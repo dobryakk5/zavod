@@ -1,0 +1,1188 @@
+from django.contrib import admin
+from django.utils.html import format_html
+from django import forms
+from django.urls import reverse
+
+from .models import Client, UserTenantRole, SocialAccount, Post, Schedule, Topic, TrendItem, ContentTemplate, SEOKeywordSet
+
+
+class ContentTemplateInline(admin.TabularInline):
+    model = ContentTemplate
+    extra = 0
+    fields = ("name", "tone", "length", "is_default")
+    show_change_link = True
+
+
+@admin.register(Client)
+class ClientAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "timezone", "has_business_info")
+    search_fields = ("name", "slug", "avatar", "pains", "desires", "objections")
+    prepopulated_fields = {"slug": ("name",)}
+    inlines = [ContentTemplateInline]
+
+    fieldsets = (
+        ("Основная информация", {
+            "fields": ("name", "slug", "timezone"),
+        }),
+        ("Описание целевой аудитории", {
+            "fields": ("avatar", "pains", "desires", "objections"),
+            "description": "Эта информация используется AI для генерации более персонализированного контента, который попадает в боли и желания вашей аудитории"
+        }),
+        ("Telegram", {
+            "fields": ("telegram_api_id", "telegram_api_hash", "telegram_source_channels"),
+            "classes": ("collapse",),
+        }),
+        ("RSS фиды", {
+            "fields": ("rss_source_feeds",),
+            "classes": ("collapse",),
+        }),
+        ("YouTube", {
+            "fields": ("youtube_api_key", "youtube_source_channels"),
+            "classes": ("collapse",),
+        }),
+        ("Instagram", {
+            "fields": ("instagram_access_token", "instagram_source_accounts"),
+            "classes": ("collapse",),
+        }),
+        ("VKontakte", {
+            "fields": ("vkontakte_access_token", "vkontakte_source_groups"),
+            "classes": ("collapse",),
+        }),
+    )
+
+    def has_business_info(self, obj):
+        """Индикатор заполненности информации о бизнесе"""
+        filled_count = sum([
+            bool(obj.avatar),
+            bool(obj.pains),
+            bool(obj.desires),
+            bool(obj.objections)
+        ])
+        if filled_count == 4:
+            return "✓ (4/4)"
+        elif filled_count > 0:
+            return f"~ ({filled_count}/4)"
+        return "- (0/4)"
+    has_business_info.short_description = "Профиль аудитории"
+
+
+@admin.register(UserTenantRole)
+class UserTenantRoleAdmin(admin.ModelAdmin):
+    list_display = ("user", "client", "role")
+    list_filter = ("role", "client")
+    search_fields = ("user__username", "user__email", "client__name")
+
+
+class SocialAccountInline(admin.TabularInline):
+    model = SocialAccount
+    extra = 0
+
+
+class ScheduleInline(admin.StackedInline):
+    model = Schedule
+    extra = 1
+    form = None  # Будет установлена позже, после объявления ScheduleAdminForm
+    fields = ("client_display", "telegram_channels", "social_account", "scheduled_at", "status", "publish_now_button")
+    readonly_fields = ("client_display", "publish_now_button")
+
+    classes = ('collapse',)  # Сворачивать по умолчанию для компактности
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Передаём parent object (Post) в форму"""
+        form = super().get_form(request, obj, **kwargs)
+
+        # Сохраняем ссылку на Post в классе формы для доступа в __init__
+        form.parent_post = obj
+
+        return form
+
+    def client_display(self, obj):
+        """Отображение клиента (только для чтения)"""
+        if obj and obj.client:
+            return obj.client.name
+        # Для новых записей получаем клиента из Post
+        return "(определится автоматически)"
+    client_display.short_description = "Клиент"
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        """Фильтруем social_account только по Telegram каналам текущего клиента"""
+        if db_field.name == "social_account":
+            # Получаем Post из URL
+            post_id = request.resolver_match.kwargs.get('object_id')
+            if post_id:
+                try:
+                    post = Post.objects.get(pk=post_id)
+                    kwargs["queryset"] = SocialAccount.objects.filter(
+                        client=post.client,
+                        platform='telegram'
+                    )
+                except Post.DoesNotExist:
+                    pass
+
+        if db_field.name == "client":
+            # Получаем Post из URL и автоматически выбираем его клиента
+            post_id = request.resolver_match.kwargs.get('object_id')
+            if post_id:
+                try:
+                    post = Post.objects.get(pk=post_id)
+                    kwargs["initial"] = post.client
+                    kwargs["disabled"] = True
+                except Post.DoesNotExist:
+                    pass
+
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def get_formset(self, request, obj=None, **kwargs):
+        """Автозаполнение клиента и поста для новых Schedule"""
+        formset = super().get_formset(request, obj, **kwargs)
+
+        # Сохраняем ссылку на obj (Post) в formset для доступа из формы
+        formset.parent_post = obj
+
+        # Если это страница редактирования Post
+        if obj:
+            # Переопределяем _construct_form для передачи parent_post в каждую форму
+            original_construct_form = formset._construct_form
+
+            def new_construct_form(self, i, **kwargs):
+                form = original_construct_form(self, i, **kwargs)
+                # Устанавливаем post для каждой формы через instance
+                if not form.instance.pk:
+                    form.instance.post = obj
+                    form.instance.client = obj.client
+                # Также устанавливаем на класс формы для доступа в __init__
+                form.__class__.parent_post = obj
+                return form
+
+            formset._construct_form = new_construct_form
+
+        return formset
+
+    def save_formset(self, request, form, formset, change):
+        """Переопределяем сохранение formset для обработки telegram_channels"""
+        from django.utils import timezone
+        from .tasks import publish_schedule
+
+        # Сначала получаем parent Post
+        post = form.instance
+
+        # Собираем данные о telegram_channels до стандартного сохранения
+        telegram_schedules_data = []
+
+        for inline_form in formset.forms:
+            if hasattr(inline_form, 'cleaned_data') and inline_form.cleaned_data:
+                # Пропускаем удаленные и пустые формы
+                if inline_form.cleaned_data.get('DELETE', False) or not inline_form.has_changed():
+                    continue
+
+                selected_channels = inline_form.cleaned_data.get('telegram_channels', [])
+
+                # Если выбраны чекбоксы telegram_channels
+                if selected_channels:
+                    # Сохраняем данные для последующего создания
+                    telegram_schedules_data.append({
+                        'channels': selected_channels,
+                        'scheduled_at': inline_form.cleaned_data.get('scheduled_at'),
+                    })
+                    # Помечаем форму как удаленную, чтобы не сохранять пустую запись
+                    inline_form.cleaned_data['DELETE'] = True
+
+        # Стандартное сохранение formset (для dropdown social_account)
+        super().save_formset(request, form, formset, change)
+
+        # Создаем Schedule для каждого выбранного telegram канала
+        now = timezone.now()
+        for schedule_data in telegram_schedules_data:
+            for channel_id in schedule_data['channels']:
+                try:
+                    social_account = SocialAccount.objects.get(id=int(channel_id))
+                    schedule = Schedule.objects.create(
+                        client=post.client,
+                        post=post,
+                        social_account=social_account,
+                        scheduled_at=schedule_data['scheduled_at'],
+                        status='pending'
+                    )
+
+                    # Если время публикации в прошлом или сейчас, запускаем публикацию сразу
+                    if schedule.scheduled_at <= now:
+                        publish_schedule.delay(schedule.id)
+
+                except (SocialAccount.DoesNotExist, ValueError):
+                    pass
+
+    def publish_now_button(self, obj):
+        """Кнопка 'Опубликовать сейчас' для каждого Schedule"""
+        if obj.pk and obj.status == 'pending':
+            from django.urls import reverse
+            publish_url = reverse('core:publish_schedule_now', args=[obj.pk])
+            return format_html(
+                '<a class="button" href="javascript:void(0)" '
+                'onclick="if(confirm(\'Опубликовать сейчас?\')) {{ '
+                'fetch(\'{}\', {{method: \'POST\', headers: {{\'X-CSRFToken\': document.querySelector(\'[name=csrfmiddlewaretoken]\').value}}}}) '
+                '.then(response => response.json()) '
+                '.then(data => {{ if(data.success) {{ alert(data.message); location.reload(); }} else {{ alert(\'Ошибка: \' + data.error); }} }}); '
+                '}}">📤 Опубликовать</a>',
+                publish_url
+            )
+        elif obj.pk and obj.status == 'published':
+            return format_html('<span style="color: green;">✓ Опубликовано</span>')
+        elif obj.pk and obj.status == 'failed':
+            return format_html('<span style="color: red;">✗ Ошибка</span>')
+        return '-'
+    publish_now_button.short_description = "Действие"
+
+
+class SocialAccountAdminForm(forms.ModelForm):
+    """Кастомная форма для удобного ввода Telegram канала"""
+    telegram_channel = forms.CharField(
+        required=False,
+        max_length=255,
+        help_text='Telegram канал (например: @my_channel или -1001234567890)',
+        label='Telegram канал'
+    )
+
+    class Meta:
+        model = SocialAccount
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Если это Telegram и есть extra данные, показываем канал
+        if self.instance.pk and self.instance.platform == 'telegram':
+            if 'channel' in self.instance.extra:
+                self.fields['telegram_channel'].initial = self.instance.extra.get('channel', '')
+
+        # Подсказка для Telegram
+        if self.instance.pk and self.instance.platform == 'telegram' or \
+           ('platform' in self.initial and self.initial.get('platform') == 'telegram'):
+            self.fields['access_token'].help_text = 'Для Telegram можно оставить пустым (используются настройки из Client)'
+
+    def clean(self):
+        cleaned_data = super().clean()
+
+        # Если указан telegram_channel, сохраняем его в extra
+        if cleaned_data.get('platform') == 'telegram':
+            telegram_channel = cleaned_data.get('telegram_channel', '').strip()
+            if telegram_channel:
+                if 'extra' not in cleaned_data or not cleaned_data['extra']:
+                    cleaned_data['extra'] = {}
+                cleaned_data['extra']['channel'] = telegram_channel
+
+        return cleaned_data
+
+
+@admin.register(SocialAccount)
+class SocialAccountAdmin(admin.ModelAdmin):
+    form = SocialAccountAdminForm
+    list_display = ("client", "platform", "name", "telegram_channel_display")
+    list_filter = ("platform", "client")
+    search_fields = ("name", "client__name")
+    autocomplete_fields = ("client",)
+
+    fieldsets = (
+        ("Основное", {
+            "fields": ("client", "platform", "name"),
+        }),
+        ("Telegram настройки", {
+            "fields": ("telegram_channel",),
+            "description": "Для Telegram укажите канал (например: @my_channel)"
+        }),
+        ("API настройки", {
+            "fields": ("access_token", "refresh_token", "extra"),
+            "classes": ("collapse",),
+        }),
+    )
+
+    def telegram_channel_display(self, obj):
+        """Показать Telegram канал из extra"""
+        if obj.platform == 'telegram' and obj.extra:
+            channel = obj.extra.get('channel', '')
+            if channel:
+                return channel
+        return '-'
+    telegram_channel_display.short_description = "TG канал"
+
+
+@admin.register(Post)
+class PostAdmin(admin.ModelAdmin):
+    list_display = ("title", "client", "status", "image_thumbnail", "created_at", "created_by")
+    list_filter = ("client", "status", "created_at")
+    search_fields = ("title", "text", "client__name")
+    autocomplete_fields = ("client", "created_by")
+    inlines = [ScheduleInline]
+    readonly_fields = (
+        "image_preview",
+        "image_generate_button",
+        "video_generate_button",
+        "quick_publish_buttons"
+    )
+
+    actions = ["generate_image_action"]
+
+    fieldsets = (
+        ("Базовая информация", {
+            "fields": ("client", "title", "status", "tags"),
+        }),
+        ("Контент", {
+            "fields": (
+                "text",
+                "image",
+                "image_generate_button",
+                "image_preview",
+                "video",
+                "video_generate_button",
+            ),
+        }),
+        ("Публиковать", {
+            "fields": (("publish_text", "publish_image", "publish_video"),),
+            "description": "Выберите, какой контент включать в публикацию"
+        }),
+        ("Быстрая публикация", {
+            "fields": ("quick_publish_buttons",),
+            "description": "Опубликовать пост сейчас в выбранный канал (без создания расписания)"
+        }),
+    )
+
+    def image_thumbnail(self, obj):
+        """Миниатюра изображения для списка постов"""
+        if obj.image:
+            return format_html('<img src="{}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px;" />', obj.image.url)
+        return "-"
+    image_thumbnail.short_description = "Image"
+
+    def image_preview(self, obj):
+        """Превью изображения для страницы редактирования поста"""
+        if obj.image:
+            return format_html('<img src="{}" style="max-width: 400px; max-height: 400px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />', obj.image.url)
+        return "Нет изображения"
+    image_preview.short_description = "Превью изображения"
+
+    def image_generate_button(self, obj):
+        """Кнопки для генерации изображения с помощью AI (две модели)"""
+        if obj.pk:  # Только для существующих постов
+            generate_url = reverse('core:generate_post_image', args=[obj.pk])
+            return format_html(
+                '''
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button type="button" class="generate-image-btn" data-default-text="🎨 Pollinations (быстро)" onclick="generateImage('{url}', 'pollinations', this)"
+                    style="padding: 10px 15px; background-color: #417690; color: white;
+                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                    🎨 Pollinations (быстро)</button>
+
+                    <button type="button" class="generate-image-btn" data-default-text="🍌 NanoBanana (Gemini)" onclick="generateImage('{url}', 'nanobanana', this)"
+                    style="padding: 10px 15px; background-color: #ff9800; color: white;
+                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                    🍌 NanoBanana (Gemini)</button>
+
+                    <button type="button" class="generate-image-btn" data-default-text="🤗 HuggingFace (FLUX)" onclick="generateImage('{url}', 'huggingface', this)"
+                    style="padding: 10px 15px; background-color: #9c27b0; color: white;
+                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                    🤗 HuggingFace (FLUX)</button>
+
+                    <button type="button" class="generate-image-btn" data-default-text="🌀 FLUX.2 (HF Space)" onclick="generateImage('{url}', 'flux2', this)"
+                    style="padding: 10px 15px; background-color: #5e35b1; color: white;
+                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                    🌀 FLUX.2 (HF Space)</button>
+                </div>
+                <div id="generate-status" style="margin-top: 10px; font-size: 13px;"></div>
+                <script>
+                function getCookie(name) {{
+                    let cookieValue = null;
+                    if (document.cookie && document.cookie !== '') {{
+                        const cookies = document.cookie.split(';');
+                        for (let i = 0; i < cookies.length; i++) {{
+                            const cookie = cookies[i].trim();
+                            if (cookie.substring(0, name.length + 1) === (name + '=')) {{
+                                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                                break;
+                            }}
+                        }}
+                    }}
+                    return cookieValue;
+                }}
+
+                function generateImage(baseUrl, model, clickedButton) {{
+                    const buttons = document.querySelectorAll('.generate-image-btn');
+                    const statusDiv = document.getElementById('generate-status');
+
+                    console.log('Генерация изображения для URL:', baseUrl, 'модель:', model);
+
+                    // Отключить все кнопки
+                    buttons.forEach(btn => {{
+                        btn.disabled = true;
+                        btn.style.opacity = '0.6';
+                    }});
+
+                    clickedButton.textContent = 'Генерируется...';
+
+                    const modelNames = {{
+                        'pollinations': 'Pollinations',
+                        'nanobanana': 'NanoBanana (Gemini)',
+                        'huggingface': 'HuggingFace (FLUX)',
+                        'flux2': 'FLUX.2 (HF Space)'
+                    }};
+                    const modelName = modelNames[model] || model;
+                    statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Генерация изображения началась (' + modelName + ')...</span>';
+
+                    const csrftoken = getCookie('csrftoken');
+                    const url = baseUrl + '?model=' + model;
+
+                    fetch(url, {{
+                        method: 'POST',
+                        headers: {{
+                            'X-CSRFToken': csrftoken,
+                            'Content-Type': 'application/json',
+                        }},
+                        credentials: 'same-origin'
+                    }})
+                    .then(response => {{
+                        console.log('Response status:', response.status);
+                        if (!response.ok) {{
+                            return response.json().then(data => {{
+                                throw new Error(data.error || 'Ошибка генерации');
+                            }});
+                        }}
+                        return response.json();
+                    }})
+                    .then(data => {{
+                        console.log('Success:', data);
+                        if (data.success) {{
+                            statusDiv.innerHTML = '<span style="color: #28a745;">✓ ' + data.message + '</span>';
+                            setTimeout(function() {{
+                                location.reload();
+                            }}, 3000);
+                        }} else {{
+                            throw new Error(data.error || 'Неизвестная ошибка');
+                        }}
+                    }})
+                    .catch(error => {{
+                        console.error('Error:', error);
+                        statusDiv.innerHTML = '<span style="color: #dc3545;">✗ Ошибка: ' + error.message + '</span>';
+
+                        // Включить кнопки обратно
+                        buttons.forEach(btn => {{
+                            btn.disabled = false;
+                            btn.style.opacity = '1';
+                            if (btn.dataset.defaultText) {{
+                                btn.textContent = btn.dataset.defaultText;
+                            }}
+                        }});
+                    }});
+                }}
+                </script>
+                ''',
+                url=generate_url
+            )
+        return "Сохраните пост, чтобы сгенерировать изображение"
+    image_generate_button.short_description = "AI генерация"
+
+    def video_generate_button(self, obj):
+        """Кнопка генерации видео из текущего изображения поста."""
+        if not obj or not obj.pk:
+            return "Сохраните пост, чтобы создать видео"
+
+        if not obj.image:
+            return format_html(
+                '<span style="color: #dc3545;">⚠️ Для генерации видео сначала добавьте изображение.</span>'
+            )
+
+        generate_url = reverse('core:generate_post_video', args=[obj.pk])
+        return format_html(
+            '''
+            <div>
+                <button type="button" class="generate-video-btn"
+                    onclick="generatePostVideo('{url}', this)"
+                    style="padding: 10px 15px; background-color: #6a1b9a; color: white;
+                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                    🎬 Создать видео из изображения
+                </button>
+                <div id="generate-video-status" style="margin-top: 8px; font-size: 13px;"></div>
+            </div>
+            <script>
+            if (!window.generatePostVideo) {{
+                window.generatePostVideo = function(url, button) {{
+                    const statusDiv = document.getElementById('generate-video-status');
+                    const originalText = button.textContent;
+                    button.disabled = true;
+                    button.style.opacity = '0.6';
+                    button.textContent = 'Генерируется...';
+                    statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Генерация видео запущена...</span>';
+
+                    const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+                    fetch(url, {{
+                        method: 'POST',
+                        headers: {{
+                            'X-CSRFToken': csrftoken,
+                            'Content-Type': 'application/json',
+                        }},
+                        credentials: 'same-origin'
+                    }})
+                    .then(response => response.json().then(data => [response.ok, data]))
+                    .then(([ok, data]) => {{
+                        if (!ok || !data.success) {{
+                            throw new Error(data.error || 'Ошибка генерации видео');
+                        }}
+                        statusDiv.innerHTML = '<span style=\"color: #28a745;\">✓ ' + data.message + '</span>';
+                        setTimeout(() => window.location.reload(), 4000);
+                    }})
+                    .catch(error => {{
+                        statusDiv.innerHTML = '<span style=\"color: #dc3545;\">✗ ' + error.message + '</span>';
+                        button.disabled = false;
+                        button.style.opacity = '1';
+                        button.textContent = originalText;
+                    }});
+                }}
+            }}
+            </script>
+            ''',
+            url=generate_url
+        )
+    video_generate_button.short_description = "AI видео"
+
+    def quick_publish_buttons(self, obj):
+        """Кнопки быстрой публикации в Telegram каналы"""
+        if not obj.pk:
+            return "Сохраните пост, чтобы использовать быструю публикацию"
+
+        # Получаем все Telegram SocialAccount для клиента
+        telegram_accounts = SocialAccount.objects.filter(
+            client=obj.client,
+            platform='telegram'
+        )
+
+        if not telegram_accounts.exists():
+            return format_html(
+                '<div style="color: #dc3545;">⚠️ Нет настроенных Telegram каналов для клиента "{}".<br>'
+                'Добавьте Social Account в настройках клиента.</div>',
+                obj.client.name
+            )
+
+        # Создаём URL для быстрой публикации
+        quick_publish_url = reverse('core:quick_publish_post', args=[obj.pk])
+
+        buttons_html = '<div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">'
+
+        for account in telegram_accounts:
+            channel_name = account.name
+            channel_info = account.extra.get('channel', 'N/A') if account.extra else 'N/A'
+
+            buttons_html += f'''
+                <button type="button" class="quick-publish-btn"
+                    onclick="quickPublish('{quick_publish_url}', {account.id}, '{channel_name}', this)"
+                    style="padding: 8px 15px; background-color: #28a745; color: white;
+                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                    📤 {channel_name} ({channel_info})
+                </button>
+            '''
+
+        buttons_html += '</div>'
+        buttons_html += '<div id="quick-publish-status" style="margin-top: 10px; font-size: 13px;"></div>'
+        buttons_html += '''
+            <script>
+            function quickPublish(url, accountId, channelName, button) {{
+                const statusDiv = document.getElementById('quick-publish-status');
+                const buttons = document.querySelectorAll('.quick-publish-btn');
+
+                // Отключаем все кнопки
+                buttons.forEach(btn => {{
+                    btn.disabled = true;
+                    btn.style.opacity = '0.6';
+                }});
+
+                button.textContent = 'Публикуется...';
+                statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Публикация в ' + channelName + '...</span>';
+
+                // Получаем CSRF токен
+                const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+                fetch(url, {{
+                    method: 'POST',
+                    headers: {{
+                        'X-CSRFToken': csrftoken,
+                        'Content-Type': 'application/json',
+                    }},
+                    body: JSON.stringify({{ social_account_id: accountId }}),
+                    credentials: 'same-origin'
+                }})
+                .then(response => response.json())
+                .then(data => {{
+                    if (data.success) {{
+                        statusDiv.innerHTML = '<span style="color: #28a745;">✓ ' + data.message + '</span>';
+                        setTimeout(function() {{
+                            location.reload();
+                        }}, 2000);
+                    }} else {{
+                        throw new Error(data.error || 'Ошибка публикации');
+                    }}
+                }})
+                .catch(error => {{
+                    statusDiv.innerHTML = '<span style="color: #dc3545;">✗ Ошибка: ' + error.message + '</span>';
+
+                    // Включаем кнопки обратно
+                    buttons.forEach(btn => {{
+                        btn.disabled = false;
+                        btn.style.opacity = '1';
+                    }});
+
+                    // Восстанавливаем текст кнопки
+                    button.textContent = '📤 ' + channelName;
+                }});
+            }}
+            </script>
+        '''
+
+        return format_html(buttons_html)
+    quick_publish_buttons.short_description = "Опубликовать сейчас"
+
+    def generate_image_action(self, request, queryset):
+        """Сгенерировать изображение для выбранных постов"""
+        from .tasks import generate_image_for_post
+
+        # Фильтровать только посты без изображения
+        posts_without_image = queryset.filter(image='')
+        count = posts_without_image.count()
+
+        if count == 0:
+            self.message_user(request, "Все выбранные посты уже имеют изображения", level="warning")
+            return
+
+        # Запустить задачи генерации
+        for post in posts_without_image:
+            generate_image_for_post.delay(post.id)
+
+        self.message_user(request, f"Запущена генерация изображений для {count} постов")
+    generate_image_action.short_description = "Сгенерировать изображение для постов"
+
+
+class ScheduleAdminForm(forms.ModelForm):
+    """Кастомная форма для удобной публикации в Telegram каналы"""
+
+    telegram_channels = forms.MultipleChoiceField(
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        label='Telegram каналы',
+        help_text='Выберите каналы для публикации'
+    )
+
+    class Meta:
+        model = Schedule
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Автоопределение клиента из поста
+        post = None
+
+        # Способ 1: Parent Post передан через get_form в Inline
+        if hasattr(self.__class__, 'parent_post') and self.__class__.parent_post:
+            post = self.__class__.parent_post
+
+        # Способ 2: Существующий Schedule с постом
+        elif self.instance.pk and self.instance.post:
+            post = self.instance.post
+
+        # Способ 3: Post передан в initial (standalone форма)
+        elif 'post' in self.initial:
+            post_id = self.initial.get('post')
+            if post_id:
+                try:
+                    post = Post.objects.get(id=post_id)
+                except Post.DoesNotExist:
+                    pass
+
+        # Способ 4: Попробовать получить из instance.post (даже если pk нет)
+        if not post and hasattr(self.instance, 'post') and self.instance.post:
+            post = self.instance.post
+
+        # Обработчик для динамического обновления при выборе поста (только для standalone формы)
+        if 'post' in self.fields:
+            self.fields['post'].widget.attrs['onchange'] = 'this.form.submit();'
+
+        if post:
+            client = post.client
+
+            # Автоматически устанавливаем клиента (только если поле присутствует в форме)
+            if 'client' in self.fields:
+                self.fields['client'].initial = client
+                self.fields['client'].disabled = True
+                self.fields['client'].help_text = f'Автоматически определен из поста: {client.name}'
+
+            # Получаем все Telegram SocialAccount для этого клиента
+            telegram_accounts = SocialAccount.objects.filter(
+                client=client,
+                platform='telegram'
+            )
+
+            # Формируем choices для чекбоксов
+            if 'telegram_channels' in self.fields:
+                if telegram_accounts.exists():
+                    choices = [(acc.id, f"{acc.name}") for acc in telegram_accounts]
+                    self.fields['telegram_channels'].choices = choices
+                    if 'social_account' in self.fields:
+                        self.fields['social_account'].required = False
+                        self.fields['social_account'].help_text = (
+                            'Можно выбрать один канал здесь ИЛИ несколько в чекбоксах ниже'
+                        )
+                else:
+                    # Если нет SocialAccount для Telegram
+                    self.fields['telegram_channels'].widget = forms.HiddenInput()
+                    self.fields['telegram_channels'].help_text = (
+                        '⚠️ Создайте SocialAccount (platform=telegram) в админке для публикации в Telegram.'
+                    )
+
+            # Фильтруем social_account только по этому клиенту и Telegram
+            if 'social_account' in self.fields:
+                self.fields['social_account'].queryset = SocialAccount.objects.filter(
+                    client=client,
+                    platform='telegram'
+                )
+
+        # Если это существующий Schedule, скрываем telegram_channels
+        if self.instance.pk and 'telegram_channels' in self.fields:
+            self.fields['telegram_channels'].widget = forms.HiddenInput()
+            self.fields['telegram_channels'].help_text = ''
+
+
+# Подключаем форму к ScheduleInline после её определения
+ScheduleInline.form = ScheduleAdminForm
+
+
+@admin.register(Schedule)
+class ScheduleAdmin(admin.ModelAdmin):
+    form = ScheduleAdminForm
+    list_display = ("post", "client", "social_account", "scheduled_at", "status", "quick_actions")
+    list_filter = ("client", "social_account__platform", "status", "scheduled_at")
+    search_fields = ("post__title", "client__name", "social_account__name")
+    autocomplete_fields = ("post",)
+    readonly_fields = ("created_at", "log_display")
+
+    actions = ["publish_now_action"]
+
+    fieldsets = (
+        ("Публикация", {
+            "fields": ("post", "client", "telegram_channels", "social_account", "scheduled_at", "status"),
+            "description": "Для публикации в несколько Telegram каналов выберите их в чекбоксах ниже"
+        }),
+        ("Результат публикации", {
+            "fields": ("external_id", "log_display", "created_at"),
+        }),
+    )
+
+    def quick_actions(self, obj):
+        """Быстрые действия для публикации"""
+        if obj.status == 'pending':
+            return format_html(
+                '<a class="button" href="#" onclick="publishNow({}); return false;" '
+                'style="padding: 5px 10px; background-color: #417690; color: white; '
+                'border-radius: 3px; text-decoration: none; font-size: 12px;">📤 Опубликовать сейчас</a>',
+                obj.pk
+            )
+        elif obj.status == 'published':
+            return format_html('<span style="color: green;">✓ Опубликовано</span>')
+        elif obj.status == 'failed':
+            return format_html('<span style="color: red;">✗ Ошибка</span>')
+        return '-'
+    quick_actions.short_description = "Действия"
+
+    def log_display(self, obj):
+        """Красивое отображение лога"""
+        if obj.log:
+            return format_html('<pre style="background: #f5f5f5; padding: 10px; border-radius: 5px;">{}</pre>', obj.log)
+        return "Нет логов"
+    log_display.short_description = "Лог публикации"
+
+    def save_model(self, request, obj, form, change):
+        """Обработка сохранения с созданием нескольких Schedule для разных каналов"""
+        # Если это новый объект и выбраны telegram_channels
+        if not change:
+            selected_channels = form.cleaned_data.get('telegram_channels', [])
+
+            if selected_channels:
+                # Создаём Schedule для каждого выбранного канала
+                created_count = 0
+                for channel_id in selected_channels:
+                    try:
+                        social_account = SocialAccount.objects.get(id=int(channel_id))
+                        Schedule.objects.create(
+                            client=obj.client,
+                            post=obj.post,
+                            social_account=social_account,
+                            scheduled_at=obj.scheduled_at,
+                            status='pending'
+                        )
+                        created_count += 1
+                    except (SocialAccount.DoesNotExist, ValueError):
+                        pass
+
+                if created_count > 0:
+                    self.message_user(
+                        request,
+                        f'✓ Создано {created_count} расписаний для публикации в Telegram каналы',
+                        level='success'
+                    )
+                    return  # Не сохраняем исходный объект
+
+        # Стандартное сохранение для единичного Schedule
+        super().save_model(request, obj, form, change)
+
+    def publish_now_action(self, request, queryset):
+        """Опубликовать выбранные посты сейчас"""
+        from .tasks import publish_schedule
+        from django.utils import timezone
+
+        count = 0
+        for schedule in queryset.filter(status='pending'):
+            # Обновляем время на "сейчас"
+            schedule.scheduled_at = timezone.now()
+            schedule.save()
+
+            # Запускаем публикацию
+            publish_schedule.delay(schedule.id)
+            count += 1
+
+        if count > 0:
+            self.message_user(request, f'Запущена публикация {count} постов')
+        else:
+            self.message_user(request, 'Нет постов для публикации (уже опубликованы или в процессе)', level='warning')
+
+    publish_now_action.short_description = "📤 Опубликовать сейчас"
+
+    class Media:
+        js = ('admin/js/schedule_actions.js',)
+        css = {
+            'all': ('admin/css/schedule_admin.css',)
+        }
+
+
+class TrendItemInline(admin.TabularInline):
+    model = TrendItem
+    extra = 0
+    fields = ("source", "title", "relevance_score", "discovered_at")
+    readonly_fields = ("discovered_at",)
+    can_delete = True
+
+
+class SEOKeywordSetInline(admin.TabularInline):
+    model = SEOKeywordSet
+    extra = 0
+    fields = ("status", "created_at", "ai_model")
+    readonly_fields = ("created_at", "ai_model")
+    show_change_link = True
+    can_delete = False
+
+
+class TopicAdminForm(forms.ModelForm):
+    """Кастомная форма для удобного ввода ключевых слов"""
+    keywords_input = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'size': '80'}),
+        help_text='Введите ключевые слова через запятую: танцы, хореография, dance',
+        label='Ключевые слова'
+    )
+
+    class Meta:
+        model = Topic
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Если есть существующие ключевые слова, показать их как текст
+        if self.instance.pk and self.instance.keywords:
+            self.fields['keywords_input'].initial = ', '.join(self.instance.keywords)
+        # Скрыть оригинальное JSONField
+        if 'keywords' in self.fields:
+            self.fields['keywords'].widget = forms.HiddenInput()
+
+    def clean(self):
+        cleaned_data = super().clean()
+        keywords_input = cleaned_data.get('keywords_input', '')
+
+        # Конвертировать текст в список
+        if keywords_input:
+            keywords_list = [kw.strip() for kw in keywords_input.split(',') if kw.strip()]
+            cleaned_data['keywords'] = keywords_list
+        else:
+            cleaned_data['keywords'] = []
+
+        return cleaned_data
+
+
+@admin.register(Topic)
+class TopicAdmin(admin.ModelAdmin):
+    form = TopicAdminForm
+    list_display = ("name", "client", "is_active", "sources_display", "keywords_display", "trend_count", "created_at")
+    list_filter = ("client", "is_active", "created_at")
+    search_fields = ("name", "client__name")
+    autocomplete_fields = ("client",)
+    readonly_fields = ("created_at", "updated_at")
+    inlines = [TrendItemInline, SEOKeywordSetInline]
+
+    actions = ["discover_content_action", "generate_posts_from_trends_action", "generate_seo_keywords_action"]
+
+    fieldsets = (
+        ("Основное", {
+            "fields": ("client", "name", "is_active"),
+        }),
+        ("Параметры поиска", {
+            "fields": ("keywords_input", "keywords"),
+        }),
+        ("Источники контента", {
+            "fields": (
+                "use_google_trends",
+                "use_telegram",
+                "use_rss",
+                "use_youtube",
+                "use_instagram",
+                "use_vkontakte",
+            ),
+            "description": "Выберите источники, из которых искать контент при нажатии кнопки 'Найти'"
+        }),
+        ("Служебное", {
+            "fields": ("created_at", "updated_at"),
+        }),
+    )
+
+    def sources_display(self, obj):
+        """Отображение включенных источников"""
+        sources = []
+        if obj.use_google_trends:
+            sources.append("📈")
+        if obj.use_telegram:
+            sources.append("💬")
+        if obj.use_rss:
+            sources.append("📰")
+        if obj.use_youtube:
+            sources.append("▶️")
+        if obj.use_instagram:
+            sources.append("📷")
+        if obj.use_vkontakte:
+            sources.append("🔵")
+        return " ".join(sources) if sources else "-"
+    sources_display.short_description = "Источники"
+
+    def keywords_display(self, obj):
+        if obj.keywords:
+            return ", ".join(obj.keywords[:3]) + ("..." if len(obj.keywords) > 3 else "")
+        return "-"
+    keywords_display.short_description = "Keywords"
+
+    def trend_count(self, obj):
+        return obj.trend_items.count()
+    trend_count.short_description = "Trends"
+
+    def discover_content_action(self, request, queryset):
+        """Найти контент из выбранных источников"""
+        from .tasks import discover_content_for_topic
+
+        count = 0
+        for topic in queryset:
+            discover_content_for_topic.delay(topic.id)
+            count += 1
+
+        self.message_user(request, f"Запущен поиск контента для {count} тем из выбранных источников")
+    discover_content_action.short_description = "🔍 Найти контент из выбранных источников"
+
+    def generate_posts_from_trends_action(self, request, queryset):
+        """Сгенерировать посты из всех неиспользованных трендов выбранных тем"""
+        from .tasks import generate_posts_for_topic
+
+        count = 0
+        for topic in queryset:
+            generate_posts_for_topic.delay(topic.id)
+            count += 1
+
+        self.message_user(request, f"Запущена генерация постов для {count} тем")
+    generate_posts_from_trends_action.short_description = "Сгенерировать посты из неиспользованных трендов"
+
+    def generate_seo_keywords_action(self, request, queryset):
+        """Сгенерировать SEO-подборку ключевых фраз для выбранных тем"""
+        from .tasks import generate_seo_keywords_for_topic
+
+        count = 0
+        for topic in queryset:
+            generate_seo_keywords_for_topic.delay(topic.id)
+            count += 1
+
+        self.message_user(request, f"Запущена генерация SEO-фраз для {count} тем")
+    generate_seo_keywords_action.short_description = "Сгенерировать SEO-подборку ключевых фраз"
+
+
+@admin.register(TrendItem)
+class TrendItemAdmin(admin.ModelAdmin):
+    list_display = ("title_short", "source", "topic", "client", "relevance_score", "used", "discovered_at")
+    list_filter = ("source", "client", "topic", "discovered_at")
+    search_fields = ("title", "description", "topic__name", "client__name")
+    autocomplete_fields = ("topic", "client", "used_for_post")
+    readonly_fields = ("discovered_at",)
+
+    actions = ["generate_posts_action"]
+
+    fieldsets = (
+        ("Основное", {
+            "fields": ("topic", "client", "source"),
+        }),
+        ("Содержание", {
+            "fields": ("title", "description", "url", "relevance_score"),
+        }),
+        ("Дополнительно", {
+            "fields": ("extra", "used_for_post", "discovered_at"),
+        }),
+    )
+
+    def title_short(self, obj):
+        return obj.title[:60] + "..." if len(obj.title) > 60 else obj.title
+    title_short.short_description = "Title"
+
+    def used(self, obj):
+        return "✓" if obj.used_for_post else "-"
+    used.short_description = "Used"
+
+    def generate_posts_action(self, request, queryset):
+        """Сгенерировать посты из выбранных трендов"""
+        from .tasks import generate_post_from_trend
+
+        # Фильтровать только неиспользованные тренды
+        unused_trends = queryset.filter(used_for_post__isnull=True)
+        count = unused_trends.count()
+
+        if count == 0:
+            self.message_user(request, "Все выбранные тренды уже использованы", level="warning")
+            return
+
+        # Запустить задачи генерации
+        for trend in unused_trends:
+            generate_post_from_trend.delay(trend.id)
+
+        self.message_user(request, f"Запущена генерация постов для {count} трендов")
+    generate_posts_action.short_description = "Сгенерировать посты из выбранных трендов"
+
+
+@admin.register(ContentTemplate)
+class ContentTemplateAdmin(admin.ModelAdmin):
+    list_display = ("name", "client", "type", "tone", "length", "language", "is_default", "created_at")
+    list_filter = ("client", "type", "tone", "length", "language", "is_default")
+    search_fields = ("name", "client__name", "prompt_template", "additional_instructions")
+    autocomplete_fields = ("client",)
+    readonly_fields = ("created_at", "updated_at")
+
+    actions = ["copy_template_action"]
+
+    fieldsets = (
+        ("Основное", {
+            "fields": ("client", "name", "type", "is_default"),
+        }),
+        ("Параметры стиля", {
+            "fields": ("tone", "length", "language"),
+        }),
+        ("Промпт", {
+            "fields": ("prompt_template", "additional_instructions"),
+            "description": (
+                "Используйте плейсхолдеры: "
+                "{trend_title}, {trend_description}, {topic_name}, {tone}, {length}, {language}, "
+                "{type}, {avatar}, {pains}, {desires}, {objections}"
+            )
+        }),
+        ("Хэштеги", {
+            "fields": ("include_hashtags", "max_hashtags"),
+        }),
+        ("Служебное", {
+            "fields": ("created_at", "updated_at"),
+        }),
+    )
+
+    def copy_template_action(self, request, queryset):
+        """Скопировать выбранные шаблоны"""
+        copied_count = 0
+
+        for template in queryset:
+            # Создаём копию, сбрасывая pk и уникальные поля
+            template_copy = ContentTemplate(
+                client=template.client,
+                name=f"Копия - {template.name}",
+                type=template.type,
+                tone=template.tone,
+                length=template.length,
+                language=template.language,
+                prompt_template=template.prompt_template,
+                additional_instructions=template.additional_instructions,
+                is_default=False,  # Копия не может быть default
+                include_hashtags=template.include_hashtags,
+                max_hashtags=template.max_hashtags,
+            )
+
+            # Проверяем уникальность имени
+            original_name = template_copy.name
+            counter = 1
+            while ContentTemplate.objects.filter(
+                client=template.client,
+                name=template_copy.name
+            ).exists():
+                template_copy.name = f"{original_name} ({counter})"
+                counter += 1
+
+            template_copy.save()
+            copied_count += 1
+
+        self.message_user(
+            request,
+            f"Успешно скопировано шаблонов: {copied_count}"
+        )
+
+    copy_template_action.short_description = "Копировать выбранные шаблоны"
+
+
+@admin.register(SEOKeywordSet)
+class SEOKeywordSetAdmin(admin.ModelAdmin):
+    list_display = ("topic", "client", "status", "keyword_groups_summary", "ai_model", "created_at")
+    list_filter = ("status", "client", "created_at")
+    search_fields = ("topic__name", "client__name", "keywords_text")
+    autocomplete_fields = ("topic", "client")
+    readonly_fields = ("created_at", "updated_at", "keyword_groups_display")
+
+    fieldsets = (
+        ("Основное", {
+            "fields": ("topic", "client", "status"),
+        }),
+        ("SEO-фразы по группам", {
+            "fields": ("keyword_groups", "keyword_groups_display"),
+            "description": "Сгенерированные группы SEO-фраз"
+        }),
+        ("Техническая информация", {
+            "fields": ("ai_model", "prompt_used", "error_log"),
+            "classes": ("collapse",),
+        }),
+        ("Служебное", {
+            "fields": ("created_at", "updated_at"),
+        }),
+    )
+
+    def keyword_groups_summary(self, obj):
+        """Краткая сводка по группам ключей"""
+        if obj.keyword_groups:
+            groups = []
+            for group_name, keywords in obj.keyword_groups.items():
+                count = len(keywords) if isinstance(keywords, list) else 0
+                groups.append(f"{group_name}: {count}")
+            return ", ".join(groups)
+        return "-"
+    keyword_groups_summary.short_description = "Группы (количество)"
+
+    def keyword_groups_display(self, obj):
+        """Красивое отображение групп ключей для просмотра"""
+        if obj.keyword_groups:
+            html = '<div style="font-family: monospace; background: #f5f5f5; padding: 15px; border-radius: 5px;">'
+            for group_name, keywords in obj.keyword_groups.items():
+                html += f'<h4 style="color: #417690; margin-top: 10px;">{group_name.upper()}</h4>'
+                if isinstance(keywords, list):
+                    html += '<ul style="margin: 5px 0;">'
+                    for keyword in keywords:
+                        html += f'<li>{keyword}</li>'
+                    html += '</ul>'
+            html += '</div>'
+            return format_html(html)
+        return "Группы ключей не сгенерированы"
+    keyword_groups_display.short_description = "Сгенерированные группы SEO-фраз"

@@ -1,0 +1,7 @@
+/venv
+
+# Environment variable files
+.env
+.env.local
+**/.env
+**/.env.local
