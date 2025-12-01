@@ -956,6 +956,336 @@ class AIContentGenerator:
                 "error": str(e)
             }
 
+    def generate_story_episodes(
+        self,
+        trend_title: str,
+        trend_description: str,
+        topic_name: str,
+        episode_count: int,
+        client_desires: str = "",
+        language: str = "ru"
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Generate story episodes from trend using AI (using tng-r1t-chimera model)
+
+        Args:
+            trend_title: Trend title
+            trend_description: Trend description
+            topic_name: Topic name (e.g., "студия танцев")
+            episode_count: Number of episodes to generate
+            client_desires: Client's target audience desires
+            language: Language code (ru/en)
+
+        Returns:
+            Dict with generated story:
+            {
+                "title": "Общий заголовок истории",
+                "episodes": [
+                    {"order": 1, "title": "Заголовок эпизода 1"},
+                    {"order": 2, "title": "Заголовок эпизода 2"},
+                    ...
+                ],
+                "success": True/False,
+                "error": "error message if failed"
+            }
+        """
+        try:
+            lang_name = "русском" if language == "ru" else "английском"
+
+            prompt = f"""
+Ты - профессиональный сценарист и SMM-специалист, который создаёт вовлекающие истории для социальных сетей.
+
+ЗАДАЧА: Создай увлекательную историю (мини-сериал) из {episode_count} эпизодов на {lang_name} языке.
+
+ТЕМА БИЗНЕСА: {topic_name}
+
+ОСНОВА ДЛЯ ИСТОРИИ:
+Тренд: {trend_title}
+Описание: {trend_description}
+
+ЦЕЛЕВАЯ АУДИТОРИЯ:
+Хотелки и желания: {client_desires}
+
+ИНСТРУКЦИИ:
+1. Придумай общий заголовок истории (1 предложение, до 100 символов)
+2. Создай {episode_count} эпизодов, которые:
+   - Вовлекают аудиторию через эмоциональную связь
+   - Учитывают желания целевой аудитории ({client_desires})
+   - Связаны с темой бизнеса "{topic_name}"
+   - Основаны на тренде "{trend_title}"
+   - Имеют развитие сюжета от эпизода к эпизоду
+   - Держат интригу и мотивируют читать дальше
+   - Каждый эпизод имеет заголовок (20-80 символов)
+
+3. История должна быть:
+   - Вовлекающей и эмоциональной
+   - С человеческими персонажами (если уместно)
+   - С развитием конфликта или интриги
+   - Связана с желаниями аудитории
+
+ПРИМЕРЫ ХОРОШИХ ИСТОРИЙ:
+- "Маша на занятиях по танцам увидела Колю" → "Коля пригласил Машу потанцевать" → "На следующее занятие он не пришел" → "Он вернулся в новой рубашке" → "Они встретились глазами"
+- "Анна решила изменить свою жизнь" → "Первое занятие было тяжелым" → "Через неделю она почувствовала изменения" → "Коллеги заметили перемены" → "Анна обрела уверенность"
+
+ФОРМАТ ОТВЕТА (строго JSON):
+{{
+    "title": "Общий заголовок истории",
+    "episodes": [
+        {{"order": 1, "title": "Заголовок эпизода 1"}},
+        {{"order": 2, "title": "Заголовок эпизода 2"}},
+        ...
+        {{"order": {episode_count}, "title": "Заголовок эпизода {episode_count}"}}
+    ]
+}}
+
+Ответь ТОЛЬКО JSON, без дополнительных комментариев."""
+
+            logger.info(f"Генерация истории на основе тренда: {trend_title[:50]}")
+
+            # Используем специальную модель для историй
+            original_model = self.model
+            self.model = "tngtech/tng-r1t-chimera:free"
+
+            try:
+                # Запрос к AI
+                ai_response = self.get_ai_response(prompt, max_tokens=2000, temperature=0.8)
+
+                if not ai_response:
+                    return {
+                        "success": False,
+                        "error": "Failed to get response from AI"
+                    }
+
+                # Парсинг JSON ответа
+                try:
+                    # Очистить ответ от markdown code blocks
+                    clean_response = ai_response.strip()
+                    if clean_response.startswith('```json'):
+                        clean_response = clean_response[7:]
+                    if clean_response.startswith('```'):
+                        clean_response = clean_response[3:]
+                    if clean_response.endswith('```'):
+                        clean_response = clean_response[:-3]
+                    clean_response = clean_response.strip()
+
+                    result = json.loads(clean_response)
+
+                    # Валидация структуры ответа
+                    if "title" not in result or "episodes" not in result:
+                        logger.error(f"Invalid AI response structure: {clean_response}")
+                        return {
+                            "success": False,
+                            "error": "Invalid response structure from AI"
+                        }
+
+                    # Проверка количества эпизодов
+                    if not isinstance(result["episodes"], list) or len(result["episodes"]) != episode_count:
+                        logger.warning(f"Expected {episode_count} episodes, got {len(result.get('episodes', []))}")
+
+                    # Добавить флаг успеха
+                    result["success"] = True
+
+                    logger.info(f"Успешно сгенерирована история: {result['title'][:50]} ({len(result['episodes'])} эпизодов)")
+                    return result
+
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse AI response as JSON: {clean_response}")
+                    return {
+                        "success": False,
+                        "error": f"JSON parsing error: {str(e)}",
+                        "raw_response": clean_response
+                    }
+
+            finally:
+                # Восстановить оригинальную модель
+                self.model = original_model
+
+        except Exception as e:
+            logger.error(f"Error generating story episodes: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def generate_post_from_episode(
+        self,
+        story_title: str,
+        episode_title: str,
+        episode_number: int,
+        total_episodes: int,
+        topic_name: str,
+        template_config: Dict[str, Any],
+        client_info: Dict[str, str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Generate a full post from a story episode
+
+        Args:
+            story_title: Overall story title
+            episode_title: Episode title/headline
+            episode_number: Episode number (1-indexed)
+            total_episodes: Total number of episodes in story
+            topic_name: Topic name (e.g., "студия танцев")
+            template_config: Template configuration (same as generate_post_text)
+            client_info: Optional client info dict with avatar/pains/desires/objections
+
+        Returns:
+            Dict with generated content (same format as generate_post_text)
+        """
+        try:
+            # Извлечь параметры из конфигурации
+            tone = template_config.get('tone', 'professional')
+            length = template_config.get('length', 'medium')
+            language = template_config.get('language', 'ru')
+            include_hashtags = template_config.get("include_hashtags", True)
+            max_hashtags = template_config.get("max_hashtags", 5)
+            additional_instructions = template_config.get("additional_instructions", "")
+
+            # Информация о клиенте
+            client_info = client_info or {}
+            avatar = client_info.get("avatar", "")
+            pains = client_info.get("pains", "")
+            desires = client_info.get("desires", "")
+            objections = client_info.get("objections", "")
+
+            # Маппинг тонов на русский для промпта
+            tone_map = {
+                "professional": "профессиональный",
+                "friendly": "дружественный",
+                "informative": "информационный",
+                "casual": "непринуждённый",
+                "enthusiastic": "восторженный"
+            }
+
+            # Маппинг длины на русский
+            length_map = {
+                "short": "короткий (до 280 символов)",
+                "medium": "средний (280-500 символов)",
+                "long": "длинный (500-1000 символов)"
+            }
+
+            tone_ru = tone_map.get(tone, tone)
+            length_ru = length_map.get(length, length)
+            lang_name = "русском" if language == "ru" else "английском"
+
+            prompt = f"""
+Ты - профессиональный копирайтер для социальных сетей.
+
+ЗАДАЧА: Создай {length_ru} пост для социальных сетей в {tone_ru} стиле на {lang_name} языке.
+
+КОНТЕКСТ ИСТОРИИ:
+- Общий заголовок истории: {story_title}
+- Эпизод {episode_number} из {total_episodes}: {episode_title}
+
+ТЕМА БИЗНЕСА: {topic_name}
+
+ДАННЫЕ О ЦЕЛЕВОЙ АУДИТОРИИ:
+Аватар: {avatar}
+Боли: {pains}
+Хотелки: {desires}
+Возражения: {objections}
+
+ИНСТРУКЦИИ:
+1. Создай привлекательный заголовок поста (до 100 символов)
+2. Напиши основной текст, который:
+   - Развивает сюжет эпизода "{episode_title}"
+   - Связан с общей историей "{story_title}"
+   - Учитывает желания и боли аудитории
+   - Связан с темой бизнеса "{topic_name}"
+   - Имеет {tone_ru} тон
+   - Соответствует длине: {length_ru}
+   - Создаёт эмоциональную связь с читателем
+   - Если это не последний эпизод, создаёт интригу для продолжения
+"""
+
+            if episode_number == 1:
+                prompt += """   - Это первый эпизод - заинтригуй читателя и представь главного героя
+"""
+            elif episode_number == total_episodes:
+                prompt += """   - Это финальный эпизод - создай удовлетворяющую концовку
+"""
+            else:
+                prompt += """   - Это промежуточный эпизод - развивай сюжет и поддерживай интригу
+"""
+
+            if include_hashtags:
+                prompt += f"""3. Добавь {max_hashtags} релевантных хэштега
+"""
+
+            if additional_instructions:
+                prompt += f"""
+ДОПОЛНИТЕЛЬНЫЕ ТРЕБОВАНИЯ:
+{additional_instructions}
+"""
+
+            prompt += """
+ФОРМАТ ОТВЕТА (строго JSON):
+{
+    "title": "Заголовок поста",
+    "text": "Основной текст поста",
+    "hashtags": ["хэштег1", "хэштег2", "хэштег3"]
+}
+
+Ответь ТОЛЬКО JSON, без дополнительных комментариев."""
+
+            logger.info(f"Генерация поста для эпизода {episode_number}/{total_episodes}: {episode_title[:50]}")
+
+            # Запрос к AI
+            ai_response = self.get_ai_response(prompt, max_tokens=2000, temperature=0.7)
+
+            if not ai_response:
+                return {
+                    "success": False,
+                    "error": "Failed to get response from AI"
+                }
+
+            # Парсинг JSON ответа
+            try:
+                # Очистить ответ от markdown code blocks
+                clean_response = ai_response.strip()
+                if clean_response.startswith('```json'):
+                    clean_response = clean_response[7:]
+                if clean_response.startswith('```'):
+                    clean_response = clean_response[3:]
+                if clean_response.endswith('```'):
+                    clean_response = clean_response[:-3]
+                clean_response = clean_response.strip()
+
+                result = json.loads(clean_response)
+
+                # Валидация структуры ответа
+                if "title" not in result or "text" not in result:
+                    logger.error(f"Invalid AI response structure: {clean_response}")
+                    return {
+                        "success": False,
+                        "error": "Invalid response structure from AI"
+                    }
+
+                # Добавить пустой список хэштегов если их нет
+                if "hashtags" not in result:
+                    result["hashtags"] = []
+
+                # Добавить флаг успеха
+                result["success"] = True
+
+                logger.info(f"Успешно сгенерирован пост для эпизода {episode_number}: {result['title'][:50]}")
+                return result
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse AI response as JSON: {clean_response}")
+                return {
+                    "success": False,
+                    "error": f"JSON parsing error: {str(e)}",
+                    "raw_response": clean_response
+                }
+
+        except Exception as e:
+            logger.error(f"Error generating post from episode: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
     def test_connection(self) -> bool:
         """
         Test connection to OpenRouter API

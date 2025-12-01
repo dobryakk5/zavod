@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 type Summary = {
@@ -18,10 +18,10 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch<Summary>('/api/client/summary/')
+    apiFetch<Summary>('/client/summary/')
       .then(setData)
       .catch((err) => {
-        if (err instanceof Error && err.message === 'unauthorized') {
+        if (err instanceof ApiError && err.status === 401) {
           router.push('/login');
         } else {
           setError('Не удалось загрузить данные');

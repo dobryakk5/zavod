@@ -4,7 +4,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.views.decorators.http import require_POST
 from django.utils import timezone
 from .models import Post, Schedule, SocialAccount
-from .tasks import generate_image_for_post, generate_video_from_image, publish_schedule
+from .tasks import generate_image_for_post, generate_video_from_image, publish_schedule, regenerate_post_text
 import json
 
 
@@ -174,4 +174,28 @@ def quick_publish_post(request, post_id):
     return JsonResponse({
         'success': True,
         'message': f'Публикация в "{social_account.name}" запущена. Страница будет перезагружена...'
+    })
+
+
+@staff_member_required
+@require_POST
+def regenerate_text(request, post_id):
+    """
+    View для регенерации текста поста через AJAX запрос из Django admin.
+
+    Args:
+        request: HTTP запрос
+        post_id: ID поста
+
+    Returns:
+        JsonResponse с результатом регенерации
+    """
+    post = get_object_or_404(Post, id=post_id)
+
+    # Запустить задачу регенерации текста в Celery
+    regenerate_post_text.delay(post_id)
+
+    return JsonResponse({
+        'success': True,
+        'message': 'Регенерация текста запущена. Страница будет перезагружена...'
     })

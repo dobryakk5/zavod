@@ -170,6 +170,22 @@ class Post(models.Model):
     )
 
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="posts")
+
+    # Связь с историей (если пост - часть истории)
+    story = models.ForeignKey(
+        "Story",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="posts",
+        help_text="История, к которой относится этот пост"
+    )
+    episode_number = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Номер эпизода в истории"
+    )
+
     title = models.CharField(max_length=255)
     text = models.TextField(blank=True)
     # пока без отдельной Media-модели – можно позже перейти на Wagtail Images/Documents
@@ -186,6 +202,11 @@ class Post(models.Model):
     publish_video = models.BooleanField(default=True, verbose_name="Публиковать видео", help_text="Включать видео в публикацию")
 
     generated_by = models.CharField(max_length=50, blank=True)  # openai / manual / ...
+    regeneration_count = models.IntegerField(
+        default=0,
+        help_text="Количество регенераций текста"
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -361,6 +382,77 @@ class TrendItem(models.Model):
         return f"[{self.source}] {self.title[:50]}"
 
 
+class Story(models.Model):
+    """История - серия связанных постов (мини-сериал)"""
+
+    STATUS_CHOICES = (
+        ("draft", "Draft"),                # черновик, только создана
+        ("ready", "Ready"),                # эпизоды сгенерированы
+        ("approved", "Approved"),          # модератор одобрил
+        ("generating_posts", "Generating Posts"),  # создаются посты из эпизодов
+        ("completed", "Completed"),        # все посты созданы и опубликованы
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="stories")
+    trend_item = models.ForeignKey(
+        "TrendItem",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="stories",
+        help_text="Тренд, на основе которого создана история"
+    )
+    template = models.ForeignKey(
+        "ContentTemplate",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Шаблон для генерации постов из эпизодов"
+    )
+
+    title = models.CharField(max_length=500, help_text="Общий заголовок истории")
+    episodes = models.JSONField(
+        default=list,
+        help_text="Список эпизодов: [{'order': 1, 'title': '...'}, ...]"
+    )
+    episode_count = models.IntegerField(
+        default=5,
+        help_text="Количество эпизодов в истории"
+    )
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+    generated_by = models.CharField(
+        max_length=50,
+        default="openrouter-chimera",
+        help_text="Модель AI, использованная для генерации"
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_stories",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        verbose_name = "Story"
+        verbose_name_plural = "Stories"
+
+    def __str__(self):
+        return f"[{self.client.slug}] {self.title}"
+
+    def get_episodes_display(self):
+        """Форматированный вывод списка эпизодов"""
+        if not self.episodes:
+            return "Нет эпизодов"
+        return "\n".join([f"{ep['order']}. {ep['title']}" for ep in self.episodes])
+
+
 class ContentTemplate(models.Model):
     """Шаблон для AI генерации контента с настройками стиля"""
 
@@ -368,6 +460,7 @@ class ContentTemplate(models.Model):
         ("selling", "Продающий"),
         ("expert", "Экспертный"),
         ("trigger", "Триггерный"),
+        ("story", "История (мини-сериал)"),
     )
 
     TONE_CHOICES = (

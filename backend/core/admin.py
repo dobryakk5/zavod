@@ -3,7 +3,7 @@ from django.utils.html import format_html
 from django import forms
 from django.urls import reverse
 
-from .models import Client, UserTenantRole, SocialAccount, Post, Schedule, Topic, TrendItem, ContentTemplate, SEOKeywordSet
+from .models import Client, UserTenantRole, SocialAccount, Post, Schedule, Topic, TrendItem, ContentTemplate, SEOKeywordSet, Story
 
 
 class ContentTemplateInline(admin.TabularInline):
@@ -307,27 +307,38 @@ class SocialAccountAdmin(admin.ModelAdmin):
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
-    list_display = ("title", "client", "status", "image_thumbnail", "created_at", "created_by")
-    list_filter = ("client", "status", "created_at")
+    list_display = ("title", "client", "status", "story_link", "episode_number", "regeneration_count", "image_thumbnail", "created_at", "created_by")
+    list_filter = ("client", "status", "story", "created_at")
     search_fields = ("title", "text", "client__name")
-    autocomplete_fields = ("client", "created_by")
+    autocomplete_fields = ("client", "created_by", "story")
     inlines = [ScheduleInline]
     readonly_fields = (
+        "story",
+        "episode_number",
+        "regeneration_count",
         "image_preview",
         "image_generate_button",
         "video_generate_button",
-        "quick_publish_buttons"
+        "quick_publish_buttons",
+        "regenerate_text_button"
     )
 
-    actions = ["generate_image_action"]
+    actions = ["generate_image_action", "regenerate_text_action"]
 
     fieldsets = (
         ("Базовая информация", {
             "fields": ("client", "title", "status", "tags"),
         }),
+        ("Связь с историей", {
+            "fields": ("story", "episode_number"),
+            "classes": ("collapse",),
+            "description": "Если этот пост - часть истории"
+        }),
         ("Контент", {
             "fields": (
                 "text",
+                "regenerate_text_button",
+                "regeneration_count",
                 "image",
                 "image_generate_button",
                 "image_preview",
@@ -637,6 +648,83 @@ class PostAdmin(admin.ModelAdmin):
         return format_html(buttons_html)
     quick_publish_buttons.short_description = "Опубликовать сейчас"
 
+    def story_link(self, obj):
+        """Ссылка на историю"""
+        if obj.story:
+            url = reverse("admin:core_story_change", args=[obj.story.id])
+            return format_html('<a href="{}">{} (эп. {})</a>', url, obj.story.title[:30], obj.episode_number)
+        return "-"
+    story_link.short_description = "История"
+
+    def regenerate_text_button(self, obj):
+        """Кнопка для регенерации текста поста"""
+        if obj.pk:
+            regenerate_url = reverse('core:regenerate_post_text', args=[obj.pk])
+            return format_html(
+                '''
+                <button type="button" class="regenerate-text-btn"
+                    onclick="regenerateText('{url}', this)"
+                    style="padding: 10px 15px; background-color: #28a745; color: white;
+                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                    🔄 Обновить текст поста
+                </button>
+                <div id="regenerate-status" style="margin-top: 10px; font-size: 13px;"></div>
+                <script>
+                function getCookie(name) {{
+                    let cookieValue = null;
+                    if (document.cookie && document.cookie !== '') {{
+                        const cookies = document.cookie.split(';');
+                        for (let i = 0; i < cookies.length; i++) {{
+                            const cookie = cookies[i].trim();
+                            if (cookie.substring(0, name.length + 1) === (name + '=')) {{
+                                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                                break;
+                            }}
+                        }}
+                    }}
+                    return cookieValue;
+                }}
+
+                function regenerateText(url, button) {{
+                    const statusDiv = document.getElementById('regenerate-status');
+                    const originalText = button.textContent;
+
+                    // Disable button and show progress
+                    button.disabled = true;
+                    button.style.opacity = '0.6';
+                    button.textContent = '⏳ Генерация...';
+                    statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Генерация нового текста...</span>';
+
+                    fetch(url, {{
+                        method: 'POST',
+                        headers: {{
+                            'X-CSRFToken': getCookie('csrftoken'),
+                            'Content-Type': 'application/json'
+                        }},
+                        credentials: 'same-origin'
+                    }})
+                    .then(response => response.json().then(data => [response.ok, data]))
+                    .then(([ok, data]) => {{
+                        if (!ok || !data.success) {{
+                            throw new Error(data.error || 'Ошибка регенерации текста');
+                        }}
+                        statusDiv.innerHTML = '<span style="color: #28a745;">✓ ' + data.message + '</span>';
+                        setTimeout(() => window.location.reload(), 2000);
+                    }})
+                    .catch(error => {{
+                        statusDiv.innerHTML = '<span style="color: #dc3545;">✗ ' + error.message + '</span>';
+                        button.disabled = false;
+                        button.style.opacity = '1';
+                        button.textContent = originalText;
+                    }});
+                }}
+                </script>
+                ''',
+                url=regenerate_url
+            )
+        return "Сохраните пост для регенерации"
+    regenerate_text_button.short_description = "Регенерация"
+
     def generate_image_action(self, request, queryset):
         """Сгенерировать изображение для выбранных постов"""
         from .tasks import generate_image_for_post
@@ -655,6 +743,23 @@ class PostAdmin(admin.ModelAdmin):
 
         self.message_user(request, f"Запущена генерация изображений для {count} постов")
     generate_image_action.short_description = "Сгенерировать изображение для постов"
+
+    def regenerate_text_action(self, request, queryset):
+        """Регенерировать текст для выбранных постов"""
+        from .tasks import regenerate_post_text
+
+        count = queryset.count()
+
+        if count == 0:
+            self.message_user(request, "Выберите хотя бы один пост", level="warning")
+            return
+
+        # Запустить задачи регенерации
+        for post in queryset:
+            regenerate_post_text.delay(post.id)
+
+        self.message_user(request, f"Запущена регенерация текста для {count} постов")
+    regenerate_text_action.short_description = "🔄 Обновить текст постов"
 
 
 class ScheduleAdminForm(forms.ModelForm):
@@ -1019,7 +1124,7 @@ class TrendItemAdmin(admin.ModelAdmin):
     autocomplete_fields = ("topic", "client", "used_for_post")
     readonly_fields = ("discovered_at",)
 
-    actions = ["generate_posts_action"]
+    actions = ["generate_posts_action", "generate_stories_action"]
 
     fieldsets = (
         ("Основное", {
@@ -1059,6 +1164,23 @@ class TrendItemAdmin(admin.ModelAdmin):
 
         self.message_user(request, f"Запущена генерация постов для {count} трендов")
     generate_posts_action.short_description = "Сгенерировать посты из выбранных трендов"
+
+    def generate_stories_action(self, request, queryset):
+        """Создать истории из выбранных трендов"""
+        from .tasks import generate_story_from_trend
+
+        count = queryset.count()
+
+        if count == 0:
+            self.message_user(request, "Выберите хотя бы один тренд", level="warning")
+            return
+
+        # Запустить задачи генерации историй (по умолчанию 5 эпизодов)
+        for trend in queryset:
+            generate_story_from_trend.delay(trend.id, episode_count=5)
+
+        self.message_user(request, f"Запущена генерация историй для {count} трендов (по 5 эпизодов)")
+    generate_stories_action.short_description = "📖 Создать истории из выбранных трендов"
 
 
 @admin.register(ContentTemplate)
@@ -1186,3 +1308,125 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
             return format_html(html)
         return "Группы ключей не сгенерированы"
     keyword_groups_display.short_description = "Сгенерированные группы SEO-фраз"
+
+
+# ============================================================================
+# STORY ADMIN (Истории - мини-сериалы)
+# ============================================================================
+
+class StoryPostInline(admin.TabularInline):
+    """Inline для отображения постов истории"""
+    model = Post
+    extra = 0
+    fields = ("episode_number", "title", "status", "regeneration_count", "view_post_link")
+    readonly_fields = ("episode_number", "title", "status", "regeneration_count", "view_post_link")
+    can_delete = False
+    show_change_link = True
+
+    def view_post_link(self, obj):
+        if obj.id:
+            url = reverse("admin:core_post_change", args=[obj.id])
+            return format_html('<a href="{}">Редактировать пост</a>', url)
+        return "-"
+    view_post_link.short_description = "Действия"
+
+
+@admin.register(Story)
+class StoryAdmin(admin.ModelAdmin):
+    list_display = ("title", "client", "episode_count", "posts_count", "status", "trend_item_link", "created_at")
+    list_filter = ("status", "client", "created_at")
+    search_fields = ("title", "client__name")
+    autocomplete_fields = ("client", "trend_item", "template")
+    readonly_fields = ("generated_by", "created_at", "updated_at", "episodes_display", "posts_count")
+    inlines = [StoryPostInline]
+
+    fieldsets = (
+        ("Основная информация", {
+            "fields": ("client", "title", "status"),
+        }),
+        ("Источник и настройки", {
+            "fields": ("trend_item", "template", "episode_count"),
+        }),
+        ("Эпизоды истории", {
+            "fields": ("episodes", "episodes_display"),
+            "description": "Список эпизодов сгенерированной истории"
+        }),
+        ("Техническая информация", {
+            "fields": ("generated_by", "posts_count", "created_at", "updated_at"),
+            "classes": ("collapse",),
+        }),
+    )
+
+    actions = ["generate_posts_action", "create_auto_schedule_action"]
+
+    def trend_item_link(self, obj):
+        """Ссылка на тренд"""
+        if obj.trend_item:
+            url = reverse("admin:core_trenditem_change", args=[obj.trend_item.id])
+            return format_html('<a href="{}">{}</a>', url, obj.trend_item.title[:40])
+        return "-"
+    trend_item_link.short_description = "Исходный тренд"
+
+    def posts_count(self, obj):
+        """Количество созданных постов"""
+        return obj.posts.count()
+    posts_count.short_description = "Создано постов"
+
+    def episodes_display(self, obj):
+        """Красивое отображение эпизодов"""
+        if obj.episodes:
+            html = '<div style="font-family: monospace; background: #f5f5f5; padding: 10px; border-radius: 5px;">'
+            html += '<ol style="margin: 0; padding-left: 20px;">'
+            for episode in obj.episodes:
+                html += f'<li style="margin: 5px 0;"><strong>Эпизод {episode["order"]}:</strong> {episode["title"]}</li>'
+            html += '</ol>'
+            html += '</div>'
+            return format_html(html)
+        return "Эпизоды не сгенерированы"
+    episodes_display.short_description = "Список эпизодов"
+
+    def generate_posts_action(self, request, queryset):
+        """Создать посты из эпизодов"""
+        from .tasks import generate_posts_from_story
+
+        generated_count = 0
+        for story in queryset:
+            if story.status in ["ready", "approved"]:
+                generate_posts_from_story.delay(story.id)
+                generated_count += 1
+            else:
+                self.message_user(
+                    request,
+                    f"История '{story.title}' имеет статус {story.status}, нужен статус 'ready' или 'approved'",
+                    level="WARNING"
+                )
+
+        if generated_count > 0:
+            self.message_user(
+                request,
+                f"Запущена генерация постов для {generated_count} историй"
+            )
+
+    generate_posts_action.short_description = "🎬 Создать посты из эпизодов"
+
+    def create_auto_schedule_action(self, request, queryset):
+        """Создать автоматическое расписание"""
+        if queryset.count() != 1:
+            self.message_user(
+                request,
+                "Выберите только одну историю для создания расписания",
+                level="ERROR"
+            )
+            return
+
+        story = queryset.first()
+
+        # Перенаправляем на форму создания расписания
+        # TODO: Реализовать кастомную форму для настройки расписания
+        self.message_user(
+            request,
+            f"Для создания расписания используйте кнопку в интерфейсе редактирования истории '{story.title}'",
+            level="INFO"
+        )
+
+    create_auto_schedule_action.short_description = "📅 Создать автоматическое расписание"

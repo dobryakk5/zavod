@@ -5,6 +5,18 @@ export type ApiRequestOptions = {
   next?: RequestInit['next'];
 };
 
+export class ApiError extends Error {
+  status: number;
+  body?: string;
+
+  constructor(message: string, status: number, body?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
 
 export async function apiFetch<TResponse>(endpoint: string, options: ApiRequestOptions = {}): Promise<TResponse> {
@@ -23,7 +35,8 @@ export async function apiFetch<TResponse>(endpoint: string, options: ApiRequestO
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || 'API request failed');
+    const message = response.status === 401 ? 'unauthorized' : (text || 'API request failed');
+    throw new ApiError(message, response.status, text);
   }
 
   if (response.status === 204) {

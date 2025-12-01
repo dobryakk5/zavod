@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -50,11 +50,10 @@ export function PostsTable() {
         if (platform) params.set('platform', platform);
 
         const query = params.toString();
-        const data = await apiFetch<Post[]>(`/api/posts/${query ? `?${query}` : ''}`);
+        const data = await apiFetch<Post[]>(`/posts/${query ? `?${query}` : ''}`);
         setPosts(data);
       } catch (err) {
-        const error = err as Error;
-        if (error.message === 'unauthorized') {
+        if (err instanceof ApiError && err.status === 401) {
           router.push('/login');
         } else {
           setError('Не удалось загрузить посты');

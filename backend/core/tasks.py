@@ -1641,3 +1641,416 @@ def discover_trends_for_topic_with_telegram(topic_id: int):
     logger.info(f"Всего найдено трендов для темы {topic_id}: {total} (Google: {google_count}, Telegram: {telegram_count})")
 
     return total
+
+
+# ============================================================================
+# ЗАДАЧИ ДЛЯ РАБОТЫ С ИСТОРИЯМИ (STORIES)
+# ============================================================================
+
+@shared_task
+def generate_story_from_trend(trend_item_id: int, episode_count: int = 5, template_id: int = None):
+    """
+    Генерация истории (мини-сериала) из тренда.
+
+    Args:
+        trend_item_id: ID тренда (TrendItem)
+        episode_count: Количество эпизодов (по умолчанию 5)
+        template_id: ID шаблона контента (ContentTemplate) для постов (опционально)
+
+    Returns:
+        ID созданной истории или None при ошибке
+    """
+    from .models import Story
+
+    try:
+        trend = TrendItem.objects.select_related('client', 'topic').get(id=trend_item_id)
+        client = trend.client
+        topic = trend.topic
+
+        # Валидация количества эпизодов
+        if not (2 <= episode_count <= 20):
+            logger.error(f"Недопустимое количество эпизодов: {episode_count}. Должно быть от 2 до 20")
+            return None
+
+        # Получить шаблон если указан
+        template = None
+        if template_id:
+            try:
+                template = ContentTemplate.objects.get(id=template_id, client=client)
+            except ContentTemplate.DoesNotExist:
+                logger.warning(f"Шаблон {template_id} не найден, продолжаем без шаблона")
+
+        logger.info(f"Генерация истории из тренда: {trend.title[:60]} ({episode_count} эпизодов)")
+
+        # Инициализация AI генератора
+        generator = AIContentGenerator()
+
+        # Генерация эпизодов истории
+        result = generator.generate_story_episodes(
+            trend_title=trend.title,
+            trend_description=trend.description,
+            topic_name=topic.name,
+            episode_count=episode_count,
+            client_desires=client.desires or "",
+            language="ru"
+        )
+
+        if not result.get("success"):
+            error = result.get("error", "Unknown error")
+            logger.error(f"Ошибка генерации истории: {error}")
+            return None
+
+        # Создание истории
+        story = Story.objects.create(
+            client=client,
+            trend_item=trend,
+            template=template,
+            title=result["title"],
+            episodes=result["episodes"],
+            episode_count=len(result["episodes"]),
+            status="ready",
+            generated_by="openrouter-chimera"
+        )
+
+        logger.info(f"История успешно создана: {story.title} (ID: {story.id})")
+        return story.id
+
+    except TrendItem.DoesNotExist:
+        logger.error(f"Тренд {trend_item_id} не найден")
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка создания истории из тренда {trend_item_id}: {e}", exc_info=True)
+        return None
+
+
+@shared_task
+def generate_posts_from_story(story_id: int):
+    """
+    Генерация постов из эпизодов истории.
+
+    Args:
+        story_id: ID истории (Story)
+
+    Returns:
+        Количество созданных постов
+    """
+    from .models import Story
+
+    try:
+        story = Story.objects.select_related('client', 'trend_item', 'template').get(id=story_id)
+
+        if not story.episodes:
+            logger.error(f"История {story_id} не содержит эпизодов")
+            return 0
+
+        # Обновляем статус истории
+        story.status = "generating_posts"
+        story.save()
+
+        logger.info(f"Генерация постов для истории: {story.title} ({len(story.episodes)} эпизодов)")
+
+        # Получаем или создаем конфигурацию шаблона
+        if story.template:
+            template_config = {
+                "tone": story.template.tone,
+                "length": story.template.length,
+                "language": story.template.language,
+                "type": story.template.type,
+                "include_hashtags": story.template.include_hashtags,
+                "max_hashtags": story.template.max_hashtags,
+                "additional_instructions": story.template.additional_instructions,
+            }
+        else:
+            # Дефолтная конфигурация
+            template_config = {
+                "tone": "friendly",
+                "length": "medium",
+                "language": "ru",
+                "type": "story",
+                "include_hashtags": True,
+                "max_hashtags": 5,
+                "additional_instructions": "",
+            }
+
+        # Информация о клиенте
+        client_info = {
+            "avatar": story.client.avatar or "",
+            "pains": story.client.pains or "",
+            "desires": story.client.desires or "",
+            "objections": story.client.objections or "",
+        }
+
+        # Инициализация AI генератора
+        generator = AIContentGenerator()
+
+        created_count = 0
+        total_episodes = len(story.episodes)
+
+        # Генерируем пост для каждого эпизода
+        for episode in story.episodes:
+            episode_number = episode["order"]
+            episode_title = episode["title"]
+
+            logger.info(f"Генерация поста для эпизода {episode_number}/{total_episodes}: {episode_title[:60]}")
+
+            # Генерация поста
+            result = generator.generate_post_from_episode(
+                story_title=story.title,
+                episode_title=episode_title,
+                episode_number=episode_number,
+                total_episodes=total_episodes,
+                topic_name=story.trend_item.topic.name if story.trend_item else "unknown",
+                template_config=template_config,
+                client_info=client_info
+            )
+
+            if not result.get("success"):
+                logger.error(f"Ошибка генерации поста для эпизода {episode_number}: {result.get('error')}")
+                continue
+
+            # Создание поста
+            post = Post.objects.create(
+                client=story.client,
+                story=story,
+                episode_number=episode_number,
+                title=result["title"],
+                text=result["text"],
+                status="ready",
+                tags=result.get("hashtags", []),
+                generated_by="openrouter-grok",
+                regeneration_count=0
+            )
+
+            logger.info(f"Пост создан: {post.title} (ID: {post.id})")
+            created_count += 1
+
+        # Обновляем статус истории
+        if created_count == total_episodes:
+            story.status = "completed"
+        else:
+            story.status = "ready"  # Возвращаем в ready если не все посты созданы
+        story.save()
+
+        logger.info(f"Создано {created_count}/{total_episodes} постов для истории {story.title}")
+        return created_count
+
+    except Story.DoesNotExist:
+        logger.error(f"История {story_id} не найдена")
+        return 0
+    except Exception as e:
+        logger.error(f"Ошибка генерации постов для истории {story_id}: {e}", exc_info=True)
+        return 0
+
+
+@shared_task
+def regenerate_post_text(post_id: int):
+    """
+    Регенерация текста поста.
+
+    Args:
+        post_id: ID поста (Post)
+
+    Returns:
+        True если успешно, False при ошибке
+    """
+    try:
+        post = Post.objects.select_related('client', 'story').get(id=post_id)
+
+        logger.info(f"Регенерация текста для поста: {post.title[:60]}")
+
+        # Инициализация AI генератора
+        generator = AIContentGenerator()
+
+        # Если пост из истории
+        if post.story:
+            story = post.story
+            episode = next((ep for ep in story.episodes if ep["order"] == post.episode_number), None)
+
+            if not episode:
+                logger.error(f"Эпизод {post.episode_number} не найден в истории {story.id}")
+                return False
+
+            # Получаем конфигурацию шаблона
+            if story.template:
+                template_config = {
+                    "tone": story.template.tone,
+                    "length": story.template.length,
+                    "language": story.template.language,
+                    "type": story.template.type,
+                    "include_hashtags": story.template.include_hashtags,
+                    "max_hashtags": story.template.max_hashtags,
+                    "additional_instructions": story.template.additional_instructions,
+                }
+            else:
+                template_config = {
+                    "tone": "friendly",
+                    "length": "medium",
+                    "language": "ru",
+                    "type": "story",
+                    "include_hashtags": True,
+                    "max_hashtags": 5,
+                    "additional_instructions": "",
+                }
+
+            # Информация о клиенте
+            client_info = {
+                "avatar": post.client.avatar or "",
+                "pains": post.client.pains or "",
+                "desires": post.client.desires or "",
+                "objections": post.client.objections or "",
+            }
+
+            # Регенерация из эпизода
+            result = generator.generate_post_from_episode(
+                story_title=story.title,
+                episode_title=episode["title"],
+                episode_number=post.episode_number,
+                total_episodes=len(story.episodes),
+                topic_name=story.trend_item.topic.name if story.trend_item else "unknown",
+                template_config=template_config,
+                client_info=client_info
+            )
+
+        else:
+            # Пост из тренда (обычный пост)
+            # Получаем исходный тренд
+            trend = post.source_trends.first()
+
+            if not trend:
+                logger.error(f"Не найден исходный тренд для поста {post.id}")
+                return False
+
+            # Получаем шаблон (пока используем дефолтный)
+            template_config = {
+                "tone": "friendly",
+                "length": "medium",
+                "language": "ru",
+                "type": "selling",
+                "include_hashtags": True,
+                "max_hashtags": 5,
+                "additional_instructions": "",
+                "avatar": post.client.avatar or "",
+                "pains": post.client.pains or "",
+                "desires": post.client.desires or "",
+                "objections": post.client.objections or "",
+            }
+
+            # Регенерация из тренда
+            result = generator.generate_post_text(
+                trend_title=trend.title,
+                trend_description=trend.description,
+                topic_name=trend.topic.name,
+                template_config=template_config
+            )
+
+        if not result.get("success"):
+            logger.error(f"Ошибка регенерации поста: {result.get('error')}")
+            return False
+
+        # Обновляем пост
+        post.title = result["title"]
+        post.text = result["text"]
+        post.tags = result.get("hashtags", [])
+        post.regeneration_count += 1
+        post.save()
+
+        logger.info(f"Пост успешно регенерирован: {post.title} (регенераций: {post.regeneration_count})")
+        return True
+
+    except Post.DoesNotExist:
+        logger.error(f"Пост {post_id} не найден")
+        return False
+    except Exception as e:
+        logger.error(f"Ошибка регенерации поста {post_id}: {e}", exc_info=True)
+        return False
+
+
+@shared_task
+def auto_schedule_story_posts(story_id: int, posts_per_day: int, start_date: str, social_account_ids: list):
+    """
+    Автоматическое создание расписания для всех постов истории.
+
+    Args:
+        story_id: ID истории (Story)
+        posts_per_day: Количество постов в день
+        start_date: Дата начала публикации (формат: YYYY-MM-DD)
+        social_account_ids: Список ID соц. аккаунтов (SocialAccount)
+
+    Returns:
+        Количество созданных Schedule записей
+    """
+    from .models import Story, SocialAccount
+    from datetime import datetime, timedelta
+
+    try:
+        story = Story.objects.select_related('client').get(id=story_id)
+        posts = Post.objects.filter(story=story).order_by('episode_number')
+
+        if not posts.exists():
+            logger.error(f"Нет постов для истории {story_id}")
+            return 0
+
+        # Парсим дату начала
+        try:
+            start_datetime = datetime.strptime(start_date, "%Y-%m-%d")
+            # Устанавливаем время на 10:00 по умолчанию
+            start_datetime = start_datetime.replace(hour=10, minute=0, second=0)
+        except ValueError:
+            logger.error(f"Неверный формат даты: {start_date}. Ожидается YYYY-MM-DD")
+            return 0
+
+        # Получаем соц. аккаунты
+        social_accounts = SocialAccount.objects.filter(id__in=social_account_ids, client=story.client)
+
+        if not social_accounts.exists():
+            logger.error(f"Не найдены соц. аккаунты с ID: {social_account_ids}")
+            return 0
+
+        logger.info(f"Создание автоматического расписания для истории: {story.title}")
+        logger.info(f"  Постов: {posts.count()}, по {posts_per_day} в день, начало: {start_datetime}")
+        logger.info(f"  Соц. аккаунты: {', '.join([sa.name for sa in social_accounts])}")
+
+        created_count = 0
+        current_datetime = start_datetime
+
+        # Интервал между постами в течение дня (в часах)
+        hours_between_posts = 24 // posts_per_day if posts_per_day > 0 else 24
+
+        post_index = 0
+        for post in posts:
+            for social_account in social_accounts:
+                # Создаем Schedule
+                schedule = Schedule.objects.create(
+                    client=story.client,
+                    post=post,
+                    social_account=social_account,
+                    scheduled_at=current_datetime,
+                    status="pending"
+                )
+
+                logger.info(f"  Создано расписание: {post.title[:40]} → {social_account.name} на {current_datetime}")
+                created_count += 1
+
+            # Переход к следующему времени публикации
+            post_index += 1
+            if post_index % posts_per_day == 0:
+                # Переход на следующий день
+                current_datetime = current_datetime + timedelta(days=1)
+                current_datetime = current_datetime.replace(hour=10, minute=0)
+            else:
+                # Следующий пост в тот же день
+                current_datetime = current_datetime + timedelta(hours=hours_between_posts)
+
+        logger.info(f"Создано {created_count} записей расписания для истории {story.title}")
+
+        # Обновляем статус постов на 'scheduled'
+        posts.update(status='scheduled')
+
+        return created_count
+
+    except Story.DoesNotExist:
+        logger.error(f"История {story_id} не найдена")
+        return 0
+    except Exception as e:
+        logger.error(f"Ошибка создания расписания для истории {story_id}: {e}", exc_info=True)
+        return 0
