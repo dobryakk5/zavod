@@ -179,7 +179,7 @@ export default function SolarLabLanding() {
             </div>
             <div>
               <div className="font-semibold">Контакты</div>
-              <div className="mt-2">hello@solarlab.media<br/>Telegram: @solarlab</div>
+              <div className="mt-2">hello@solarlab.media<br/>Telegram: @solarlab_bot</div>
             </div>
           </div>
         </div>

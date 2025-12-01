@@ -82,7 +82,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
       return;
     }
     try {
-      const response = await fetch(buildUrl('/api/auth/telegram'), {
+      const response = await fetch(buildUrl('/auth/telegram'), {
         credentials: 'include'
       });
       if (response.ok) {
@@ -105,7 +105,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
     setLoading(true);
     setStatus(null);
     try {
-      const authResponse = await fetch(buildUrl('/api/auth/telegram'), {
+      const authResponse = await fetch(buildUrl('/auth/telegram'), {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -139,7 +139,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
     setLoading(true);
     setStatus(null);
     try {
-      const response = await fetch(buildUrl('/api/auth/telegram'), {
+      const response = await fetch(buildUrl('/auth/telegram'), {
         method: 'DELETE',
         credentials: 'include'
       });
@@ -165,7 +165,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
     setLoading(true);
     setStatus(null);
     try {
-      const response = await fetch(buildUrl('/api/auth/telegram'), {
+      const response = await fetch(buildUrl('/auth/telegram'), {
         method: 'PUT',
         credentials: 'include'
       });
