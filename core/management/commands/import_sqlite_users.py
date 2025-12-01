@@ -8,11 +8,14 @@ from django.core.management.base import BaseCommand, CommandError
 from django.core.management.color import no_style
 from django.db import connection, transaction
 
-from core.models import Client, UserTenantRole
+from core.models import Client, ContentTemplate, UserTenantRole
 
 
 class Command(BaseCommand):
-    help = "Import users, clients, and their roles from the legacy SQLite database."
+    help = (
+        "Import users, clients, content templates, and user/client role bindings "
+        "from the legacy SQLite database."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -25,7 +28,7 @@ class Command(BaseCommand):
         sqlite_path = Path(options["sqlite_path"]).expanduser().resolve()
 
         if not sqlite_path.exists():
-            raise CommandError(f"SQLite database not found: {sqlite_path}")
+            raise CommandError(f"SQLite database not found at {sqlite_path}")
 
         with closing(sqlite3.connect(str(sqlite_path))) as conn:
             conn.row_factory = sqlite3.Row
@@ -42,6 +45,12 @@ class Command(BaseCommand):
                 "objections, pains "
                 "FROM core_client"
             ).fetchall()
+            template_rows = conn.execute(
+                "SELECT id, name, tone, length, language, prompt_template, "
+                "additional_instructions, is_default, include_hashtags, max_hashtags, "
+                "client_id, type "
+                "FROM core_contenttemplate"
+            ).fetchall()
             role_rows = conn.execute(
                 "SELECT id, role, client_id, user_id FROM core_usertenantrole"
             ).fetchall()
@@ -51,21 +60,26 @@ class Command(BaseCommand):
         with transaction.atomic():
             user_stats = self._import_users(User, user_rows)
             client_stats = self._import_clients(client_rows)
+            template_stats = self._import_templates(template_rows)
             role_stats = self._import_roles(role_rows, User)
-            self._reset_sequences([User, Client, UserTenantRole])
+            self._reset_sequences([User, Client, ContentTemplate, UserTenantRole])
 
         self.stdout.write(
-            self.style.SUCCESS(
-                "Users imported: %s new / %s updated" % user_stats
-            )
+            self.style.SUCCESS("Users imported: %s new / %s updated" % user_stats)
         )
         self.stdout.write(
-            self.style.SUCCESS(
-                "Clients imported: %s new / %s updated" % client_stats
-            )
+            self.style.SUCCESS("Clients imported: %s new / %s updated" % client_stats)
         )
+        template_msg = (
+            "Content templates imported: %(created)s new / %(updated)s updated"
+            % template_stats
+        )
+        if template_stats["skipped"]:
+            template_msg += f" (skipped {template_stats['skipped']} due to missing clients)"
+        self.stdout.write(self.style.SUCCESS(template_msg))
         role_msg = (
-            f"Roles imported: {role_stats['created']} new / {role_stats['updated']} updated"
+            "Roles imported: %(created)s new / %(updated)s updated"
+            % role_stats
         )
         if role_stats["skipped"]:
             role_msg += f" (skipped {role_stats['skipped']} because of missing users/clients)"
@@ -80,8 +94,7 @@ class Command(BaseCommand):
             return created, updated
 
         for row in rows:
-            defaults = {
-                "username": row["username"],
+            user_data = {
                 "email": row["email"] or "",
                 "password": row["password"],
                 "is_superuser": bool(row["is_superuser"]),
@@ -90,14 +103,23 @@ class Command(BaseCommand):
                 "first_name": row["first_name"] or "",
                 "last_name": row["last_name"] or "",
             }
-            _, was_created = User.objects.update_or_create(
-                id=row["id"],
-                defaults=defaults,
-            )
-            if was_created:
-                created += 1
-            else:
+            user_id = row["id"]
+            username = row["username"]
+
+            obj = User.objects.filter(id=user_id).first()
+            if obj:
+                self._update_user_instance(obj, username, user_data)
                 updated += 1
+                continue
+
+            obj = User.objects.filter(username=username).first()
+            if obj:
+                self._update_user_instance(obj, username, user_data)
+                updated += 1
+                continue
+
+            User.objects.create(id=user_id, username=username, **user_data)
+            created += 1
 
         return created, updated
 
@@ -140,20 +162,59 @@ class Command(BaseCommand):
 
         return created, updated
 
+    def _import_templates(self, rows):
+        created = 0
+        updated = 0
+        skipped = 0
+
+        if not rows:
+            self.stdout.write(self.style.WARNING("No content templates found in SQLite database."))
+            return {"created": created, "updated": updated, "skipped": skipped}
+
+        for row in rows:
+            if not Client.objects.filter(id=row["client_id"]).exists():
+                skipped += 1
+                continue
+
+            defaults = {
+                "client_id": row["client_id"],
+                "name": row["name"],
+                "tone": row["tone"] or "professional",
+                "length": row["length"] or "medium",
+                "language": row["language"] or "ru",
+                "prompt_template": row["prompt_template"] or "",
+                "additional_instructions": row["additional_instructions"] or "",
+                "is_default": bool(row["is_default"]),
+                "include_hashtags": bool(row["include_hashtags"]),
+                "max_hashtags": row["max_hashtags"] or 5,
+                "type": row["type"] or "selling",
+            }
+            _, was_created = ContentTemplate.objects.update_or_create(
+                id=row["id"],
+                defaults=defaults,
+            )
+            if was_created:
+                created += 1
+            else:
+                updated += 1
+
+        return {"created": created, "updated": updated, "skipped": skipped}
+
     def _import_roles(self, rows, User):
         created = 0
         updated = 0
         skipped = 0
 
         if not rows:
-            self.stdout.write(self.style.WARNING("No user/client role bindings found in SQLite database."))
+            self.stdout.write(
+                self.style.WARNING("No user/client role bindings found in SQLite database.")
+            )
             return {"created": created, "updated": updated, "skipped": skipped}
 
         for row in rows:
-            user_exists = User.objects.filter(id=row["user_id"]).exists()
-            client_exists = Client.objects.filter(id=row["client_id"]).exists()
-
-            if not user_exists or not client_exists:
+            if not User.objects.filter(id=row["user_id"]).exists() or not Client.objects.filter(
+                id=row["client_id"]
+            ).exists():
                 skipped += 1
                 continue
 
@@ -176,3 +237,9 @@ class Command(BaseCommand):
         with connection.cursor() as cursor:
             for sql in sql_list:
                 cursor.execute(sql)
+
+    def _update_user_instance(self, obj, username, fields):
+        for attr, value in fields.items():
+            setattr(obj, attr, value)
+        obj.username = username
+        obj.save()
