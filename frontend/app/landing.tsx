@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import Link from "next/link";
+import Image from "next/image";
 
 export default function SolarLabLanding() {
   return (
@@ -10,14 +11,16 @@ export default function SolarLabLanding() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-300 via-yellow-200 to-orange-200 flex items-center justify-center shadow-md">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <circle cx="12" cy="12" r="5" fill="white" />
-                <path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" stroke="#F59E0B" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
+              <Image
+                src="/solarlab-logo.png"
+                alt="SolarLab AI"
+                width={28}
+                height={28}
+                priority
+              />
             </div>
             <div>
               <div className="text-lg font-semibold">SolarLab</div>
-              <div className="text-xs text-gray-500">Media · AI Lab</div>
             </div>
           </div>
         </div>

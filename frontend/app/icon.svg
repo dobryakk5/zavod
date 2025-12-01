@@ -1,0 +1,36 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sunGradientIcon" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F97316"/>
+      <stop offset="0.5" stop-color="#FACC15"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rays -->
+  <g fill="url(#sunGradientIcon)">
+    <path d="M32 4L29 14H35L32 4Z"/>
+    <path d="M32 60L29 50H35L32 60Z"/>
+    <path d="M4 32L14 29V35L4 32Z"/>
+    <path d="M60 32L50 29V35L60 32Z"/>
+    <path d="M11 11L17 17L13 21L11 11Z"/>
+    <path d="M53 53L47 47L51 43L53 53Z"/>
+    <path d="M11 53L17 47L13 43L11 53Z"/>
+    <path d="M53 11L47 17L51 21L53 11Z"/>
+  </g>
+
+  <!-- Central circle -->
+  <circle cx="32" cy="32" r="16" fill="url(#sunGradientIcon)"/>
+
+  <!-- Stylized AI / circuits -->
+  <g stroke="#FFFFFF" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 36H28L31 28L33 33L35 28L37 36H40" />
+    <path d="M27 32H29" />
+    <path d="M35 32H37" />
+    <circle cx="24" cy="38" r="1.4" fill="#FFFFFF" />
+    <circle cx="40" cy="38" r="1.4" fill="#FFFFFF" />
+    <path d="M32 26V22" />
+    <circle cx="32" cy="20" r="1.4" fill="#FFFFFF" />
+  </g>
+</svg>
+
