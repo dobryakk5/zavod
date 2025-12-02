@@ -494,31 +494,56 @@ class PostAdmin(admin.ModelAdmin):
         if not obj or not obj.pk:
             return "Сохраните пост, чтобы создать видео"
 
-        if not obj.image:
-            return format_html(
-                '<span style="color: #dc3545;">⚠️ Для генерации видео сначала добавьте изображение.</span>'
-            )
-
         generate_url = reverse('core:generate_post_video', args=[obj.pk])
+        veo_image_url = f"{generate_url}?method=veo&source=image"
+        veo_text_url = f"{generate_url}?method=veo&source=text"
+        status_id = f"generate-video-status-{obj.pk}"
+
+        image_disabled = '' if obj.image else 'disabled'
+        text_disabled = '' if obj.text else 'disabled'
+        image_title = '' if obj.image else 'title="Сначала добавьте изображение"'
+        text_title = '' if obj.text else 'title="Нужен текст поста"'
+
+        warnings = []
+        if not obj.image:
+            warnings.append('⚠️ Добавьте изображение, чтобы сделать видео из картинки.')
+        if not obj.text:
+            warnings.append('⚠️ Добавьте текст, чтобы сделать видео по тексту.')
+
+        warning_html = ''.join(
+            f'<div style="color:#dc3545;font-size:12px;margin-top:4px;">{w}</div>' for w in warnings
+        )
+
         return format_html(
             '''
-            <div>
-                <button type="button" class="generate-video-btn"
-                    onclick="generatePostVideo('{url}', this)"
-                    style="padding: 10px 15px; background-color: #6a1b9a; color: white;
-                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                    🎬 Создать видео из изображения
-                </button>
-                <div id="generate-video-status" style="margin-top: 8px; font-size: 13px;"></div>
+            <div class="video-gen-section">
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button type="button" class="generate-video-btn"
+                        onclick="generatePostVideo('{image_url}', this, '{status_id}')"
+                        style="padding: 8px 12px; background-color: #6a1b9a; color: white;
+                        border: none; border-radius: 4px; cursor: pointer; font-size: 12px;"
+                        {image_disabled} {image_title}>
+                        🎬 VEO: из изображения
+                    </button>
+                    <button type="button" class="generate-video-btn"
+                        onclick="generatePostVideo('{text_url}', this, '{status_id}')"
+                        style="padding: 8px 12px; background-color: #1b5e20; color: white;
+                        border: none; border-radius: 4px; cursor: pointer; font-size: 12px;"
+                        {text_disabled} {text_title}>
+                        📝 VEO: по тексту
+                    </button>
+                </div>
+                <div id="{status_id}" style="margin-top: 8px; font-size: 13px;"></div>
+                {warnings}
             </div>
             <script>
             if (!window.generatePostVideo) {{
-                window.generatePostVideo = function(url, button) {{
-                    const statusDiv = document.getElementById('generate-video-status');
+                window.generatePostVideo = function(url, button, statusId) {{
+                    const statusDiv = document.getElementById(statusId || 'generate-video-status');
                     const originalText = button.textContent;
                     button.disabled = true;
                     button.style.opacity = '0.6';
-                    button.textContent = 'Генерируется...';
+                    button.textContent = 'Генерация...';
                     statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Генерация видео запущена...</span>';
 
                     const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
@@ -536,11 +561,11 @@ class PostAdmin(admin.ModelAdmin):
                         if (!ok || !data.success) {{
                             throw new Error(data.error || 'Ошибка генерации видео');
                         }}
-                        statusDiv.innerHTML = '<span style=\"color: #28a745;\">✓ ' + data.message + '</span>';
+                        statusDiv.innerHTML = '<span style="color: #28a745;">✓ ' + data.message + '</span>';
                         setTimeout(() => window.location.reload(), 4000);
                     }})
                     .catch(error => {{
-                        statusDiv.innerHTML = '<span style=\"color: #dc3545;\">✗ ' + error.message + '</span>';
+                        statusDiv.innerHTML = '<span style="color: #dc3545;">✗ ' + error.message + '</span>';
                         button.disabled = false;
                         button.style.opacity = '1';
                         button.textContent = originalText;
@@ -549,7 +574,14 @@ class PostAdmin(admin.ModelAdmin):
             }}
             </script>
             ''',
-            url=generate_url
+            image_url=veo_image_url,
+            text_url=veo_text_url,
+            status_id=status_id,
+            image_disabled=image_disabled,
+            text_disabled=text_disabled,
+            image_title=image_title,
+            text_title=text_title,
+            warnings=format_html(warning_html) if warnings else ''
         )
     video_generate_button.short_description = "AI видео"
 

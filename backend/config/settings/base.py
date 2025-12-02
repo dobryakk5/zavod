@@ -157,9 +157,22 @@ SIMPLE_JWT = {
     "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
 }
 
-# CORS settings
+# CORS / CSRF settings
+DEFAULT_CLIENT_ORIGINS = ",".join(
+    [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://solarlab.media",
+        "https://adm.solarlab.media",
+    ]
+)
+
 CORS_ALLOWED_ORIGINS = os.getenv(
     "CORS_ALLOWED_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,https://solarlab.media"
+    DEFAULT_CLIENT_ORIGINS,
 ).split(",")
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = os.getenv(
+    "CSRF_TRUSTED_ORIGINS",
+    DEFAULT_CLIENT_ORIGINS,
+).split(",")

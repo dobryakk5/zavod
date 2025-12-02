@@ -2,7 +2,8 @@
 
 ## Проблема
 
-При публикации через Celery worker возникает ошибка:
+При публикации через Celery worker или при выполнении задачи `discover_telegram_trends_for_topic`
+возникает ошибка:
 ```
 EOFError: EOF when reading a line
 ```
@@ -97,10 +98,14 @@ if __name__ == '__main__':
 
 ```bash
 cd backend
-python scripts/authorize_telegram.py
+python scripts/authorize_telegram.py --client-id 3 --session-type publisher
+# или для сборщика трендов:
+python scripts/authorize_telegram.py --client-id 3 --session-type collector
 ```
 
-Вам будет предложено ввести:
+Если не укажете параметры, скрипт спросит ID клиента и создаст `session_publisher_client_<ID>.session` по умолчанию.
+
+В обоих случаях вам будет предложено ввести:
 1. Номер телефона (в международном формате, например: +79123456789)
 2. Код подтверждения из Telegram
 3. (Опционально) 2FA пароль, если включен
@@ -108,6 +113,20 @@ python scripts/authorize_telegram.py
 ### Шаг 3: Перезапустите Celery worker
 
 После успешной авторизации файл сессии будет создан, и Celery worker сможет использовать его для публикаций.
+
+### Сбор Telegram трендов
+
+Задача `discover_telegram_trends_for_topic` **не может работать с ботами** (Telegram запрещает ботам читать историю каналов).
+Создайте отдельную пользовательскую сессию командой:
+
+```bash
+cd backend
+python scripts/authorize_telegram.py --client-id 3 --session-type collector
+```
+
+Будет создан файл `telegram_sessions/session_collector_client_<ID>.session`.
+Его отсутствие или авторизация как бота приведут к ошибке
+`Эта Telegram сессия авторизована как бот. Для сбора трендов необходима Telegram User API сессия.`
 
 ---
 

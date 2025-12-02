@@ -3,6 +3,7 @@ from django.utils import timezone
 import logging
 import json
 import os
+from typing import Optional
 
 from .models import Schedule, Topic, TrendItem, Post, ContentTemplate, SEOKeywordSet, Client
 from .aggregator import (
@@ -18,6 +19,51 @@ from .ai_generator import AIContentGenerator
 from .telegram_client import TelegramContentCollector, TelegramPublisher, run_async_task
 
 logger = logging.getLogger(__name__)
+
+
+def _build_text_video_prompt(post: Post) -> str:
+    """Собрать описание для генерации видео по тексту."""
+    base_text = (post.text or "").strip()
+    if len(base_text) > 800:
+        base_text = base_text[:800] + "..."
+
+    topic_name = ""
+    raw_topic = getattr(post, "topic", None)
+    if raw_topic:
+        topic_name = getattr(raw_topic, "name", str(raw_topic))
+    elif getattr(post, "story_id", None):
+        try:
+            story = post.story
+        except Exception:
+            story = None
+        if story and story.trend_item and story.trend_item.topic:
+            topic_name = story.trend_item.topic.name
+
+    if not topic_name:
+        source_trends = getattr(post, "source_trends", None)
+        trend = None
+        if source_trends is not None:
+            try:
+                trend = source_trends.select_related("topic").first()
+            except Exception:
+                trend = source_trends.first()
+        if trend and trend.topic:
+            topic_name = trend.topic.name
+
+    if not topic_name and post.client:
+        topic_name = post.client.name
+
+    parts = [
+        "Create a dynamic short-form social media video (vertical 9:16).",
+        "Add cinematic motion and modern transitions.",
+        f"Title: {post.title}".strip(),
+    ]
+    if topic_name:
+        parts.append(f"Business/topic: {topic_name}")
+    if base_text:
+        parts.append(f"Script idea:\n{base_text}")
+
+    return "\n".join(parts)
 
 
 def _update_post_status_after_publish(post):
@@ -734,123 +780,83 @@ def generate_image_for_post(post_id: int, model: str = "pollinations"):
 
 
 @shared_task
-def generate_video_from_image(post_id: int):
-    """Создать короткое видео по изображению поста с помощью Gradio."""
+def generate_video_from_image(post_id: int, method: Optional[str] = None, source: str = "image"):
+    """Создать короткое видео для поста (по изображению или тексту)."""
     try:
         post = Post.objects.get(id=post_id)
 
-        if not post.image:
-            logger.warning(f"Пост {post.id} не содержит изображения – видео не может быть создано")
+        from django.core.files import File
+        import uuid
+
+        try:
+            generator = AIContentGenerator()
+        except ValueError as exc:
+            logger.error("OPENROUTER_API_KEY обязателен для генерации видео: %s", exc)
             return False
 
-        from django.core.files import File
-        from gradio_client import Client, handle_file
-        import uuid
-        import tempfile
-        import requests
-
-        gradio_space = os.getenv('WAN_VIDEO_SPACE', 'zerogpu-aoti/wan2-2-fp8da-aoti-faster')
-        default_prompt = (
-            f"make this image come alive, cinematic motion, smooth animation. "
-            f"Context: {post.title[:120]}"
-        )
-        negative_prompt = (
-            "色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 静止, 整体发灰, 最差质量, "
-            "低质量, JPEG压缩残留, 丑陋的, 残缺的, 多余的手指, 画得不好的手部, 画得不好的脸部, 畸形的, 毁容的, "
-            "形态畸形的肢体, 手指融合, 静止不动的画面, 杂乱的背景, 三条腿, 背景人很多, 倒着走"
-        )
-
+        selected_method = (method or os.getenv("VIDEO_GENERATOR_METHOD", "wan")).lower()
+        source_type = (source or "image").lower()
         logger.info(
-            "Запуск генерации видео по изображению поста %s (space=%s)",
+            "Генерация видео для поста %s методом %s (source=%s)",
             post.id,
-            gradio_space,
+            selected_method,
+            source_type
         )
 
-        client = Client(gradio_space)
+        video_prompt = None
+        if post.text:
+            video_prompt = generator.generate_video_prompt(post.title, post.text)
+        if video_prompt:
+            logger.info("Используем AI-промпт для видео: %s", video_prompt[:120])
 
-        result = client.predict(
-            input_image=handle_file(post.image.path),
-            prompt=default_prompt,
-            steps=6,
-            negative_prompt=negative_prompt,
-            duration_seconds=3.5,
-            guidance_scale=1,
-            guidance_scale_2=1,
-            seed=42,
-            randomize_seed=True,
-            api_name="/generate_video"
-        )
+        if source_type == "text":
+            if not post.text:
+                logger.warning("Пост %s не содержит текста – видео по тексту невозможно", post.id)
+                return False
+            if selected_method != "veo":
+                logger.error("Метод %s не поддерживает генерацию по тексту", selected_method)
+                return False
 
-        logger.debug("Ответ от генератора видео: %s", result)
+            final_prompt = video_prompt or _build_text_video_prompt(post)
+            result = generator.generate_video_from_text(
+                prompt=final_prompt,
+                method=selected_method
+            )
+        else:
+            if not post.image:
+                logger.warning("Пост %s не содержит изображения – видео не получится", post.id)
+                return False
 
-        downloaded_temp_files = []
+            default_prompt = (
+                f"make this image come alive, cinematic motion, smooth animation. "
+                f"Context: {post.title[:120]}"
+            )
+            negative_prompt = (
+                "色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 静止, 整体发灰, 最差质量, "
+                "低质量, JPEG压缩残留, 丑陋的, 残缺的, 多余的手指, 画得不好的手部, 画得不好的脸部, 畸形的, 毁容的, "
+                "形态畸形的肢体, 手指融合, 静止不动的画面, 杂乱的背景, 三条腿, 背景人很多, 倒着走"
+            )
 
-        def _download_url(url: str) -> str:
-            try:
-                response = requests.get(url, timeout=180)
-                response.raise_for_status()
-                fd, temp_path = tempfile.mkstemp(suffix=".mp4")
-                with os.fdopen(fd, 'wb') as tmp_file:
-                    tmp_file.write(response.content)
-                downloaded_temp_files.append(temp_path)
-                return temp_path
-            except Exception as download_error:
-                logger.error(f"Не удалось скачать видео по ссылке {url}: {download_error}")
-                return None
+            final_prompt = video_prompt or default_prompt
+            if selected_method == "veo":
+                final_prompt = (
+                    final_prompt +
+                    "\nUse the provided post image as the starting frame and animate it with cinematic motion."
+                )
+            result = generator.generate_video_from_image(
+                image_path=post.image.path,
+                prompt=final_prompt,
+                method=selected_method,
+                negative_prompt=negative_prompt
+            )
 
-        def _extract_video_path(value):
-            if value is None:
-                return None
+        if not result.get("success"):
+            logger.error("Ошибка генерации видео (%s): %s", selected_method, result.get("error"))
+            return False
 
-            if isinstance(value, str):
-                candidate = value.strip()
-                if candidate.startswith("file="):
-                    candidate = candidate.split("file=", 1)[1].split(";", 1)[0]
-                if candidate.startswith("http"):
-                    return _download_url(candidate)
-                if os.path.exists(candidate):
-                    return candidate
-                return None
-
-            if isinstance(value, (list, tuple)):
-                for item in value:
-                    path = _extract_video_path(item)
-                    if path:
-                        return path
-                return None
-
-            if isinstance(value, dict):
-                preferred_keys = [
-                    'video', 'videos', 'result', 'data', 'value', 'output', 'outputs'
-                ]
-                for key in preferred_keys:
-                    if key in value:
-                        path = _extract_video_path(value[key])
-                        if path:
-                            return path
-                for val in value.values():
-                    path = _extract_video_path(val)
-                    if path:
-                        return path
-                return None
-
-            for attr in ('data', 'value'):
-                if hasattr(value, attr):
-                    path = _extract_video_path(getattr(value, attr))
-                    if path:
-                        return path
-
-            return None
-
-        video_temp_path = _extract_video_path(result)
-
+        video_temp_path = result.get("video_path")
         if not video_temp_path or not os.path.exists(video_temp_path):
-            logger.error("Не удалось получить путь к сгенерированному видео для поста %s", post.id)
-            for temp_path in downloaded_temp_files:
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
+            logger.error("Видео не найдено после генерации для поста %s", post.id)
             return False
 
         video_filename = f"post_{post.id}_{uuid.uuid4().hex[:8]}.mp4"
@@ -858,17 +864,17 @@ def generate_video_from_image(post_id: int):
         if post.video:
             post.video.delete(save=False)
 
-        with open(video_temp_path, 'rb') as video_file:
+        with open(video_temp_path, "rb") as video_file:
             post.video.save(video_filename, File(video_file), save=True)
 
-        logger.info("Видео успешно сохранено в пост %s", post.id)
+        for path in set(result.get("cleanup_paths", []) + [video_temp_path]):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
-        if video_temp_path in downloaded_temp_files:
-            try:
-                os.remove(video_temp_path)
-            except OSError:
-                pass
-
+        logger.info("Видео (%s) успешно сохранено в пост %s", result.get("model", selected_method), post.id)
         return True
 
     except Post.DoesNotExist:
@@ -954,7 +960,7 @@ def discover_telegram_trends_for_topic(topic_id: int, limit: int = 100):
         collector = TelegramContentCollector(
             api_id=client.telegram_api_id,
             api_hash=client.telegram_api_hash,
-            session_name=f"session_client_{client.id}"
+            session_name=f"session_collector_client_{client.id}"
         )
 
         # Запускаем асинхронный поиск

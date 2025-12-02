@@ -425,18 +425,46 @@ class PostViewSet(viewsets.ModelViewSet):
         """
         post = self.get_object()
 
-        if not post.image:
+        method = (request.data.get('method') or 'wan').lower()
+        allowed_methods = {'wan', 'veo'}
+        if method not in allowed_methods:
+            return Response({
+                'success': False,
+                'error': f'Unknown video method "{method}"'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        source = (request.data.get('source') or 'image').lower()
+        allowed_sources = {'image', 'text'}
+        if source not in allowed_sources:
+            return Response({
+                'success': False,
+                'error': f'Unknown video source "{source}"'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if source == 'image' and not post.image:
             return Response({
                 'success': False,
                 'error': 'Post must have an image before generating video'
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        if source == 'text' and not post.text:
+            return Response({
+                'success': False,
+                'error': 'Post must have text before generating text-based video'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if source == 'text' and method != 'veo':
+            return Response({
+                'success': False,
+                'error': 'Text-based video currently supported only via VEO'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         # Call existing Celery task
-        task = tasks.generate_video_from_image.delay(post.id)
+        task = tasks.generate_video_from_image.delay(post.id, method=method, source=source)
 
         return Response({
             'success': True,
-            'message': 'Video generation started',
+            'message': f'Video generation started ({method}/{source})',
             'task_id': task.id
         })
 

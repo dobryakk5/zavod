@@ -267,7 +267,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
             </div>
           ) : (
             <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">Наш бот запросит доступ к вашему профилю и вернет вас в кабинет.</p>
+              <p className="text-sm text-muted-foreground">После авторизации произойдет вход в кабинет.</p>
               {botUsername ? (
                 <TelegramAuthButton
                   botUsername={botUsername}

@@ -69,17 +69,54 @@ def generate_post_video(request, post_id):
     """
     post = get_object_or_404(Post, id=post_id)
 
-    if not post.image:
+    payload = {}
+    if request.body:
+        try:
+            payload = json.loads(request.body)
+        except json.JSONDecodeError:
+            payload = {}
+
+    method = (payload.get('method') or request.GET.get('method') or 'wan').lower()
+    source = (payload.get('source') or request.GET.get('source') or 'image').lower()
+
+    allowed_methods = {'wan', 'veo'}
+    allowed_sources = {'image', 'text'}
+
+    if method not in allowed_methods:
+        return JsonResponse({
+            'success': False,
+            'error': f'Неизвестный метод генерации видео: {method}'
+        }, status=400)
+
+    if source not in allowed_sources:
+        return JsonResponse({
+            'success': False,
+            'error': f'Неизвестный тип источника: {source}'
+        }, status=400)
+
+    if source == 'image' and not post.image:
         return JsonResponse({
             'success': False,
             'error': 'Сначала добавьте изображение к посту'
         }, status=400)
 
-    generate_video_from_image.delay(post_id)
+    if source == 'text' and not post.text:
+        return JsonResponse({
+            'success': False,
+            'error': 'Для генерации по тексту нужен текст поста'
+        }, status=400)
+
+    if source == 'text' and method != 'veo':
+        return JsonResponse({
+            'success': False,
+            'error': 'Текстовая генерация пока поддерживается только VEO'
+        }, status=400)
+
+    generate_video_from_image.delay(post_id, method=method, source=source)
 
     return JsonResponse({
         'success': True,
-        'message': 'Генерация видео запущена. Обновите страницу чуть позже.',
+        'message': f'Генерация видео ({method}/{source}) запущена. Обновите страницу чуть позже.',
     })
 
 

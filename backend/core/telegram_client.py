@@ -43,9 +43,29 @@ class TelegramContentCollector:
         os.makedirs(sessions_dir, exist_ok=True)
 
         session_path = os.path.join(sessions_dir, self.session_name)
+        session_file = f"{session_path}.session"
+
+        if not os.path.exists(session_file):
+            raise RuntimeError(
+                f"Telegram сессия '{session_file}' не найдена. "
+                "Создайте её через python backend/scripts/authorize_telegram.py "
+                "или следуйте инструкции в docs/TELEGRAM_SETUP.md."
+            )
 
         self.client = TelegramClient(session_path, self.api_id, self.api_hash)
         await self.client.start()
+
+        me = await self.client.get_me()
+        if getattr(me, 'bot', False):
+            await self.client.disconnect()
+            self.client = None
+            raise RuntimeError(
+                "Эта Telegram сессия авторизована как бот. "
+                "Для сбора трендов необходима Telegram User API сессия. "
+                "Создайте её через python backend/scripts/authorize_telegram.py --session-type collector "
+                "или следуйте инструкции в docs/TELEGRAM_SETUP.md."
+            )
+
         logger.info(f"Telegram клиент подключен (сессия: {self.session_name})")
 
     async def disconnect(self):
@@ -119,6 +139,8 @@ class TelegramContentCollector:
             logger.error(f"Нет доступа к каналу {channel} (приватный или заблокирован)")
         except errors.ChannelInvalidError:
             logger.error(f"Неверный канал: {channel}")
+        except ValueError as e:
+            logger.error(f"Некорректный канал {channel}: {e}")
         except Exception as e:
             logger.error(f"Ошибка при поиске в канале {channel}: {e}", exc_info=True)
 
@@ -194,7 +216,7 @@ class TelegramPublisher:
             if not os.path.exists(session_path + '.session'):
                 raise RuntimeError(
                     f"Сессия {session_path}.session не найдена. "
-                    "Создайте сессию с помощью скрипта: python manage.py shell < scripts/authorize_telegram.py"
+                    "Создайте сессию командой: python backend/scripts/authorize_telegram.py --client-id <id> --session-type publisher"
                 )
             await self.client.start()
             logger.info(f"Telegram publisher подключен (User API, сессия: {self.session_name})")

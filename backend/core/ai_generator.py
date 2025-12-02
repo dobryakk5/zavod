@@ -8,23 +8,15 @@ import os
 import requests
 import json
 import logging
-import base64
-import shutil
 from typing import Dict, Any, Optional
-from io import BytesIO
+
+from . import foto_video_gen
 
 try:
     from huggingface_hub import InferenceClient
     HF_HUB_AVAILABLE = True
 except ImportError:
     HF_HUB_AVAILABLE = False
-
-try:
-    from gradio_client import Client as GradioClient
-    GRADIO_AVAILABLE = True
-except ImportError:
-    GradioClient = None
-    GRADIO_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -524,437 +516,85 @@ class AIContentGenerator:
             logger.error(f"Error generating image prompt: {e}", exc_info=True)
             return None
 
+    def generate_video_prompt(self, post_title: str, post_text: str, language: str = "ru") -> Optional[str]:
+        """Сгенерировать промпт для короткого вовлекающего видео по тексту поста."""
+        try:
+            lang_name = "русском" if language == "ru" else "английском"
+            prompt = f"""
+Ты — режиссёр и сценарист коротких вертикальных видео TikTok/Reels. На входе у тебя текст поста.
+
+1. Сделай вовлекающий, визуально насыщенный prompt на английском языке.
+2. Описывай сцену, настроение, движения камеры, переходы, ключевые визуальные объекты.
+3. Стиль — современный, динамичный, вдохновляющий. Максимум 3 предложения.
+4. Не добавляй хештеги, кавычки и технические команды.
+
+Пост ({lang_name}):
+Заголовок: {post_title}
+Текст: {post_text[:800]}
+
+Выход: только английский prompt для генерации видео.
+"""
+
+            logger.info("Генерация промпта для видео по посту: %s", post_title[:50])
+            ai_response = self.get_ai_response(prompt, max_tokens=300, temperature=0.7)
+            if not ai_response:
+                logger.error("Не удалось получить промпт для видео")
+                return None
+
+            video_prompt = ai_response.strip()
+            logger.info("Сгенерирован промпт для видео: %s", video_prompt[:120])
+            return video_prompt
+
+        except Exception as e:
+            logger.error(f"Error generating video prompt: {e}", exc_info=True)
+            return None
+
     def generate_image(self, prompt: str, output_path: str, model: str = "pollinations") -> Optional[Dict[str, Any]]:
         """
-        Generate image using AI based on text prompt
-
-        Args:
-            prompt: Text prompt for image generation (in English)
-            output_path: Full path where to save the generated image
-            model: Image generation model to use:
-                - "pollinations": Pollinations AI (free, default)
-                - "nanobanana": OpenRouter google/gemini-2.5-flash-image
-                - "huggingface": HuggingFace with Nebius GPU provider (requires HF_TOKEN)
-                - "flux2": FLUX.2 HuggingFace Space via gradio_client (requires gradio_client)
-
-        Returns:
-            Dict with result:
-            {
-                "success": True/False,
-                "image_path": "path to saved image",
-                "image_url": "URL of generated image",
-                "error": "error message if failed"
-            }
+        Генерация изображения с использованием вынесенного фото/видео модуля.
         """
-        logger.info(f"Генерация изображения моделью '{model}' по промпту: {prompt[:100]}")
+        return foto_video_gen.generate_image(
+            prompt=prompt,
+            output_path=output_path,
+            model=model,
+            api_key=self.api_key,
+            api_url=self.api_url,
+            hf_client=self.hf_client
+        )
 
-        if model == "nanobanana":
-            return self._generate_image_openrouter(prompt, output_path)
-        elif model == "huggingface":
-            return self._generate_image_huggingface(prompt, output_path)
-        elif model == "flux2":
-            return self._generate_image_flux2(prompt, output_path)
-        else:
-            return self._generate_image_pollinations(prompt, output_path)
-
-    def _generate_image_pollinations(self, prompt: str, output_path: str) -> Optional[Dict[str, Any]]:
+    def generate_video_from_image(
+        self,
+        image_path: str,
+        prompt: str,
+        method: str = "wan",
+        negative_prompt: Optional[str] = None,
+        **options: Any
+    ) -> Dict[str, Any]:
         """
-        Generate image using Pollinations AI (free service)
-
-        Args:
-            prompt: Text prompt for image generation
-            output_path: Full path where to save the generated image
-
-        Returns:
-            Dict with result
+        Создать видео из изображения, поддерживая WAN и VEO методы.
         """
-        try:
-            # Используем Pollinations AI - бесплатный сервис генерации изображений
-            # URL формируется как: https://image.pollinations.ai/prompt/{encoded_prompt}
-            import urllib.parse
-            encoded_prompt = urllib.parse.quote(prompt)
-            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+        return foto_video_gen.generate_video_from_image(
+            image_path=image_path,
+            prompt=prompt,
+            method=method,
+            negative_prompt=negative_prompt,
+            **options
+        )
 
-            logger.info(f"Запрос изображения Pollinations с URL: {image_url}")
-
-            # Скачиваем изображение
-            response = requests.get(image_url, timeout=60)
-
-            if response.status_code == 200:
-                # Создаём директорию если не существует
-                import os
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-                # Сохраняем изображение
-                with open(output_path, 'wb') as f:
-                    f.write(response.content)
-
-                logger.info(f"Изображение успешно сохранено: {output_path}")
-
-                return {
-                    "success": True,
-                    "image_path": output_path,
-                    "image_url": image_url,
-                    "model": "pollinations"
-                }
-            else:
-                logger.error(f"Ошибка загрузки изображения: HTTP {response.status_code}")
-                return {
-                    "success": False,
-                    "error": f"HTTP error {response.status_code}"
-                }
-
-        except requests.exceptions.Timeout:
-            logger.error("Таймаут при генерации изображения")
-            return {
-                "success": False,
-                "error": "Request timeout"
-            }
-        except Exception as e:
-            logger.error(f"Error generating image: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": str(e)
-            }
-
-    def _generate_image_openrouter(self, prompt: str, output_path: str) -> Optional[Dict[str, Any]]:
+    def generate_video_from_text(
+        self,
+        prompt: str,
+        method: str = "veo",
+        **options: Any
+    ) -> Dict[str, Any]:
         """
-        Generate image using OpenRouter google/gemini-2.5-flash-image model
-
-        Args:
-            prompt: Text prompt for image generation
-            output_path: Full path where to save the generated image
-
-        Returns:
-            Dict with result
+        Создать видео только по тексту (доступно для VEO).
         """
-        try:
-            logger.info("Генерация изображения через OpenRouter (google/gemini-2.5-flash-image)")
-
-            # OpenRouter API для генерации изображений
-            response = requests.post(
-                self.api_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://zavod-content-factory.com",
-                    "X-Title": "Content Factory Image Generator"
-                },
-                json={
-                    "model": "google/gemini-2.5-flash-image",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": f"Generate an image: {prompt}"
-                        }
-                    ]
-                },
-                timeout=120  # Генерация изображения может занять больше времени
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                logger.debug(f"OpenRouter response: {data}")
-
-                # Извлечь изображение из ответа
-                # Может быть URL или base64-encoded изображение
-                image_url = None
-                image_base64 = None
-
-                if 'choices' in data and len(data['choices']) > 0:
-                    message = data['choices'][0].get('message', {})
-                    content = message.get('content', '')
-
-                    # Проверяем, есть ли base64 изображение в content (часто в виде data URI)
-                    if isinstance(content, list):
-                        # content может быть массивом объектов
-                        for item in content:
-                            if isinstance(item, dict):
-                                # Проверяем image_url с base64
-                                if 'image_url' in item:
-                                    img_url_data = item['image_url']
-                                    if isinstance(img_url_data, dict) and 'url' in img_url_data:
-                                        url_value = img_url_data['url']
-                                        if url_value.startswith('data:image'):
-                                            image_base64 = url_value
-                                        else:
-                                            image_url = url_value
-                    elif isinstance(content, str):
-                        # Попробуем найти data URI или обычный URL
-                        if content.startswith('data:image'):
-                            image_base64 = content
-                        else:
-                            # Попробуем найти URL изображения в тексте
-                            import re
-                            url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-                            urls = re.findall(url_pattern, content)
-                            if urls:
-                                image_url = urls[0]
-
-                    # Проверяем альтернативные поля
-                    if not image_url and not image_base64:
-                        if 'image_url' in message:
-                            image_url = message['image_url']
-
-                # Обрабатываем изображение в зависимости от формата
-                if image_base64:
-                    logger.info("Обнаружено base64-encoded изображение")
-                    # Извлекаем base64 данные из data URI
-                    # Формат: data:image/png;base64,iVBORw0KGgo...
-                    if ',' in image_base64:
-                        base64_data = image_base64.split(',', 1)[1]
-                    else:
-                        base64_data = image_base64
-
-                    # Декодируем base64
-                    try:
-                        image_bytes = base64.b64decode(base64_data)
-
-                        # Создаём директорию если не существует
-                        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-                        # Сохраняем изображение
-                        with open(output_path, 'wb') as f:
-                            f.write(image_bytes)
-
-                        logger.info(f"Изображение NanoBanana успешно сохранено: {output_path}")
-
-                        return {
-                            "success": True,
-                            "image_path": output_path,
-                            "image_url": None,  # Нет прямого URL для base64
-                            "model": "nanobanana"
-                        }
-                    except Exception as e:
-                        logger.error(f"Ошибка декодирования base64 изображения: {e}")
-                        return {
-                            "success": False,
-                            "error": f"Base64 decode error: {str(e)}"
-                        }
-
-                elif image_url:
-                    logger.info(f"Получен URL изображения: {image_url}")
-
-                    # Скачиваем изображение по URL
-                    img_response = requests.get(image_url, timeout=60)
-
-                    if img_response.status_code == 200:
-                        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-                        with open(output_path, 'wb') as f:
-                            f.write(img_response.content)
-
-                        logger.info(f"Изображение NanoBanana успешно сохранено: {output_path}")
-
-                        return {
-                            "success": True,
-                            "image_path": output_path,
-                            "image_url": image_url,
-                            "model": "nanobanana"
-                        }
-                    else:
-                        logger.error(f"Ошибка загрузки изображения: HTTP {img_response.status_code}")
-                        return {
-                            "success": False,
-                            "error": f"Image download HTTP error {img_response.status_code}"
-                        }
-                else:
-                    logger.error(f"Не удалось извлечь изображение из ответа: {data}")
-                    return {
-                        "success": False,
-                        "error": "No image URL or base64 data in response"
-                    }
-            else:
-                logger.error(f"OpenRouter API Error: {response.status_code} - {response.text}")
-                return {
-                    "success": False,
-                    "error": f"API error {response.status_code}: {response.text}"
-                }
-
-        except requests.exceptions.Timeout:
-            logger.error("Таймаут при генерации изображения через OpenRouter")
-            return {
-                "success": False,
-                "error": "Request timeout"
-            }
-        except Exception as e:
-            logger.error(f"Error generating image via OpenRouter: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": str(e)
-            }
-
-    def _generate_image_flux2(self, prompt: str, output_path: str) -> Optional[Dict[str, Any]]:
-        """
-        Generate image using FLUX.2 HuggingFace Space via gradio_client.
-        """
-        if not GRADIO_AVAILABLE:
-            logger.error("gradio_client не установлен – FLUX.2 генерация недоступна")
-            return {
-                "success": False,
-                "error": "gradio_client not installed. Run pip install gradio_client."
-            }
-
-        try:
-            def _env_bool(name: str, default: bool) -> bool:
-                value = os.getenv(name)
-                if value is None:
-                    return default
-                return value.strip().lower() in ("1", "true", "yes", "on")
-
-            space_name = os.getenv('FLUX2_SPACE', 'black-forest-labs/FLUX.2-dev')
-            api_name = os.getenv('FLUX2_API_NAME', '/infer')
-            width = int(os.getenv('FLUX2_WIDTH', '1024'))
-            height = int(os.getenv('FLUX2_HEIGHT', '1024'))
-            seed = float(os.getenv('FLUX2_SEED', '0'))
-            randomize_seed = _env_bool('FLUX2_RANDOMIZE_SEED', True)
-            steps = float(os.getenv('FLUX2_STEPS', '30'))
-            guidance_scale = float(os.getenv('FLUX2_GUIDANCE', '4'))
-            prompt_upsampling = _env_bool('FLUX2_PROMPT_UPSAMPLING', True)
-
-            logger.info("Генерация изображения через FLUX.2 Space %s", space_name)
-
-            client = GradioClient(space_name)
-            result = client.predict(
-                prompt=prompt,
-                input_images=[],
-                seed=seed,
-                randomize_seed=randomize_seed,
-                width=width,
-                height=height,
-                num_inference_steps=steps,
-                guidance_scale=guidance_scale,
-                prompt_upsampling=prompt_upsampling,
-                api_name=api_name
-            )
-
-            logger.debug("FLUX.2 ответ: %s", result)
-
-            image_entry: Optional[Dict[str, Any]] = None
-            if isinstance(result, (list, tuple)) and len(result) > 0:
-                potential = result[0]
-                if isinstance(potential, dict):
-                    image_entry = potential
-            elif isinstance(result, dict):
-                image_entry = result
-
-            path_candidate = None
-            url_candidate = None
-
-            if image_entry:
-                path_candidate = image_entry.get('path')
-                url_candidate = image_entry.get('url')
-
-                meta = image_entry.get('meta')
-                if isinstance(meta, dict):
-                    url_candidate = url_candidate or meta.get('url')
-
-                nested_image = image_entry.get('image')
-                if isinstance(nested_image, dict):
-                    path_candidate = path_candidate or nested_image.get('path')
-                    url_candidate = url_candidate or nested_image.get('url')
-
-            if isinstance(result, str) and not path_candidate:
-                path_candidate = result
-
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-            saved = False
-
-            if path_candidate and os.path.exists(path_candidate):
-                shutil.copyfile(path_candidate, output_path)
-                saved = True
-            else:
-                download_url = None
-                if path_candidate and str(path_candidate).startswith('http'):
-                    download_url = path_candidate
-                elif url_candidate:
-                    download_url = url_candidate
-
-                if download_url:
-                    response = requests.get(download_url, timeout=120)
-                    response.raise_for_status()
-                    with open(output_path, 'wb') as f:
-                        f.write(response.content)
-                    saved = True
-
-            if not saved:
-                logger.error("FLUX.2 Space не вернуло корректного пути или URL для изображения")
-                return {
-                    "success": False,
-                    "error": "Unable to retrieve generated image from FLUX.2 space"
-                }
-
-            logger.info("Изображение FLUX.2 успешно сохранено: %s", output_path)
-            return {
-                "success": True,
-                "image_path": output_path,
-                "image_url": url_candidate,
-                "model": "flux2"
-            }
-
-        except Exception as e:
-            logger.error(f"Ошибка генерации через FLUX.2 Space: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": str(e)
-            }
-
-    def _generate_image_huggingface(self, prompt: str, output_path: str, model: str = "black-forest-labs/FLUX.1-dev") -> Optional[Dict[str, Any]]:
-        """
-        Generate image using HuggingFace InferenceClient with Nebius provider
-
-        Args:
-            prompt: Text prompt for image generation
-            output_path: Full path where to save the generated image
-            model: HuggingFace model to use (default: black-forest-labs/FLUX.1-dev)
-
-        Returns:
-            Dict with result
-        """
-        try:
-            if not self.hf_client:
-                logger.error("HuggingFace client not initialized (check HF_TOKEN in environment)")
-                return {
-                    "success": False,
-                    "error": "HuggingFace client not available. Install huggingface_hub and set HF_TOKEN environment variable."
-                }
-
-            logger.info(f"Генерация изображения через HuggingFace Nebius (модель: {model})")
-
-            # Генерация изображения через InferenceClient
-            image = self.hf_client.text_to_image(
-                prompt=prompt,
-                model=model
-            )
-
-            # Конвертируем PIL Image в байты
-            img_byte_arr = BytesIO()
-            image.save(img_byte_arr, format='PNG')
-            img_byte_arr = img_byte_arr.getvalue()
-
-            # Создаём директорию если не существует
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-            # Сохраняем изображение
-            with open(output_path, 'wb') as f:
-                f.write(img_byte_arr)
-
-            logger.info(f"Изображение HuggingFace успешно сохранено: {output_path}")
-
-            return {
-                "success": True,
-                "image_path": output_path,
-                "image_url": None,  # InferenceClient не возвращает URL
-                "model": "huggingface"
-            }
-
-        except Exception as e:
-            logger.error(f"Error generating image via HuggingFace: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        return foto_video_gen.generate_video_from_text(
+            prompt=prompt,
+            method=method,
+            **options
+        )
 
     def generate_story_episodes(
         self,
