@@ -6,7 +6,7 @@ from urllib.parse import parse_qsl
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db.models import Count, F
+from django.db.models import Count, F, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action
@@ -20,6 +20,8 @@ from core.models import (
     Client,
     ContentTemplate,
     Post,
+    PostTone,
+    PostType,
     Schedule,
     SocialAccount,
     Story,
@@ -28,6 +30,7 @@ from core.models import (
 )
 from core import tasks
 
+from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
 from .serializers import (
     ClientSettingsSerializer,
@@ -35,6 +38,8 @@ from .serializers import (
     ContentTemplateSerializer,
     PostDetailSerializer,
     PostSerializer,
+    PostToneSerializer,
+    PostTypeSerializer,
     ScheduleSerializer,
     SocialAccountSerializer,
     StoryDetailSerializer,
@@ -69,21 +74,38 @@ def set_token_cookie(response: Response, key: str, value: str, max_age: int):
 class TelegramAuthView(APIView):
     """Telegram authentication endpoint for frontend"""
     permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def _authenticate_cookie_user(self, request):
+        """
+        Manually authenticate the request since the view disables global JWT auth.
+        Allows login endpoints to be accessed even when existing tokens are expired.
+        """
+        authenticator = CookieJWTAuthentication()
+        auth_result = authenticator.authenticate(request)
+        if not auth_result:
+            return None
+
+        user, token = auth_result
+        request.user = user
+        request.auth = token
+        return user
 
     def get(self, request):
         """Check if user is authenticated"""
-        if not request.user.is_authenticated:
+        user = self._authenticate_cookie_user(request)
+        if not user:
             return Response(status=status.HTTP_401_UNAUTHORIZED)
 
         user_data = {
             "user": {
-                "telegramId": str(request.user.id),
-                "firstName": request.user.first_name or request.user.username,
-                "lastName": request.user.last_name,
-                "username": request.user.username,
+                "telegramId": str(user.id),
+                "firstName": user.first_name or user.username,
+                "lastName": user.last_name,
+                "username": user.username,
                 "photoUrl": None,
-                "authDate": str(request.user.date_joined),
-                "isDev": getattr(request.user, 'is_dev_user', False)
+                "authDate": str(user.date_joined),
+                "isDev": getattr(user, 'is_dev_user', False)
             }
         }
         return Response(user_data)
@@ -232,6 +254,7 @@ class TelegramAuthView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
 
     def post(self, request, *args, **kwargs):
         serializer = TokenObtainPairSerializer(data=request.data, context={"request": request})
@@ -251,6 +274,7 @@ class LoginView(APIView):
 
 class RefreshTokenView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
 
     def post(self, request, *args, **kwargs):
         data = request.data.copy()
@@ -275,6 +299,7 @@ class RefreshTokenView(APIView):
 
 class LogoutView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
 
     def post(self, request, *args, **kwargs):
         response = Response({"success": True})
@@ -580,15 +605,15 @@ class TopicViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], permission_classes=[IsTenantOwnerOrEditor])
     def generate_seo(self, request, pk=None):
-        """Generate SEO keywords for this topic"""
+        """Generate SEO keywords for the topic's client"""
         topic = self.get_object()
 
-        # Call existing Celery task
-        task = tasks.generate_seo_keywords_for_topic.delay(topic.id)
+        # Trigger client-level SEO generation (deduplicated per client)
+        task = tasks.generate_seo_keywords_for_client.delay(topic.client_id)
 
         return Response({
             'success': True,
-            'message': f'SEO keyword generation started for topic: {topic.name}',
+            'message': f'SEO keyword generation started for client: {topic.client.name}',
             'task_id': task.id
         })
 
@@ -788,3 +813,50 @@ class ClientSettingsView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+
+
+class PostTypeViewSet(viewsets.ModelViewSet):
+    """ViewSet for PostType (справочник типов постов)"""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = PostTypeSerializer
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsTenantOwnerOrEditor()]
+        return [IsTenantMember()]
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        # Возвращаем системные типы (client=None) + типы конкретного клиента
+        return PostType.objects.filter(
+            Q(client__isnull=True) | Q(client=client)
+        ).order_by("label")
+
+    def perform_create(self, serializer):
+        # Новые типы создаются как системные (доступны всем клиентам)
+        serializer.save(client=None)
+
+
+class PostToneViewSet(viewsets.ModelViewSet):
+    """ViewSet for PostTone (справочник тонов постов)"""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = PostToneSerializer
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsTenantOwnerOrEditor()]
+        return [IsTenantMember()]
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        # Возвращаем системные тоны (client=None) + тоны конкретного клиента
+        return PostTone.objects.filter(
+            Q(client__isnull=True) | Q(client=client)
+        ).order_by("label")
+
+    def perform_create(self, serializer):
+        # Новые тоны создаются как системные (доступны всем клиентам)
+        serializer.save(client=None)

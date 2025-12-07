@@ -6,6 +6,8 @@ from core.models import (
     Client,
     ContentTemplate,
     Post,
+    PostTone,
+    PostType,
     Schedule,
     SEOKeywordSet,
     SocialAccount,
@@ -234,8 +236,8 @@ class StoryDetailSerializer(serializers.ModelSerializer):
 class ContentTemplateSerializer(serializers.ModelSerializer):
     """
     Content template serializer.
-    Basic fields (type, tone, length, language) are READ-ONLY.
-    Only advanced fields can be edited.
+    Type and tone are now editable to allow custom values.
+    Length and language remain read-only after creation.
     """
 
     class Meta:
@@ -247,7 +249,8 @@ class ContentTemplateSerializer(serializers.ModelSerializer):
             "tone",
             "length",
             "language",
-            "prompt_template",
+            "seo_prompt_template",
+            "trend_prompt_template",
             "additional_instructions",
             "is_default",
             "include_hashtags",
@@ -257,10 +260,8 @@ class ContentTemplateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
-            "type",  # Basic field - readonly
-            "tone",  # Basic field - readonly
-            "length",  # Basic field - readonly
-            "language",  # Basic field - readonly
+            "length",  # Keep readonly for now
+            "language",  # Keep readonly for now
             "created_at",
             "updated_at",
         ]
@@ -270,14 +271,19 @@ class SEOKeywordSetSerializer(serializers.ModelSerializer):
     """SEO keyword set serializer."""
 
     topic_name = serializers.CharField(source="topic.name", read_only=True)
+    client_name = serializers.CharField(source="client.name", read_only=True)
 
     class Meta:
         model = SEOKeywordSet
         fields = [
             "id",
+            "client",
+            "client_name",
+             "group_type",
             "topic",
             "topic_name",
             "status",
+            "keywords_list",
             "keyword_groups",
             "ai_model",
             "prompt_used",
@@ -286,7 +292,11 @@ class SEOKeywordSetSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "client",
+            "group_type",
+            "topic",
             "status",
+            "keywords_list",
             "keyword_groups",
             "ai_model",
             "prompt_used",
@@ -343,3 +353,22 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "vkontakte_source_groups",
         ]
         read_only_fields = ["slug"]  # slug is readonly
+
+
+
+class PostTypeSerializer(serializers.ModelSerializer):
+    """Serializer for PostType (справочник типов постов)"""
+
+    class Meta:
+        model = PostType
+        fields = ["id", "value", "label", "is_default", "created_at"]
+        read_only_fields = ["id", "is_default", "created_at"]
+
+
+class PostToneSerializer(serializers.ModelSerializer):
+    """Serializer for PostTone (справочник тонов постов)"""
+
+    class Meta:
+        model = PostTone
+        fields = ["id", "value", "label", "is_default", "created_at"]
+        read_only_fields = ["id", "is_default", "created_at"]

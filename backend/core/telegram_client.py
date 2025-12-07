@@ -146,6 +146,62 @@ class TelegramContentCollector:
 
         return found_messages
 
+    async def get_channel_messages(
+        self,
+        channel_username: str,
+        limit: int = 20
+    ) -> List[Dict]:
+        """
+        Получить последние сообщения из канала (без фильтрации).
+
+        Args:
+            channel_username: Username канала (например, '@my_channel')
+            limit: Количество сообщений для получения (по умолчанию 20)
+
+        Returns:
+            Список сообщений в формате словарей
+        """
+        if not self.client:
+            raise RuntimeError("Клиент не подключен. Вызовите connect() сначала.")
+
+        messages = []
+
+        try:
+            # Получаем последние сообщения из канала
+            async for msg in self.client.iter_messages(channel_username, limit=limit):
+                if not msg:
+                    continue
+
+                # Получаем текст сообщения
+                text = msg.message or ''
+
+                # Формируем данные сообщения
+                message_data = {
+                    'id': msg.id,
+                    'text': text,
+                    'date': msg.date,
+                    'channel': channel_username,
+                    'url': f"https://t.me/{channel_username.lstrip('@')}/{msg.id}",
+                    'views': getattr(msg, 'views', 0) or 0,
+                    'forwards': getattr(msg, 'forwards', 0) or 0,
+                    'has_media': msg.media is not None,
+                    'media_type': type(msg.media).__name__ if msg.media else None,
+                }
+                messages.append(message_data)
+
+            logger.info(f"Получено {len(messages)} сообщений из канала {channel_username}")
+
+        except errors.ChannelPrivateError:
+            logger.error(f"Нет доступа к каналу {channel_username} (приватный или заблокирован)")
+        except errors.ChannelInvalidError:
+            logger.error(f"Неверный канал: {channel_username}")
+        except ValueError as e:
+            logger.error(f"Некорректный канал {channel_username}: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка при получении сообщений из канала {channel_username}: {e}", exc_info=True)
+
+        return messages
+
     async def search_in_channels(
         self,
         channels: List[str],

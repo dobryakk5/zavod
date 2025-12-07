@@ -217,8 +217,11 @@ export function TemplateForm({ template }: { template?: ContentTemplate }) {
         )}
       </FormField>
 
-      {/* Advanced fields - always editable */}
-      <FormField name="prompt_template">
+      {/* Prompt templates */}
+      <FormField name="seo_prompt_template">
+        <Textarea {...field} />
+      </FormField>
+      <FormField name="trend_prompt_template">
         <Textarea {...field} />
       </FormField>
       <FormField name="additional_instructions">

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -23,14 +24,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Plus } from 'lucide-react';
+import { toast } from 'sonner';
 import type { ContentTemplate } from '@/lib/types';
+import { postTypesApi, postTonesApi, type PostType, type PostTone } from '@/lib/api/postTypes';
 
 const templateFormSchema = z.object({
-  type: z.enum(['post', 'story_episode']),
-  tone: z.enum(['professional', 'casual', 'humorous', 'educational']),
+  name: z.string().min(1, 'Название обязательно'),
+  type: z.string().min(1, 'Тип обязателен'),
+  tone: z.string().min(1, 'Тон обязателен'),
   length: z.enum(['short', 'medium', 'long']),
   language: z.string().min(2).max(10),
-  prompt_template: z.string().min(1, 'Шаблон промпта обязателен'),
+  seo_prompt_template: z.string().min(1, 'SEO-промпт обязателен'),
+  trend_prompt_template: z.string().min(1, 'Trend-промпт обязателен'),
   additional_instructions: z.string().optional(),
 });
 
@@ -45,17 +51,59 @@ interface TemplateFormProps {
 export function TemplateForm({ template, onSubmit, loading = false }: TemplateFormProps) {
   const isEditing = !!template;
 
+  // Load types and tones from API
+  const [availableTypes, setAvailableTypes] = useState<PostType[]>([]);
+  const [availableTones, setAvailableTones] = useState<PostTone[]>([]);
+  const [loadingOptions, setLoadingOptions] = useState(true);
+
+  // UI state for adding new type/tone
+  const [showTypeInput, setShowTypeInput] = useState(false);
+  const [showToneInput, setShowToneInput] = useState(false);
+  const [newTypeValue, setNewTypeValue] = useState('');
+  const [newToneValue, setNewToneValue] = useState('');
+
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(templateFormSchema),
     defaultValues: {
-      type: template?.type || 'post',
-      tone: template?.tone || 'professional',
+      name: template?.name || '',
+      type: template?.type || '',
+      tone: template?.tone || '',
       length: template?.length || 'medium',
       language: template?.language || 'ru',
-      prompt_template: template?.prompt_template || '',
+      seo_prompt_template: template?.seo_prompt_template || '',
+      trend_prompt_template: template?.trend_prompt_template || '',
       additional_instructions: template?.additional_instructions || '',
     },
   });
+
+  // Load types and tones from API
+  useEffect(() => {
+    const loadOptions = async () => {
+      try {
+        const [types, tones] = await Promise.all([
+          postTypesApi.list(),
+          postTonesApi.list(),
+        ]);
+        setAvailableTypes(types);
+        setAvailableTones(tones);
+
+        // Set default values if not editing
+        if (!template) {
+          if (types.length > 0) {
+            form.setValue('type', types[0].value);
+          }
+          if (tones.length > 0) {
+            form.setValue('tone', tones[0].value);
+          }
+        }
+      } catch (error) {
+        toast.error('Не удалось загрузить типы и тоны');
+      } finally {
+        setLoadingOptions(false);
+      }
+    };
+    loadOptions();
+  }, [template, form]);
 
   const handleSubmit = async (data: TemplateFormValues) => {
     try {
@@ -65,76 +113,239 @@ export function TemplateForm({ template, onSubmit, loading = false }: TemplateFo
     }
   };
 
+  const getTypeLabel = (value: string) => {
+    const found = availableTypes.find(t => t.value === value);
+    return found ? found.label : value;
+  };
+
+  const getToneLabel = (value: string) => {
+    const found = availableTones.find(t => t.value === value);
+    return found ? found.label : value;
+  };
+
+  const handleAddCustomType = async () => {
+    if (!newTypeValue.trim()) return;
+
+    try {
+      const created = await postTypesApi.create({
+        value: newTypeValue.trim().toLowerCase().replace(/\s+/g, '_'),
+        label: newTypeValue.trim(),
+      });
+
+      setAvailableTypes([...availableTypes, created]);
+      form.setValue('type', created.value);
+      setNewTypeValue('');
+      setShowTypeInput(false);
+      toast.success('Новый тип добавлен');
+    } catch (error) {
+      toast.error('Ошибка при создании типа');
+    }
+  };
+
+  const handleAddCustomTone = async () => {
+    if (!newToneValue.trim()) return;
+
+    try {
+      const created = await postTonesApi.create({
+        value: newToneValue.trim().toLowerCase().replace(/\s+/g, '_'),
+        label: newToneValue.trim(),
+      });
+
+      setAvailableTones([...availableTones, created]);
+      form.setValue('tone', created.value);
+      setNewToneValue('');
+      setShowToneInput(false);
+      toast.success('Новый тон добавлен');
+    } catch (error) {
+      toast.error('Ошибка при создании тона');
+    }
+  };
+
+  if (loadingOptions) {
+    return <div className="py-8 text-center">Загрузка...</div>;
+  }
+
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
-        {/* Basic fields - readonly if editing */}
+        {/* Template name */}
+        <FormField
+          control={form.control}
+          name="name"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Название шаблона</FormLabel>
+              <FormControl>
+                <Input placeholder="Например: Instagram продающий пост" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        {/* Basic fields - editable for type and tone */}
         <div className="grid grid-cols-2 gap-4">
+          {/* Type field */}
           <FormField
             control={form.control}
             name="type"
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Тип контента</FormLabel>
-                {isEditing ? (
-                  <div className="mt-2">
-                    <Badge variant="secondary" className="text-base py-1 px-3">
-                      {field.value === 'post' ? 'Пост' : 'Эпизод истории'}
-                    </Badge>
-                  </div>
-                ) : (
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                <div className="flex gap-2">
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Выберите тип" />
+                        <SelectValue placeholder="Выберите тип">
+                          {field.value ? getTypeLabel(field.value) : 'Выберите тип'}
+                        </SelectValue>
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="post">Пост</SelectItem>
-                      <SelectItem value="story_episode">Эпизод истории</SelectItem>
+                      {availableTypes.map((type) => (
+                        <SelectItem key={type.id} value={type.value}>
+                          {type.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setShowTypeInput(!showTypeInput)}
+                    title="Добавить свой тип"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                {showTypeInput && (
+                  <div className="flex gap-2 mt-2">
+                    <Input
+                      placeholder="Введите свой тип (русскими буквами)"
+                      value={newTypeValue}
+                      onChange={(e) => setNewTypeValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddCustomType();
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      onClick={handleAddCustomType}
+                    >
+                      Добавить
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setShowTypeInput(false);
+                        setNewTypeValue('');
+                      }}
+                    >
+                      Отмена
+                    </Button>
+                  </div>
                 )}
+
+                <FormDescription>
+                  Структура контента (продающий, экспертный и т.д.)
+                </FormDescription>
                 <FormMessage />
               </FormItem>
             )}
           />
 
+          {/* Tone field */}
           <FormField
             control={form.control}
             name="tone"
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Тон</FormLabel>
-                {isEditing ? (
-                  <div className="mt-2">
-                    <Badge variant="secondary" className="text-base py-1 px-3">
-                      {field.value === 'professional' && 'Профессиональный'}
-                      {field.value === 'casual' && 'Неформальный'}
-                      {field.value === 'humorous' && 'Юмористический'}
-                      {field.value === 'educational' && 'Образовательный'}
-                    </Badge>
-                  </div>
-                ) : (
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                <div className="flex gap-2">
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Выберите тон" />
+                        <SelectValue placeholder="Выберите тон">
+                          {field.value ? getToneLabel(field.value) : 'Выберите тон'}
+                        </SelectValue>
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="professional">Профессиональный</SelectItem>
-                      <SelectItem value="casual">Неформальный</SelectItem>
-                      <SelectItem value="humorous">Юмористический</SelectItem>
-                      <SelectItem value="educational">Образовательный</SelectItem>
+                      {availableTones.map((tone) => (
+                        <SelectItem key={tone.id} value={tone.value}>
+                          {tone.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setShowToneInput(!showToneInput)}
+                    title="Добавить свой тон"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                {showToneInput && (
+                  <div className="flex gap-2 mt-2">
+                    <Input
+                      placeholder="Введите свой тон (русскими буквами)"
+                      value={newToneValue}
+                      onChange={(e) => setNewToneValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddCustomTone();
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      onClick={handleAddCustomTone}
+                    >
+                      Добавить
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setShowToneInput(false);
+                        setNewToneValue('');
+                      }}
+                    >
+                      Отмена
+                    </Button>
+                  </div>
                 )}
+
+                <FormDescription>
+                  Стиль общения в контенте
+                </FormDescription>
                 <FormMessage />
               </FormItem>
             )}
           />
 
+          {/* Length field */}
           <FormField
             control={form.control}
             name="length"
@@ -157,9 +368,9 @@ export function TemplateForm({ template, onSubmit, loading = false }: TemplateFo
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="short">Короткий</SelectItem>
-                      <SelectItem value="medium">Средний</SelectItem>
-                      <SelectItem value="long">Длинный</SelectItem>
+                      <SelectItem value="short">Короткий (до 280 символов)</SelectItem>
+                      <SelectItem value="medium">Средний (280-500 символов)</SelectItem>
+                      <SelectItem value="long">Длинный (500-1000 символов)</SelectItem>
                     </SelectContent>
                   </Select>
                 )}
@@ -168,6 +379,7 @@ export function TemplateForm({ template, onSubmit, loading = false }: TemplateFo
             )}
           />
 
+          {/* Language field */}
           <FormField
             control={form.control}
             name="language"
@@ -191,27 +403,50 @@ export function TemplateForm({ template, onSubmit, loading = false }: TemplateFo
           />
         </div>
 
-        {/* Advanced fields - always editable */}
-        <FormField
-          control={form.control}
-          name="prompt_template"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Шаблон промпта</FormLabel>
-              <FormControl>
-                <Textarea
-                  placeholder="Введите шаблон промпта для генерации контента"
-                  className="min-h-[150px] font-mono text-sm"
-                  {...field}
-                />
-              </FormControl>
-              <FormDescription>
-                Используйте переменные: {'{topic}'}, {'{keywords}'}, {'{trend}'}
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+        {/* Prompt templates */}
+        <div className="grid gap-6 xl:grid-cols-2">
+          <FormField
+            control={form.control}
+            name="seo_prompt_template"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>SEO-промпт</FormLabel>
+                <FormControl>
+                  <Textarea
+                    placeholder="Промпт для генерации по SEO-ключам"
+                    className="min-h-[180px] font-mono text-sm"
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  Доступные переменные: {'{seo_keywords}'}, {'{topic_name}'}, {'{tone}'}, {'{length}'}, {'{language}'}, {'{type}'}, {'{avatar}'}, {'{pains}'}, {'{desires}'}, {'{objections}'}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="trend_prompt_template"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Trend-промпт</FormLabel>
+                <FormControl>
+                  <Textarea
+                    placeholder="Промпт для генерации по трендам"
+                    className="min-h-[180px] font-mono text-sm"
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  Доступные переменные: {'{trend_title}'}, {'{trend_description}'}, {'{trend_url}'}, {'{topic_name}'}, {'{tone}'}, {'{length}'}, {'{language}'}, {'{type}'}, {'{avatar}'}, {'{pains}'}, {'{desires}'}, {'{objections}'}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
 
         <FormField
           control={form.control}

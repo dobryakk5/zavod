@@ -40,18 +40,35 @@ export default function TemplatesPage() {
     }
   };
 
+  const getTypeName = (type: string) => {
+    switch (type) {
+      case 'selling':
+        return 'Продающий';
+      case 'expert':
+        return 'Экспертный';
+      case 'trigger':
+        return 'Триггерный';
+      case 'story':
+        return 'История';
+      default:
+        return type; // Custom type - show as is
+    }
+  };
+
   const getToneName = (tone: string) => {
     switch (tone) {
       case 'professional':
         return 'Профессиональный';
+      case 'friendly':
+        return 'Дружественный';
+      case 'informative':
+        return 'Информационный';
       case 'casual':
-        return 'Неформальный';
-      case 'humorous':
-        return 'Юмористический';
-      case 'educational':
-        return 'Образовательный';
+        return 'Непринуждённый';
+      case 'enthusiastic':
+        return 'Восторженный';
       default:
-        return tone;
+        return tone; // Custom tone - show as is
     }
   };
 
@@ -97,20 +114,23 @@ export default function TemplatesPage() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead>Название</TableHead>
               <TableHead>Тип</TableHead>
               <TableHead>Тон</TableHead>
               <TableHead>Длина</TableHead>
               <TableHead>Язык</TableHead>
-              <TableHead>Промпт</TableHead>
+              <TableHead>SEO промпт</TableHead>
+              <TableHead>Trend промпт</TableHead>
               <TableHead className="text-right">Действия</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {templates.map((template) => (
               <TableRow key={template.id}>
+                <TableCell className="font-medium">{template.name}</TableCell>
                 <TableCell>
                   <Badge variant="secondary">
-                    {template.type === 'post' ? 'Пост' : 'Эпизод'}
+                    {getTypeName(template.type)}
                   </Badge>
                 </TableCell>
                 <TableCell>{getToneName(template.tone)}</TableCell>
@@ -119,7 +139,10 @@ export default function TemplatesPage() {
                   <Badge variant="outline">{template.language}</Badge>
                 </TableCell>
                 <TableCell className="max-w-xs truncate font-mono text-xs">
-                  {template.prompt_template}
+                  {template.seo_prompt_template}
+                </TableCell>
+                <TableCell className="max-w-xs truncate font-mono text-xs">
+                  {template.trend_prompt_template}
                 </TableCell>
                 <TableCell className="text-right">
                   {canEdit && (

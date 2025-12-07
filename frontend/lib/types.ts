@@ -6,8 +6,8 @@ export type StoryStatus = 'draft' | 'ready' | 'approved' | 'generating_posts' | 
 export type SEOStatus = 'pending' | 'generating' | 'completed' | 'failed';
 
 export type Platform = 'instagram' | 'telegram' | 'youtube';
-export type ContentType = 'post' | 'story_episode';
-export type Tone = 'professional' | 'casual' | 'humorous' | 'educational';
+export type ContentType = string; // Now supports custom types
+export type Tone = string; // Now supports custom tones
 export type Length = 'short' | 'medium' | 'long';
 export type Language = string;
 
@@ -123,7 +123,8 @@ export interface ContentTemplate {
   tone: Tone;
   length: Length;
   language: Language;
-  prompt_template: string;
+  seo_prompt_template: string;
+  trend_prompt_template: string;
   additional_instructions: string;
   is_default: boolean;
   include_hashtags: boolean;

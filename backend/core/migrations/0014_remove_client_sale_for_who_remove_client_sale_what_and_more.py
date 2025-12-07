@@ -21,7 +21,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='client',
             name='avatar',
-            field=models.TextField(blank=True, help_text="Портрет целевой аудитории (например: 'Марина, 32 года, мама двоих детей, работает удалённо, хочет больше времени для себя')", verbose_name='Аватар клиента'),
+            field=models.TextField(blank=True, help_text="Портрет целевой аудитории (например: 'Мама двоих детей, работает удалённо, хочет больше времени для себя')", verbose_name='Аватар клиента'),
         ),
         migrations.AddField(
             model_name='client',

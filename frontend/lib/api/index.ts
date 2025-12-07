@@ -7,3 +7,4 @@ export * from './templates';
 export * from './schedules';
 export * from './socialAccounts';
 export * from './client';
+export * from './postTypes';

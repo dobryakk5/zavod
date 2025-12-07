@@ -8,9 +8,12 @@ import os
 import requests
 import json
 import logging
-from typing import Dict, Any, Optional
+import ast
+import re
+from typing import Dict, Any, Optional, Callable
 
 from . import foto_video_gen
+from .system_settings import get_default_ai_model
 
 try:
     from huggingface_hub import InferenceClient
@@ -35,7 +38,7 @@ class AIContentGenerator:
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY not found in environment")
 
-        self.model = "x-ai/grok-4.1-fast:free"  # Бесплатная модель
+        self.model = get_default_ai_model()
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
 
         # Initialize HuggingFace client if available
@@ -106,7 +109,8 @@ class AIContentGenerator:
         trend_description: str,
         topic_name: str,
         template_config: Dict[str, Any],
-        seo_keywords: Dict[str, list] = None
+        seo_keywords: Dict[str, list] = None,
+        trend_url: str = ""
     ) -> Optional[Dict[str, Any]]:
         """
         Generate post text from trend using AI
@@ -124,7 +128,10 @@ class AIContentGenerator:
                 - pains: client pains text
                 - desires: client desires text
                 - objections: client objections text
-                - prompt_template: custom prompt template
+                - trend_prompt_template: кастомный промпт под тренды
+                - seo_prompt_template: кастомный промпт под SEO генерацию
+                - prompt_type: "trend" (по умолчанию) или "seo"
+                - prompt_template: legacy поле для обратной совместимости
                 - additional_instructions: extra instructions
                 - include_hashtags: bool
                 - max_hashtags: int
@@ -133,6 +140,7 @@ class AIContentGenerator:
                 - general: ["топик москва", ...]
                 - informational: ["как ...", ...]
                 - long_tail: ["длинные фразы", ...]
+            trend_url: Optional URL источника тренда
 
         Returns:
             Dict with generated content:
@@ -149,7 +157,13 @@ class AIContentGenerator:
             tone = template_config.get('tone', 'professional')
             length = template_config.get('length', 'medium')
             language = template_config.get('language', 'ru')
-            prompt_template = template_config.get("prompt_template", "")
+            prompt_type = template_config.get("prompt_type", "trend")
+            trend_prompt_template = template_config.get("trend_prompt_template", "")
+            seo_prompt_template = template_config.get("seo_prompt_template", "")
+            legacy_prompt_template = template_config.get("prompt_template", "")
+            prompt_template = (
+                seo_prompt_template if str(prompt_type).lower() == "seo" else trend_prompt_template
+            ) or legacy_prompt_template
             additional_instructions = template_config.get("additional_instructions", "")
             include_hashtags = template_config.get("include_hashtags", True)
             max_hashtags = template_config.get("max_hashtags", 5)
@@ -170,6 +184,7 @@ class AIContentGenerator:
                         selected_seo_keywords.append(f"{random_keyword} ({group_name})")
 
                 logger.info(f"Выбраны SEO-ключи для поста: {selected_seo_keywords}")
+            seo_keywords_for_prompt = ", ".join(selected_seo_keywords)
 
             # Маппинг тонов на русский для промпта
             tone_map = {
@@ -191,24 +206,60 @@ class AIContentGenerator:
             length_ru = length_map.get(length, length)
             lang_name = "русском" if language == "ru" else "английском"
 
+            format_kwargs = {
+                "trend_title": trend_title,
+                "trend_description": trend_description,
+                "trend_url": trend_url or "",
+                "topic_name": topic_name,
+                "tone": tone_ru,
+                "length": length_ru,
+                "language": lang_name,
+                "type": post_type,
+                "avatar": avatar,
+                "pains": pains,
+                "desires": desires,
+                "objections": objections,
+                "seo_keywords": seo_keywords_for_prompt or "",
+            }
+
             # Если есть кастомный промпт-шаблон, используем его
             if prompt_template:
-                prompt = prompt_template.format(
-                    trend_title=trend_title,
-                    trend_description=trend_description,
-                    topic_name=topic_name,
-                    tone=tone_ru,
-                    length=length_ru,
-                    language=lang_name,
-                    type=post_type,
-                    avatar=avatar,
-                    pains=pains,
-                    desires=desires,
-                    objections=objections,
-                )
-            else:
-                # Дефолтный промпт
-                prompt = f"""
+                try:
+                    prompt = prompt_template.format(**format_kwargs)
+                except KeyError as exc:
+                    missing = exc.args[0]
+                    logger.warning(
+                        f"В промпте отсутствует значение для плейсхолдера '{missing}'. "
+                        "Используем дефолтный промпт."
+                    )
+                    prompt_template = ""
+            if not prompt_template:
+                # Дефолтные промпты
+                if str(prompt_type).lower() == "seo":
+                    prompt = f"""
+Ты - SEO-копирайтер и SMM-стратег, который создаёт контент для социальных сетей.
+
+ДАННЫЕ О ЦЕЛЕВОЙ АУДИТОРИИ:
+Аватар: {avatar}
+Боли: {pains}
+Хотелки: {desires}
+Возражения: {objections}
+
+ЗАДАЧА: Создай {length_ru} пост для социальных сетей в {tone_ru} стиле на {lang_name} языке,
+используя SEO-ключевые фразы: {seo_keywords_for_prompt or "ключи отсутствуют"}.
+
+ТЕМА БИЗНЕСА: {topic_name}
+
+ИНСТРУКЦИИ:
+1. Сформируй цепляющий заголовок (до 100 символов)
+2. Напиши основной текст, который:
+   - Связывает SEO-ключи с продуктом/услугой
+   - Отражает боли и желания целевой аудитории
+   - Выстраивает логичную структуру для {post_type} типа контента
+   - Соответствует требуемой длине: {length_ru}
+"""
+                else:
+                    prompt = f"""
 Ты - опытный SMM-менеджер, который создаёт контент для социальных сетей.
 
 ДАННЫЕ О ЦЕЛЕВОЙ АУДИТОРИИ:
@@ -224,6 +275,7 @@ class AIContentGenerator:
 НОВОСТЬ/ТРЕНД:
 Заголовок: {trend_title}
 Описание: {trend_description}
+Источник: {trend_url}
 
 ИНСТРУКЦИИ:
 1. Создай привлекательный заголовок поста (до 100 символов)
@@ -328,23 +380,37 @@ class AIContentGenerator:
         self,
         topic_name: str,
         keywords: list,
-        language: str = "ru"
+        language: str = "ru",
+        brand: str = "",
+        avatar: str = "",
+        pains: str = "",
+        desires: str = "",
+        objections: str = "",
+        on_group_generated: Optional[Callable[[str, list], None]] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Generate SEO keyword phrases for a topic using AI, grouped by category
+        Generate 5 SEO artifacts (pains, desires, objections, avatar self-descriptions, keyword mixes)
+        for a topic/client combination using AI.
 
         Args:
             topic_name: Topic name (e.g., "студия танцев")
             keywords: Existing keywords list for the topic
             language: Language code (ru/en)
+            brand: Client/brand name
+            avatar: Client avatar description
+            pains: Audience pains
+            desires: Audience desires
+            objections: Audience objections/fears
 
         Returns:
-            Dict with generated keywords:
+            Dict with generated keyword groups:
             {
                 "keyword_groups": {
-                    "commercial": ["купить ...", "заказать ...", ...],
-                    "general": ["топик москва", ...],
-                    "informational": ["как ...", "что такое ...", ...]
+                    "seo_pains": [...],
+                    "seo_desires": [...],
+                    "seo_objections": [...],
+                    "seo_avatar": [...],
+                    "seo_keywords": [...]
                 },
                 "success": True/False,
                 "error": "error message if failed"
@@ -354,106 +420,254 @@ class AIContentGenerator:
             lang_name = "русском" if language == "ru" else "английском"
             keywords_str = ", ".join(keywords) if keywords else "не указаны"
 
-            prompt = f"""
-Ты - эксперт по SEO и поисковой оптимизации.
+            def _cleanup_value(value: str, fallback: str = "не указано") -> str:
+                if value:
+                    stripped = value.strip()
+                    if stripped:
+                        return stripped
+                return fallback
 
-ЗАДАЧА: Составь подробный список часто используемых SEO-фраз и ключевых слов для темы бизнеса на {lang_name} языке.
+            brand_name = _cleanup_value(brand or topic_name, topic_name)
+            avatar_desc = _cleanup_value(avatar)
+            pains_desc = _cleanup_value(pains)
+            desires_desc = _cleanup_value(desires)
+            objections_desc = _cleanup_value(objections)
 
-ТЕМА БИЗНЕСА: {topic_name}
+            def _strip_code_fence(text: str) -> str:
+                stripped = text.strip()
+                if stripped.startswith("```"):
+                    stripped = stripped[3:]
+                    stripped = stripped.lstrip()
+                    if "\n" in stripped:
+                        first_line, rest = stripped.split("\n", 1)
+                        first_line_clean = first_line.strip().lower()
+                        if first_line_clean and first_line_clean.isalpha():
+                            stripped = rest
+                        else:
+                            stripped = first_line + "\n" + rest
+                    if stripped.endswith("```"):
+                        stripped = stripped[:-3]
+                return stripped.strip()
 
-ТЕКУЩИЕ КЛЮЧЕВЫЕ СЛОВА: {keywords_str}
+            def _parse_list(text: str, variable: str) -> list:
+                cleaned = _strip_code_fence(text)
+                if variable in cleaned:
+                    # оставить только часть после первого "="
+                    var_index = cleaned.find(variable)
+                    eq_index = cleaned.find("=", var_index)
+                    if eq_index != -1:
+                        cleaned = cleaned[eq_index + 1:].strip()
+                start = cleaned.find("[")
+                end = cleaned.rfind("]")
+                if start == -1:
+                    list_text = cleaned
+                elif end == -1 or end <= start:
+                    list_text = cleaned[start:]
+                else:
+                    list_text = cleaned[start:end + 1]
 
-ИНСТРУКЦИИ:
-1. Проанализируй тему бизнеса и найди 30-50 релевантных SEO-фраз
-2. Раздели фразы на следующие группы:
-   - **commercial** (коммерческие): "купить", "заказать", "цена", "стоимость", "услуги"
-   - **general** (общие): основные запросы с геолокацией, брендовые запросы
-   - **informational** (информационные): "как", "что такое", "зачем", "почему", обучающие
-   - **long_tail** (длинные хвосты): специфичные длинные фразы 4-6 слов
-3. В каждой группе должно быть 8-15 релевантных фраз
-4. Фразы должны быть реалистичными поисковыми запросами
+                def _normalize_sequence(seq):
+                    normalized_items = [str(item).strip() for item in seq if str(item).strip()]
+                    return normalized_items
 
-ФОРМАТ ОТВЕТА (строго JSON):
-{{
-    "commercial": [
-        "купить танцы онлайн",
-        "заказать занятия танцами",
-        "стоимость уроков танцев"
-    ],
-    "general": [
-        "студия танцев москва",
-        "школа танцев для начинающих",
-        "танцевальная студия рядом"
-    ],
-    "informational": [
-        "как научиться танцевать",
-        "виды современных танцев",
-        "что нужно для танцев"
-    ],
-    "long_tail": [
-        "лучшая студия танцев для взрослых в москве",
-        "где научиться танцевать с нуля недорого"
-    ]
-}}
+                literal_eval_attempted = False
+                if start != -1:
+                    try:
+                        literal_eval_attempted = True
+                        parsed = ast.literal_eval(list_text)
+                        if isinstance(parsed, list):
+                            normalized = _normalize_sequence(parsed)
+                            if normalized:
+                                return normalized
+                    except (ValueError, SyntaxError):
+                        logger.warning(f"Невозможно распарсить {variable} через literal_eval, пытаемся fallback")
 
-Ответь ТОЛЬКО JSON, без дополнительных комментариев."""
+                quotes_pattern = re.compile(r'"([^"]+)"|\'([^\']+)\'')
+                quoted_matches = []
+                for match in quotes_pattern.finditer(list_text):
+                    quoted_matches.append(match.group(1) or match.group(2))
 
-            logger.info(f"Генерация SEO-фраз для темы: {topic_name}")
+                fallback_items = [item.strip() for item in quoted_matches if item and item.strip()]
+                if not fallback_items:
+                    bullet_items = []
+                    for line in cleaned.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith(variable):
+                            continue
+                        line = line.lstrip("-•*0123456789. \t")
+                        line = line.strip()
+                        if len(line) > 2:
+                            bullet_items.append(line)
+                    fallback_items = bullet_items
 
-            # Запрос к AI
-            ai_response = self.get_ai_response(prompt, max_tokens=2000, temperature=0.5)
+                if fallback_items:
+                    if literal_eval_attempted:
+                        logger.warning(f"Используем fallback-парсинг для {variable}, элементов: {len(fallback_items)}")
+                    return fallback_items
 
-            if not ai_response:
-                return {
-                    "success": False,
-                    "error": "Failed to get response from AI"
-                }
+                raise ValueError(f"Не удалось распарсить {variable}")
 
-            # Парсинг JSON ответа
-            try:
-                # Очистить ответ от markdown code blocks
-                clean_response = ai_response.strip()
-                if clean_response.startswith('```json'):
-                    clean_response = clean_response[7:]
-                if clean_response.startswith('```'):
-                    clean_response = clean_response[3:]
-                if clean_response.endswith('```'):
-                    clean_response = clean_response[:-3]
-                clean_response = clean_response.strip()
+            logger.info(f"Генерация SEO-групп для темы: {topic_name} / бренд: {brand_name}")
 
-                keyword_groups = json.loads(clean_response)
+            prompt_specs = [
+                {
+                    "key": "seo_pains",
+                    "variable": "seo_pains",
+                    "max_tokens": 1200,
+                    "prompt": f"""
+Ты — стратег по контенту и SEO-аналитике бренда {brand_name}.
+Тема бизнеса: {topic_name}.
+Проанализируй следующую аудиторию:
 
-                # Валидация структуры ответа
-                if not isinstance(keyword_groups, dict):
-                    logger.error(f"Invalid AI response structure: expected dict, got {type(keyword_groups)}")
+Аватар: {avatar_desc}
+Боли: {pains_desc}
+Возражения: {objections_desc}
+Хотелки: {desires_desc}
+
+Задача:
+Сформируй список из 15–25 SEO-поисковых болей — фраз, которые люди реально могут вводить в Google/Yandex, пытаясь решить свои проблемы.
+Формулируй так, как пишет сам клиент, максимально приближенно к естественному поисковому запросу.
+Создавай запросы на {lang_name} языке.
+
+Выведи результат в формате Python-переменной:
+seo_pains = [ ... ]
+"""
+                },
+                {
+                    "key": "seo_desires",
+                    "variable": "seo_desires",
+                    "max_tokens": 1200,
+                    "prompt": f"""
+Ты — SEO-стратег бренда {brand_name}.
+Тема бизнеса: {topic_name}.
+На основе данных о целевой аудитории:
+
+Аватар: {avatar_desc}
+Хотелки: {desires_desc}
+Боли: {pains_desc}
+
+Создай список из 15–25 желаний, которые люди ищут в поиске (ключевые запросы, связанные с ростом, мечтами, результатами) на {lang_name} языке.
+
+Выведи результат в формате Python-переменной:
+seo_desires = [ ... ]
+"""
+                },
+                {
+                    "key": "seo_objections",
+                    "variable": "seo_objections",
+                    "max_tokens": 1000,
+                    "prompt": f"""
+Ты — маркетолог бренда {brand_name}.
+Тема бизнеса: {topic_name}.
+Используя данные:
+
+Боли: {pains_desc}
+Возражения: {objections_desc}
+Страхи: {objections_desc}
+
+Сгенерируй список из 10–20 поисковых возражений — фраз, которые человек ищет, сомневаясь или опасаясь купить. Используй формулировки, которые звучат как реальные запросы на {lang_name} языке.
+
+Выведи в формате:
+seo_objections = [ ... ]
+"""
+                },
+                {
+                    "key": "seo_avatar",
+                    "variable": "seo_avatar",
+                    "max_tokens": 1000,
+                    "prompt": f"""
+Ты — SEO-аналитик бренда {brand_name}.
+Тема бизнеса: {topic_name}.
+Используя данные об аудитории (аватар, профессия, стиль мышления, боли, хотелки), сформируй 10–15 формулировок того, как человек может описывать себя в поиске.
+
+Аватар: {avatar_desc}
+Боли: {pains_desc}
+Хотелки: {desires_desc}
+Возражения: {objections_desc}
+
+Пример: "психолог который хочет клиентов через Instagram".
+Генерируй формулировки на {lang_name} языке.
+
+Выведи в формате:
+seo_avatar = [ ... ]
+"""
+                },
+                {
+                    "key": "seo_keywords",
+                    "variable": "seo_keywords",
+                    "max_tokens": 1500,
+                    "prompt": f"""
+Ты — специалист по SEO-структурам для бренда {brand_name}.
+Тема бизнеса: {topic_name}.
+Используя данные:
+
+Аватар: {avatar_desc}
+Боли: {pains_desc}
+Хотелки: {desires_desc}
+Возражения: {objections_desc}
+Существующие ключевые слова: {keywords_str}
+
+Создай список из 20–40 SEO ключей (низкочастотных, среднечастотных и ключей-модификаторов), которые можно использовать для блога, соцсетей, лендинга, рилс и автогенерации контента.
+Обязательно включай комбинации:
+- [боль + решение]
+- [хотелка + инструмент]
+- [ниша + контент]
+- [бренд + категория продукта]
+
+Фразы должны быть записаны как реальные поисковые запросы на {lang_name} языке.
+
+Выведи в формате:
+seo_keywords = [ ... ]
+"""
+                },
+            ]
+
+            seo_results = {}
+            for spec in prompt_specs:
+                logger.info(f"Генерация блока {spec['key']} для темы '{topic_name}'")
+                ai_response = self.get_ai_response(
+                    spec["prompt"],
+                    max_tokens=spec.get("max_tokens", 1200),
+                    temperature=0.55
+                )
+
+                if not ai_response:
+                    logger.error(f"Не удалось получить ответ для группы {spec['key']}")
                     return {
                         "success": False,
-                        "error": "Invalid response structure from AI"
+                        "error": f"Failed to get response for {spec['key']}"
                     }
 
-                # Проверка, что есть хотя бы одна группа
-                if not keyword_groups:
-                    logger.error(f"Empty keyword groups in AI response")
+                try:
+                    parsed_list = _parse_list(ai_response, spec["variable"])
+                    seo_results[spec["key"]] = parsed_list
+                    logger.info(f"{spec['key']}: получено {len(parsed_list)} элементов")
+                    if on_group_generated:
+                        try:
+                            on_group_generated(spec["key"], parsed_list)
+                        except Exception as cb_exc:
+                            logger.warning(
+                                f"on_group_generated callback failed for {spec['key']}: {cb_exc}"
+                            )
+                except Exception as e:
+                    logger.error(
+                        f"Ошибка парсинга ответа для {spec['key']}: {e}; raw={ai_response[:200]}"
+                    )
                     return {
                         "success": False,
-                        "error": "No keyword groups generated"
+                        "error": f"Failed to parse {spec['key']}: {str(e)}",
+                        "raw_response": ai_response
                     }
 
-                logger.info(f"Успешно сгенерированы SEO-фразы для темы: {topic_name}")
-                logger.info(f"Группы: {list(keyword_groups.keys())}")
+            total_items = sum(len(items) for items in seo_results.values())
+            logger.info(
+                f"Успешно сгенерированы SEO группы ({', '.join(seo_results.keys())}), всего элементов: {total_items}"
+            )
 
-                return {
-                    "keyword_groups": keyword_groups,
-                    "success": True
-                }
-
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse AI response as JSON: {clean_response[:200]}")
-                return {
-                    "success": False,
-                    "error": f"JSON parsing error: {str(e)}",
-                    "raw_response": clean_response
-                }
+            return {
+                "keyword_groups": seo_results,
+                "success": True
+            }
 
         except Exception as e:
             logger.error(f"Error generating SEO keywords: {e}", exc_info=True)

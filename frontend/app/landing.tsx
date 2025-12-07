@@ -16,7 +16,6 @@ export default function SolarLabLanding() {
                 alt="SolarLab AI"
                 width={28}
                 height={28}
-                priority
               />
             </div>
             <div>
@@ -73,23 +72,15 @@ export default function SolarLabLanding() {
           </div>
 
           <div className="relative">
-            <div className="w-full h-80 bg-gradient-to-br from-yellow-50 to-white rounded-2xl border border-gray-100 shadow-sm flex items-center justify-center">
-              {/* Mockup visualization */}
-              <svg width="360" height="220" viewBox="0 0 360 220" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect x="0" y="0" width="360" height="220" rx="18" fill="url(#g)"/>
-                <defs>
-                  <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
-                    <stop stopColor="#FFFBEA" offset="0" />
-                    <stop stopColor="#FFF3E0" offset="1" />
-                  </linearGradient>
-                </defs>
-                <g>
-                  <circle cx="56" cy="56" r="24" fill="#fff" opacity="0.9" />
-                  <rect x="96" y="30" width="220" height="40" rx="8" fill="#ffffff" opacity="0.95" />
-                  <rect x="96" y="86" width="140" height="18" rx="6" fill="#fff" opacity="0.95" />
-                  <rect x="96" y="110" width="220" height="86" rx="10" fill="#fff" opacity="0.98" />
-                </g>
-              </svg>
+            <div className="relative w-full h-80 rounded-2xl overflow-hidden border border-gray-100 shadow-lg">
+              <Image
+                src="/fist_screen.jpg"
+                alt="SolarLab контент для первого экрана"
+                fill
+                priority
+                sizes="(min-width: 1024px) 480px, (min-width: 768px) 60vw, 90vw"
+                className="object-cover"
+              />
             </div>
             <div className="absolute -bottom-8 right-6 w-48 p-3 bg-white border rounded-lg shadow-md">
               <div className="text-xs text-gray-500">Pipeline</div>

@@ -9,6 +9,8 @@ from .views import (
     LoginView,
     LogoutView,
     PostsListView,
+    PostToneViewSet,
+    PostTypeViewSet,
     PostViewSet,
     RefreshTokenView,
     ScheduleListView,
@@ -31,6 +33,8 @@ router.register(r'stories', StoryViewSet, basename='story')
 router.register(r'templates', ContentTemplateViewSet, basename='template')
 router.register(r'schedules-manage', ScheduleViewSet, basename='schedule-manage')
 router.register(r'social-accounts', SocialAccountViewSet, basename='social-account')
+router.register(r'post-types', PostTypeViewSet, basename='post-type')
+router.register(r'post-tones', PostToneViewSet, basename='post-tone')
 
 urlpatterns = [
     # Authentication endpoints

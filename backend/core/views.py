@@ -3,8 +3,8 @@ from django.http import JsonResponse
 from django.contrib.admin.views.decorators import staff_member_required
 from django.views.decorators.http import require_POST
 from django.utils import timezone
-from .models import Post, Schedule, SocialAccount
-from .tasks import generate_image_for_post, generate_video_from_image, publish_schedule, regenerate_post_text
+from .models import Post, Schedule, SocialAccount, Client
+from .tasks import generate_image_for_post, generate_video_from_image, publish_schedule, regenerate_post_text, analyze_telegram_channel_task
 import json
 
 
@@ -235,4 +235,54 @@ def regenerate_text(request, post_id):
     return JsonResponse({
         'success': True,
         'message': 'Регенерация текста запущена. Страница будет перезагружена...'
+    })
+
+
+@staff_member_required
+@require_POST
+def analyze_telegram_channel(request, client_id):
+    """
+    View для анализа Telegram канала и автоматического заполнения профиля аудитории.
+
+    Получает последние 20 постов из Telegram канала клиента,
+    анализирует их с помощью AI и заполняет поля:
+    - Аватар клиента (avatar)
+    - Боли (pains)
+    - Хотелки (desires)
+    - Возражения/страхи (objections)
+
+    Args:
+        request: HTTP запрос
+        client_id: ID клиента
+
+    Returns:
+        JsonResponse с результатом анализа
+    """
+    from django.conf import settings
+
+    client = get_object_or_404(Client, id=client_id)
+
+    # Проверка наличия канала
+    if not client.telegram_client_channel:
+        return JsonResponse({
+            'success': False,
+            'error': 'Не указан Telegram канал клиента'
+        }, status=400)
+
+    # Проверка наличия API credentials (клиентских или системных)
+    api_id = client.telegram_api_id or settings.TELEGRAM_API_ID
+    api_hash = client.telegram_api_hash or settings.TELEGRAM_API_HASH
+
+    if not api_id or not api_hash:
+        return JsonResponse({
+            'success': False,
+            'error': 'Не указаны Telegram API ID и API Hash. Настройте системные credentials в .env или укажите для клиента.'
+        }, status=400)
+
+    # Запустить задачу анализа канала в Celery
+    analyze_telegram_channel_task.delay(client_id)
+
+    return JsonResponse({
+        'success': True,
+        'message': 'Анализ канала запущен. Это может занять 1-2 минуты. Страница будет перезагружена...'
     })

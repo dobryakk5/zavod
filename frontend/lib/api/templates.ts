@@ -28,7 +28,7 @@ export const templatesApi = {
 
   /**
    * Update an existing template
-   * Note: Basic fields (type, tone, length, language) are read-only
+   * Note: Type and tone are editable, but length and language are read-only
    */
   update: async (id: number, data: Partial<ContentTemplate>): Promise<ContentTemplate> => {
     return apiFetch<ContentTemplate>(`/templates/${id}/`, {

@@ -45,11 +45,33 @@ class Command(BaseCommand):
                 "objections, pains "
                 "FROM core_client"
             ).fetchall()
+            template_table_info = conn.execute(
+                "PRAGMA table_info('core_contenttemplate')"
+            ).fetchall()
+            template_column_names = {col["name"] for col in template_table_info}
+            template_select_parts = [
+                "id",
+                "name",
+                "tone",
+                "length",
+                "language",
+            ]
+            if "seo_prompt_template" in template_column_names:
+                template_select_parts.append("seo_prompt_template")
+            if "trend_prompt_template" in template_column_names:
+                template_select_parts.append("trend_prompt_template")
+            if "prompt_template" in template_column_names:
+                template_select_parts.append("prompt_template AS legacy_prompt_template")
+            template_select_parts.extend([
+                "additional_instructions",
+                "is_default",
+                "include_hashtags",
+                "max_hashtags",
+                "client_id",
+                "type",
+            ])
             template_rows = conn.execute(
-                "SELECT id, name, tone, length, language, prompt_template, "
-                "additional_instructions, is_default, include_hashtags, max_hashtags, "
-                "client_id, type "
-                "FROM core_contenttemplate"
+                f"SELECT {', '.join(template_select_parts)} FROM core_contenttemplate"
             ).fetchall()
             role_rows = conn.execute(
                 "SELECT id, role, client_id, user_id FROM core_usertenantrole"
@@ -176,13 +198,19 @@ class Command(BaseCommand):
                 skipped += 1
                 continue
 
+            row_keys = row.keys()
+            legacy_prompt = row["legacy_prompt_template"] if "legacy_prompt_template" in row_keys else ""
+            seo_prompt = row["seo_prompt_template"] if "seo_prompt_template" in row_keys else ""
+            trend_prompt = row["trend_prompt_template"] if "trend_prompt_template" in row_keys else ""
+
             defaults = {
                 "client_id": row["client_id"],
                 "name": row["name"],
                 "tone": row["tone"] or "professional",
                 "length": row["length"] or "medium",
                 "language": row["language"] or "ru",
-                "prompt_template": row["prompt_template"] or "",
+                "seo_prompt_template": (seo_prompt or legacy_prompt or ""),
+                "trend_prompt_template": trend_prompt or "",
                 "additional_instructions": row["additional_instructions"] or "",
                 "is_default": bool(row["is_default"]),
                 "include_hashtags": bool(row["include_hashtags"]),

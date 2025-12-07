@@ -11,7 +11,7 @@ class Client(models.Model):
     avatar = models.TextField(
         blank=True,
         verbose_name="Аватар клиента",
-        help_text="Портрет целевой аудитории (например: 'Марина, 32 года, мама двоих детей, работает удалённо, хочет больше времени для себя')"
+        help_text="Портрет целевой аудитории (например: 'Мама двоих детей, работает удалённо, хочет больше времени для себя')"
     )
     pains = models.TextField(
         blank=True,
@@ -30,6 +30,12 @@ class Client(models.Model):
     )
 
     # Telegram settings
+    telegram_client_channel = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Канал клиента",
+        help_text="Telegram канал клиента для публикации (например: @my_channel или -1001234567890)"
+    )
     telegram_api_id = models.CharField(
         max_length=255,
         blank=True,
@@ -453,23 +459,99 @@ class Story(models.Model):
         return "\n".join([f"{ep['order']}. {ep['title']}" for ep in self.episodes])
 
 
+class PostType(models.Model):
+    """Справочник типов постов (системные и клиентские)"""
+
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        related_name="post_types",
+        null=True,
+        blank=True,
+        help_text="Оставьте пустым для системного типа, доступного всем клиентам"
+    )
+    value = models.CharField(
+        max_length=50,
+        help_text="Техническое название (например: selling, expert)"
+    )
+    label = models.CharField(
+        max_length=100,
+        help_text="Отображаемое название (например: Продающий, Экспертный)"
+    )
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Предустановленный тип (создан автоматически)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["label"]
+        verbose_name = "Post Type"
+        verbose_name_plural = "Post Types"
+        unique_together = [["client", "value"]]
+
+    def __str__(self):
+        if self.client:
+            return f"[{self.client.slug}] {self.label}"
+        return f"[Системный] {self.label}"
+
+
+class PostTone(models.Model):
+    """Справочник тонов постов (системные и клиентские)"""
+
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        related_name="post_tones",
+        null=True,
+        blank=True,
+        help_text="Оставьте пустым для системного тона, доступного всем клиентам"
+    )
+    value = models.CharField(
+        max_length=50,
+        help_text="Техническое название (например: professional, friendly)"
+    )
+    label = models.CharField(
+        max_length=100,
+        help_text="Отображаемое название (например: Профессиональный, Дружественный)"
+    )
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Предустановленный тон (создан автоматически)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["label"]
+        verbose_name = "Post Tone"
+        verbose_name_plural = "Post Tones"
+        unique_together = [["client", "value"]]
+
+    def __str__(self):
+        if self.client:
+            return f"[{self.client.slug}] {self.label}"
+        return f"[Системный] {self.label}"
+
+
 class ContentTemplate(models.Model):
     """Шаблон для AI генерации контента с настройками стиля"""
 
-    TYPE_CHOICES = (
-        ("selling", "Продающий"),
-        ("expert", "Экспертный"),
-        ("trigger", "Триггерный"),
-        ("story", "История (мини-сериал)"),
-    )
+    # Suggested default types (not enforced - users can create custom types)
+    SUGGESTED_TYPES = [
+        "selling",      # Продающий
+        "expert",       # Экспертный
+        "trigger",      # Триггерный
+        "story",        # История (мини-сериал)
+    ]
 
-    TONE_CHOICES = (
-        ("professional", "Профессиональный"),
-        ("friendly", "Дружественный"),
-        ("informative", "Информационный"),
-        ("casual", "Непринуждённый"),
-        ("enthusiastic", "Восторженный"),
-    )
+    # Suggested default tones (not enforced - users can create custom tones)
+    SUGGESTED_TONES = [
+        "professional", # Профессиональный
+        "friendly",     # Дружественный
+        "informative",  # Информационный
+        "casual",       # Непринуждённый
+        "enthusiastic", # Восторженный
+    ]
 
     LENGTH_CHOICES = (
         ("short", "Короткий (до 280 символов)"),
@@ -487,16 +569,14 @@ class ContentTemplate(models.Model):
 
     # Параметры стиля
     type = models.CharField(
-        max_length=20,
-        choices=TYPE_CHOICES,
+        max_length=50,
         default="selling",
-        help_text="Тип поста по структуре (продающий, экспертный, триггерный)"
+        help_text="Тип поста по структуре (продающий, экспертный, триггерный) или свой кастомный тип"
     )
     tone = models.CharField(
-        max_length=20,
-        choices=TONE_CHOICES,
+        max_length=50,
         default="professional",
-        help_text="Тон контента"
+        help_text="Тон контента или свой кастомный тон"
     )
     length = models.CharField(
         max_length=20,
@@ -511,11 +591,22 @@ class ContentTemplate(models.Model):
         help_text="Язык контента"
     )
 
-    # Кастомный промпт-шаблон
-    prompt_template = models.TextField(
+    # Кастомные промпт-шаблоны
+    seo_prompt_template = models.TextField(
+        verbose_name="SEO промпт",
+        default="",
         help_text=(
-            "Шаблон промпта с плейсхолдерами: "
-            "{trend_title}, {trend_description}, {topic_name}, {tone}, {length}, {language}, "
+            "Шаблон промпта для генерации на основе SEO ключевых фраз. "
+            "Плейсхолдеры: {seo_keywords}, {topic_name}, {tone}, {length}, {language}, "
+            "{type}, {avatar}, {pains}, {desires}, {objections}"
+        )
+    )
+    trend_prompt_template = models.TextField(
+        verbose_name="Trend промпт",
+        default="",
+        help_text=(
+            "Шаблон промпта для генерации на основе трендов. "
+            "Плейсхолдеры: {trend_title}, {trend_description}, {trend_url}, {topic_name}, {tone}, {length}, {language}, "
             "{type}, {avatar}, {pains}, {desires}, {objections}"
         )
     )
@@ -564,7 +655,15 @@ class ContentTemplate(models.Model):
 
 
 class SEOKeywordSet(models.Model):
-    """SEO подборка ключевых фраз для топика"""
+    """SEO подборка ключевых фраз для клиента (исторически могла относиться к теме)"""
+
+    GROUP_TYPE_CHOICES = [
+        ("seo_pains", "SEO Pains"),
+        ("seo_desires", "SEO Desires"),
+        ("seo_objections", "SEO Objections"),
+        ("seo_avatar", "SEO Avatar"),
+        ("seo_keywords", "SEO Keywords"),
+    ]
 
     STATUS_CHOICES = (
         ("pending", "Ожидает генерации"),
@@ -573,7 +672,14 @@ class SEOKeywordSet(models.Model):
         ("failed", "Ошибка"),
     )
 
-    topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name="seo_keyword_sets")
+    topic = models.ForeignKey(
+        Topic,
+        on_delete=models.SET_NULL,
+        related_name="seo_keyword_sets",
+        null=True,
+        blank=True,
+        help_text="(опционально) Историческая связь с конкретной темой"
+    )
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="seo_keyword_sets")
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
@@ -589,6 +695,19 @@ class SEOKeywordSet(models.Model):
     keywords_text = models.TextField(
         blank=True,
         help_text="[DEPRECATED] Список ключевых SEO-фраз, сгенерированных AI"
+    )
+
+    group_type = models.CharField(
+        max_length=32,
+        choices=GROUP_TYPE_CHOICES,
+        blank=True,
+        default="",
+        help_text="Тип SEO-группы (по умолчанию пусто для старых записей)"
+    )
+    keywords_list = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Список ключевых фраз для группы (используется для новых генераций)"
     )
 
     # Дополнительные метаданные
@@ -615,4 +734,42 @@ class SEOKeywordSet(models.Model):
         verbose_name_plural = "SEO Keyword Sets"
 
     def __str__(self):
-        return f"[{self.client.slug}] SEO для {self.topic.name} ({self.status})"
+        topic_part = f" → {self.topic.name}" if self.topic else ""
+        group_part = f" [{self.group_type}]" if self.group_type else ""
+        return f"[{self.client.slug}] SEO{topic_part}{group_part} ({self.status})"
+
+
+class SystemSetting(models.Model):
+    """Глобальные настройки системы (singleton)."""
+
+    DEFAULT_AI_MODEL = "x-ai/grok-4.1-fast:free"
+
+    default_ai_model = models.CharField(
+        max_length=255,
+        default=DEFAULT_AI_MODEL,
+        help_text="Модель OpenRouter по умолчанию для генерации контента (например, x-ai/grok-4.1-fast:free)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "System Setting"
+        verbose_name_plural = "System Settings"
+
+    def __str__(self):
+        return "System Settings"
+
+    def save(self, *args, **kwargs):
+        # Принудительно держим одну запись
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(
+            pk=1,
+            defaults={
+                "default_ai_model": cls.DEFAULT_AI_MODEL,
+            },
+        )
+        return obj

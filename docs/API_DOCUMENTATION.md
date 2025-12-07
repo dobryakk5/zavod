@@ -269,7 +269,7 @@ Discover new content (trends) from enabled sources
 Generate posts from all unused trends for this topic
 
 ### `POST /api/topics/{id}/generate_seo/`
-Generate SEO keywords for this topic
+Generate SEO keywords for the topic's client (creates 5 separate SEOKeywordSet entries: pains, desires, objections, avatar, keywords)
 
 ---
 

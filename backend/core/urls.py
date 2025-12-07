@@ -9,4 +9,5 @@ urlpatterns = [
     path('admin/post/<int:post_id>/quick-publish/', views.quick_publish_post, name='quick_publish_post'),
     path('admin/post/<int:post_id>/regenerate-text/', views.regenerate_text, name='regenerate_post_text'),
     path('admin/schedule/<int:schedule_id>/publish-now/', views.publish_schedule_now, name='publish_schedule_now'),
+    path('admin/client/<int:client_id>/analyze-channel/', views.analyze_telegram_channel, name='analyze_telegram_channel'),
 ]

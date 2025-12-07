@@ -1,9 +1,26 @@
 from django.contrib import admin
+from django.contrib.admin import widgets as admin_widgets
 from django.utils.html import format_html
 from django import forms
 from django.urls import reverse
+from django.db import models
 
-from .models import Client, UserTenantRole, SocialAccount, Post, Schedule, Topic, TrendItem, ContentTemplate, SEOKeywordSet, Story
+from .models import (
+    Client,
+    UserTenantRole,
+    SocialAccount,
+    Post,
+    Schedule,
+    Topic,
+    TrendItem,
+    ContentTemplate,
+    SEOKeywordSet,
+    Story,
+    PostType,
+    PostTone,
+    SystemSetting,
+)
+from .system_settings import invalidate_system_settings_cache
 
 
 class ContentTemplateInline(admin.TabularInline):
@@ -13,12 +30,37 @@ class ContentTemplateInline(admin.TabularInline):
     show_change_link = True
 
 
+class ClientSEOKeywordSetInline(admin.TabularInline):
+    model = SEOKeywordSet
+    fk_name = "client"
+    extra = 0
+    fields = ("group_type", "status", "keywords_preview", "created_at")
+    readonly_fields = ("group_type", "status", "keywords_preview", "created_at")
+    show_change_link = True
+    can_delete = False
+
+    def keywords_preview(self, obj):
+        if obj.keywords_list:
+            return ", ".join(obj.keywords_list[:3]) + ("..." if len(obj.keywords_list) > 3 else "")
+        if obj.keyword_groups:
+            preview = []
+            for group_name, items in obj.keyword_groups.items():
+                if isinstance(items, list):
+                    preview.extend(items[:2])
+            if preview:
+                return ", ".join(preview[:3]) + ("..." if len(preview) > 3 else "")
+        return "-"
+    keywords_preview.short_description = "Ключи"
+
+
 @admin.register(Client)
 class ClientAdmin(admin.ModelAdmin):
     list_display = ("name", "slug", "timezone", "has_business_info")
     search_fields = ("name", "slug", "avatar", "pains", "desires", "objections")
     prepopulated_fields = {"slug": ("name",)}
-    inlines = [ContentTemplateInline]
+    inlines = [ContentTemplateInline, ClientSEOKeywordSetInline]
+    actions = ["generate_seo_keywords_action"]
+    readonly_fields = ("analyze_channel_button",)
 
     fieldsets = (
         ("Основная информация", {
@@ -29,7 +71,7 @@ class ClientAdmin(admin.ModelAdmin):
             "description": "Эта информация используется AI для генерации более персонализированного контента, который попадает в боли и желания вашей аудитории"
         }),
         ("Telegram", {
-            "fields": ("telegram_api_id", "telegram_api_hash", "telegram_source_channels"),
+            "fields": ("telegram_client_channel", "analyze_channel_button", "telegram_api_id", "telegram_api_hash", "telegram_source_channels"),
             "classes": ("collapse",),
         }),
         ("RSS фиды", {
@@ -64,6 +106,120 @@ class ClientAdmin(admin.ModelAdmin):
             return f"~ ({filled_count}/4)"
         return "- (0/4)"
     has_business_info.short_description = "Профиль аудитории"
+
+    def analyze_channel_button(self, obj):
+        """Кнопка для анализа Telegram канала и заполнения профиля аудитории"""
+        if not obj.pk:
+            return "Сохраните клиента, чтобы использовать эту функцию"
+
+        if not obj.telegram_client_channel:
+            return format_html(
+                '<div style="color: #dc3545;">⚠️ Сначала укажите канал клиента выше</div>'
+            )
+
+        analyze_url = reverse('core:analyze_telegram_channel', args=[obj.pk])
+
+        return format_html(
+            '''
+            <div style="margin: 10px 0;">
+                <button type="button" class="analyze-channel-btn"
+                    onclick="analyzeChannel('{url}', this)"
+                    style="padding: 10px 20px; background-color: #28a745; color: white;
+                    border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;">
+                    🔍 Получить базовую информацию из канала
+                </button>
+                <div id="analyze-status" style="margin-top: 10px; font-size: 13px;"></div>
+                <div style="color: #6c757d; font-size: 12px; margin-top: 8px;">
+                    Будут проанализированы последние 20 постов из канала <strong>{channel}</strong>
+                    для автоматического заполнения полей "Аватар клиента", "Боли", "Хотелки" и "Возражения/страхи"
+                </div>
+            </div>
+            <script>
+            function getCookie(name) {{
+                let cookieValue = null;
+                if (document.cookie && document.cookie !== '') {{
+                    const cookies = document.cookie.split(';');
+                    for (let i = 0; i < cookies.length; i++) {{
+                        const cookie = cookies[i].trim();
+                        if (cookie.substring(0, name.length + 1) === (name + '=')) {{
+                            cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                            break;
+                        }}
+                    }}
+                }}
+                return cookieValue;
+            }}
+
+            function analyzeChannel(url, button) {{
+                const statusDiv = document.getElementById('analyze-status');
+                const originalText = button.textContent;
+
+                button.disabled = true;
+                button.style.opacity = '0.6';
+                button.textContent = '⏳ Анализирую канал...';
+                statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Получение постов из Telegram канала...</span>';
+
+                fetch(url, {{
+                    method: 'POST',
+                    headers: {{
+                        'X-CSRFToken': getCookie('csrftoken'),
+                        'Content-Type': 'application/json',
+                    }},
+                    credentials: 'same-origin'
+                }})
+                .then(response => response.json().then(data => [response.ok, data]))
+                .then(([ok, data]) => {{
+                    if (!ok || !data.success) {{
+                        throw new Error(data.error || 'Ошибка анализа канала');
+                    }}
+                    statusDiv.innerHTML = '<span style="color: #28a745;">✓ ' + data.message + '</span>';
+                    setTimeout(() => window.location.reload(), 2000);
+                }})
+                .catch(error => {{
+                    statusDiv.innerHTML = '<span style="color: #dc3545;">✗ ' + error.message + '</span>';
+                    button.disabled = false;
+                    button.style.opacity = '1';
+                    button.textContent = originalText;
+                }});
+            }}
+            </script>
+            ''',
+            url=analyze_url,
+            channel=obj.telegram_client_channel
+        )
+    analyze_channel_button.short_description = "AI Анализ канала"
+
+    def generate_seo_keywords_action(self, request, queryset):
+        """Сгенерировать SEO подборку для выбранных клиентов"""
+        from .tasks import generate_seo_keywords_for_client
+
+        count = 0
+        for client in queryset:
+            generate_seo_keywords_for_client.delay(client.id)
+            count += 1
+
+        self.message_user(request, f"Запущена генерация SEO-фраз для {count} клиентов")
+    generate_seo_keywords_action.short_description = "Сгенерировать SEO для клиентов"
+
+
+@admin.register(SystemSetting)
+class SystemSettingAdmin(admin.ModelAdmin):
+    list_display = ("default_ai_model", "updated_at")
+    fieldsets = (
+        ("AI настройки", {"fields": ("default_ai_model",)}),
+        ("Служебное", {"fields": ("created_at", "updated_at")}),
+    )
+    readonly_fields = ("created_at", "updated_at")
+
+    def has_add_permission(self, request):
+        return not SystemSetting.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        invalidate_system_settings_cache()
 
 
 @admin.register(UserTenantRole)
@@ -1003,13 +1159,27 @@ class TrendItemInline(admin.TabularInline):
     can_delete = True
 
 
-class SEOKeywordSetInline(admin.TabularInline):
+class TopicSEOKeywordSetInline(admin.TabularInline):
     model = SEOKeywordSet
+    fk_name = "topic"
     extra = 0
-    fields = ("status", "created_at", "ai_model")
-    readonly_fields = ("created_at", "ai_model")
+    fields = ("group_type", "status", "keywords_preview", "created_at")
+    readonly_fields = ("group_type", "status", "keywords_preview", "created_at")
     show_change_link = True
     can_delete = False
+
+    def keywords_preview(self, obj):
+        if obj.keywords_list:
+            return ", ".join(obj.keywords_list[:3]) + ("..." if len(obj.keywords_list) > 3 else "")
+        if obj.keyword_groups:
+            preview = []
+            for group_name, items in obj.keyword_groups.items():
+                if isinstance(items, list):
+                    preview.extend(items[:2])
+            if preview:
+                return ", ".join(preview[:3]) + ("..." if len(preview) > 3 else "")
+        return "-"
+    keywords_preview.short_description = "Ключи"
 
 
 class TopicAdminForm(forms.ModelForm):
@@ -1056,7 +1226,7 @@ class TopicAdmin(admin.ModelAdmin):
     search_fields = ("name", "client__name")
     autocomplete_fields = ("client",)
     readonly_fields = ("created_at", "updated_at")
-    inlines = [TrendItemInline, SEOKeywordSetInline]
+    inlines = [TrendItemInline, TopicSEOKeywordSetInline]
 
     actions = ["discover_content_action", "generate_posts_from_trends_action", "generate_seo_keywords_action"]
 
@@ -1136,16 +1306,19 @@ class TopicAdmin(admin.ModelAdmin):
     generate_posts_from_trends_action.short_description = "Сгенерировать посты из неиспользованных трендов"
 
     def generate_seo_keywords_action(self, request, queryset):
-        """Сгенерировать SEO-подборку ключевых фраз для выбранных тем"""
-        from .tasks import generate_seo_keywords_for_topic
+        """Сгенерировать SEO-подборку ключевых фраз для клиентов выбранных тем"""
+        from .tasks import generate_seo_keywords_for_client
 
+        client_ids = set()
         count = 0
-        for topic in queryset:
-            generate_seo_keywords_for_topic.delay(topic.id)
-            count += 1
+        for topic in queryset.select_related("client"):
+            if topic.client_id not in client_ids:
+                generate_seo_keywords_for_client.delay(topic.client_id)
+                client_ids.add(topic.client_id)
+                count += 1
 
-        self.message_user(request, f"Запущена генерация SEO-фраз для {count} тем")
-    generate_seo_keywords_action.short_description = "Сгенерировать SEO-подборку ключевых фраз"
+        self.message_user(request, f"Запущена генерация SEO-фраз для {count} клиентов")
+    generate_seo_keywords_action.short_description = "Сгенерировать SEO для клиентов выбранных тем"
 
 
 @admin.register(TrendItem)
@@ -1215,11 +1388,127 @@ class TrendItemAdmin(admin.ModelAdmin):
     generate_stories_action.short_description = "📖 Создать истории из выбранных трендов"
 
 
+class ContentTemplateAdminForm(forms.ModelForm):
+    """Кастомная форма с dropdown из справочников PostType и PostTone"""
+
+    class Meta:
+        model = ContentTemplate
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Получаем admin_site и request из класса (установлены в get_form)
+        admin_site = getattr(self.__class__, '_admin_site', None)
+        request = getattr(self.__class__, '_request', None)
+
+        # Импортируем модели здесь, чтобы избежать циклических импортов
+        from .models import PostType, PostTone
+
+        # Определяем клиента
+        client = None
+        if self.instance.pk:
+            client = self.instance.client
+        elif 'client' in self.initial:
+            client = self.initial.get('client')
+        elif request and hasattr(request.user, 'get_active_client'):
+            # В форме добавления используем активного клиента пользователя
+            try:
+                client = request.user.get_active_client()
+                # Устанавливаем клиента по умолчанию в форме
+                if client and 'client' in self.fields:
+                    self.fields['client'].initial = client
+            except:
+                pass
+
+        # Получаем типы из справочника: системные (client=None) + клиентские
+        if client:
+            # Системные типы (доступны всем) + типы конкретного клиента
+            post_types = PostType.objects.filter(
+                models.Q(client__isnull=True) | models.Q(client=client)
+            ).order_by('label')
+        else:
+            # Если клиент не определен, показываем только системные типы
+            post_types = PostType.objects.filter(client__isnull=True).order_by('label')
+
+        type_choices = [('', '---------')] + [(pt.value, pt.label) for pt in post_types]
+
+        # Создаем виджет для типа
+        type_widget = forms.Select(choices=type_choices)
+
+        # Добавляем кнопку "+" если есть admin_site
+        if admin_site:
+            # Создаем fake relation для PostType
+            rel = type('FakeRel', (), {
+                'model': PostType,
+                'get_related_field': lambda self=None: PostType._meta.pk,
+                'limit_choices_to': {'client': client} if client else {},
+            })()
+
+            type_widget = admin_widgets.RelatedFieldWidgetWrapper(
+                type_widget,
+                rel,
+                admin_site,
+                can_add_related=True,
+                can_change_related=False,
+                can_delete_related=False,
+            )
+
+        self.fields['type'] = forms.CharField(
+            widget=type_widget,
+            help_text='Выберите тип из списка или нажмите "+" для добавления нового'
+        )
+
+        # Получаем тоны из справочника: системные (client=None) + клиентские
+        if client:
+            # Системные тоны (доступны всем) + тоны конкретного клиента
+            post_tones = PostTone.objects.filter(
+                models.Q(client__isnull=True) | models.Q(client=client)
+            ).order_by('label')
+        else:
+            # Если клиент не определен, показываем только системные тоны
+            post_tones = PostTone.objects.filter(client__isnull=True).order_by('label')
+
+        tone_choices = [('', '---------')] + [(pt.value, pt.label) for pt in post_tones]
+
+        # Создаем виджет для тона
+        tone_widget = forms.Select(choices=tone_choices)
+
+        # Добавляем кнопку "+" если есть admin_site
+        if admin_site:
+            # Создаем fake relation для PostTone
+            rel = type('FakeRel', (), {
+                'model': PostTone,
+                'get_related_field': lambda self=None: PostTone._meta.pk,
+                'limit_choices_to': {'client': client} if client else {},
+            })()
+
+            tone_widget = admin_widgets.RelatedFieldWidgetWrapper(
+                tone_widget,
+                rel,
+                admin_site,
+                can_add_related=True,
+                can_change_related=False,
+                can_delete_related=False,
+            )
+
+        self.fields['tone'] = forms.CharField(
+            widget=tone_widget,
+            help_text='Выберите тон из списка или нажмите "+" для добавления нового'
+        )
+
+        # Устанавливаем текущее значение, если редактируем
+        if self.instance.pk:
+            self.fields['type'].initial = self.instance.type
+            self.fields['tone'].initial = self.instance.tone
+
+
 @admin.register(ContentTemplate)
 class ContentTemplateAdmin(admin.ModelAdmin):
+    form = ContentTemplateAdminForm
     list_display = ("name", "client", "type", "tone", "length", "language", "is_default", "created_at")
     list_filter = ("client", "type", "tone", "length", "language", "is_default")
-    search_fields = ("name", "client__name", "prompt_template", "additional_instructions")
+    search_fields = ("name", "client__name", "seo_prompt_template", "trend_prompt_template", "additional_instructions")
     autocomplete_fields = ("client",)
     readonly_fields = ("created_at", "updated_at")
 
@@ -1232,13 +1521,25 @@ class ContentTemplateAdmin(admin.ModelAdmin):
         ("Параметры стиля", {
             "fields": ("tone", "length", "language"),
         }),
-        ("Промпт", {
-            "fields": ("prompt_template", "additional_instructions"),
+        ("SEO промпт", {
+            "fields": ("seo_prompt_template",),
             "description": (
-                "Используйте плейсхолдеры: "
-                "{trend_title}, {trend_description}, {topic_name}, {tone}, {length}, {language}, "
+                "Промпт для генерации контента на основе SEO ключевых фраз. "
+                "Плейсхолдеры: {seo_keywords}, {topic_name}, {tone}, {length}, {language}, "
                 "{type}, {avatar}, {pains}, {desires}, {objections}"
             )
+        }),
+        ("Trend промпт", {
+            "fields": ("trend_prompt_template",),
+            "description": (
+                "Промпт для генерации контента на основе трендов. "
+                "Плейсхолдеры: {trend_title}, {trend_description}, {trend_url}, {topic_name}, {tone}, {length}, {language}, "
+                "{type}, {avatar}, {pains}, {desires}, {objections}"
+            )
+        }),
+        ("Дополнительные инструкции", {
+            "fields": ("additional_instructions",),
+            "description": "Дополнительные инструкции для AI (применяются к обоим промптам)"
         }),
         ("Хэштеги", {
             "fields": ("include_hashtags", "max_hashtags"),
@@ -1261,7 +1562,8 @@ class ContentTemplateAdmin(admin.ModelAdmin):
                 tone=template.tone,
                 length=template.length,
                 language=template.language,
-                prompt_template=template.prompt_template,
+                seo_prompt_template=template.seo_prompt_template,
+                trend_prompt_template=template.trend_prompt_template,
                 additional_instructions=template.additional_instructions,
                 is_default=False,  # Копия не может быть default
                 include_hashtags=template.include_hashtags,
@@ -1288,22 +1590,29 @@ class ContentTemplateAdmin(admin.ModelAdmin):
 
     copy_template_action.short_description = "Копировать выбранные шаблоны"
 
+    def get_form(self, request, obj=None, **kwargs):
+        """Передаем admin_site и request в форму для использования RelatedFieldWidgetWrapper"""
+        form = super().get_form(request, obj, **kwargs)
+        form._admin_site = self.admin_site
+        form._request = request
+        return form
+
 
 @admin.register(SEOKeywordSet)
 class SEOKeywordSetAdmin(admin.ModelAdmin):
-    list_display = ("topic", "client", "status", "keyword_groups_summary", "ai_model", "created_at")
-    list_filter = ("status", "client", "created_at")
+    list_display = ("group_type", "topic", "client", "status", "keywords_count", "ai_model", "created_at")
+    list_filter = ("group_type", "status", "client", "created_at")
     search_fields = ("topic__name", "client__name", "keywords_text")
     autocomplete_fields = ("topic", "client")
-    readonly_fields = ("created_at", "updated_at", "keyword_groups_display")
+    readonly_fields = ("created_at", "updated_at", "keywords_display")
 
     fieldsets = (
         ("Основное", {
-            "fields": ("topic", "client", "status"),
+            "fields": ("group_type", "topic", "client", "status"),
         }),
-        ("SEO-фразы по группам", {
-            "fields": ("keyword_groups", "keyword_groups_display"),
-            "description": "Сгенерированные группы SEO-фраз"
+        ("SEO-фразы", {
+            "fields": ("keywords_list", "keyword_groups", "keywords_display"),
+            "description": "Сгенерированные фразы (новые записи используют поле 'keywords_list')"
         }),
         ("Техническая информация", {
             "fields": ("ai_model", "prompt_used", "error_log"),
@@ -1314,19 +1623,27 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
         }),
     )
 
-    def keyword_groups_summary(self, obj):
-        """Краткая сводка по группам ключей"""
+    def keywords_count(self, obj):
+        if obj.keywords_list:
+            return len(obj.keywords_list)
         if obj.keyword_groups:
-            groups = []
-            for group_name, keywords in obj.keyword_groups.items():
-                count = len(keywords) if isinstance(keywords, list) else 0
-                groups.append(f"{group_name}: {count}")
-            return ", ".join(groups)
-        return "-"
-    keyword_groups_summary.short_description = "Группы (количество)"
+            total = 0
+            for keywords in obj.keyword_groups.values():
+                if isinstance(keywords, list):
+                    total += len(keywords)
+            return total
+        return 0
+    keywords_count.short_description = "Количество"
 
-    def keyword_groups_display(self, obj):
-        """Красивое отображение групп ключей для просмотра"""
+    def keywords_display(self, obj):
+        """Универсальное отображение ключей (список или группы)."""
+        if obj.keywords_list:
+            html = '<div style="font-family: monospace; background: #f5f5f5; padding: 15px; border-radius: 5px;">'
+            html += '<ul style="margin: 0;">'
+            for keyword in obj.keywords_list:
+                html += f'<li>{keyword}</li>'
+            html += '</ul></div>'
+            return format_html(html)
         if obj.keyword_groups:
             html = '<div style="font-family: monospace; background: #f5f5f5; padding: 15px; border-radius: 5px;">'
             for group_name, keywords in obj.keyword_groups.items():
@@ -1338,8 +1655,8 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
                     html += '</ul>'
             html += '</div>'
             return format_html(html)
-        return "Группы ключей не сгенерированы"
-    keyword_groups_display.short_description = "Сгенерированные группы SEO-фраз"
+        return "Ключи не сгенерированы"
+    keywords_display.short_description = "Сгенерированные ключи"
 
 
 # ============================================================================
@@ -1462,3 +1779,92 @@ class StoryAdmin(admin.ModelAdmin):
         )
 
     create_auto_schedule_action.short_description = "📅 Создать автоматическое расписание"
+
+
+CORE_ADMIN_MODEL_ORDER = {
+    "Client": 0,
+    "Topic": 1,
+    "TrendItem": 2,
+    "Post": 3,
+    "SEOKeywordSet": 4,
+    "SystemSetting": 999,
+}
+
+
+def _core_model_sort_key(model_dict):
+    return (
+        CORE_ADMIN_MODEL_ORDER.get(model_dict["object_name"], 100),
+        model_dict["name"],
+    )
+
+
+_original_get_app_list = admin.site.get_app_list
+
+
+def _core_sorted_get_app_list(*args, **kwargs):
+    """Wrap admin get_app_list to enforce custom ordering for core models."""
+    app_list = _original_get_app_list(*args, **kwargs)
+    if isinstance(app_list, list):
+        for app in app_list:
+            if app.get("app_label") == "core":
+                app["models"].sort(key=_core_model_sort_key)
+    return app_list
+
+
+if not getattr(admin.site, "_core_sorted", False):
+    admin.site.get_app_list = _core_sorted_get_app_list
+    admin.site._core_sorted = True
+
+
+@admin.register(PostType)
+class PostTypeAdmin(admin.ModelAdmin):
+    """Админка для справочника типов постов"""
+    list_display = ("label", "value", "client_display", "is_default", "created_at")
+    list_filter = ("client", "is_default", "created_at")
+    search_fields = ("label", "value", "client__name")
+    autocomplete_fields = ("client",)
+    readonly_fields = ("created_at",)
+
+    fieldsets = (
+        ("Основная информация", {
+            "fields": ("client", "label", "value", "is_default"),
+            "description": "Оставьте поле 'Client' пустым для создания системного типа, доступного всем клиентам"
+        }),
+        ("Системная информация", {
+            "fields": ("created_at",),
+            "classes": ("collapse",),
+        }),
+    )
+
+    def client_display(self, obj):
+        """Показывает 'Системный' если client=None"""
+        return obj.client.name if obj.client else "Системный"
+    client_display.short_description = "Client"
+    client_display.admin_order_field = "client"
+
+
+@admin.register(PostTone)
+class PostToneAdmin(admin.ModelAdmin):
+    """Админка для справочника тонов постов"""
+    list_display = ("label", "value", "client_display", "is_default", "created_at")
+    list_filter = ("client", "is_default", "created_at")
+    search_fields = ("label", "value", "client__name")
+    autocomplete_fields = ("client",)
+    readonly_fields = ("created_at",)
+
+    fieldsets = (
+        ("Основная информация", {
+            "fields": ("client", "label", "value", "is_default"),
+            "description": "Оставьте поле 'Client' пустым для создания системного тона, доступного всем клиентам"
+        }),
+        ("Системная информация", {
+            "fields": ("created_at",),
+            "classes": ("collapse",),
+        }),
+    )
+
+    def client_display(self, obj):
+        """Показывает 'Системный' если client=None"""
+        return obj.client.name if obj.client else "Системный"
+    client_display.short_description = "Client"
+    client_display.admin_order_field = "client"

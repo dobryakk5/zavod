@@ -57,7 +57,7 @@ class CanGenerateVideo(BasePermission):
 - CRUD операции
 - `POST /api/topics/{id}/discover_content/` - поиск контента
 - `POST /api/topics/{id}/generate_posts/` - генерация постов
-- `POST /api/topics/{id}/generate_seo/` - генерация SEO
+ - `POST /api/topics/{id}/generate_seo/` - запуск клиентской генерации SEO (5 отдельных записей: pains, desires, objections, avatar, keywords)
 
 **TrendItemViewSet:**
 - Просмотр/удаление трендов
