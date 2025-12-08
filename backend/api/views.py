@@ -466,7 +466,7 @@ class PostViewSet(viewsets.ModelViewSet):
                 'error': f'Unknown video source "{source}"'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        if source == 'image' and not post.image:
+        if source == 'image' and not post.images.exists():
             return Response({
                 'success': False,
                 'error': 'Post must have an image before generating video'

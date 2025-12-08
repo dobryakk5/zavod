@@ -6,8 +6,10 @@ from core.models import (
     Client,
     ContentTemplate,
     Post,
+    PostImage,
     PostTone,
     PostType,
+    PostVideo,
     Schedule,
     SEOKeywordSet,
     SocialAccount,
@@ -55,8 +57,25 @@ class ClientSummarySerializer(serializers.Serializer):
 # ============================================================================
 
 
+class PostImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PostImage
+        fields = ["id", "image", "alt_text", "order", "created_at", "updated_at"]
+        read_only_fields = ["id", "image", "alt_text", "order", "created_at", "updated_at"]
+
+
+class PostVideoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PostVideo
+        fields = ["id", "video", "caption", "order", "created_at", "updated_at"]
+        read_only_fields = ["id", "video", "caption", "order", "created_at", "updated_at"]
+
+
 class PostDetailSerializer(serializers.ModelSerializer):
     """Detailed post serializer with all fields for create/update/retrieve."""
+
+    images = PostImageSerializer(many=True, read_only=True)
+    videos = PostVideoSerializer(many=True, read_only=True)
 
     class Meta:
         model = Post
@@ -64,8 +83,6 @@ class PostDetailSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "text",
-            "image",
-            "video",
             "status",
             "tags",
             "source_links",
@@ -78,6 +95,8 @@ class PostDetailSerializer(serializers.ModelSerializer):
             "regeneration_count",
             "created_at",
             "updated_at",
+            "images",
+            "videos",
         ]
         read_only_fields = [
             "id",
@@ -85,6 +104,8 @@ class PostDetailSerializer(serializers.ModelSerializer):
             "regeneration_count",
             "created_at",
             "updated_at",
+            "images",
+            "videos",
         ]
 
 

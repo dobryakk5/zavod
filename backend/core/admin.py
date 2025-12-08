@@ -1,15 +1,24 @@
-from django.contrib import admin
+import logging
+
+from django.contrib import admin, messages
 from django.contrib.admin import widgets as admin_widgets
-from django.utils.html import format_html
 from django import forms
-from django.urls import reverse
+from django.urls import reverse, path
 from django.db import models
+from django.http import HttpResponseRedirect
+from django.middleware.csrf import get_token
+from django.template.loader import render_to_string
+from django.utils.html import format_html
+from django.utils.safestring import mark_safe
+from django.core.exceptions import PermissionDenied
 
 from .models import (
     Client,
     UserTenantRole,
     SocialAccount,
     Post,
+    PostImage,
+    PostVideo,
     Schedule,
     Topic,
     TrendItem,
@@ -21,6 +30,32 @@ from .models import (
     SystemSetting,
 )
 from .system_settings import invalidate_system_settings_cache
+
+logger = logging.getLogger(__name__)
+
+
+def _file_url_if_exists(file_field):
+    """
+    Возвращает URL файла, только если он действительно существует на сторидже.
+    Позволяет избежать 404 при клике на ссылку, когда физический файл удалён.
+    """
+    if not file_field:
+        return None
+
+    file_name = getattr(file_field, "name", "")
+    if not file_name:
+        return None
+
+    storage = getattr(file_field, "storage", None)
+    if not storage:
+        return None
+
+    try:
+        if storage.exists(file_name):
+            return file_field.url
+    except Exception as exc:  # pragma: no cover - диагностика окружения
+        logger.warning("Failed to access file %s: %s", file_name, exc)
+    return None
 
 
 class ContentTemplateInline(admin.TabularInline):
@@ -204,9 +239,16 @@ class ClientAdmin(admin.ModelAdmin):
 
 @admin.register(SystemSetting)
 class SystemSettingAdmin(admin.ModelAdmin):
-    list_display = ("default_ai_model", "updated_at")
+    list_display = (
+        "default_ai_model",
+        "fallback_ai_model",
+        "image_generation_timeout",
+        "video_generation_timeout",
+        "updated_at",
+    )
     fieldsets = (
-        ("AI настройки", {"fields": ("default_ai_model",)}),
+        ("AI настройки", {"fields": ("default_ai_model", "fallback_ai_model", "video_prompt_instructions")}),
+        ("Таймауты генерации", {"fields": ("image_generation_timeout", "video_generation_timeout")}),
         ("Служебное", {"fields": ("created_at", "updated_at")}),
     )
     readonly_fields = ("created_at", "updated_at")
@@ -461,13 +503,51 @@ class SocialAccountAdmin(admin.ModelAdmin):
     telegram_channel_display.short_description = "TG канал"
 
 
+class PostImageInline(admin.TabularInline):
+    model = PostImage
+    extra = 0
+    fields = ("preview", "image", "alt_text", "order", "created_at")
+    readonly_fields = ("preview", "created_at")
+
+    def preview(self, obj):
+        if obj and obj.image:
+            return format_html('<img src="{}" style="width:80px;height:80px;object-fit:cover;border-radius:4px;" />', obj.image.url)
+        return "-"
+    preview.short_description = "Превью"
+
+
+class PostVideoInline(admin.TabularInline):
+    model = PostVideo
+    extra = 0
+    fields = ("preview", "video", "caption", "order", "created_at")
+    readonly_fields = ("preview", "created_at")
+
+    def preview(self, obj):
+        video_url = _file_url_if_exists(getattr(obj, "video", None))
+        if video_url:
+            return format_html('<a href="{}" target="_blank">🎬 Смотреть</a>', video_url)
+        if obj and getattr(obj, "video", None):
+            return format_html('<span style="color:#d9534f;">⚠️ Файл отсутствует</span>')
+        return "-"
+    preview.short_description = "Видео"
+
+
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
-    list_display = ("title", "client", "status", "story_link", "episode_number", "regeneration_count", "image_thumbnail", "created_at", "created_by")
+    list_display = (
+        "title",
+        "client",
+        "status",
+        "story_link",
+        "episode_number",
+        "image_thumbnail",
+        "video_badge",
+        "created_at",
+    )
     list_filter = ("client", "status", "story", "created_at")
     search_fields = ("title", "text", "client__name")
     autocomplete_fields = ("client", "created_by", "story")
-    inlines = [ScheduleInline]
+    inlines = [PostImageInline, PostVideoInline, ScheduleInline]
     readonly_fields = (
         "story",
         "episode_number",
@@ -479,7 +559,7 @@ class PostAdmin(admin.ModelAdmin):
         "regenerate_text_button"
     )
 
-    actions = ["generate_image_action", "regenerate_text_action"]
+    actions = ["generate_image_action", "regenerate_text_action", "generate_videos_action"]
 
     fieldsets = (
         ("Базовая информация", {
@@ -495,10 +575,8 @@ class PostAdmin(admin.ModelAdmin):
                 "text",
                 "regenerate_text_button",
                 "regeneration_count",
-                "image",
                 "image_generate_button",
                 "image_preview",
-                "video",
                 "video_generate_button",
             ),
         }),
@@ -514,16 +592,39 @@ class PostAdmin(admin.ModelAdmin):
 
     def image_thumbnail(self, obj):
         """Миниатюра изображения для списка постов"""
-        if obj.image:
-            return format_html('<img src="{}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px;" />', obj.image.url)
+        image = obj.get_primary_image()
+        if image and image.image:
+            return format_html('<img src="{}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px;" />', image.image.url)
         return "-"
     image_thumbnail.short_description = "Image"
 
+    def video_badge(self, obj):
+        """Короткая ссылка на основное видео поста."""
+        primary_video = obj.get_primary_video()
+        if primary_video and primary_video.video:
+            video_url = _file_url_if_exists(primary_video.video)
+            if video_url:
+                total = obj.videos.count()
+                extra = f" ({total})" if total > 1 else ""
+                return format_html('<a href="{}" target="_blank">🎬 Видео{}</a>', video_url, extra)
+            return format_html('<span style="color:#d9534f;">⚠️ Нет файла</span>')
+        return "-"
+    video_badge.short_description = "Video"
+
     def image_preview(self, obj):
         """Превью изображения для страницы редактирования поста"""
-        if obj.image:
-            return format_html('<img src="{}" style="max-width: 400px; max-height: 400px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />', obj.image.url)
-        return "Нет изображения"
+        image = obj.get_primary_image()
+        if image and image.image:
+            extra = ""
+            total = obj.images.count()
+            if total > 1:
+                extra = f"<div style='margin-top:6px;font-size:12px;color:#666;'>Ещё {total - 1} изображений в галерее ниже</div>"
+            return format_html(
+                '<div>{}<img src="{}" style="max-width: 400px; max-height: 400px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" /></div>',
+                mark_safe(extra),
+                image.image.url
+            )
+        return "Нет изображений"
     image_preview.short_description = "Превью изображения"
 
     def image_generate_button(self, obj):
@@ -655,14 +756,15 @@ class PostAdmin(admin.ModelAdmin):
         veo_text_url = f"{generate_url}?method=veo&source=text"
         status_id = f"generate-video-status-{obj.pk}"
 
-        image_disabled = '' if obj.image else 'disabled'
+        primary_image = obj.get_primary_image()
+        image_disabled = '' if primary_image else 'disabled'
         text_disabled = '' if obj.text else 'disabled'
-        image_title = '' if obj.image else 'title="Сначала добавьте изображение"'
+        image_title = '' if primary_image else 'title="Сначала добавьте изображение"'
         text_title = '' if obj.text else 'title="Нужен текст поста"'
 
         warnings = []
-        if not obj.image:
-            warnings.append('⚠️ Добавьте изображение, чтобы сделать видео из картинки.')
+        if not primary_image:
+            warnings.append('⚠️ Добавьте изображение (в инлайне ниже), чтобы сделать видео из картинки.')
         if not obj.text:
             warnings.append('⚠️ Добавьте текст, чтобы сделать видео по тексту.')
 
@@ -948,6 +1050,25 @@ class PostAdmin(admin.ModelAdmin):
 
         self.message_user(request, f"Запущена регенерация текста для {count} постов")
     regenerate_text_action.short_description = "🔄 Обновить текст постов"
+
+    def generate_videos_action(self, request, queryset):
+        """Сгенерировать два видео для каждого выбранного поста."""
+        from .tasks import generate_videos_for_posts
+
+        post_ids = list(queryset.values_list("id", flat=True))
+        if not post_ids:
+            self.message_user(request, "Выберите хотя бы один пост", level=messages.WARNING)
+            return
+
+        videos_per_post = 2
+        generate_videos_for_posts.delay(post_ids, videos_per_post=videos_per_post)
+
+        self.message_user(
+            request,
+            f"Запущена генерация {videos_per_post} видео для каждого из {len(post_ids)} постов",
+            level=messages.SUCCESS
+        )
+    generate_videos_action.short_description = "Создать 2 видео на пост"
 
 
 class ScheduleAdminForm(forms.ModelForm):
@@ -1600,11 +1721,14 @@ class ContentTemplateAdmin(admin.ModelAdmin):
 
 @admin.register(SEOKeywordSet)
 class SEOKeywordSetAdmin(admin.ModelAdmin):
+    MAX_POSTS_PER_RUN = 99
+    MAX_VIDEOS_PER_POST = 5
+
     list_display = ("group_type", "topic", "client", "status", "keywords_count", "ai_model", "created_at")
     list_filter = ("group_type", "status", "client", "created_at")
     search_fields = ("topic__name", "client__name", "keywords_text")
     autocomplete_fields = ("topic", "client")
-    readonly_fields = ("created_at", "updated_at", "keywords_display")
+    readonly_fields = ("created_at", "updated_at", "keywords_display", "generate_posts_block")
 
     fieldsets = (
         ("Основное", {
@@ -1613,6 +1737,10 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
         ("SEO-фразы", {
             "fields": ("keywords_list", "keyword_groups", "keywords_display"),
             "description": "Сгенерированные фразы (новые записи используют поле 'keywords_list')"
+        }),
+        ("Создать посты", {
+            "fields": ("generate_posts_block",),
+            "description": "Сгенерируйте серию постов по выбранному SEO шаблону",
         }),
         ("Техническая информация", {
             "fields": ("ai_model", "prompt_used", "error_log"),
@@ -1624,15 +1752,9 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
     )
 
     def keywords_count(self, obj):
-        if obj.keywords_list:
-            return len(obj.keywords_list)
-        if obj.keyword_groups:
-            total = 0
-            for keywords in obj.keyword_groups.values():
-                if isinstance(keywords, list):
-                    total += len(keywords)
-            return total
-        return 0
+        if not obj:
+            return 0
+        return len(obj.get_flat_keywords())
     keywords_count.short_description = "Количество"
 
     def keywords_display(self, obj):
@@ -1657,6 +1779,242 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
             return format_html(html)
         return "Ключи не сгенерированы"
     keywords_display.short_description = "Сгенерированные ключи"
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                "<int:seo_set_id>/generate-posts/",
+                self.admin_site.admin_view(self.process_generate_posts_request),
+                name="core_seokeywordset_generate_posts",
+            ),
+            path(
+                "<int:seo_set_id>/generate-posts-videos/",
+                self.admin_site.admin_view(self.process_generate_posts_with_videos_request),
+                name="core_seokeywordset_generate_posts_videos",
+            ),
+        ]
+        return custom_urls + urls
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        self._current_request = request
+        response = super().change_view(request, object_id, form_url, extra_context)
+
+        def cleanup(resp):
+            setattr(self, "_current_request", None)
+            return resp
+
+        if hasattr(response, "add_post_render_callback"):
+            response.add_post_render_callback(cleanup)
+        else:
+            cleanup(response)
+        return response
+
+    def generate_posts_block(self, obj):
+        request = getattr(self, "_current_request", None)
+        if not obj or not obj.pk:
+            return "Сохраните SEO подборку, чтобы создать посты"
+        if not obj.client:
+            return "Не указан клиент для этой SEO подборки"
+
+        keywords = obj.get_flat_keywords()
+        keyword_count = len(keywords)
+        if keyword_count == 0:
+            return format_html('<div style="color:#ba2121;">Добавьте или сгенерируйте ключи выше.</div>')
+
+        templates_qs = ContentTemplate.objects.filter(client=obj.client).order_by("name")
+        templates = list(templates_qs)
+        if not templates:
+            return format_html(
+                '<div style="color:#ba2121;">У клиента нет контент-шаблонов. '
+                'Добавьте шаблон на странице клиента.</div>'
+            )
+
+        if not request:
+            return "Форма недоступна в текущем контексте"
+
+        posts_action_url = reverse("admin:core_seokeywordset_generate_posts", args=[obj.pk])
+        videos_action_url = reverse("admin:core_seokeywordset_generate_posts_videos", args=[obj.pk])
+        max_posts = self.MAX_POSTS_PER_RUN
+        max_videos = self.MAX_VIDEOS_PER_POST
+        context = {
+            "posts_action_url": posts_action_url,
+            "videos_action_url": videos_action_url,
+            "csrf_token": get_token(request),
+            "templates": templates,
+            "default_posts_count": min(keyword_count, max_posts) or 1,
+            "default_video_posts_count": min(keyword_count, max_posts) or 1,
+            "default_videos_per_post": 1,
+            "keyword_count": keyword_count,
+            "max_posts": max_posts,
+            "max_videos_per_post": max_videos,
+        }
+        html = render_to_string("admin/core/seo_keyword_set/generate_posts_block.html", context)
+        return mark_safe(html)
+
+    generate_posts_block.short_description = "Создать посты"
+
+    def process_generate_posts_request(self, request, seo_set_id: int):
+        change_url = reverse("admin:core_seokeywordset_change", args=[seo_set_id])
+        seo_set = self.get_object(request, str(seo_set_id))
+
+        if not seo_set:
+            self.message_user(
+                request,
+                "SEO подборка не найдена",
+                level=messages.ERROR
+            )
+            return HttpResponseRedirect(reverse("admin:core_seokeywordset_changelist"))
+
+        if request.method != "POST":
+            return HttpResponseRedirect(change_url)
+
+        if not self.has_change_permission(request, seo_set):
+            raise PermissionDenied
+
+        keywords = seo_set.get_flat_keywords()
+        if not keywords:
+            self.message_user(
+                request,
+                "Нет ключевых фраз для генерации постов",
+                level=messages.ERROR
+            )
+            return HttpResponseRedirect(change_url)
+
+        template_id = request.POST.get("template_id")
+        if not template_id:
+            self.message_user(
+                request,
+                "Выберите шаблон контента",
+                level=messages.ERROR
+            )
+            return HttpResponseRedirect(change_url)
+
+        try:
+            template = ContentTemplate.objects.get(id=template_id, client=seo_set.client)
+        except ContentTemplate.DoesNotExist:
+            self.message_user(
+                request,
+                "Шаблон не найден или принадлежит другому клиенту",
+                level=messages.ERROR
+            )
+            return HttpResponseRedirect(change_url)
+
+        raw_posts_count = request.POST.get("posts_count")
+        try:
+            posts_count = int(raw_posts_count)
+        except (TypeError, ValueError):
+            posts_count = len(keywords)
+
+        posts_count = max(1, min(self.MAX_POSTS_PER_RUN, posts_count))
+
+        if posts_count <= 0:
+            self.message_user(
+                request,
+                "Количество постов должно быть положительным",
+                level=messages.ERROR
+            )
+            return HttpResponseRedirect(change_url)
+
+        from .tasks import generate_posts_from_seo_keyword_set
+
+        created_by_id = request.user.id if request.user and request.user.is_authenticated else None
+
+        generate_posts_from_seo_keyword_set.delay(
+            seo_set.id,
+            template.id,
+            posts_count,
+            created_by_id
+        )
+
+        self.message_user(
+            request,
+            f"Запущена генерация {posts_count} постов по шаблону «{template.name}»",
+            level=messages.SUCCESS
+        )
+        return HttpResponseRedirect(change_url)
+
+    def process_generate_posts_with_videos_request(self, request, seo_set_id: int):
+        change_url = reverse("admin:core_seokeywordset_change", args=[seo_set_id])
+        seo_set = self.get_object(request, str(seo_set_id))
+
+        if not seo_set:
+            self.message_user(
+                request,
+                "SEO подборка не найдена",
+                level=messages.ERROR
+            )
+            return HttpResponseRedirect(reverse("admin:core_seokeywordset_changelist"))
+
+        if request.method != "POST":
+            return HttpResponseRedirect(change_url)
+
+        if not self.has_change_permission(request, seo_set):
+            raise PermissionDenied
+
+        keywords = seo_set.get_flat_keywords()
+        if not keywords:
+            self.message_user(
+                request,
+                "Нет ключевых фраз для генерации постов",
+                level=messages.ERROR
+            )
+            return HttpResponseRedirect(change_url)
+
+        template_id = request.POST.get("template_id")
+        if not template_id:
+            self.message_user(
+                request,
+                "Выберите шаблон контента",
+                level=messages.ERROR
+            )
+            return HttpResponseRedirect(change_url)
+
+        try:
+            template = ContentTemplate.objects.get(id=template_id, client=seo_set.client)
+        except ContentTemplate.DoesNotExist:
+            self.message_user(
+                request,
+                "Шаблон не найден или принадлежит другому клиенту",
+                level=messages.ERROR
+            )
+            return HttpResponseRedirect(change_url)
+
+        raw_posts_count = request.POST.get("posts_count")
+        try:
+            posts_count = int(raw_posts_count)
+        except (TypeError, ValueError):
+            posts_count = len(keywords)
+        posts_count = max(1, min(self.MAX_POSTS_PER_RUN, posts_count))
+
+        raw_videos_per_post = request.POST.get("videos_per_post")
+        try:
+            videos_per_post = int(raw_videos_per_post)
+        except (TypeError, ValueError):
+            videos_per_post = 1
+        videos_per_post = max(1, min(self.MAX_VIDEOS_PER_POST, videos_per_post))
+
+        from .tasks import generate_posts_with_videos_from_seo_keyword_set
+
+        created_by_id = request.user.id if request.user and request.user.is_authenticated else None
+
+        generate_posts_with_videos_from_seo_keyword_set.delay(
+            seo_set.id,
+            template.id,
+            posts_count,
+            videos_per_post,
+            created_by_id
+        )
+
+        self.message_user(
+            request,
+            (
+                f"Запущена генерация {posts_count} постов "
+                f"с {videos_per_post} видео(роликами) на ключ для шаблона «{template.name}»"
+            ),
+            level=messages.SUCCESS
+        )
+        return HttpResponseRedirect(change_url)
 
 
 # ============================================================================

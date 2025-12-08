@@ -5,11 +5,21 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+import time
 import urllib.parse
+import uuid
+from collections import OrderedDict
+from contextlib import contextmanager
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import requests
+
+from .system_settings import (
+    get_image_generation_timeout,
+    get_video_generation_timeout,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +41,143 @@ except ImportError:
     AuthKeyUnregisteredError = None
     TELETHON_AVAILABLE = False
 
+try:  # pragma: no cover - зависит от платформы
+    import fcntl  # type: ignore
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+
+SESSION_THREAD_LOCKS: Dict[str, threading.RLock] = {}
+SESSION_THREAD_LOCKS_GUARD = threading.Lock()
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+VIDEO_RESPONSE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+VIDEO_RESPONSE_CACHE_LOCK = threading.Lock()
+
 WAN_NEGATIVE_PROMPT = (
     "色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 静止, 整体发灰, 最差质量, "
     "低质量, JPEG压缩残留, 丑陋的, 残缺的, 多余的手指, 画得不好的手部, 画得不好的脸部, 畸形的, 毁容的, "
     "形态畸形的肢体, 手指融合, 静止不动的画面, 杂乱的背景, 三条腿, 背景人很多, 倒着走"
 )
+
+
+@contextmanager
+def _telethon_session_lock(session_file: Optional[str]):
+    """Глобальная блокировка для Telethon-сессии (sqlite), чтобы избежать database is locked."""
+
+    normalized = os.path.abspath(session_file or "veo_generator.session")
+    lock_file_handle = None
+    used_file_lock = False
+    thread_lock = None
+
+    if fcntl and session_file:
+        lock_path = normalized + ".lock"
+        lock_dir = os.path.dirname(lock_path)
+        if lock_dir and not os.path.exists(lock_dir):
+            os.makedirs(lock_dir, exist_ok=True)
+        try:
+            lock_file_handle = open(lock_path, "w")
+            fcntl.flock(lock_file_handle.fileno(), fcntl.LOCK_EX)
+            used_file_lock = True
+        except OSError as exc:  # pragma: no cover - I/O ошибки маловероятны
+            logger.warning("Не удалось установить файловый лок для %s: %s", lock_path, exc)
+            if lock_file_handle:
+                lock_file_handle.close()
+                lock_file_handle = None
+
+    if not used_file_lock:
+        lock_key = normalized
+        with SESSION_THREAD_LOCKS_GUARD:
+            thread_lock = SESSION_THREAD_LOCKS.setdefault(lock_key, threading.RLock())
+        thread_lock.acquire()
+
+    try:
+        yield
+    finally:
+        if used_file_lock and lock_file_handle:
+            try:
+                fcntl.flock(lock_file_handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_file_handle.close()
+        elif thread_lock:
+            thread_lock.release()
+
+
+def _cache_video_response(signature: Optional[str], payload: Dict[str, Any]):
+    """Сохранить готовый ответ VEO по подписи промпта (макс 4 элемента)."""
+    if not signature or not payload:
+        return
+    with VIDEO_RESPONSE_CACHE_LOCK:
+        VIDEO_RESPONSE_CACHE[signature] = payload
+        VIDEO_RESPONSE_CACHE.move_to_end(signature)
+        while len(VIDEO_RESPONSE_CACHE) > 4:
+            old_signature, old_payload = VIDEO_RESPONSE_CACHE.popitem(last=False)
+            cleanup_paths = old_payload.get("cleanup_paths") or [old_payload.get("video_path")]
+            for path in cleanup_paths:
+                if path and isinstance(path, str) and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+
+
+def _pop_video_response(signature: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Получить и удалить ответ VEO из кеша."""
+    if not signature:
+        return None
+    with VIDEO_RESPONSE_CACHE_LOCK:
+        return VIDEO_RESPONSE_CACHE.pop(signature, None)
+
+
+def _take_first_sentences(text: str, limit: int = 3) -> str:
+    """Вернуть первые limit предложений (по . ! ?) как строку."""
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if not cleaned:
+        return ""
+    sentences = SENTENCE_SPLIT_RE.split(cleaned)
+    result_parts: List[str] = []
+    for sentence in sentences:
+        if sentence:
+            result_parts.append(sentence)
+        if len(result_parts) >= limit:
+            break
+    if not result_parts:
+        return cleaned
+    return " ".join(result_parts)
+
+
+def _normalize_prompt_signature(value: Optional[str], max_length: int = 500) -> str:
+    """Нормализовать промпт для сравнения (без регистра и лишних пробелов)."""
+    if not value:
+        return ""
+    head = _take_first_sentences(value)
+    normalized = re.sub(r"\s+", " ", head).strip().lower()
+    return normalized[:max_length]
+
+
+def _extract_response_prompt_fragment(text: Optional[str]) -> Optional[str]:
+    """Выделить фрагмент промпта из текста ответа VEO (после 'Ваш запрос:')."""
+    if not text:
+        return None
+    match = re.search(r"Ваш запрос:\s*(.+)", text, flags=re.IGNORECASE | re.S)
+    if not match:
+        return None
+    fragment = match.group(1)
+    stop_tokens = [
+        "\n",
+        "🎛",
+        "📍",
+        "📌",
+        "📎",
+        "Инструмент",
+        "Instrument",
+        "▶",
+        "🎬",
+    ]
+    for token in stop_tokens:
+        idx = fragment.find(token)
+        if idx != -1:
+            fragment = fragment[:idx]
+            break
+    return _take_first_sentences(fragment.strip().strip('"'))
 
 
 def generate_image(
@@ -106,11 +248,12 @@ def generate_video_from_text(
 
 def _generate_image_pollinations(prompt: str, output_path: str) -> Dict[str, Any]:
     try:
+        image_timeout = get_image_generation_timeout()
         encoded_prompt = urllib.parse.quote(prompt)
         image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
         logger.info("Pollinations запрос: %s", image_url)
 
-        response = requests.get(image_url, timeout=60)
+        response = requests.get(image_url, timeout=image_timeout)
         if response.status_code != 200:
             logger.error("Ошибка Pollinations HTTP %s", response.status_code)
             return {"success": False, "error": f"HTTP error {response.status_code}"}
@@ -143,6 +286,7 @@ def _generate_image_openrouter(
         return {"success": False, "error": "OPENROUTER_API_KEY не задан"}
 
     try:
+        image_timeout = get_image_generation_timeout()
         logger.info("Генерация через OpenRouter (google/gemini-2.5-flash-image)")
         response = requests.post(
             api_url,
@@ -156,7 +300,7 @@ def _generate_image_openrouter(
                 "model": "google/gemini-2.5-flash-image",
                 "messages": [{"role": "user", "content": f"Generate an image: {prompt}"}]
             },
-            timeout=120
+            timeout=image_timeout
         )
 
         if response.status_code != 200:
@@ -208,7 +352,7 @@ def _generate_image_openrouter(
             }
 
         if image_url:
-            img_response = requests.get(image_url, timeout=60)
+            img_response = requests.get(image_url, timeout=image_timeout)
             if img_response.status_code != 200:
                 logger.error("Ошибка скачивания изображения %s", img_response.status_code)
                 return {
@@ -312,7 +456,8 @@ def _generate_image_flux2(prompt: str, output_path: str) -> Dict[str, Any]:
                 download_url = url_candidate
 
             if download_url:
-                response = requests.get(download_url, timeout=120)
+                image_timeout = get_image_generation_timeout()
+                response = requests.get(download_url, timeout=image_timeout)
                 response.raise_for_status()
                 with open(output_path, "wb") as f:
                     f.write(response.content)
@@ -443,7 +588,7 @@ def _generate_video_veo(
     if not text_only and not image_path:
         return {"success": False, "error": "Для генерации по изображению нужен путь к файлу"}
 
-    bot_username = options.get("bot_username") or os.getenv("VEO_BOT_USERNAME", "c_zv_bot")
+    bot_username = options.get("bot_username") or os.getenv("VEO_BOT_USERNAME", "syntxaibot")
     session_path = (
         options.get("session_path")
         or os.getenv("VEO_SESSION_PATH")
@@ -468,7 +613,21 @@ def _generate_video_veo(
     session_dir = os.path.dirname(session_name)
     if session_dir and not os.path.exists(session_dir):
         os.makedirs(session_dir, exist_ok=True)
-    timeout = options.get("timeout") or int(os.getenv("VEO_TIMEOUT", "600"))
+    timeout_value = options.get("timeout")
+    if timeout_value is None:
+        env_timeout = os.getenv("VEO_TIMEOUT")
+        if env_timeout:
+            try:
+                timeout_value = int(env_timeout)
+            except ValueError:
+                logger.warning("Некорректное значение VEO_TIMEOUT: %s", env_timeout)
+                timeout_value = None
+        if timeout_value is None:
+            timeout_value = get_video_generation_timeout()
+    try:
+        timeout = max(30, int(timeout_value))
+    except (TypeError, ValueError):
+        timeout = get_video_generation_timeout()
 
     api_id = (
         options.get("api_id")
@@ -495,19 +654,83 @@ def _generate_video_veo(
         return {"success": False, "error": "TELEGRAM_API_ID должен быть числом"}
 
     caption = prompt or options.get("fallback_prompt") or "Please animate this image"
+    expected_prompt_signature = _normalize_prompt_signature(caption)
+    matched_prompt_fragment: Optional[str] = None
+    cached_payload = _pop_video_response(expected_prompt_signature)
+    if cached_payload:
+        logger.info("[VEO] Используем кешированный ответ для промпта до обращения к боту")
+        cached_payload.pop("prompt_signature", None)
+        return cached_payload
 
-    async def _veo_coroutine() -> Optional[str]:
-        client = TelegramClient(session_name, api_id, api_hash)
+    cleanup_session_files: List[str] = []
+
+    async def _veo_coroutine() -> Optional[Dict[str, Any]]:
+        session_base = session_name[:-8] if session_name.endswith('.session') else session_name
+        thread_id = threading.get_ident()
+        unique_suffix = uuid.uuid4().hex[:6]
+        thread_session_name = f"{session_base}_thread_{thread_id}_{unique_suffix}"
+        thread_session_file = f"{thread_session_name}.session"
+        cleanup_session_files.clear()
+        cleanup_session_files.extend([
+            thread_session_file,
+            f"{thread_session_file}-journal",
+            f"{thread_session_file}-wal",
+        ])
+
+        source_session_file = f"{session_base}.session"
+
+        logger.info("[VEO Thread %s] Начало инициализации клиента", thread_id)
+        logger.info("[VEO Thread %s] Базовая сессия: %s", thread_id, source_session_file)
+        logger.info("[VEO Thread %s] Сессия потока: %s", thread_id, thread_session_file)
+
+        thread_session_dir = os.path.dirname(thread_session_file)
+        if thread_session_dir:
+            os.makedirs(thread_session_dir, exist_ok=True)
+
+        def _take_cached_payload(stage: str) -> Optional[Dict[str, Any]]:
+            cached = _pop_video_response(expected_prompt_signature)
+            if cached:
+                logger.info("[VEO Thread %s] Найден кешированный ответ (%s) для текущего промпта", thread_id, stage)
+            return cached
+
+        with _telethon_session_lock(source_session_file):
+            if os.path.exists(source_session_file):
+                try:
+                    shutil.copy2(source_session_file, thread_session_file)
+                    logger.info(
+                        "[VEO Thread %s] Скопирована сессия: %s -> %s",
+                        thread_id,
+                        source_session_file,
+                        thread_session_file
+                    )
+                except Exception as e:
+                    logger.warning("[VEO Thread %s] Не удалось скопировать сессию: %s", thread_id, e)
+            else:
+                logger.warning("[VEO Thread %s] Исходная сессия не найдена: %s", thread_id, source_session_file)
+
+        logger.info("[VEO Thread %s] Создание TelegramClient с сессией: %s", thread_id, thread_session_name)
+        client = TelegramClient(thread_session_name, api_id, api_hash)
+
         try:
+            cached_before_connect = _take_cached_payload("before connect")
+            if cached_before_connect:
+                return cached_before_connect
+            logger.info("[VEO Thread %s] Попытка подключения к Telegram...", thread_id)
             await client.connect()
+            logger.info("[VEO Thread %s] Успешно подключено к Telegram", thread_id)
+
+            logger.info("[VEO Thread %s] Проверка авторизации...", thread_id)
             if not await client.is_user_authorized():
                 raise RuntimeError(
                     f"Telethon session '{session_label}' не авторизована. "
                     "Запустите backend/core/foto_video_gen.py (или scripts/authorize_telegram.py) и пройдите вход в Telegram."
                 )
+            logger.info("[VEO Thread %s] Авторизация подтверждена", thread_id)
 
             try:
+                logger.info("[VEO Thread %s] Получение бота %s...", thread_id, bot_username)
                 bot = await client.get_entity(bot_username)
+                logger.info("[VEO Thread %s] Бот получен: %s", thread_id, bot_username)
             except AuthKeyUnregisteredError as auth_err:
                 raise RuntimeError(
                     f"Telethon session '{session_label}' требует повторной авторизации: {auth_err}. "
@@ -516,43 +739,177 @@ def _generate_video_veo(
             except Exception:
                 raise
             try:
+                logger.info("[VEO Thread %s] Начало разговора с ботом (timeout=%s)...", thread_id, timeout)
                 async with client.conversation(bot, timeout=timeout) as conv:
+                    logger.info("[VEO Thread %s] Отправка %s боту...", thread_id, "текста" if text_only else "файла")
                     if text_only:
                         await conv.send_message(caption)
                     else:
                         await conv.send_file(bot, image_path, caption=caption)
+                    logger.info("[VEO Thread %s] Сообщение отправлено, ожидание ответа...", thread_id)
 
                     try:
                         response = await conv.get_response()
+                        logger.info("[VEO Thread %s] Получен первый ответ от бота", thread_id)
                     except asyncio.TimeoutError:
                         logger.error("Бот VEO не ответил в течение %s секунд", timeout)
                         return None
+
+                    deadline = time.time() + timeout
+                    timed_out = False
+
+                    async def _handle_response(resp) -> Optional[Dict[str, Any]]:
+                        nonlocal matched_prompt_fragment
+                        resp_text = resp.raw_text or ""
+                        fragment_raw = _extract_response_prompt_fragment(resp_text)
+                        fragment_signature = _normalize_prompt_signature(fragment_raw)
+                        if fragment_raw:
+                            matched_prompt_fragment = fragment_raw
+                        if fragment_signature and expected_prompt_signature:
+                            matches_expected = (
+                                fragment_signature in expected_prompt_signature
+                                or expected_prompt_signature in fragment_signature
+                            )
+                            if not matches_expected:
+                                logger.warning(
+                                    "[VEO Thread %s] Ответ относится к другому промпту, ожидаем совпадение...",
+                                    thread_id
+                                )
+                                return None
+                            if fragment_raw:
+                                logger.info(
+                                    "[VEO Thread %s] Ответ подтвержден по промпту: %s",
+                                    thread_id,
+                                    fragment_raw[:120]
+                                )
+                        if resp_text:
+                            url_match = re.search(r'https?://\S+', resp_text)
+                            if url_match:
+                                direct_url = url_match.group(0)
+                                logger.info("Получена прямая ссылка от VEO: %s", direct_url)
+                                downloaded_path = _download_url(direct_url)
+                                if downloaded_path:
+                                    target_signature = fragment_signature or expected_prompt_signature
+                                    payload = {
+                                        "success": True,
+                                        "video_path": downloaded_path,
+                                        "model": "veo",
+                                        "cleanup_paths": [downloaded_path],
+                                        "response_prompt_fragment": matched_prompt_fragment or fragment_raw or "",
+                                        "prompt_signature": target_signature,
+                                    }
+                                    if target_signature and target_signature != expected_prompt_signature:
+                                        _cache_video_response(target_signature, payload)
+                                        logger.info(
+                                            "[VEO Thread %s] Видео сохранено в кеш для другого промпта (%s)",
+                                            thread_id,
+                                            target_signature
+                                        )
+                                        return None
+                                    return payload
+                                logger.warning(
+                                    "Не удалось скачать видео по ссылке %s, пробуем следующие ответы.", direct_url
+                                )
+                        if resp.media:
+                            fd, temp_path = tempfile.mkstemp(suffix=".mp4")
+                            os.close(fd)
+                            downloaded = await client.download_media(resp.media, file=temp_path)
+                            target_signature = fragment_signature or expected_prompt_signature
+                            payload = {
+                                "success": True,
+                                "video_path": downloaded,
+                                "model": "veo",
+                                "cleanup_paths": [downloaded],
+                                "response_prompt_fragment": matched_prompt_fragment or fragment_raw or "",
+                                "prompt_signature": target_signature,
+                            }
+                            if target_signature and target_signature != expected_prompt_signature:
+                                _cache_video_response(target_signature, payload)
+                                logger.info(
+                                    "[VEO Thread %s] Видео сохранено в кеш для другого промпта (%s)",
+                                    thread_id,
+                                    target_signature
+                                )
+                                return None
+                            return payload
+                        return None
+
+                    while True:
+                        result_payload = await _handle_response(response)
+                        if result_payload:
+                            return result_payload
+                        cached_after_response = _take_cached_payload("after foreign response")
+                        if cached_after_response:
+                            return cached_after_response
+
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            timed_out = True
+                            break
+                        try:
+                            response = await conv.get_response(timeout=remaining)
+                        except asyncio.TimeoutError:
+                            timed_out = True
+                            break
+
+                    if timed_out:
+                        logger.error("Бот VEO не прислал видео в течение %s секунд (conversation)", timeout)
+                        cached_timeout_payload = _take_cached_payload("conversation timeout")
+                        if cached_timeout_payload:
+                            return cached_timeout_payload
+                        return None
+
             except asyncio.TimeoutError:
                 logger.error("Бот VEO не ответил в течение %s секунд (conversation)", timeout)
+                cached_on_timeout = _take_cached_payload("timeout")
+                if cached_on_timeout:
+                    return cached_on_timeout
                 return None
 
-            if response.media:
-                fd, temp_path = tempfile.mkstemp(suffix=".mp4")
-                os.close(fd)
-                saved_path = await client.download_media(response.media, file=temp_path)
-                return saved_path
-
-            if response.raw_text:
-                url_match = re.search(r'https?://\S+', response.raw_text)
-                if url_match:
-                    return _download_url(url_match.group(0))
-
-            logger.error("Ответ бота VEO не содержит видео")
-            return None
         finally:
             await client.disconnect()
+            if os.path.exists(thread_session_file):
+                try:
+                    with _telethon_session_lock(source_session_file):
+                        shutil.copy2(thread_session_file, source_session_file)
+                        logger.info(
+                            "[VEO Thread %s] Сессия потока синхронизирована обратно в базовую",
+                            thread_id
+                        )
+                except Exception as sync_exc:
+                    logger.warning(
+                        "[VEO Thread %s] Не удалось обновить базовую сессию: %s",
+                        thread_id,
+                        sync_exc
+                    )
 
     try:
-        video_path = asyncio.run(_veo_coroutine())
+        video_payload = asyncio.run(_veo_coroutine())
     except Exception as exc:
         logger.error("Ошибка общения с ботом VEO: %s", exc, exc_info=True)
         return {"success": False, "error": str(exc)}
+    finally:
+        for temp_path in cleanup_session_files:
+            if not temp_path:
+                continue
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                    if temp_path.endswith(".session"):
+                        logger.info("[VEO] Удалена временная сессия: %s", temp_path)
+                except OSError:
+                    pass
 
+    if not video_payload:
+        cached_fallback = _pop_video_response(expected_prompt_signature)
+        if cached_fallback:
+            video_payload = cached_fallback
+
+    if video_payload:
+        video_payload.pop("prompt_signature", None)
+
+    video_path = (video_payload or {}).get("video_path") if video_payload else None
+    prompt_fragment = (video_payload or {}).get("response_prompt_fragment")
     if not video_path or not os.path.exists(video_path):
         return {"success": False, "error": "Не удалось получить видео от VEO"}
 
@@ -560,13 +917,15 @@ def _generate_video_veo(
         "success": True,
         "video_path": video_path,
         "model": "veo",
-        "cleanup_paths": [video_path]
+        "cleanup_paths": video_payload.get("cleanup_paths") if video_payload else [video_path],
+        "response_prompt_fragment": prompt_fragment,
     }
 
 
 def _download_url(url: str) -> Optional[str]:
     try:
-        response = requests.get(url, timeout=180)
+        video_timeout = get_video_generation_timeout()
+        response = requests.get(url, timeout=video_timeout)
         response.raise_for_status()
         fd, temp_path = tempfile.mkstemp(suffix=".mp4")
         with os.fdopen(fd, "wb") as tmp_file:

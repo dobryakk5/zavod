@@ -2,7 +2,6 @@
 
 redis-server /opt/homebrew/etc/redis.conf
 celery -A config worker -l info
-celery -A config worker -l info --autoreload
 python manage.py runserver
 
 # Frontend DevOps Guide

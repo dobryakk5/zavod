@@ -10,10 +10,14 @@ import json
 import logging
 import ast
 import re
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, List
 
 from . import foto_video_gen
-from .system_settings import get_default_ai_model
+from .system_settings import (
+    get_default_ai_model,
+    get_fallback_ai_model,
+    get_video_prompt_instructions,
+)
 
 try:
     from huggingface_hub import InferenceClient
@@ -39,6 +43,7 @@ class AIContentGenerator:
             raise ValueError("OPENROUTER_API_KEY not found in environment")
 
         self.model = get_default_ai_model()
+        self.fallback_model = get_fallback_ai_model()
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
 
         # Initialize HuggingFace client if available
@@ -57,18 +62,8 @@ class AIContentGenerator:
             else:
                 logger.debug("HuggingFace token not found, HF image generation will be unavailable")
 
-    def get_ai_response(self, prompt: str, max_tokens: int = 2000, temperature: float = 0.7) -> Optional[str]:
-        """
-        Send request to OpenRouter API
-
-        Args:
-            prompt: Text prompt for AI
-            max_tokens: Maximum tokens in response
-            temperature: Creativity level (0.0-1.0)
-
-        Returns:
-            AI response text or None if error
-        """
+    def _call_openrouter(self, model: str, prompt: str, max_tokens: int, temperature: float) -> Optional[str]:
+        """Call OpenRouter chat completions API and return text."""
         try:
             response = requests.post(
                 self.api_url,
@@ -79,7 +74,7 @@ class AIContentGenerator:
                     "X-Title": "Content Factory AI Generator"
                 },
                 json={
-                    "model": self.model,
+                    "model": model,
                     "messages": [
                         {"role": "user", "content": prompt}
                     ],
@@ -93,15 +88,44 @@ class AIContentGenerator:
                 data = response.json()
                 return data['choices'][0]['message']['content'].strip()
             else:
-                logger.error(f"OpenRouter API Error: {response.status_code} - {response.text}")
+                logger.error(
+                    "OpenRouter API Error (%s) for model %s - %s",
+                    response.status_code,
+                    model,
+                    response.text,
+                )
                 return None
 
         except requests.exceptions.Timeout:
-            logger.error("OpenRouter API request timed out")
+            logger.error("OpenRouter API request timed out for model %s", model)
             return None
         except Exception as e:
-            logger.error(f"Error calling OpenRouter API: {e}", exc_info=True)
+            logger.error(f"Error calling OpenRouter API for model {model}: {e}", exc_info=True)
             return None
+
+    def get_ai_response(self, prompt: str, max_tokens: int = 2000, temperature: float = 0.7) -> Optional[str]:
+        """
+        Send request to OpenRouter API with automatic fallback model.
+
+        Args:
+            prompt: Text prompt for AI
+            max_tokens: Maximum tokens in response
+            temperature: Creativity level (0.0-1.0)
+
+        Returns:
+            AI response text or None if error
+        """
+
+        primary_response = self._call_openrouter(self.model, prompt, max_tokens, temperature)
+        if primary_response:
+            return primary_response
+
+        fallback_model = self.fallback_model.strip() if self.fallback_model else ""
+        if fallback_model and fallback_model != self.model:
+            logger.info("Primary model %s failed, trying fallback %s", self.model, fallback_model)
+            return self._call_openrouter(fallback_model, prompt, max_tokens, temperature)
+
+        return None
 
     def generate_post_text(
         self,
@@ -135,6 +159,11 @@ class AIContentGenerator:
                 - additional_instructions: extra instructions
                 - include_hashtags: bool
                 - max_hashtags: int
+
+                Переменные доступные в кастомных промптах:
+                {topic_name}, {tone}, {length}, {language}, {type}, {avatar},
+                {pains}, {desires}, {objections}, {seo_keywords}, {keyword},
+                {trend_title}, {trend_description}, {trend_url}
             seo_keywords: Optional dict with keyword groups:
                 - commercial: ["купить ...", ...]
                 - general: ["топик москва", ...]
@@ -169,6 +198,7 @@ class AIContentGenerator:
             max_hashtags = template_config.get("max_hashtags", 5)
             post_type = template_config.get("type", "")
             avatar = template_config.get("avatar", "")
+            brand = template_config.get("brand", "")
             pains = template_config.get("pains", "")
             desires = template_config.get("desires", "")
             objections = template_config.get("objections", "")
@@ -176,12 +206,16 @@ class AIContentGenerator:
             # Извлечь случайные SEO-ключи из каждой группы
             import random
             selected_seo_keywords = []
+            first_keyword = ""  # Основной ключ для переменной {keyword}
             if seo_keywords and isinstance(seo_keywords, dict):
                 for group_name, keywords_list in seo_keywords.items():
                     if keywords_list and isinstance(keywords_list, list) and len(keywords_list) > 0:
                         # Выбрать случайный ключ из группы
                         random_keyword = random.choice(keywords_list)
                         selected_seo_keywords.append(f"{random_keyword} ({group_name})")
+                        # Запомнить первый ключ как основной
+                        if not first_keyword:
+                            first_keyword = random_keyword
 
                 logger.info(f"Выбраны SEO-ключи для поста: {selected_seo_keywords}")
             seo_keywords_for_prompt = ", ".join(selected_seo_keywords)
@@ -197,9 +231,9 @@ class AIContentGenerator:
 
             # Маппинг длины на русский
             length_map = {
-                "short": "короткий (до 280 символов)",
-                "medium": "средний (280-500 символов)",
-                "long": "длинный (500-1000 символов)"
+                "short": "короткий (500-1000 символов)",
+                "medium": "средний (1000-1500 символов)",
+                "long": "длинный (1500-2000 символов)"
             }
 
             tone_ru = tone_map.get(tone, tone)
@@ -216,10 +250,12 @@ class AIContentGenerator:
                 "language": lang_name,
                 "type": post_type,
                 "avatar": avatar,
+                "brand": brand,
                 "pains": pains,
                 "desires": desires,
                 "objections": objections,
                 "seo_keywords": seo_keywords_for_prompt or "",
+                "keyword": first_keyword or "",
             }
 
             # Если есть кастомный промпт-шаблон, используем его
@@ -734,6 +770,13 @@ seo_keywords = [ ... ]
         """Сгенерировать промпт для короткого вовлекающего видео по тексту поста."""
         try:
             lang_name = "русском" if language == "ru" else "английском"
+            extra_video_instructions = get_video_prompt_instructions().strip()
+            admin_instructions_block = ""
+            if extra_video_instructions:
+                admin_instructions_block = (
+                    "\nДополнительные пожелания от администратора (учти их в ответе):\n"
+                    f"{extra_video_instructions}\n"
+                )
             prompt = f"""
 Ты — режиссёр и сценарист коротких вертикальных видео TikTok/Reels. На входе у тебя текст поста.
 
@@ -741,6 +784,7 @@ seo_keywords = [ ... ]
 2. Описывай сцену, настроение, движения камеры, переходы, ключевые визуальные объекты.
 3. Стиль — современный, динамичный, вдохновляющий. Максимум 3 предложения.
 4. Не добавляй хештеги, кавычки и технические команды.
+{admin_instructions_block}
 
 Пост ({lang_name}):
 Заголовок: {post_title}
@@ -808,6 +852,236 @@ seo_keywords = [ ... ]
             prompt=prompt,
             method=method,
             **options
+        )
+
+    def generate_posts_with_videos_from_seo_group(
+        self,
+        seo_group_name: str,
+        seo_keywords: List[str],
+        topic_name: str,
+        template_config: Dict[str, Any],
+        posts_per_group: int = 10,
+        videos_per_post: int = 3,
+        video_method: str = "veo",
+        video_options: Optional[Dict[str, Any]] = None,
+        on_post_generated: Optional[Callable[[Dict[str, Any]], None]] = None
+    ) -> Dict[str, Any]:
+        """Сгенерировать серию постов по SEO-группе и по каждому посту создать несколько VEO-видео."""
+
+        if not seo_group_name:
+            return {
+                "success": False,
+                "error": "Название SEO-группы обязательно"
+            }
+
+        if not seo_keywords or not isinstance(seo_keywords, list):
+            return {
+                "success": False,
+                "error": "Список SEO-ключей должен быть непустым"
+            }
+
+        clean_keywords = []
+        for keyword in seo_keywords:
+            if isinstance(keyword, str):
+                trimmed = keyword.strip()
+                if trimmed:
+                    clean_keywords.append(trimmed)
+
+        if not clean_keywords:
+            return {
+                "success": False,
+                "error": "Список SEO-ключей пуст после фильтрации"
+            }
+
+        try:
+            posts_per_group = max(1, int(posts_per_group))
+            videos_per_post = max(1, int(videos_per_post))
+        except (TypeError, ValueError):
+            return {
+                "success": False,
+                "error": "posts_per_group и videos_per_post должны быть числами"
+            }
+
+        import random
+
+        shuffled_keywords = clean_keywords.copy()
+        random.shuffle(shuffled_keywords)
+        selected_keywords = shuffled_keywords[:posts_per_group]
+        if len(selected_keywords) < posts_per_group:
+            while len(selected_keywords) < posts_per_group:
+                selected_keywords.append(random.choice(clean_keywords))
+
+        requested_method = (video_method or "veo").lower()
+        if requested_method != "veo":
+            logger.warning("Поддерживается только метод 'veo'. Переопределяем на VEO.")
+            requested_method = "veo"
+
+        video_params = dict(video_options or {})
+        video_params.setdefault("bot_username", "syntxaibot")
+
+        template_config = template_config or {}
+        language = template_config.get("language", "ru")
+
+        summary = {
+            "success": True,
+            "seo_group": seo_group_name,
+            "topic": topic_name,
+            "requested_posts": posts_per_group,
+            "videos_per_post": videos_per_post,
+            "posts": [],
+            "errors": [],
+            "video_attempts": 0,
+            "video_successes": 0,
+        }
+
+        template_copy = dict(template_config)
+        template_copy.setdefault("prompt_type", "seo")
+        template_copy.setdefault("type", "selling")  # Дефолтный тип для SEO-постов
+
+        logger.info(
+            "Старт пакетной генерации: группа=%s, постов=%s, видео_на_пост=%s",
+            seo_group_name,
+            posts_per_group,
+            videos_per_post
+        )
+
+        for index, keyword in enumerate(selected_keywords, start=1):
+            per_post_keywords = {seo_group_name: [keyword]}
+            logger.info("[%s/%s] Генерация поста по ключу '%s'", index, posts_per_group, keyword)
+
+            post_result = self.generate_post_text(
+                trend_title=f"SEO keyword: {keyword}",
+                trend_description=f"Autogenerated from SEO group {seo_group_name}",
+                trend_url="",
+                topic_name=topic_name,
+                template_config=template_copy,
+                seo_keywords=per_post_keywords
+            )
+
+            if not post_result or not post_result.get("success"):
+                error_message = (post_result or {}).get("error", "Не удалось сгенерировать пост")
+                logger.error("Ошибка генерации поста для ключа '%s': %s", keyword, error_message)
+                summary["errors"].append({
+                    "index": index,
+                    "step": "post",
+                    "seo_keyword": keyword,
+                    "error": error_message
+                })
+                summary["posts"].append({
+                    "index": index,
+                    "seo_keyword": keyword,
+                    "success": False,
+                    "error": error_message,
+                    "videos": []
+                })
+                summary["success"] = False
+                continue
+
+            base_video_prompt = self.generate_video_prompt(
+                post_title=post_result.get("title", ""),
+                post_text=post_result.get("text", ""),
+                language=language
+            )
+            if not base_video_prompt:
+                base_video_prompt = self._build_fallback_video_prompt(
+                    post_result.get("title", keyword),
+                    post_result.get("text", ""),
+                    language
+                )
+
+            videos_info = []
+            for video_idx in range(1, videos_per_post + 1):
+                summary["video_attempts"] += 1
+                variation_prompt = base_video_prompt
+                if videos_per_post > 1:
+                    variation_prompt = (
+                        f"{base_video_prompt}\nVariation #{video_idx}: offer a distinct cinematic take,"
+                        " pacing and camera work."
+                    )
+
+                logger.info(
+                    "[%s/%s] Генерация видео %s/%s через VEO (%s)",
+                    index,
+                    posts_per_group,
+                    video_idx,
+                    videos_per_post,
+                    video_params.get("bot_username")
+                )
+
+                video_result = self.generate_video_from_text(
+                    prompt=variation_prompt,
+                    method=requested_method,
+                    **video_params
+                )
+
+                video_entry = {
+                    "index": video_idx,
+                    "prompt": variation_prompt,
+                    "success": bool(video_result.get("success")),
+                    "video_path": video_result.get("video_path"),
+                    "error": video_result.get("error"),
+                    "model": video_result.get("model")
+                }
+
+                if video_entry["success"]:
+                    summary["video_successes"] += 1
+                else:
+                    summary["success"] = False
+                    summary["errors"].append({
+                        "index": index,
+                        "step": "video",
+                        "seo_keyword": keyword,
+                        "video_index": video_idx,
+                        "error": video_entry["error"] or "Неизвестная ошибка VEO"
+                    })
+
+                videos_info.append(video_entry)
+
+            post_payload = {
+                "index": index,
+                "seo_keyword": keyword,
+                "post": post_result,
+                "videos": videos_info,
+                "success": all(video["success"] for video in videos_info)
+            }
+            summary["posts"].append(post_payload)
+
+            if on_post_generated:
+                try:
+                    on_post_generated(post_payload)
+                except Exception as cb_exc:
+                    logger.warning("on_post_generated callback failed: %s", cb_exc)
+
+        summary["generated_posts"] = len(summary["posts"])
+
+        if summary["errors"]:
+            logger.warning(
+                "Завершено с ошибками: %s/%s успешных видео",
+                summary["video_successes"],
+                summary["video_attempts"]
+            )
+        else:
+            logger.info(
+                "Успешно завершено: %s постов, %s видео",
+                summary["generated_posts"],
+                summary["video_successes"]
+            )
+
+        return summary
+
+    @staticmethod
+    def _build_fallback_video_prompt(post_title: str, post_text: str, language: str = "ru") -> str:
+        """Создать простой промпт на английском для видео по тексту поста."""
+        snippet = (post_text or "").strip()
+        if len(snippet) > 900:
+            snippet = snippet[:900] + "..."
+
+        lang_label = "Russian" if language == "ru" else "English"
+        return (
+            "Create a vertical 9:16 short-form social media video with cinematic motion.\n"
+            f"Base language of the provided script: {lang_label}.\n"
+            f"Title: {post_title}.\n"
+            f"Script idea: {snippet}"
         )
 
     def generate_story_episodes(
@@ -1013,9 +1287,9 @@ seo_keywords = [ ... ]
 
             # Маппинг длины на русский
             length_map = {
-                "short": "короткий (до 280 символов)",
-                "medium": "средний (280-500 символов)",
-                "long": "длинный (500-1000 символов)"
+                "short": "короткий (500-1000 символов)",
+                "medium": "средний (1000-1500 символов)",
+                "long": "длинный (1500-2000 символов)"
             }
 
             tone_ru = tone_map.get(tone, tone)

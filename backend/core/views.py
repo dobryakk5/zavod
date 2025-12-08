@@ -94,7 +94,7 @@ def generate_post_video(request, post_id):
             'error': f'Неизвестный тип источника: {source}'
         }, status=400)
 
-    if source == 'image' and not post.image:
+    if source == 'image' and not post.images.exists():
         return JsonResponse({
             'success': False,
             'error': 'Сначала добавьте изображение к посту'

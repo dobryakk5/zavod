@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from typing import Dict, List
 
 
 class Client(models.Model):
@@ -195,9 +196,6 @@ class Post(models.Model):
     title = models.CharField(max_length=255)
     text = models.TextField(blank=True)
     # пока без отдельной Media-модели – можно позже перейти на Wagtail Images/Documents
-    image = models.ImageField(upload_to="post_images/", blank=True, null=True)
-    video = models.FileField(upload_to="post_videos/", blank=True, null=True)
-
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
     tags = models.JSONField(default=list, blank=True)          # ["ai", "instagram", ...]
     source_links = models.JSONField(default=list, blank=True)  # ["https://...", ...]
@@ -229,6 +227,52 @@ class Post(models.Model):
 
     def __str__(self):
         return f"[{self.client.slug}] {self.title}"
+
+    def get_primary_image(self):
+        """Вернуть первое изображение по порядку."""
+        return self.images.order_by("order", "id").first()
+
+    def get_primary_video(self):
+        """Вернуть первое видео по порядку."""
+        return self.videos.order_by("order", "id").first()
+
+
+class PostImage(models.Model):
+    """Изображение поста (поддержка нескольких файлов)."""
+
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="images")
+    image = models.ImageField(upload_to="post_images/")
+    alt_text = models.CharField(max_length=255, blank=True)
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("order", "id")
+        verbose_name = "Post Image"
+        verbose_name_plural = "Post Images"
+
+    def __str__(self):
+        return f"Image #{self.id} for {self.post}"
+
+
+class PostVideo(models.Model):
+    """Видео поста (поддержка нескольких файлов)."""
+
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="videos")
+    video = models.FileField(upload_to="post_videos/")
+    caption = models.CharField(max_length=255, blank=True)
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("order", "id")
+        verbose_name = "Post Video"
+        verbose_name_plural = "Post Videos"
+
+    def __str__(self):
+        return f"Video #{self.id} for {self.post}"
 
 
 class Schedule(models.Model):
@@ -554,9 +598,9 @@ class ContentTemplate(models.Model):
     ]
 
     LENGTH_CHOICES = (
-        ("short", "Короткий (до 280 символов)"),
-        ("medium", "Средний (280-500 символов)"),
-        ("long", "Длинный (500-1000 символов)"),
+        ("short", "Короткий (500-1000 символов)"),
+        ("medium", "Средний (1000-1500 символов)"),
+        ("long", "Длинный (1500-2000 символов)"),
     )
 
     LANGUAGE_CHOICES = (
@@ -738,16 +782,84 @@ class SEOKeywordSet(models.Model):
         group_part = f" [{self.group_type}]" if self.group_type else ""
         return f"[{self.client.slug}] SEO{topic_part}{group_part} ({self.status})"
 
+    def get_keyword_groups_for_generation(self) -> Dict[str, List[str]]:
+        """
+        Возвращает словарь групп ключей с очищенными значениями.
+        Отдаёт приоритет keywords_list (новые записи) и дополняет keyword_groups для обратной совместимости.
+        """
+
+        def _clean(items) -> List[str]:
+            cleaned: List[str] = []
+            if isinstance(items, list):
+                for keyword in items:
+                    if isinstance(keyword, str):
+                        trimmed = keyword.strip()
+                        if trimmed:
+                            cleaned.append(trimmed)
+            return cleaned
+
+        groups: Dict[str, List[str]] = {}
+        primary_group_name = self.group_type or "seo_keywords"
+
+        primary_keywords = _clean(self.keywords_list)
+        if primary_keywords:
+            groups[primary_group_name] = primary_keywords
+
+        if isinstance(self.keyword_groups, dict):
+            for group_name, keywords in self.keyword_groups.items():
+                cleaned = _clean(keywords)
+                if cleaned and group_name not in groups:
+                    groups[str(group_name)] = cleaned
+
+        return groups
+
+    def get_flat_keywords(self) -> List[str]:
+        """Плоский список всех ключевых фраз."""
+        flat_keywords: List[str] = []
+        for keywords in self.get_keyword_groups_for_generation().values():
+            flat_keywords.extend(keywords)
+        return flat_keywords
+
 
 class SystemSetting(models.Model):
     """Глобальные настройки системы (singleton)."""
 
     DEFAULT_AI_MODEL = "x-ai/grok-4.1-fast:free"
+    DEFAULT_IMAGE_TIMEOUT = 120
+    DEFAULT_VIDEO_TIMEOUT = 600
+    DEFAULT_FALLBACK_AI_MODEL = "tngtech/deepseek-r1t2-chimera:free"
 
     default_ai_model = models.CharField(
         max_length=255,
         default=DEFAULT_AI_MODEL,
         help_text="Модель OpenRouter по умолчанию для генерации контента (например, x-ai/grok-4.1-fast:free)"
+    )
+    fallback_ai_model = models.CharField(
+        max_length=255,
+        blank=True,
+        default=DEFAULT_FALLBACK_AI_MODEL,
+        help_text="Запасная модель OpenRouter, используется если основная недоступна"
+    )
+    video_prompt_instructions = models.TextField(
+        blank=True,
+        help_text=(
+            "Дополнительные пожелания к промптам для видео. "
+            "Этот текст добавляется к базовым инструкциям при генерации видео."
+        ),
+    )
+    image_generation_timeout = models.PositiveIntegerField(
+        default=DEFAULT_IMAGE_TIMEOUT,
+        help_text=(
+            "Таймаут (в секундах) для генерации и скачивания изображений. "
+            "После его истечения запрос прерывается и пользователю возвращается ошибка о таймауте."
+        ),
+    )
+    video_generation_timeout = models.PositiveIntegerField(
+        default=DEFAULT_VIDEO_TIMEOUT,
+        help_text=(
+            "Таймаут (в секундах) для генерации видео (включая ожидание ответа бота VEO/скачивание файлов). "
+            "По истечении лимита процесс отменяется и появляется ошибка о таймауте."
+        ),
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -770,6 +882,9 @@ class SystemSetting(models.Model):
             pk=1,
             defaults={
                 "default_ai_model": cls.DEFAULT_AI_MODEL,
+                "fallback_ai_model": cls.DEFAULT_FALLBACK_AI_MODEL,
+                "image_generation_timeout": cls.DEFAULT_IMAGE_TIMEOUT,
+                "video_generation_timeout": cls.DEFAULT_VIDEO_TIMEOUT,
             },
         )
         return obj

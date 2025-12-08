@@ -1,0 +1,141 @@
+<div class="seo-generate-posts">
+  <div class="seo-generate-posts__header">
+    <strong>Сгенерировать посты</strong>
+    <span>Доступно ключей: {{ keyword_count }}</span>
+  </div>
+
+  <div class="seo-generate-posts__section">
+    <div class="seo-generate-posts__section-title">Посты без видео</div>
+    <p class="help">
+      Выберите SEO-шаблон и количество постов. По умолчанию создаётся столько постов, сколько ключей в подборке.
+    </p>
+
+    <form method="post" action="{{ posts_action_url }}" class="seo-generate-posts__form">
+      <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+      <div class="form-row">
+        <label for="id_template_posts">SEO контент-шаблон</label>
+        <select name="template_id" id="id_template_posts" required>
+          {% for template in templates %}
+            <option value="{{ template.id }}">
+              {{ template.name }} — {{ template.type }} / {{ template.tone }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="id_posts_count">Количество постов</label>
+        <input
+          type="number"
+          name="posts_count"
+          id="id_posts_count"
+          min="1"
+          max="{{ max_posts }}"
+          value="{{ default_posts_count }}"
+          pattern="\d{1,2}"
+          required
+        >
+        <span class="help-inline">Максимум {{ max_posts }} постов за один запуск</span>
+      </div>
+      <div class="form-row">
+        <button type="submit" class="button default">Создать посты</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="seo-generate-posts__section">
+    <div class="seo-generate-posts__section-title">Посты + вертикальные видео (VEO)</div>
+    <p class="help">
+      Выберите шаблон, количество постов и сколько видео генерировать на каждый пост (до {{ max_videos_per_post }} роликов через Telegram VEO бот).
+    </p>
+
+    <form method="post" action="{{ videos_action_url }}" class="seo-generate-posts__form">
+      <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+      <div class="form-row">
+        <label for="id_template_videos">SEO контент-шаблон</label>
+        <select name="template_id" id="id_template_videos" required>
+          {% for template in templates %}
+            <option value="{{ template.id }}">
+              {{ template.name }} — {{ template.type }} / {{ template.tone }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="id_video_posts_count">Количество постов</label>
+        <input
+          type="number"
+          name="posts_count"
+          id="id_video_posts_count"
+          min="1"
+          max="{{ max_posts }}"
+          value="{{ default_video_posts_count }}"
+          pattern="\d{1,2}"
+          required
+        >
+        <span class="help-inline">Максимум {{ max_posts }} постов за запуск</span>
+      </div>
+      <div class="form-row">
+        <label for="id_videos_per_post">Видео на пост</label>
+        <input
+          type="number"
+          name="videos_per_post"
+          id="id_videos_per_post"
+          min="1"
+          max="{{ max_videos_per_post }}"
+          value="{{ default_videos_per_post }}"
+          pattern="\d{1,2}"
+          required
+        >
+        <span class="help-inline">До {{ max_videos_per_post }} роликов на каждый пост</span>
+      </div>
+      <div class="form-row">
+        <button type="submit" class="button default">Создать посты + видео</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+  .seo-generate-posts {
+    background: #f5f5f5;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 12px 0;
+  }
+  .seo-generate-posts__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .seo-generate-posts__section {
+    background: #fff;
+    border-radius: 6px;
+    padding: 14px;
+    margin-bottom: 12px;
+    border: 1px solid #e0e0e0;
+  }
+  .seo-generate-posts__section-title {
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .seo-generate-posts__form .form-row {
+    margin-bottom: 12px;
+  }
+  .seo-generate-posts__form label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .seo-generate-posts__form select,
+  .seo-generate-posts__form input[type="number"] {
+    width: 100%;
+    max-width: 380px;
+  }
+  .seo-generate-posts__form .help-inline {
+    display: block;
+    color: #555;
+    font-size: 12px;
+    margin-top: 3px;
+  }
+</style>
