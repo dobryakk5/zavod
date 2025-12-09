@@ -90,7 +90,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
         if (payload?.user) {
           setUser(payload.user);
           onClose();
-          router.push('/dashboard');
+          router.push('/hello');
         }
       }
     } catch (error) {
@@ -120,7 +120,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
         setUser(payload.user);
         setStatus({ type: 'success', text: 'Успешная авторизация!' });
         onClose();
-        router.push('/dashboard');
+        router.push('/hello');
       } else {
         setStatus({ type: 'error', text: resolveErrorMessage(payload, text, 'Ошибка авторизации') });
       }
@@ -147,6 +147,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
       if (response.ok) {
         setUser(null);
         setStatus({ type: 'success', text: 'Вы вышли из аккаунта' });
+        router.push('/login');
       } else {
         setStatus({ type: 'error', text: 'Ошибка при выходе' });
       }
@@ -176,7 +177,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
         setUser(payload.user);
         setStatus({ type: 'success', text: 'Dev режим активирован!' });
         onClose();
-        router.push('/dashboard');
+        router.push('/hello');
       } else {
         setStatus({ type: 'error', text: resolveErrorMessage(payload, text, 'Ошибка dev авторизации') });
       }

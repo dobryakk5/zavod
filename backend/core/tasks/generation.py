@@ -5,6 +5,7 @@ import queue
 import random
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 from django.core.files import File
@@ -789,111 +790,145 @@ def _generate_videos_for_single_post(
     if not video_prompt:
         video_prompt = _build_text_video_prompt(post)
 
+    prompts: Dict[int, str] = {}
     for video_idx in range(1, videos_per_post + 1):
         prompt_to_use = video_prompt
         if videos_per_post > 1:
             prompt_to_use = (
                 f"{video_prompt}\nVariation #{video_idx}: distinct cinematic take, camera work and pacing."
             )
+        prompts[video_idx] = prompt_to_use
 
-        attempt = 0
-        success = False
-        while attempt < max_attempts and not success:
-            attempt += 1
-            stats["attempts"] += 1
-            logger.info(
-                "[%s] Генерация видео %s/%s для поста %s (попытка %s/%s)",
-                log_prefix,
-                video_idx,
-                videos_per_post,
-                post.id,
-                attempt,
-                max_attempts
-            )
-            result = prompt_generator.generate_video_from_text(
-                prompt=prompt_to_use,
-                method=video_method,
-                **video_options
-            )
-            cleanup_paths = result.get("cleanup_paths") or []
-            video_path = result.get("video_path")
-            if result.get("success") and video_path and os.path.exists(video_path):
+    video_state: Dict[int, Dict[str, Any]] = {
+        idx: {"attempts": 0, "success": False}
+        for idx in prompts
+    }
+    pending = set(prompts.keys())
+
+    def _run_video_generation(prompt_text: str) -> Dict[str, Any]:
+        try:
+            generator = AIContentGenerator()
+        except ValueError as exc:
+            return {"success": False, "error": str(exc), "cleanup_paths": []}
+        return generator.generate_video_from_text(
+            prompt=prompt_text,
+            method=video_method,
+            **video_options
+        )
+
+    while pending:
+        batch = [idx for idx in pending if video_state[idx]["attempts"] < max_attempts]
+        if not batch:
+            break
+
+        max_workers = len(batch)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {}
+            for idx in batch:
+                video_state[idx]["attempts"] += 1
+                attempt_no = video_state[idx]["attempts"]
+                logger.info(
+                    "[%s] Генерация видео %s/%s для поста %s (параллельная попытка %s/%s)",
+                    log_prefix,
+                    idx,
+                    videos_per_post,
+                    post.id,
+                    attempt_no,
+                    max_attempts
+                )
+                future = executor.submit(_run_video_generation, prompts[idx])
+                future_map[future] = (idx, attempt_no)
+
+            for future in as_completed(future_map):
+                idx, attempt_no = future_map[future]
+                stats["attempts"] += 1
                 try:
-                    filename = f"post_{post.id}_{uuid.uuid4().hex[:8]}.mp4"
-                    with open(video_path, "rb") as video_file:
-                        post_video = PostVideo(
-                            post=post,
-                            order=post.videos.count(),
-                            caption=(prompt_to_use or post.title or "")[:255],
-                        )
-                        post_video.video.save(filename, File(video_file), save=True)
-                    stats["saved"] += 1
-                    success = True
-                    logger.info(
-                        "[%s] Видео %s/%s для поста %s сохранено",
-                        log_prefix,
-                        video_idx,
-                        videos_per_post,
-                        post.id
-                    )
+                    result = future.result()
                 except Exception as exc:
-                    logger.error(
-                        "[%s] Ошибка сохранения видео для поста %s: %s",
+                    result = {"success": False, "error": str(exc), "cleanup_paths": []}
+                cleanup_paths = result.get("cleanup_paths") or []
+                video_path = result.get("video_path")
+
+                if result.get("success") and video_path and os.path.exists(video_path):
+                    try:
+                        filename = f"post_{post.id}_{uuid.uuid4().hex[:8]}.mp4"
+                        with open(video_path, "rb") as video_file:
+                            post_video = PostVideo(
+                                post=post,
+                                order=post.videos.count(),
+                                caption=(prompts[idx] or post.title or "")[:255],
+                            )
+                            post_video.video.save(filename, File(video_file), save=True)
+                        stats["saved"] += 1
+                        video_state[idx]["success"] = True
+                        pending.discard(idx)
+                        logger.info(
+                            "[%s] Видео %s/%s для поста %s сохранено",
+                            log_prefix,
+                            idx,
+                            videos_per_post,
+                            post.id
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "[%s] Ошибка сохранения видео для поста %s: %s",
+                            log_prefix,
+                            post.id,
+                            exc,
+                            exc_info=True
+                        )
+                        stats["errors"].append({
+                            "post_id": post.id,
+                            "video_index": idx,
+                            "error": str(exc),
+                            "prompt_start": (prompts[idx] or "")[:120],
+                        })
+                    finally:
+                        if os.path.exists(video_path):
+                            try:
+                                os.remove(video_path)
+                            except OSError:
+                                pass
+                        for extra_path in cleanup_paths:
+                            if extra_path and os.path.exists(extra_path):
+                                try:
+                                    os.remove(extra_path)
+                                except OSError:
+                                    pass
+                else:
+                    error_message = result.get("error") or "Видео не получено"
+                    logger.warning(
+                        "[%s] Неудачная генерация видео %s/%s для поста %s: %s",
                         log_prefix,
+                        idx,
+                        videos_per_post,
                         post.id,
-                        exc,
-                        exc_info=True
+                        error_message
                     )
-                    stats["errors"].append({
-                        "post_id": post.id,
-                        "video_index": video_idx,
-                        "error": str(exc),
-                        "prompt_start": prompt_to_use[:120],
-                    })
-                finally:
-                    if os.path.exists(video_path):
-                        try:
-                            os.remove(video_path)
-                        except OSError:
-                            pass
                     for extra_path in cleanup_paths:
                         if extra_path and os.path.exists(extra_path):
                             try:
                                 os.remove(extra_path)
                             except OSError:
                                 pass
-            else:
-                error_message = result.get("error") or "Видео не получено"
-                logger.warning(
-                    "[%s] Неудачная генерация видео %s/%s для поста %s: %s",
-                    log_prefix,
-                    video_idx,
-                    videos_per_post,
-                    post.id,
-                    error_message
-                )
-                for extra_path in cleanup_paths:
-                    if extra_path and os.path.exists(extra_path):
-                        try:
-                            os.remove(extra_path)
-                        except OSError:
-                            pass
 
-        if not success:
-            stats["errors"].append({
-                "post_id": post.id,
-                "video_index": video_idx,
-                "error": f"video_failed_after_{max_attempts}_attempts",
-                "prompt_start": prompt_to_use[:120],
-            })
-            logger.error(
-                "[%s] Не удалось получить видео %s/%s для поста %s",
-                log_prefix,
-                video_idx,
-                videos_per_post,
-                post.id
-            )
-            break
+                    if video_state[idx]["attempts"] >= max_attempts:
+                        stats["errors"].append({
+                            "post_id": post.id,
+                            "video_index": idx,
+                            "error": f"video_failed_after_{max_attempts}_attempts",
+                            "prompt_start": (prompts[idx] or "")[:120],
+                        })
+                        logger.error(
+                            "[%s] Не удалось получить видео %s/%s для поста %s",
+                            log_prefix,
+                            idx,
+                            videos_per_post,
+                            post.id
+                        )
+                        pending.discard(idx)
+
+    return stats
 
     return stats
 

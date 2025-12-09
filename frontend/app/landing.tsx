@@ -2,6 +2,7 @@
 import React from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { Rocket, BarChart2, FileText, Zap } from "lucide-react";
 
 export default function SolarLabLanding() {
   return (
@@ -79,12 +80,12 @@ export default function SolarLabLanding() {
                 fill
                 priority
                 sizes="(min-width: 1024px) 480px, (min-width: 768px) 60vw, 90vw"
-                className="object-cover"
+                className="object-contain"
               />
             </div>
-            <div className="absolute -bottom-8 right-6 w-48 p-3 bg-white border rounded-lg shadow-md">
-              <div className="text-xs text-gray-500">Pipeline</div>
-              <div className="mt-1 font-medium">AI → Test → Scale</div>
+            <div className="absolute -bottom-8 -right-2 w-90 p-3 bg-white border rounded-lg shadow-md">
+              <div className="text-xs text-gray-500">Процесс</div>
+              <div className="mt-1 font-medium whitespace-nowrap">Идеи клиента → AI → Проверка результата</div>
             </div>
           </div>
         </section>
@@ -117,21 +118,96 @@ export default function SolarLabLanding() {
           </div>
         </section>
 
-        {/* Demos */}
+        {/* Free Trial */}
         <section id="demos" className="py-10">
-          <h2 className="text-2xl font-semibold">Демонстрации</h2>
-          <p className="mt-2 text-gray-600">Небольшая подборка контента, сгенерированного нашей лабораторией.</p>
+          <h2 className="text-2xl font-semibold">Демо режим</h2>
+          <p className="mt-2 text-gray-600">Попробуйте бесплатно — без карт и обязательств</p>
 
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-            {demoItems.map((d) => (
-              <div key={d.id} className="border rounded-lg overflow-hidden">
-                <div className="w-full h-40 bg-gray-50 flex items-center justify-center">{d.media}</div>
-                <div className="p-4">
-                  <div className="font-semibold">{d.title}</div>
-                  <div className="mt-2 text-sm text-gray-600">{d.desc}</div>
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+            <div>
+              <h3 className="text-xl font-semibold">Получите бесплатный доступ и сделайте первичную аналитику вашего аккаунта</h3>
+              <p className="mt-4 text-gray-600">
+                Мы сформируем первые идеи и предложим готовые посты, которые можно сразу публиковать.
+              </p>
+
+              <ul className="mt-6 space-y-4">
+                <li className="flex items-start gap-4">
+                  <div className="flex-none w-10 h-10 rounded-full bg-yellow-100 flex items-center justify-center">
+                    <BarChart2 className="h-5 w-5 text-yellow-600" />
+                  </div>
+                  <div>
+                    <div className="font-semibold">Первичная аналитика</div>
+                    <div className="text-sm text-gray-600">Охват, вовлечение, лучшие посты</div>
+                  </div>
+                </li>
+                <li className="flex items-start gap-4">
+                  <div className="flex-none w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
+                    <Zap className="h-5 w-5 text-green-600" />
+                  </div>
+                  <div>
+                    <div className="font-semibold">Генерация первых постов</div>
+                    <div className="text-sm text-gray-600">Адаптированы под вашу аудиторию</div>
+                  </div>
+                </li>
+                <li className="flex items-start gap-4">
+                  <div className="flex-none w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center">
+                    <FileText className="h-5 w-5 text-orange-600" />
+                  </div>
+                  <div>
+                    <div className="font-semibold">Экспорт в удобный формат</div>
+                    <div className="text-sm text-gray-600">Или копирование в один клик</div>
+                  </div>
+                </li>
+              </ul>
+
+              <div className="mt-8 flex flex-col sm:flex-row sm:items-center gap-3">
+                <Link href="/login" className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold text-black shadow">
+                  <Rocket className="h-4 w-4" />
+                  Попробовать бесплатно
+                </Link>
+
+                <Link href="/login" className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-medium text-gray-700 border border-gray-200 hover:bg-gray-50">
+                  Войти в личный кабинет
+                </Link>
+              </div>
+
+              <p className="mt-3 text-xs text-gray-500">Бесплатный доступ — без привязки карты. Ограниченный набор функций для быстрого старта.</p>
+            </div>
+
+            <div className="flex justify-center md:justify-end">
+              <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-lg border border-gray-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-gray-500">Аналитика профиля</div>
+                    <div className="mt-2 text-2xl font-semibold">+12% вовлечения</div>
+                  </div>
+                  <div className="text-sm text-gray-500">За месяц</div>
+                </div>
+
+                <div className="mt-4 rounded-md overflow-hidden">
+                  <Image
+                    src="/trial.jpeg"
+                    alt="Скриншот аналитики"
+                    width={600}
+                    height={240}
+                    className="w-full h-auto"
+                  />
+                </div>
+
+                <div className="mt-4 flex items-center justify-between text-sm text-gray-600">
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-full bg-yellow-100 p-2">
+                      <Rocket className="h-4 w-4 text-yellow-600" />
+                    </div>
+                    <div>
+                      <div className="font-medium">Готовый контент</div>
+                      <div className="text-xs text-gray-500">под вашу тему</div>
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500">Экспорт в 1 клик</div>
                 </div>
               </div>
-            ))}
+            </div>
           </div>
         </section>
 
