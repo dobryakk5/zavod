@@ -10,3 +10,4 @@ export * from './client';
 export * from './postTypes';
 export * from './analytics';
 export * from './seo';
+export * from './vk';

@@ -5,7 +5,7 @@ export type ScheduleStatus = 'pending' | 'in_progress' | 'published' | 'failed';
 export type StoryStatus = 'draft' | 'ready' | 'approved' | 'generating_posts' | 'completed';
 export type SEOStatus = 'pending' | 'generating' | 'completed' | 'failed';
 
-export type Platform = 'instagram' | 'telegram' | 'youtube';
+export type Platform = 'instagram' | 'telegram' | 'youtube' | 'vkontakte';
 export type ContentType = string; // Now supports custom types
 export type Tone = string; // Now supports custom tones
 export type Length = 'short' | 'medium' | 'long';
@@ -174,6 +174,20 @@ export interface SocialAccount {
   is_active: boolean;
   extra?: Record<string, unknown>;
   created_at: string;
+}
+
+export interface VkIntegration {
+  id: number;
+  group_id: number;
+  group_name?: string;
+  screen_name?: string;
+  status?: string;
+  last_published_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+  owner_name?: string;
+  owner_id?: number;
+  extra?: Record<string, unknown>;
 }
 
 export interface ClientSettings {

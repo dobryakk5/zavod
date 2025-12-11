@@ -2,4 +2,4 @@
 .env
 /.next
 /media
-/telegram_sessions
+telegram_sessions

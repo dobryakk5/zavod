@@ -28,7 +28,8 @@ const PLATFORM_OPTIONS = [
   { value: '', label: 'Все платформы' },
   { value: 'instagram', label: 'Instagram' },
   { value: 'telegram', label: 'Telegram' },
-  { value: 'youtube', label: 'YouTube' }
+  { value: 'youtube', label: 'YouTube' },
+  { value: 'vkontakte', label: 'VKontakte' }
 ];
 
 export function PostsTable() {

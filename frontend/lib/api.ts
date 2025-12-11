@@ -17,7 +17,8 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
+export const BACKEND_BASE_URL = API_BASE_URL.replace(/\/api\/?$/, '');
 
 let isRefreshing = false;
 let refreshPromise: Promise<boolean> | null = null;
