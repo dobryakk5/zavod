@@ -63,7 +63,7 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     loadPost();
   }, [postId]);
 
-  const handleGenerateImage = async (model: 'pollinations' | 'nanobanana' | 'huggingface' | 'flux2') => {
+  const handleGenerateImage = async (model: 'pollinations' | 'nanobanana' | 'huggingface' | 'flux2' | 'sora_images') => {
     setLoading(true);
     try {
       await postsApi.generateImage(postId, model);
@@ -176,6 +176,9 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleGenerateImage('flux2')}>
                 FLUX.2
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleGenerateImage('sora_images')}>
+                SORA Images
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

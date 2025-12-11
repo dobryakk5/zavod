@@ -1378,6 +1378,7 @@ def generate_image_for_post(post_id: int, model: str = "pollinations"):
             - "pollinations": Pollinations AI (бесплатный, по умолчанию)
             - "nanobanana": OpenRouter google/gemini-2.5-flash-image
             - "huggingface": HuggingFace with Nebius GPU (FLUX.1-dev)
+            - "sora_images": Генерация через Telegram бота SORA Images
 
     Returns:
         True при успехе, False при ошибке
@@ -1385,6 +1386,11 @@ def generate_image_for_post(post_id: int, model: str = "pollinations"):
     try:
         # Получить Post
         post = Post.objects.select_related('client').get(id=post_id)
+
+        model_aliases = {"telegram_bot": "sora_images"}
+        if model in model_aliases:
+            logger.info("Модель %s преобразована в %s", model, model_aliases[model])
+            model = model_aliases[model]
 
         logger.info(f"Генерация изображения для поста: {post.title} (ID={post.id}) с моделью '{model}'")
 
@@ -1424,22 +1430,58 @@ def generate_image_for_post(post_id: int, model: str = "pollinations"):
         image_filename = f"post_{post.id}_{uuid.uuid4().hex[:8]}.jpg"
         # Путь для временного сохранения
         temp_image_path = os.path.join(settings.MEDIA_ROOT, 'temp', image_filename)
+        os.makedirs(os.path.dirname(temp_image_path), exist_ok=True)
 
         logger.info(f"Генерация изображения моделью '{model}' и сохранение в {temp_image_path}...")
 
-        result = generator.generate_image(
-            prompt=image_prompt,
-            output_path=temp_image_path,
-            model=model
-        )
+        cleanup_paths: Set[str] = set()
+        result: Dict[str, Any] = {}
+        final_image_path: Optional[str] = None
+
+        if model == "sora_images":
+            from ..core.foto_video_gen import generate_image_from_telegram_bot
+
+            bot_username = os.getenv("IMAGE_BOT_USERNAME", "@your_bot_username")
+            result = generate_image_from_telegram_bot(
+                prompt=image_prompt,
+                bot_username=bot_username,
+                session_path=os.getenv("IMAGE_BOT_SESSION_PATH"),
+                session_name=os.getenv("IMAGE_BOT_SESSION_NAME"),
+                timeout=os.getenv("IMAGE_BOT_TIMEOUT"),
+                api_id=os.getenv("TELEGRAM_API_ID"),
+                api_hash=os.getenv("TELEGRAM_API_HASH")
+            )
+            final_image_path = result.get("image_path")
+            cleanup_paths.update(result.get("cleanup_paths") or [])
+        else:
+            result = generator.generate_image(
+                prompt=image_prompt,
+                output_path=temp_image_path,
+                model=model
+            )
+            final_image_path = temp_image_path
+            cleanup_paths.add(temp_image_path)
 
         if not result.get('success'):
             logger.error(f"Ошибка генерации изображения: {result.get('error')}")
+            # Очистить файлы даже при ошибке
+            for path in cleanup_paths:
+                if path and os.path.exists(path):
+                    os.remove(path)
             return False
+
+        if not final_image_path or not os.path.exists(final_image_path):
+            logger.error("Не найден сгенерированный файл изображения (model=%s)", model)
+            for path in cleanup_paths:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            return False
+
+        cleanup_paths.add(final_image_path)
 
         # Шаг 3: Сохранить изображение среди PostImage
         try:
-            with open(temp_image_path, 'rb') as f:
+            with open(final_image_path, 'rb') as f:
                 post_image = PostImage(
                     post=post,
                     order=post.images.count(),
@@ -1449,19 +1491,21 @@ def generate_image_for_post(post_id: int, model: str = "pollinations"):
             logger.info(f"Изображение успешно сохранено в пост {post.id}: {post_image.image.url}")
             logger.info(f"Использована модель: {result.get('model', model)}")
 
-            # Удалить временный файл
-            if os.path.exists(temp_image_path):
-                os.remove(temp_image_path)
-                logger.info(f"Временный файл удалён: {temp_image_path}")
-
             return True
 
         except Exception as e:
             logger.error(f"Ошибка сохранения изображения в пост: {e}", exc_info=True)
-            # Попытаться удалить временный файл
-            if os.path.exists(temp_image_path):
-                os.remove(temp_image_path)
             return False
+        finally:
+            for path in cleanup_paths:
+                if not path:
+                    continue
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                        logger.info("Удалён временный файл: %s", path)
+                except OSError:
+                    pass
 
     except Post.DoesNotExist:
         logger.error(f"Пост с ID {post_id} не найден")

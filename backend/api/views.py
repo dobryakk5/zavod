@@ -433,7 +433,7 @@ class PostViewSet(viewsets.ModelViewSet):
     def generate_image(self, request, pk=None):
         """
         Generate image for post using AI.
-        Model choices: pollinations, nanobanana, huggingface, flux2
+        Model choices: pollinations, nanobanana, huggingface, flux2, sora_images
         """
         post = self.get_object()
         model = request.data.get('model', 'pollinations')

@@ -657,6 +657,11 @@ class PostAdmin(admin.ModelAdmin):
                     style="padding: 10px 15px; background-color: #5e35b1; color: white;
                     border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
                     🌀 FLUX.2 (HF Space)</button>
+
+                    <button type="button" class="generate-image-btn" data-default-text="🌙 SORA Images" onclick="generateImage('{url}', 'sora_images', this)"
+                    style="padding: 10px 15px; background-color: #007bff; color: white;
+                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                    🌙 SORA Images</button>
                 </div>
                 <div id="generate-status" style="margin-top: 10px; font-size: 13px;"></div>
                 <script>
@@ -693,7 +698,8 @@ class PostAdmin(admin.ModelAdmin):
                         'pollinations': 'Pollinations',
                         'nanobanana': 'NanoBanana (Gemini)',
                         'huggingface': 'HuggingFace (FLUX)',
-                        'flux2': 'FLUX.2 (HF Space)'
+                        'flux2': 'FLUX.2 (HF Space)',
+                        'sora_images': 'SORA Images (TG Bot)'
                     }};
                     const modelName = modelNames[model] || model;
                     statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Генерация изображения началась (' + modelName + ')...</span>';

@@ -19,7 +19,7 @@ def generate_post_image(request, post_id):
         post_id: ID поста
 
     Query parameters:
-        model: Модель для генерации ('pollinations', 'nanobanana', 'huggingface' или 'flux2')
+        model: Модель для генерации ('pollinations', 'nanobanana', 'huggingface', 'flux2' или 'sora_images')
 
     Returns:
         JsonResponse с результатом генерации
@@ -34,13 +34,18 @@ def generate_post_image(request, post_id):
         }, status=400)
 
     # Получить модель из параметров запроса (по умолчанию pollinations)
-    model = request.GET.get('model', 'pollinations')
+    model_param = request.GET.get('model', 'pollinations')
+    alias_map = {
+        'telegram_bot': 'sora_images',
+    }
+    model = alias_map.get(model_param, model_param)
 
     # Валидация модели
-    if model not in ['pollinations', 'nanobanana', 'huggingface', 'flux2']:
+    allowed_models = ['pollinations', 'nanobanana', 'huggingface', 'flux2', 'sora_images']
+    if model not in allowed_models:
         return JsonResponse({
             'success': False,
-            'error': f'Неизвестная модель: {model}'
+            'error': f'Неизвестная модель: {model_param}'
         }, status=400)
 
     # Запустить задачу генерации изображения в Celery
@@ -50,7 +55,8 @@ def generate_post_image(request, post_id):
         'pollinations': 'Pollinations AI',
         'nanobanana': 'NanoBanana (Gemini 2.5 Flash)',
         'huggingface': 'HuggingFace (FLUX.1-dev)',
-        'flux2': 'FLUX.2 (HuggingFace Space)'
+        'flux2': 'FLUX.2 (HuggingFace Space)',
+        'sora_images': 'SORA Images (Telegram Bot)',
     }
     model_name = model_name_map.get(model, model)
 

@@ -34,11 +34,13 @@ except ImportError:
 try:
     from telethon import TelegramClient, events
     from telethon.errors import AuthKeyUnregisteredError
+    from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
     TELETHON_AVAILABLE = True
 except ImportError:
     TelegramClient = None
     events = None
     AuthKeyUnregisteredError = None
+    GetBotCallbackAnswerRequest = None
     TELETHON_AVAILABLE = False
 
 try:  # pragma: no cover - зависит от платформы
@@ -244,6 +246,330 @@ def generate_video_from_text(
         text_only=True,
         **options
     )
+
+
+def generate_image_from_telegram_bot(
+    prompt: str,
+    bot_username: str,
+    **options: Any
+) -> Dict[str, Any]:
+    """
+    Создать изображение через Telegram бота с выбором режима через inline-кнопки.
+    
+    Процесс:
+    1) Открывает меню бота
+    2) Выбирает /design
+    3) Выбирает inline меню: 🌙 SORA Images
+    4) Отправляет промпт и получает изображение
+    
+    Args:
+        prompt: Текстовый промпт для генерации изображения
+        bot_username: Username Telegram бота
+        **options: Дополнительные параметры:
+            - session_path: Путь к файлу сессии
+            - session_name: Имя сессии
+            - timeout: Таймаут в секундах
+            - api_id: Telegram API ID
+            - api_hash: Telegram API Hash
+    
+    Returns:
+        Dict с результатом генерации
+    """
+    if not TELETHON_AVAILABLE:
+        return {"success": False, "error": "telethon не установлен. Установите пакет telethon."}
+
+    if not prompt:
+        return {"success": False, "error": "Промпт обязателен для генерации изображения"}
+
+    session_path = (
+        options.get("session_path")
+        or os.getenv("IMAGE_BOT_SESSION_PATH")
+        or os.getenv("IMAGE_BOT_SESSION_FILE")
+        or os.getenv("TELEGRAM_SESSION_PATH")
+    )
+    session_name_raw = options.get("session_name") or os.getenv("IMAGE_BOT_SESSION_NAME", "image_generator")
+    session_label = session_path or session_name_raw
+    
+    if session_path:
+        expanded_path = os.path.abspath(os.path.expanduser(session_path))
+        if expanded_path.endswith(".session"):
+            session_name = expanded_path[:-8]
+            session_file = expanded_path
+        else:
+            session_name = expanded_path
+            session_file = expanded_path + ".session"
+        session_label = session_file
+        logger.info("Используется файл сессии Telethon: %s", session_file)
+    else:
+        session_name = session_name_raw
+        session_file = f"{session_name}.session"
+    
+    session_dir = os.path.dirname(session_name)
+    if session_dir and not os.path.exists(session_dir):
+        os.makedirs(session_dir, exist_ok=True)
+    
+    timeout_value = options.get("timeout")
+    if timeout_value is None:
+        env_timeout = os.getenv("IMAGE_BOT_TIMEOUT")
+        if env_timeout:
+            try:
+                timeout_value = int(env_timeout)
+            except ValueError:
+                logger.warning("Некорректное значение IMAGE_BOT_TIMEOUT: %s", env_timeout)
+                timeout_value = None
+        if timeout_value is None:
+            timeout_value = get_image_generation_timeout()
+    try:
+        timeout = max(30, int(timeout_value))
+    except (TypeError, ValueError):
+        timeout = get_image_generation_timeout()
+
+    api_id = (
+        options.get("api_id")
+        or os.getenv("TELEGRAM_API_ID")
+        or os.getenv("TG_API_ID")
+        or os.getenv("API_ID")
+    )
+    api_hash = (
+        options.get("api_hash")
+        or os.getenv("TELEGRAM_API_HASH")
+        or os.getenv("TG_API_HASH")
+        or os.getenv("API_HASH")
+    )
+
+    if not api_id or not api_hash:
+        return {
+            "success": False,
+            "error": "TELEGRAM_API_ID (или TG_API_ID/API_ID) и TELEGRAM_API_HASH (TG_API_HASH/API_HASH) обязательны для генерации изображений через Telegram бота"
+        }
+
+    try:
+        api_id = int(api_id)
+    except ValueError:
+        return {"success": False, "error": "TELEGRAM_API_ID должен быть числом"}
+
+    expected_prompt_signature = _normalize_prompt_signature(prompt)
+    matched_prompt_fragment: Optional[str] = None
+    cleanup_session_files: List[str] = []
+
+    async def _image_bot_coroutine() -> Optional[Dict[str, Any]]:
+        session_base = session_name[:-8] if session_name.endswith('.session') else session_name
+        thread_id = threading.get_ident()
+        unique_suffix = uuid.uuid4().hex[:6]
+        thread_session_name = f"{session_base}_thread_{thread_id}_{unique_suffix}"
+        thread_session_file = f"{thread_session_name}.session"
+        cleanup_session_files.clear()
+        cleanup_session_files.extend([
+            thread_session_file,
+            f"{thread_session_file}-journal",
+            f"{thread_session_file}-wal",
+        ])
+
+        source_session_file = f"{session_base}.session"
+
+        logger.info("[IMAGE BOT Thread %s] Начало инициализации клиента", thread_id)
+        logger.info("[IMAGE BOT Thread %s] Базовая сессия: %s", thread_id, source_session_file)
+        logger.info("[IMAGE BOT Thread %s] Сессия потока: %s", thread_id, thread_session_file)
+
+        thread_session_dir = os.path.dirname(thread_session_file)
+        if thread_session_dir:
+            os.makedirs(thread_session_dir, exist_ok=True)
+
+        def _take_cached_payload(stage: str) -> Optional[Dict[str, Any]]:
+            # Для изображений пока не используем кеш, так как каждый промпт уникален
+            return None
+
+        with _telethon_session_lock(source_session_file):
+            if os.path.exists(source_session_file):
+                try:
+                    shutil.copy2(source_session_file, thread_session_file)
+                    logger.info(
+                        "[IMAGE BOT Thread %s] Скопирована сессия: %s -> %s",
+                        thread_id,
+                        source_session_file,
+                        thread_session_file
+                    )
+                except Exception as e:
+                    logger.warning("[IMAGE BOT Thread %s] Не удалось скопировать сессию: %s", thread_id, e)
+            else:
+                logger.warning("[IMAGE BOT Thread %s] Исходная сессия не найдена: %s", thread_id, source_session_file)
+
+        logger.info("[IMAGE BOT Thread %s] Создание TelegramClient с сессией: %s", thread_id, thread_session_name)
+        client = TelegramClient(thread_session_name, api_id, api_hash)
+
+        try:
+            cached_before_connect = _take_cached_payload("before connect")
+            if cached_before_connect:
+                return cached_before_connect
+            
+            logger.info("[IMAGE BOT Thread %s] Попытка подключения к Telegram...", thread_id)
+            await client.connect()
+            logger.info("[IMAGE BOT Thread %s] Успешно подключено к Telegram", thread_id)
+
+            logger.info("[IMAGE BOT Thread %s] Проверка авторизации...", thread_id)
+            if not await client.is_user_authorized():
+                raise RuntimeError(
+                    f"Telethon session '{session_label}' не авторизована. "
+                    "Запустите backend/core/foto_video_gen.py (или scripts/authorize_telegram.py) и пройдите вход в Telegram."
+                )
+            logger.info("[IMAGE BOT Thread %s] Авторизация подтверждена", thread_id)
+
+            try:
+                logger.info("[IMAGE BOT Thread %s] Получение бота %s...", thread_id, bot_username)
+                bot = await client.get_entity(bot_username)
+                logger.info("[IMAGE BOT Thread %s] Бот получен: %s", thread_id, bot_username)
+            except AuthKeyUnregisteredError as auth_err:
+                raise RuntimeError(
+                    f"Telethon session '{session_label}' требует повторной авторизации: {auth_err}. "
+                    "Удалите файл сессии и выполните вход снова через backend/core/foto_video_gen.py или scripts/authorize_telegram.py."
+                ) from auth_err
+            except Exception:
+                raise
+
+            try:
+                logger.info("[IMAGE BOT Thread %s] Начало разговора с ботом (timeout=%s)...", thread_id, timeout)
+                async with client.conversation(bot, timeout=timeout) as conv:
+                    # Шаг 1: Отправляем команду /design
+                    logger.info("[IMAGE BOT Thread %s] Отправка команды /design...", thread_id)
+                    await conv.send_message("/design")
+                    
+                    # Ждем ответа с кнопками
+                    try:
+                        response = await conv.get_response(timeout=5)
+                        logger.info("[IMAGE BOT Thread %s] Получен ответ на /design", thread_id)
+                    except asyncio.TimeoutError:
+                        logger.warning("[IMAGE BOT Thread %s] Таймаут ожидания ответа на /design", thread_id)
+                        return None
+
+                    # Шаг 2: Ищем и нажимаем кнопку "🌙 SORA Images"
+                    if response.reply_markup:
+                        sora_button = None
+                        for row in response.reply_markup.rows:
+                            for button in row.buttons:
+                                if "SORA" in button.text or "🌙" in button.text:
+                                    sora_button = button
+                                    break
+                            if sora_button:
+                                break
+                        
+                        if sora_button:
+                            logger.info("[IMAGE BOT Thread %s] Нажимаю кнопку: %s", thread_id, sora_button.text)
+                            await client(GetBotCallbackAnswerRequest(
+                                peer=bot_username,
+                                msg_id=response.id,
+                                data=sora_button.data
+                            ))
+                            logger.info("[IMAGE BOT Thread %s] Кнопка SORA Images нажата", thread_id)
+                        else:
+                            logger.error("[IMAGE BOT Thread %s] Кнопка SORA Images не найдена", thread_id)
+                            return None
+                    else:
+                        logger.error("[IMAGE BOT Thread %s] Нет inline-кнопок в ответе на /design", thread_id)
+                        return None
+
+                    # Шаг 3: Ждем подтверждение выбора режима и отправляем промпт
+                    try:
+                        mode_response = await conv.get_response(timeout=5)
+                        logger.info("[IMAGE BOT Thread %s] Получено подтверждение выбора режима", thread_id)
+                    except asyncio.TimeoutError:
+                        logger.warning("[IMAGE BOT Thread %s] Таймаут ожидания подтверждения режима", thread_id)
+                        return None
+
+                    # Шаг 4: Отправляем промпт
+                    logger.info("[IMAGE BOT Thread %s] Отправка промпта: %s", thread_id, prompt[:100])
+                    await conv.send_message(prompt)
+                    logger.info("[IMAGE BOT Thread %s] Промпт отправлен, ожидание изображения...", thread_id)
+
+                    # Шаг 5: Получаем ответ с изображением
+                    try:
+                        image_response = await conv.get_response(timeout=timeout)
+                        logger.info("[IMAGE BOT Thread %s] Получен ответ с изображением", thread_id)
+                    except asyncio.TimeoutError:
+                        logger.error("Бот не ответил с изображением в течение %s секунд", timeout)
+                        return None
+
+                    # Шаг 6: Обрабатываем ответ
+                    if image_response.media:
+                        # Скачиваем изображение
+                        fd, temp_path = tempfile.mkstemp(suffix=".png")
+                        os.close(fd)
+                        downloaded = await client.download_media(image_response.media, file=temp_path)
+                        
+                        logger.info("[IMAGE BOT Thread %s] Изображение успешно скачано: %s", thread_id, downloaded)
+                        
+                        return {
+                            "success": True,
+                            "image_path": downloaded,
+                            "model": "sora_images",
+                            "cleanup_paths": [downloaded],
+                            "response_text": image_response.raw_text or "",
+                        }
+                    else:
+                        # Проверяем, есть ли текстовый ответ с ошибкой
+                        error_text = image_response.raw_text or ""
+                        if error_text:
+                            logger.error("[IMAGE BOT Thread %s] Ошибка от бота: %s", thread_id, error_text)
+                            return {
+                                "success": False,
+                                "error": f"Bot error: {error_text}",
+                                "response_text": error_text
+                            }
+                        else:
+                            logger.error("[IMAGE BOT Thread %s] Бот не прислал изображение", thread_id)
+                            return {"success": False, "error": "Bot did not send an image"}
+
+            except asyncio.TimeoutError:
+                logger.error("Бот не ответил в течение %s секунд (conversation)", timeout)
+                return None
+
+        finally:
+            await client.disconnect()
+            if os.path.exists(thread_session_file):
+                try:
+                    with _telethon_session_lock(source_session_file):
+                        shutil.copy2(thread_session_file, source_session_file)
+                        logger.info(
+                            "[IMAGE BOT Thread %s] Сессия потока синхронизирована обратно в базовую",
+                            thread_id
+                        )
+                except Exception as sync_exc:
+                    logger.warning(
+                        "[IMAGE BOT Thread %s] Не удалось обновить базовую сессию: %s",
+                        thread_id,
+                        sync_exc
+                    )
+
+    try:
+        image_payload = asyncio.run(_image_bot_coroutine())
+    except Exception as exc:
+        logger.error("Ошибка общения с Telegram ботом для генерации изображения: %s", exc, exc_info=True)
+        return {"success": False, "error": str(exc)}
+    finally:
+        for temp_path in cleanup_session_files:
+            if not temp_path:
+                continue
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                    if temp_path.endswith(".session"):
+                        logger.info("[IMAGE BOT] Удалена временная сессия: %s", temp_path)
+                except OSError:
+                    pass
+
+    if not image_payload:
+        return {"success": False, "error": "Не удалось получить изображение от Telegram бота"}
+
+    image_path = image_payload.get("image_path")
+    if not image_path or not os.path.exists(image_path):
+        return {"success": False, "error": "Не удалось получить изображение от Telegram бота"}
+
+    return {
+        "success": True,
+        "image_path": image_path,
+        "model": "sora_images",
+        "cleanup_paths": image_payload.get("cleanup_paths") or [image_path],
+        "response_text": image_payload.get("response_text", ""),
+    }
 
 
 def _generate_image_pollinations(prompt: str, output_path: str) -> Dict[str, Any]:
@@ -741,6 +1067,53 @@ def _generate_video_veo(
             try:
                 logger.info("[VEO Thread %s] Начало разговора с ботом (timeout=%s)...", thread_id, timeout)
                 async with client.conversation(bot, timeout=timeout) as conv:
+                    # Шаг 1: Отправляем команду /video
+                    logger.info("[VEO Thread %s] Отправка команды /video...", thread_id)
+                    await conv.send_message("/video")
+                    
+                    # Ждем ответа с кнопками
+                    try:
+                        response = await conv.get_response(timeout=5)
+                        logger.info("[VEO Thread %s] Получен ответ на /video", thread_id)
+                    except asyncio.TimeoutError:
+                        logger.warning("[VEO Thread %s] Таймаут ожидания ответа на /video", thread_id)
+                        return None
+
+                    # Шаг 2: Ищем и нажимаем кнопку "⭕️ Veo"
+                    if response.reply_markup:
+                        veo_button = None
+                        for row in response.reply_markup.rows:
+                            for button in row.buttons:
+                                if "Veo" in button.text or "⭕️" in button.text:
+                                    veo_button = button
+                                    break
+                            if veo_button:
+                                break
+                        
+                        if veo_button:
+                            logger.info("[VEO Thread %s] Нажимаю кнопку: %s", thread_id, veo_button.text)
+                            await client(GetBotCallbackAnswerRequest(
+                                peer=bot_username,
+                                msg_id=response.id,
+                                data=veo_button.data
+                            ))
+                            logger.info("[VEO Thread %s] Кнопка Veo нажата", thread_id)
+                        else:
+                            logger.error("[VEO Thread %s] Кнопка Veo не найдена", thread_id)
+                            return None
+                    else:
+                        logger.error("[VEO Thread %s] Нет inline-кнопок в ответе на /video", thread_id)
+                        return None
+
+                    # Шаг 3: Ждем подтверждение выбора режима
+                    try:
+                        mode_response = await conv.get_response(timeout=5)
+                        logger.info("[VEO Thread %s] Получено подтверждение выбора режима", thread_id)
+                    except asyncio.TimeoutError:
+                        logger.warning("[VEO Thread %s] Таймаут ожидания подтверждения режима", thread_id)
+                        return None
+
+                    # Шаг 4: Отправляем изображение или текст
                     logger.info("[VEO Thread %s] Отправка %s боту...", thread_id, "текста" if text_only else "файла")
                     if text_only:
                         await conv.send_message(caption)
