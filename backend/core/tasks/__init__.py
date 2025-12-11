@@ -33,6 +33,9 @@ from .aggregation import (
     analyze_telegram_channel_task,
 )
 
+from .channel_analysis import (
+    analyze_channel_task,
+)
 # Generation tasks (10)
 from .generation import (
     generate_post_from_trend,
@@ -45,6 +48,7 @@ from .generation import (
     generate_story_from_trend,
     generate_posts_from_story,
     regenerate_post_text,
+    generate_weekly_posts_from_template,
 )
 
 # SEO tasks (2)
@@ -76,6 +80,7 @@ __all__ = [
     'discover_content_for_topic',
     'discover_trends_for_topic_with_telegram',
     'analyze_telegram_channel_task',
+    'analyze_channel_task',
 
     # Generation (10)
     'generate_post_from_trend',
@@ -88,6 +93,7 @@ __all__ = [
     'generate_story_from_trend',
     'generate_posts_from_story',
     'regenerate_post_text',
+    'generate_weekly_posts_from_template',
 
     # SEO (2)
     'generate_seo_keywords_for_client',

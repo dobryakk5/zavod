@@ -7,6 +7,7 @@ from .models import SystemSetting
 logger = logging.getLogger(__name__)
 
 DEFAULT_AI_MODEL_CACHE_KEY = "core:default_ai_model"
+POST_AI_MODEL_CACHE_KEY = "core:post_ai_model"
 FALLBACK_AI_MODEL_CACHE_KEY = "core:fallback_ai_model"
 VIDEO_PROMPT_INSTRUCTIONS_CACHE_KEY = "core:video_prompt_instructions"
 IMAGE_TIMEOUT_CACHE_KEY = "core:image_generation_timeout"
@@ -21,6 +22,19 @@ def _fetch_default_ai_model_from_db() -> str:
     except Exception as exc:
         logger.warning("Failed to load SystemSetting: %s", exc)
         return SystemSetting.DEFAULT_AI_MODEL
+
+
+def _fetch_post_ai_model_from_db() -> str:
+    try:
+        setting = SystemSetting.get_solo()
+        return (
+            setting.post_ai_model
+            or setting.default_ai_model
+            or SystemSetting.DEFAULT_POST_AI_MODEL
+        )
+    except Exception as exc:
+        logger.warning("Failed to load SystemSetting post model: %s", exc)
+        return SystemSetting.DEFAULT_POST_AI_MODEL
 
 
 def _fetch_fallback_ai_model_from_db() -> str:
@@ -72,6 +86,21 @@ def get_default_ai_model(use_cache: bool = True) -> str:
 
     if use_cache:
         cache.set(DEFAULT_AI_MODEL_CACHE_KEY, model_name, DEFAULT_AI_MODEL_CACHE_TIMEOUT)
+
+    return model_name
+
+
+def get_post_ai_model(use_cache: bool = True) -> str:
+    """Return dedicated AI model for post generation."""
+    if use_cache:
+        cached = cache.get(POST_AI_MODEL_CACHE_KEY)
+        if cached:
+            return cached
+
+    model_name = _fetch_post_ai_model_from_db()
+
+    if use_cache:
+        cache.set(POST_AI_MODEL_CACHE_KEY, model_name, DEFAULT_AI_MODEL_CACHE_TIMEOUT)
 
     return model_name
 
@@ -130,6 +159,7 @@ def get_video_generation_timeout(use_cache: bool = True) -> int:
 
 def invalidate_system_settings_cache():
     cache.delete(DEFAULT_AI_MODEL_CACHE_KEY)
+    cache.delete(POST_AI_MODEL_CACHE_KEY)
     cache.delete(FALLBACK_AI_MODEL_CACHE_KEY)
     cache.delete(VIDEO_PROMPT_INSTRUCTIONS_CACHE_KEY)
     cache.delete(IMAGE_TIMEOUT_CACHE_KEY)

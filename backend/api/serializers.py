@@ -21,10 +21,11 @@ from core.models import (
 
 class PostSerializer(serializers.ModelSerializer):
     platforms = serializers.SerializerMethodField()
+    template_name = serializers.CharField(source="template.name", read_only=True)
 
     class Meta:
         model = Post
-        fields = ["id", "title", "status", "created_at", "platforms"]
+        fields = ["id", "title", "status", "created_at", "platforms", "template_name"]
 
     def get_platforms(self, obj: Post) -> list[str]:
         schedules = obj.schedules.all()
@@ -76,6 +77,8 @@ class PostDetailSerializer(serializers.ModelSerializer):
 
     images = PostImageSerializer(many=True, read_only=True)
     videos = PostVideoSerializer(many=True, read_only=True)
+    template_name = serializers.CharField(source="template.name", read_only=True)
+    template_type = serializers.CharField(source="template.type", read_only=True)
 
     class Meta:
         model = Post
@@ -95,6 +98,9 @@ class PostDetailSerializer(serializers.ModelSerializer):
             "regeneration_count",
             "created_at",
             "updated_at",
+            "template",
+            "template_name",
+            "template_type",
             "images",
             "videos",
         ]
@@ -106,6 +112,8 @@ class PostDetailSerializer(serializers.ModelSerializer):
             "updated_at",
             "images",
             "videos",
+            "template_name",
+            "template_type",
         ]
 
 
@@ -261,6 +269,8 @@ class ContentTemplateSerializer(serializers.ModelSerializer):
     Length and language remain read-only after creation.
     """
 
+    is_system = serializers.SerializerMethodField()
+
     class Meta:
         model = ContentTemplate
         fields = [
@@ -276,6 +286,7 @@ class ContentTemplateSerializer(serializers.ModelSerializer):
             "is_default",
             "include_hashtags",
             "max_hashtags",
+            "is_system",
             "created_at",
             "updated_at",
         ]
@@ -286,6 +297,9 @@ class ContentTemplateSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_is_system(self, obj):
+        return obj.is_system
 
 
 class SEOKeywordSetSerializer(serializers.ModelSerializer):
@@ -351,6 +365,7 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
     """
     Client settings serializer.
     Excludes 'id' and 'name' fields - they cannot be edited by users.
+    Excludes secret fields - they cannot be accessed by frontend.
     """
 
     class Meta:
@@ -362,15 +377,12 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "pains",
             "desires",
             "objections",
-            "telegram_api_id",
-            "telegram_api_hash",
+            "ai_analysis_channel_url",
+            "ai_analysis_channel_type",
             "telegram_source_channels",
             "rss_source_feeds",
-            "youtube_api_key",
             "youtube_source_channels",
-            "instagram_access_token",
             "instagram_source_accounts",
-            "vkontakte_access_token",
             "vkontakte_source_groups",
         ]
         read_only_fields = ["slug"]  # slug is readonly

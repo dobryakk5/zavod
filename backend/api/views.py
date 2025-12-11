@@ -10,7 +10,7 @@ from django.db.models import Count, F, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -27,8 +27,11 @@ from core.models import (
     Story,
     Topic,
     TrendItem,
+    ChannelAnalysis,
+    SEOKeywordSet,
 )
 from core import tasks
+from core.telegram_client import normalize_telegram_channel_identifier
 
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
@@ -48,6 +51,7 @@ from .serializers import (
     TopicSerializer,
     TrendItemDetailSerializer,
     TrendItemSerializer,
+    SEOKeywordSetSerializer,
 )
 from .utils import get_active_client
 
@@ -57,6 +61,7 @@ COOKIE_SECURE = not settings.DEBUG
 COOKIE_SAMESITE = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
 COOKIE_MAX_AGE = int(getattr(settings, "JWT_COOKIE_MAX_AGE", 60 * 60))  # 1 hour for access token
 REFRESH_COOKIE_MAX_AGE = int(getattr(settings, "JWT_REFRESH_COOKIE_MAX_AGE", 60 * 60 * 24 * 7))
+MAX_WEEKLY_POSTS = 21
 
 
 def set_token_cookie(response: Response, key: str, value: str, max_age: int):
@@ -551,6 +556,65 @@ class PostViewSet(viewsets.ModelViewSet):
             'task_id': task.id
         })
 
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path='plan-weekly',
+        permission_classes=[IsTenantOwnerOrEditor]
+    )
+    def plan_weekly(self, request):
+        """Запустить генерацию постов на следующую неделю по выбранному шаблону."""
+
+        client = get_active_client(request.user)
+        template_id = request.data.get('template_id')
+        posts_per_week = request.data.get('posts_per_week')
+        social_account_id = request.data.get('social_account_id')
+
+        try:
+            template_id_int = int(template_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'Укажите корректный шаблон'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            posts_count = int(posts_per_week)
+        except (TypeError, ValueError):
+            return Response({'error': 'Некорректное количество постов'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if posts_count <= 0 or posts_count > MAX_WEEKLY_POSTS:
+            return Response(
+                {'error': f'Количество постов должно быть от 1 до {MAX_WEEKLY_POSTS}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            template = ContentTemplate.get_for_client_or_system(client, template_id_int)
+        except ContentTemplate.DoesNotExist:
+            return Response({'error': 'Шаблон недоступен'}, status=status.HTTP_404_NOT_FOUND)
+
+        social_account_id_int = None
+        if social_account_id is not None:
+            try:
+                social_account_id_int = int(social_account_id)
+            except (TypeError, ValueError):
+                return Response({'error': 'Некорректный ID соц. аккаунта'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not SocialAccount.objects.filter(id=social_account_id_int, client=client).exists():
+                return Response({'error': 'Соц. аккаунт не найден'}, status=status.HTTP_404_NOT_FOUND)
+
+        task = tasks.generate_weekly_posts_from_template.delay(
+            client.id,
+            template.id,
+            posts_count,
+            request.user.id if request.user and request.user.is_authenticated else None,
+            social_account_id_int,
+        )
+
+        return Response({
+            'success': True,
+            'message': f'Запущена генерация {posts_count} постов по шаблону «{template.name}»',
+            'task_id': task.id
+        })
+
 
 class TopicViewSet(viewsets.ModelViewSet):
     """ViewSet for Topic CRUD operations and content discovery"""
@@ -734,7 +798,10 @@ class ContentTemplateViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
-        return ContentTemplate.objects.filter(client=client).order_by('-created_at')
+        queryset = ContentTemplate.objects.for_client(client).select_related("client").order_by('-created_at')
+        if getattr(self, "action", None) in ['update', 'partial_update', 'destroy']:
+            return queryset.filter(client=client)
+        return queryset
 
     def perform_create(self, serializer):
         client = get_active_client(self.request.user)
@@ -860,3 +927,255 @@ class PostToneViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         # Новые тоны создаются как системные (доступны всем клиентам)
         serializer.save(client=None)
+
+
+class TgChannelView(APIView):
+    """
+    Unified endpoint for Telegram channel operations:
+    - analyze: Start channel analysis
+    - status: Get analysis status
+    - validate: Validate channel URL
+    
+    Usage:
+    POST /tg_channel/ with {"action": "analyze", "channel_url": "...", "channel_type": "..."}
+    GET /tg_channel/ with {"action": "status", "task_id": "..."}
+    POST /tg_channel/ with {"action": "validate", "channel_url": "...", "channel_type": "..."}
+    """
+    permission_classes = [IsAuthenticated]
+    CHANNEL_TYPES = {"telegram", "instagram", "youtube", "vkontakte"}
+    SUPPORTED_TYPES = {"telegram"}
+
+    def post(self, request):
+        """Handle POST requests for analyze and validate actions"""
+        action = request.data.get('action')
+        
+        if action == 'analyze':
+            return self._analyze_channel(request)
+        elif action == 'validate':
+            return self._validate_channel(request)
+        else:
+            return Response({
+                'success': False,
+                'error': f'Unknown action: {action}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    def get(self, request):
+        """Handle GET requests for status action"""
+        action = request.GET.get('action')
+        task_id = request.GET.get('task_id')
+        
+        if action == 'status' and task_id:
+            # For GET requests, we need to pass task_id in query params
+            # Create a mock request data object using setattr
+            setattr(request, '_data', {'action': 'status', 'task_id': task_id})
+            return self._get_analysis_status(request)
+        else:
+            return Response({
+                'success': False,
+                'error': f'Unknown action: {action}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    def _normalize_channel_type(self, value):
+        """Return normalized channel type if valid."""
+        if not value:
+            return ""
+        normalized = str(value).strip().lower()
+        return normalized if normalized in self.CHANNEL_TYPES else ""
+
+    def _resolve_channel_config(self, request):
+        """Return active client and resolved channel config."""
+        client = get_active_client(request.user)
+        data = getattr(request, 'data', {}) or {}
+
+        raw_url = (data.get('channel_url') or '').strip()
+        raw_type = (data.get('channel_type') or '').strip()
+
+        normalized_type = self._normalize_channel_type(raw_type)
+        type_invalid = bool(raw_type and not normalized_type)
+
+        stored_url = (client.ai_analysis_channel_url or '').strip()
+        stored_type = self._normalize_channel_type(getattr(client, 'ai_analysis_channel_type', ''))
+
+        channel_url = raw_url or stored_url
+        channel_type = normalized_type or stored_type
+
+        updates = {}
+        if raw_url and raw_url != stored_url:
+            updates['ai_analysis_channel_url'] = raw_url
+        if normalized_type and normalized_type != stored_type:
+            updates['ai_analysis_channel_type'] = normalized_type
+
+        return client, channel_url, channel_type, type_invalid, updates
+
+    def _persist_channel_preferences(self, client, updates):
+        """Save updated channel settings on the client model."""
+        if not updates:
+            return
+        for field, value in updates.items():
+            setattr(client, field, value)
+        client.save(update_fields=list(updates.keys()))
+
+    def _normalize_identifier(self, channel_url: str, channel_type: str) -> str:
+        if channel_type == "telegram":
+            return normalize_telegram_channel_identifier(channel_url)
+        return (channel_url or "").strip()
+
+    def _analyze_channel(self, request):
+        """Start channel analysis"""
+        from .permissions import IsTenantOwnerOrEditor
+        
+        # Check permissions
+        if not IsTenantOwnerOrEditor().has_permission(request, self):
+            return Response({
+                'success': False,
+                'error': 'Insufficient permissions'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        client, channel_url, channel_type, type_invalid, updates = self._resolve_channel_config(request)
+
+        if type_invalid:
+            return Response({
+                'success': False,
+                'error': f"Некорректный тип канала. Допустимые значения: {', '.join(sorted(self.CHANNEL_TYPES))}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if not channel_url or not channel_type:
+            return Response({
+                'success': False,
+                'error': 'Не указан канал для анализа. Добавьте channel_url и channel_type в запрос или сохраните их в настройках клиента.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if channel_type not in self.SUPPORTED_TYPES:
+            return Response({
+                'success': False,
+                'error': 'Пока поддерживаются только Telegram каналы'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        normalized_identifier = self._normalize_identifier(channel_url, channel_type)
+        if not normalized_identifier:
+            return Response({
+                'success': False,
+                'error': 'Не удалось распознать канал. Проверьте правильность ссылки.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Persist provided settings so the client configuration stays in sync
+        self._persist_channel_preferences(client, updates)
+
+        analysis = ChannelAnalysis.objects.create(
+            client=client,
+            channel_url=channel_url,
+            channel_type=channel_type,
+            status=ChannelAnalysis.STATUS_PENDING,
+            progress=0,
+        )
+
+        task = tasks.analyze_channel_task.delay(analysis.id)
+        analysis.task_id = task.id
+        analysis.save(update_fields=['task_id'])
+
+        return Response({
+            'success': True,
+            'message': 'Анализ канала запущен',
+            'task_id': analysis.task_id,
+            'channel_url': channel_url,
+            'channel_type': channel_type,
+        })
+
+    def _validate_channel(self, request):
+        """Validate channel URL"""
+        client, channel_url, channel_type, type_invalid, _updates = self._resolve_channel_config(request)
+
+        if type_invalid:
+            return Response({
+                'valid': False,
+                'error': f"Некорректный тип канала. Допустимые значения: {', '.join(sorted(self.CHANNEL_TYPES))}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if not channel_url or not channel_type:
+            return Response({
+                'valid': False,
+                'error': 'channel_url и channel_type обязательны. Заполните канал в настройках клиента или передайте значения в запросе.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if channel_type not in self.SUPPORTED_TYPES:
+            return Response({
+                'valid': False,
+                'error': 'Пока поддерживаются только Telegram каналы'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        identifier = self._normalize_identifier(channel_url, channel_type)
+        if not identifier:
+            return Response({
+                'valid': False,
+                'error': 'Не удалось распознать канал. Проверьте ссылку или @username'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # TODO: Add actual validation logic
+        # For now, just return success
+
+        return Response({
+            'valid': True,
+            'message': 'Channel URL is valid',
+            'channel_url': channel_url,
+            'channel_type': channel_type,
+            'normalized_channel': identifier,
+        })
+
+    def _get_analysis_status(self, request):
+        """Get analysis task status"""
+        client = get_active_client(request.user)
+
+        task_id = request.GET.get('task_id') or getattr(request, 'data', {}).get('task_id')
+        if not task_id:
+            return Response({
+                'success': False,
+                'error': 'task_id is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            analysis = ChannelAnalysis.objects.get(client=client, task_id=task_id)
+        except ChannelAnalysis.DoesNotExist:
+            return Response({
+                'success': False,
+                'error': 'Анализ с таким task_id не найден'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        payload = {
+            'task_id': analysis.task_id,
+            'status': analysis.status,
+            'progress': analysis.progress,
+            'result': analysis.result if analysis.status == ChannelAnalysis.STATUS_COMPLETED else None,
+        }
+
+        if analysis.status == ChannelAnalysis.STATUS_FAILED:
+            payload['error'] = analysis.error or 'Анализ завершился с ошибкой'
+
+        return Response(payload)
+
+
+class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing and generating SEO keyword sets."""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = SEOKeywordSetSerializer
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        queryset = SEOKeywordSet.objects.filter(client=client).order_by('-created_at')
+        group_type = self.request.query_params.get('group_type')
+        if group_type:
+            queryset = queryset.filter(group_type=group_type)
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        return queryset
+
+    @action(detail=False, methods=['post'], permission_classes=[IsTenantOwnerOrEditor])
+    def generate(self, request):
+        client = get_active_client(request.user)
+        task = tasks.generate_seo_keywords_for_client.delay(client.id)
+        return Response({
+            'success': True,
+            'message': f"Генерация SEO-фраз запущена для клиента: {client.name}",
+            'task_id': task.id,
+        })

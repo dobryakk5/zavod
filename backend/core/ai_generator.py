@@ -10,11 +10,12 @@ import json
 import logging
 import ast
 import re
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Optional, Callable, List, Tuple
 
 from . import foto_video_gen
 from .system_settings import (
     get_default_ai_model,
+    get_post_ai_model,
     get_fallback_ai_model,
     get_video_prompt_instructions,
 )
@@ -26,6 +27,52 @@ except ImportError:
     HF_HUB_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+_COMMENTED_VALUE_RE = re.compile(r'#\s*(?=")')
+_CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def _normalize_ai_json_response(raw_response: str) -> str:
+    text = (raw_response or "").strip()
+    if text.startswith('```json'):
+        text = text[7:]
+    if text.startswith('```'):
+        text = text[3:]
+    if text.endswith('```'):
+        text = text[:-3]
+    return text.strip()
+
+
+def _add_json_candidate(attempts: List[str], text: str):
+    candidate = (text or "").strip()
+    if not candidate:
+        return
+    if candidate not in attempts:
+        attempts.append(candidate)
+    sanitized = _COMMENTED_VALUE_RE.sub('', candidate)
+    if sanitized and sanitized not in attempts:
+        attempts.append(sanitized)
+
+
+def _parse_ai_json_response(raw_response: str) -> Tuple[Optional[Dict[str, Any]], str, Optional[json.JSONDecodeError]]:
+    clean_response = _normalize_ai_json_response(raw_response)
+    attempts: List[str] = []
+    _add_json_candidate(attempts, clean_response)
+
+    for block in _CODE_BLOCK_RE.findall(raw_response):
+        _add_json_candidate(attempts, block)
+
+    last_error: Optional[json.JSONDecodeError] = None
+    last_text = clean_response
+
+    for candidate in attempts:
+        try:
+            return json.loads(candidate), candidate, None
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            last_text = candidate
+
+    return None, last_text, last_error
 
 
 class AIContentGenerator:
@@ -43,6 +90,7 @@ class AIContentGenerator:
             raise ValueError("OPENROUTER_API_KEY not found in environment")
 
         self.model = get_default_ai_model()
+        self.post_model = get_post_ai_model()
         self.fallback_model = get_fallback_ai_model()
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -103,7 +151,13 @@ class AIContentGenerator:
             logger.error(f"Error calling OpenRouter API for model {model}: {e}", exc_info=True)
             return None
 
-    def get_ai_response(self, prompt: str, max_tokens: int = 2000, temperature: float = 0.7) -> Optional[str]:
+    def get_ai_response(
+        self,
+        prompt: str,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+        model: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Send request to OpenRouter API with automatic fallback model.
 
@@ -111,18 +165,23 @@ class AIContentGenerator:
             prompt: Text prompt for AI
             max_tokens: Maximum tokens in response
             temperature: Creativity level (0.0-1.0)
+            model: Preferred model name (defaults to self.model)
 
         Returns:
             AI response text or None if error
         """
 
-        primary_response = self._call_openrouter(self.model, prompt, max_tokens, temperature)
+        selected_model = (model or self.model or "").strip()
+        if not selected_model:
+            selected_model = get_default_ai_model()
+
+        primary_response = self._call_openrouter(selected_model, prompt, max_tokens, temperature)
         if primary_response:
             return primary_response
 
         fallback_model = self.fallback_model.strip() if self.fallback_model else ""
-        if fallback_model and fallback_model != self.model:
-            logger.info("Primary model %s failed, trying fallback %s", self.model, fallback_model)
+        if fallback_model and fallback_model != selected_model:
+            logger.info("Primary model %s failed, trying fallback %s", selected_model, fallback_model)
             return self._call_openrouter(fallback_model, prompt, max_tokens, temperature)
 
         return None
@@ -357,7 +416,8 @@ class AIContentGenerator:
             logger.info(f"Генерация поста для тренда: {trend_title[:50]}")
 
             # Запрос к AI
-            ai_response = self.get_ai_response(prompt, max_tokens=2000, temperature=0.7)
+            post_model = (self.post_model or self.model)
+            ai_response = self.get_ai_response(prompt, max_tokens=2000, temperature=0.7, model=post_model)
 
             if not ai_response:
                 return {
@@ -366,44 +426,34 @@ class AIContentGenerator:
                 }
 
             # Парсинг JSON ответа
-            try:
-                # Очистить ответ от markdown code blocks
-                clean_response = ai_response.strip()
-                if clean_response.startswith('```json'):
-                    clean_response = clean_response[7:]
-                if clean_response.startswith('```'):
-                    clean_response = clean_response[3:]
-                if clean_response.endswith('```'):
-                    clean_response = clean_response[:-3]
-                clean_response = clean_response.strip()
-
-                result = json.loads(clean_response)
-
-                # Валидация структуры ответа
-                if "title" not in result or "text" not in result:
-                    logger.error(f"Invalid AI response structure: {clean_response}")
-                    return {
-                        "success": False,
-                        "error": "Invalid response structure from AI"
-                    }
-
-                # Добавить пустой список хэштегов если их нет
-                if "hashtags" not in result:
-                    result["hashtags"] = []
-
-                # Добавить флаг успеха
-                result["success"] = True
-
-                logger.info(f"Успешно сгенерирован пост: {result['title'][:50]}")
-                return result
-
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse AI response as JSON: {clean_response}")
+            parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+            if parse_error:
+                logger.error(f"Failed to parse AI response as JSON: {normalized_text}")
                 return {
                     "success": False,
-                    "error": f"JSON parsing error: {str(e)}",
-                    "raw_response": clean_response
+                    "error": f"JSON parsing error: {str(parse_error)}",
+                    "raw_response": normalized_text
                 }
+
+            result = parsed_result or {}
+
+            # Валидация структуры ответа
+            if "title" not in result or "text" not in result:
+                logger.error(f"Invalid AI response structure: {normalized_text}")
+                return {
+                    "success": False,
+                    "error": "Invalid response structure from AI"
+                }
+
+            # Добавить пустой список хэштегов если их нет
+            if "hashtags" not in result:
+                result["hashtags"] = []
+
+            # Добавить флаг успеха
+            result["success"] = True
+
+            logger.info(f"Успешно сгенерирован пост: {result['title'][:50]}")
+            return result
 
         except Exception as e:
             logger.error(f"Error generating post text: {e}", exc_info=True)
@@ -1184,45 +1234,34 @@ seo_keywords = [ ... ]
                         "error": "Failed to get response from AI"
                     }
 
-                # Парсинг JSON ответа
-                try:
-                    # Очистить ответ от markdown code blocks
-                    clean_response = ai_response.strip()
-                    if clean_response.startswith('```json'):
-                        clean_response = clean_response[7:]
-                    if clean_response.startswith('```'):
-                        clean_response = clean_response[3:]
-                    if clean_response.endswith('```'):
-                        clean_response = clean_response[:-3]
-                    clean_response = clean_response.strip()
-
-                    result = json.loads(clean_response)
-
-                    # Валидация структуры ответа
-                    if "title" not in result or "episodes" not in result:
-                        logger.error(f"Invalid AI response structure: {clean_response}")
-                        return {
-                            "success": False,
-                            "error": "Invalid response structure from AI"
-                        }
-
-                    # Проверка количества эпизодов
-                    if not isinstance(result["episodes"], list) or len(result["episodes"]) != episode_count:
-                        logger.warning(f"Expected {episode_count} episodes, got {len(result.get('episodes', []))}")
-
-                    # Добавить флаг успеха
-                    result["success"] = True
-
-                    logger.info(f"Успешно сгенерирована история: {result['title'][:50]} ({len(result['episodes'])} эпизодов)")
-                    return result
-
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse AI response as JSON: {clean_response}")
+                parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+                if parse_error:
+                    logger.error(f"Failed to parse AI response as JSON: {normalized_text}")
                     return {
                         "success": False,
-                        "error": f"JSON parsing error: {str(e)}",
-                        "raw_response": clean_response
+                        "error": f"JSON parsing error: {str(parse_error)}",
+                        "raw_response": normalized_text
                     }
+
+                result = parsed_result or {}
+
+                # Валидация структуры ответа
+                if "title" not in result or "episodes" not in result:
+                    logger.error(f"Invalid AI response structure: {normalized_text}")
+                    return {
+                        "success": False,
+                        "error": "Invalid response structure from AI"
+                    }
+
+                # Проверка количества эпизодов
+                if not isinstance(result["episodes"], list) or len(result["episodes"]) != episode_count:
+                    logger.warning(f"Expected {episode_count} episodes, got {len(result.get('episodes', []))}")
+
+                # Добавить флаг успеха
+                result["success"] = True
+
+                logger.info(f"Успешно сгенерирована история: {result['title'][:50]} ({len(result['episodes'])} эпизодов)")
+                return result
 
             finally:
                 # Восстановить оригинальную модель
@@ -1359,7 +1398,8 @@ seo_keywords = [ ... ]
             logger.info(f"Генерация поста для эпизода {episode_number}/{total_episodes}: {episode_title[:50]}")
 
             # Запрос к AI
-            ai_response = self.get_ai_response(prompt, max_tokens=2000, temperature=0.7)
+            post_model = (self.post_model or self.model)
+            ai_response = self.get_ai_response(prompt, max_tokens=2000, temperature=0.7, model=post_model)
 
             if not ai_response:
                 return {
@@ -1367,45 +1407,34 @@ seo_keywords = [ ... ]
                     "error": "Failed to get response from AI"
                 }
 
-            # Парсинг JSON ответа
-            try:
-                # Очистить ответ от markdown code blocks
-                clean_response = ai_response.strip()
-                if clean_response.startswith('```json'):
-                    clean_response = clean_response[7:]
-                if clean_response.startswith('```'):
-                    clean_response = clean_response[3:]
-                if clean_response.endswith('```'):
-                    clean_response = clean_response[:-3]
-                clean_response = clean_response.strip()
-
-                result = json.loads(clean_response)
-
-                # Валидация структуры ответа
-                if "title" not in result or "text" not in result:
-                    logger.error(f"Invalid AI response structure: {clean_response}")
-                    return {
-                        "success": False,
-                        "error": "Invalid response structure from AI"
-                    }
-
-                # Добавить пустой список хэштегов если их нет
-                if "hashtags" not in result:
-                    result["hashtags"] = []
-
-                # Добавить флаг успеха
-                result["success"] = True
-
-                logger.info(f"Успешно сгенерирован пост для эпизода {episode_number}: {result['title'][:50]}")
-                return result
-
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse AI response as JSON: {clean_response}")
+            parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+            if parse_error:
+                logger.error(f"Failed to parse AI response as JSON: {normalized_text}")
                 return {
                     "success": False,
-                    "error": f"JSON parsing error: {str(e)}",
-                    "raw_response": clean_response
+                    "error": f"JSON parsing error: {str(parse_error)}",
+                    "raw_response": normalized_text
                 }
+
+            result = parsed_result or {}
+
+            # Валидация структуры ответа
+            if "title" not in result or "text" not in result:
+                logger.error(f"Invalid AI response structure: {normalized_text}")
+                return {
+                    "success": False,
+                    "error": "Invalid response structure from AI"
+                }
+
+            # Добавить пустой список хэштегов если их нет
+            if "hashtags" not in result:
+                result["hashtags"] = []
+
+            # Добавить флаг успеха
+            result["success"] = True
+
+            logger.info(f"Успешно сгенерирован пост для эпизода {episode_number}: {result['title'][:50]}")
+            return result
 
         except Exception as e:
             logger.error(f"Error generating post from episode: {e}", exc_info=True)

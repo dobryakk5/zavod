@@ -5,10 +5,14 @@ import queue
 import random
 import threading
 import uuid
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone as dt_timezone
+from typing import Any, Dict, List, Optional, Tuple, Set
+from zoneinfo import ZoneInfo
 
 from django.core.files import File
+from django.utils import timezone
 
 from ..models import (
     Post,
@@ -19,10 +23,141 @@ from ..models import (
     ContentTemplate,
     Client,
     SEOKeywordSet,
+    Schedule,
+    SocialAccount,
 )
 from ..ai_generator import AIContentGenerator
 
 logger = logging.getLogger(__name__)
+
+WEEKDAY_LABELS = [
+    "понедельник",
+    "вторник",
+    "среду",
+    "четверг",
+    "пятницу",
+    "субботу",
+    "воскресенье",
+]
+
+MAX_WEEKLY_POSTS = 21
+
+
+def _get_client_timezone(client: Client):
+    tz_name = client.timezone or "UTC"
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        logger.warning("Unknown timezone '%s', falling back to UTC", tz_name)
+        return dt_timezone.utc
+
+
+def _get_next_week_start_local(client: Client):
+    client_tz = _get_client_timezone(client)
+    now_local = timezone.now().astimezone(client_tz)
+    days_until_next_week = (7 - now_local.weekday()) % 7
+    if days_until_next_week == 0:
+        days_until_next_week = 7
+    start_local = (now_local + timedelta(days=days_until_next_week)).replace(
+        hour=10,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    return start_local
+
+
+def _collect_existing_weekdays(client: Client, template: ContentTemplate, week_start_local) -> Set[int]:
+    client_tz = _get_client_timezone(client)
+    week_start_utc = week_start_local.astimezone(dt_timezone.utc)
+    week_end_utc = week_start_utc + timedelta(days=7)
+    template_tag = f"template:{template.id}"
+    week_tag = f"plan-week:{week_start_local.date().isoformat()}"
+
+    blocked: Set[int] = set()
+
+    schedules_qs = Schedule.objects.filter(
+        client=client,
+        scheduled_at__gte=week_start_utc,
+        scheduled_at__lt=week_end_utc,
+        post__tags__contains=[template_tag],
+    )
+    for schedule in schedules_qs:
+        local_dt = schedule.scheduled_at.astimezone(client_tz)
+        blocked.add(local_dt.weekday())
+
+    planned_posts = Post.objects.filter(client=client, tags__contains=[template_tag])
+    planned_posts = planned_posts.filter(tags__contains=[week_tag])
+    for post in planned_posts:
+        planned_dt = None
+        for tag in post.tags:
+            if isinstance(tag, str) and tag.startswith("planned-at:"):
+                raw_value = tag.split("planned-at:", 1)[1]
+                try:
+                    planned_dt = datetime.fromisoformat(raw_value)
+                except ValueError:
+                    planned_dt = None
+                break
+        if planned_dt:
+            blocked.add(planned_dt.astimezone(client_tz).weekday())
+
+    return blocked
+
+
+def _build_weekly_slots(
+    start_local,
+    total_count: int,
+    blocked_days: Optional[Set[int]] = None,
+) -> List[Tuple[Any, int]]:
+    if total_count <= 0:
+        return []
+
+    per_day_usage: Dict[int, int] = defaultdict(int)
+    permanent_blocked = set(blocked_days or set())
+    used_in_batch: Set[int] = set()
+    slots: List[Tuple[Any, int]] = []
+
+    for idx in range(total_count):
+        day_fraction = idx / total_count
+        proposed_offset = min(6, int(day_fraction * 7))
+        day_offset = proposed_offset
+        attempts = 0
+        while attempts < 7:
+            if day_offset not in permanent_blocked and day_offset not in used_in_batch:
+                break
+            day_offset = (day_offset + 1) % 7
+            attempts += 1
+        if attempts < 7:
+            used_in_batch.add(day_offset)
+        else:
+            day_offset = proposed_offset
+
+        in_day_index = per_day_usage[day_offset]
+        scheduled_local = start_local + timedelta(days=day_offset, hours=in_day_index * 2)
+        slots.append((scheduled_local, day_offset))
+        per_day_usage[day_offset] = in_day_index + 1
+
+    return slots
+
+
+def _build_template_config(template: ContentTemplate, client: Client, prompt_type: str = "trend") -> Dict[str, Any]:
+    return {
+        "tone": template.tone,
+        "length": template.length,
+        "language": template.language,
+        "seo_prompt_template": template.seo_prompt_template,
+        "trend_prompt_template": template.trend_prompt_template,
+        "prompt_type": prompt_type,
+        "additional_instructions": template.additional_instructions,
+        "include_hashtags": template.include_hashtags,
+        "max_hashtags": template.max_hashtags,
+        "type": getattr(template, "type", ""),
+        "avatar": client.avatar or "",
+        "pains": client.pains or "",
+        "desires": client.desires or "",
+        "objections": client.objections or "",
+        "brand": client.name or "",
+    }
 
 
 def _build_text_video_prompt(post: Post) -> str:
@@ -151,17 +286,13 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
 
         # Получить шаблон контента
         if template_id:
-            template = ContentTemplate.objects.get(id=template_id, client=trend.client)
+            try:
+                template = ContentTemplate.get_for_client_or_system(trend.client, template_id)
+            except ContentTemplate.DoesNotExist:
+                logger.error(f"Шаблон контента с ID {template_id} не найден для клиента {trend.client_id}")
+                return None
         else:
-            # Использовать default шаблон для клиента
-            template = ContentTemplate.objects.filter(
-                client=trend.client,
-                is_default=True
-            ).first()
-
-            if not template:
-                # Если нет default шаблона, взять любой первый
-                template = ContentTemplate.objects.filter(client=trend.client).first()
+            template = ContentTemplate.get_default_for_client(trend.client)
 
             if not template:
                 logger.error(f"Нет шаблонов контента для клиента {trend.client.name}")
@@ -232,6 +363,7 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
         # Создать пост со статусом draft
         post = Post.objects.create(
             client=trend.client,
+            template=template,
             title=post_title,
             text=post_text,
             status="draft",  # Требует модерации
@@ -328,10 +460,10 @@ def generate_posts_from_seo_keyword_set(
         return {"success": False, "error": "client_required"}
 
     try:
-        template = ContentTemplate.objects.get(id=template_id, client=client)
+        template = ContentTemplate.get_for_client_or_system(client, template_id)
     except ContentTemplate.DoesNotExist:
         logger.error(
-            "Шаблон %s не найден или не принадлежит клиенту %s",
+            "Шаблон %s не найден или недоступен клиенту %s",
             template_id,
             client.id
         )
@@ -438,6 +570,7 @@ def generate_posts_from_seo_keyword_set(
 
         Post.objects.create(
             client=client,
+            template=template,
             title=result["title"],
             text=result["text"],
             status="draft",
@@ -493,10 +626,10 @@ def generate_posts_with_videos_from_seo_keyword_set(
         return {"success": False, "error": "client_required"}
 
     try:
-        template = ContentTemplate.objects.get(id=template_id, client=client)
+        template = ContentTemplate.get_for_client_or_system(client, template_id)
     except ContentTemplate.DoesNotExist:
         logger.error(
-            "Шаблон %s не найден или не принадлежит клиенту %s",
+            "Шаблон %s не найден или недоступен клиенту %s",
             template_id,
             client.id
         )
@@ -709,6 +842,7 @@ def generate_posts_with_videos_from_seo_keyword_set(
             try:
                 post = Post.objects.create(
                     client=client,
+                    template=template,
                     title=(post_result.get("title") or keyword or "SEO post")[:255],
                     text=post_result.get("text") or "",
                     status="draft",
@@ -758,6 +892,181 @@ def generate_posts_with_videos_from_seo_keyword_set(
         "post_errors": post_errors,
         "video_errors": video_errors,
         "post_ids": [post.id for post in created_posts_list],
+    }
+
+
+@shared_task
+def generate_weekly_posts_from_template(
+    client_id: int,
+    template_id: int,
+    posts_per_week: int,
+    created_by_id: Optional[int] = None,
+    social_account_id: Optional[int] = None,
+):
+    """Запуск автоматической генерации постов на следующую неделю."""
+
+    try:
+        client = Client.objects.get(id=client_id)
+    except Client.DoesNotExist:
+        logger.error("Client %s not found for weekly generation", client_id)
+        return {"success": False, "error": "client_not_found"}
+
+    try:
+        template = ContentTemplate.get_for_client_or_system(client, template_id)
+    except ContentTemplate.DoesNotExist:
+        logger.error("Template %s unavailable for client %s", template_id, client_id)
+        return {"success": False, "error": "template_not_found"}
+
+    try:
+        posts_count = int(posts_per_week)
+    except (TypeError, ValueError):
+        return {"success": False, "error": "invalid_posts_count"}
+
+    posts_count = max(1, min(MAX_WEEKLY_POSTS, posts_count))
+
+    social_account = None
+    if social_account_id:
+        try:
+            social_account = SocialAccount.objects.get(id=social_account_id, client=client)
+        except SocialAccount.DoesNotExist:
+            logger.error(
+                "Social account %s not found for client %s",
+                social_account_id,
+                client_id,
+            )
+            return {"success": False, "error": "social_account_not_found"}
+    else:
+        social_account = SocialAccount.objects.filter(client=client).order_by("id").first()
+
+    start_local = _get_next_week_start_local(client)
+    blocked_days = _collect_existing_weekdays(client, template, start_local)
+    slots = _build_weekly_slots(start_local, posts_count, blocked_days)
+    if not slots:
+        return {"success": False, "error": "no_slots"}
+
+    try:
+        generator = AIContentGenerator()
+    except ValueError as exc:
+        logger.error("Failed to init AI generator for weekly posts: %s", exc)
+        return {"success": False, "error": "ai_generator_error"}
+
+    template_config = _build_template_config(template, client, prompt_type="trend")
+    created_posts: List[int] = []
+    scheduled_times: List[str] = []
+    errors: List[Dict[str, Any]] = []
+
+    logger.info(
+        "Weekly plan: client=%s template=%s posts=%s social_account=%s",
+        client.slug,
+        template.name,
+        posts_count,
+        getattr(social_account, "id", None),
+    )
+
+    week_tag = f"plan-week:{start_local.date().isoformat()}"
+
+    for index, (local_dt, day_offset) in enumerate(slots, start=1):
+        weekday_label = WEEKDAY_LABELS[day_offset]
+        trend_title = f"{template.name}: пост на {weekday_label}"
+        trend_description = (
+            "Подготовь {post_type} пост для {brand} на {weekday} следующей недели. "
+            "Используй боли и желания аудитории, избегай ссылок и новостных поводов."
+        ).format(
+            post_type=template.type or "контентный",
+            brand=client.name or "бренда",
+            weekday=weekday_label,
+        )
+
+        try:
+            result = generator.generate_post_text(
+                trend_title=trend_title,
+                trend_description=trend_description,
+                trend_url="",
+                topic_name=client.name or template.name,
+                template_config=template_config,
+                seo_keywords=None,
+            )
+        except Exception as exc:
+            logger.error("Weekly generator crashed: %s", exc, exc_info=True)
+            errors.append({"index": index, "error": "generator_error"})
+            continue
+
+        if not result or not result.get("success"):
+            error_message = (result or {}).get("error", "generation_failed")
+            logger.error(
+                "Weekly generation failed (template=%s, index=%s): %s",
+                template.id,
+                index,
+                error_message,
+            )
+            errors.append({"index": index, "error": error_message})
+            continue
+
+        hashtags = result.get("hashtags", [])
+        tags: List[str] = []
+        if isinstance(hashtags, list):
+            tags.extend([tag for tag in hashtags if isinstance(tag, str)])
+        planned_at_tag = f"planned-at:{local_dt.isoformat()}"
+        tags.extend([
+            "auto-week",
+            f"template:{template.id}",
+            f"weekday:{weekday_label}",
+            week_tag,
+            planned_at_tag,
+        ])
+
+        seen = set()
+        deduped: List[str] = []
+        for tag in tags:
+            if not isinstance(tag, str):
+                continue
+            normalized = tag.strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                deduped.append(normalized)
+
+        post = Post.objects.create(
+            client=client,
+            template=template,
+            title=result["title"],
+            text=result["text"],
+            status="draft",
+            tags=deduped,
+            source_links=[],
+            generated_by="weekly-plan",
+            created_by_id=created_by_id,
+        )
+
+        scheduled_at = local_dt.astimezone(dt_timezone.utc)
+        if social_account:
+            Schedule.objects.create(
+                client=client,
+                post=post,
+                social_account=social_account,
+                scheduled_at=scheduled_at,
+                status="pending",
+            )
+            post.status = "scheduled"
+            post.save(update_fields=["status"])
+
+        scheduled_times.append(local_dt.isoformat())
+
+        created_posts.append(post.id)
+
+    logger.info(
+        "Weekly plan finished: template=%s created=%s errors=%s",
+        template.id,
+        len(created_posts),
+        len(errors),
+    )
+
+    return {
+        "success": bool(created_posts),
+        "created_posts": created_posts,
+        "requested": posts_count,
+        "errors": errors,
+        "scheduled_at": scheduled_times,
+        "social_account_id": getattr(social_account, "id", None),
     }
 
 
@@ -1305,9 +1614,9 @@ def generate_story_from_trend(trend_item_id: int, episode_count: int = 5, templa
         template = None
         if template_id:
             try:
-                template = ContentTemplate.objects.get(id=template_id, client=client)
+                template = ContentTemplate.get_for_client_or_system(client, template_id)
             except ContentTemplate.DoesNotExist:
-                logger.warning(f"Шаблон {template_id} не найден, продолжаем без шаблона")
+                logger.warning(f"Шаблон {template_id} не найден для клиента {client.id}, продолжаем без шаблона")
 
         logger.info(f"Генерация истории из тренда: {trend.title[:60]} ({episode_count} эпизодов)")
 
@@ -1441,6 +1750,7 @@ def generate_posts_from_story(story_id: int):
             # Создание поста
             post = Post.objects.create(
                 client=story.client,
+                template=story.template,
                 story=story,
                 episode_number=episode_number,
                 title=result["title"],

@@ -16,10 +16,12 @@ from .views import (
     ScheduleListView,
     ScheduleViewSet,
     SocialAccountViewSet,
+    SEOKeywordSetViewSet,
     StoryViewSet,
     TelegramAuthView,
     TopicViewSet,
     TrendItemViewSet,
+    TgChannelView,
 )
 
 app_name = 'api'
@@ -35,8 +37,12 @@ router.register(r'schedules-manage', ScheduleViewSet, basename='schedule-manage'
 router.register(r'social-accounts', SocialAccountViewSet, basename='social-account')
 router.register(r'post-types', PostTypeViewSet, basename='post-type')
 router.register(r'post-tones', PostToneViewSet, basename='post-tone')
+router.register(r'seo-keywords', SEOKeywordSetViewSet, basename='seo-keyword')
 
 urlpatterns = [
+    # Analytics endpoint (must be before router to avoid conflicts)
+    path('tg_channel/', TgChannelView.as_view(), name='tg_channel'),
+
     # Authentication endpoints
     path('auth/telegram', TelegramAuthView.as_view(), name='telegram-auth'),
     path('auth/token/', LoginView.as_view(), name='token'),

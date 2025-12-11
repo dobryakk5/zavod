@@ -59,15 +59,18 @@ async function refreshAccessToken(): Promise<boolean> {
 
 export async function apiFetch<TResponse>(endpoint: string, options: ApiRequestOptions = {}): Promise<TResponse> {
   const { method = 'GET', body, headers, next } = options;
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  const hasJsonBody = body !== undefined && !isFormData;
+  const requestBody = hasJsonBody ? JSON.stringify(body) : body;
 
   const makeRequest = async (): Promise<Response> => {
     return fetch(`${API_BASE_URL}${endpoint}`, {
       method,
       headers: {
-        'Content-Type': 'application/json',
+        ...(hasJsonBody ? { 'Content-Type': 'application/json' } : {}),
         ...headers
       },
-      body: body ? JSON.stringify(body) : undefined,
+      body: requestBody as BodyInit | undefined,
       credentials: 'include',
       next
     });

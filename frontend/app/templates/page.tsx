@@ -17,6 +17,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { useRole } from '@/lib/hooks';
 import type { ContentTemplate } from '@/lib/types';
+import { formatTemplateDisplayName } from '@/lib/utils';
 
 export default function TemplatesPage() {
   const router = useRouter();
@@ -127,7 +128,7 @@ export default function TemplatesPage() {
           <TableBody>
             {templates.map((template) => (
               <TableRow key={template.id}>
-                <TableCell className="font-medium">{template.name}</TableCell>
+                <TableCell className="font-medium">{formatTemplateDisplayName(template.name)}</TableCell>
                 <TableCell>
                   <Badge variant="secondary">
                     {getTypeName(template.type)}

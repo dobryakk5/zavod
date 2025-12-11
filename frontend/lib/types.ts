@@ -30,6 +30,25 @@ export interface Post {
   status: PostStatus;
   created_at: string;
   platforms?: string[];
+  template_name?: string | null;
+}
+
+export interface PostMediaImage {
+  id: number;
+  image: string;
+  alt_text?: string;
+  order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PostMediaVideo {
+  id: number;
+  video: string;
+  caption?: string;
+  order: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface PostDetail {
@@ -54,6 +73,11 @@ export interface PostDetail {
   scheduled_time?: string;
   created_at: string;
   updated_at?: string;
+  template?: number | null;
+  template_name?: string | null;
+  template_type?: string | null;
+  images?: PostMediaImage[];
+  videos?: PostMediaVideo[];
 }
 
 export interface Topic {
@@ -129,6 +153,7 @@ export interface ContentTemplate {
   is_default: boolean;
   include_hashtags: boolean;
   max_hashtags: number;
+  is_system?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -155,22 +180,17 @@ export interface ClientSettings {
   slug?: string;
   timezone?: string;
   avatar?: string;
-  logo?: string;
-  website?: string;
-  description?: string;
-  default_language?: string;
   pains?: string;
   desires?: string;
   objections?: string;
-  telegram_api_id?: string;
-  telegram_api_hash?: string;
+  logo?: string;
+  website?: string;
+  ai_analysis_channel_url?: string;
+  ai_analysis_channel_type?: string;
   telegram_source_channels?: string;
   rss_source_feeds?: string;
-  youtube_api_key?: string;
   youtube_source_channels?: string;
-  instagram_access_token?: string;
   instagram_source_accounts?: string;
-  vkontakte_access_token?: string;
   vkontakte_source_groups?: string;
 }
 
@@ -200,8 +220,31 @@ export interface TaskResponse {
   error?: string;
 }
 
+export type SEOGroupType = 'seo_pains' | 'seo_desires' | 'seo_objections' | 'seo_avatar' | 'seo_keywords' | '';
+
+export interface SEOKeywordSet {
+  id: number;
+  client: number;
+  client_name?: string;
+  group_type: SEOGroupType;
+  topic?: number | null;
+  topic_name?: string | null;
+  status: SEOStatus;
+  keywords_list: string[];
+  keyword_groups: Record<string, string[]>;
+  ai_model?: string;
+  prompt_used?: string;
+  error_log?: string;
+  created_at: string;
+}
+
 export interface GenerateImageRequest {
   model: 'pollinations' | 'nanobanana' | 'huggingface' | 'flux2';
+}
+
+export interface GenerateVideoRequest {
+  source?: 'image' | 'text';
+  method?: 'wan' | 'veo';
 }
 
 export interface QuickPublishRequest {

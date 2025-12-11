@@ -241,13 +241,17 @@ class ClientAdmin(admin.ModelAdmin):
 class SystemSettingAdmin(admin.ModelAdmin):
     list_display = (
         "default_ai_model",
+        "post_ai_model",
         "fallback_ai_model",
         "image_generation_timeout",
         "video_generation_timeout",
         "updated_at",
     )
     fieldsets = (
-        ("AI настройки", {"fields": ("default_ai_model", "fallback_ai_model", "video_prompt_instructions")}),
+        (
+            "AI настройки",
+            {"fields": ("default_ai_model", "post_ai_model", "fallback_ai_model", "video_prompt_instructions")},
+        ),
         ("Таймауты генерации", {"fields": ("image_generation_timeout", "video_generation_timeout")}),
         ("Служебное", {"fields": ("created_at", "updated_at")}),
     )
@@ -1822,12 +1826,23 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
         if keyword_count == 0:
             return format_html('<div style="color:#ba2121;">Добавьте или сгенерируйте ключи выше.</div>')
 
-        templates_qs = ContentTemplate.objects.filter(client=obj.client).order_by("name")
-        templates = list(templates_qs)
+        templates = list(
+            ContentTemplate.objects
+            .for_client(obj.client)
+            .select_related("client")
+            .order_by("name")
+        )
+
+        templates.sort(
+            key=lambda tpl: (
+                0 if tpl.client_id == obj.client_id else 1,
+                tpl.name.lower(),
+            )
+        )
         if not templates:
             return format_html(
-                '<div style="color:#ba2121;">У клиента нет контент-шаблонов. '
-                'Добавьте шаблон на странице клиента.</div>'
+                '<div style="color:#ba2121;">Нет доступных контент-шаблонов. '
+                'Добавьте шаблон клиенту или создайте системный шаблон.</div>'
             )
 
         if not request:
@@ -1891,11 +1906,11 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
             return HttpResponseRedirect(change_url)
 
         try:
-            template = ContentTemplate.objects.get(id=template_id, client=seo_set.client)
+            template = ContentTemplate.get_for_client_or_system(seo_set.client, template_id)
         except ContentTemplate.DoesNotExist:
             self.message_user(
                 request,
-                "Шаблон не найден или принадлежит другому клиенту",
+                "Шаблон не найден или недоступен этому клиенту",
                 level=messages.ERROR
             )
             return HttpResponseRedirect(change_url)
@@ -1971,11 +1986,11 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
             return HttpResponseRedirect(change_url)
 
         try:
-            template = ContentTemplate.objects.get(id=template_id, client=seo_set.client)
+            template = ContentTemplate.get_for_client_or_system(seo_set.client, template_id)
         except ContentTemplate.DoesNotExist:
             self.message_user(
                 request,
-                "Шаблон не найден или принадлежит другому клиенту",
+                "Шаблон не найден или недоступен этому клиенту",
                 level=messages.ERROR
             )
             return HttpResponseRedirect(change_url)

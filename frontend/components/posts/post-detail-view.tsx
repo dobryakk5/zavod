@@ -6,8 +6,37 @@ import { useCanGenerateVideo, useRole } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
-import type { PostDetail } from '@/lib/types';
+import type { GenerateVideoRequest, PostDetail } from '@/lib/types';
 import { toast } from 'sonner';
+
+const STATUS_LABELS: Record<string, string> = {
+  draft: 'Черновик',
+  ready: 'Готово',
+  approved: 'Утверждено',
+  scheduled: 'Запланировано',
+  published: 'Опубликовано',
+};
+
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api').replace(/\/api\/?$/, '/');
+
+const resolveMediaUrl = (url?: string | null) => {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return url;
+  }
+  return `${API_ORIGIN}${url.startsWith('/') ? url.slice(1) : url}`;
+};
+
+const formatPostTypeLabel = (value?: string | null) => {
+  if (!value) {
+    return '';
+  }
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
 
 interface PostDetailViewProps {
   postId: number;
@@ -51,18 +80,19 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     }
   };
 
-  const handleGenerateVideo = async () => {
+  const handleGenerateVideo = async (options?: GenerateVideoRequest) => {
     setLoading(true);
     try {
-      await postsApi.generateVideo(postId);
-      toast.success('Генерация видео запущена');
+      await postsApi.generateVideo(postId, options);
+      const isTextVideo = options?.source === 'text';
+      toast.success(isTextVideo ? 'Генерация видео по тексту запущена' : 'Генерация видео запущена');
       // Reload post after a delay to show the new video
       setTimeout(async () => {
         const updatedPost = await postsApi.get(postId);
         setPost(updatedPost);
-      }, 5000);
+      }, options?.source === 'text' ? 6000 : 5000);
     } catch (err) {
-      toast.error('Ошибка при генерации видео');
+      toast.error(options?.source === 'text' ? 'Ошибка при генерации видео по тексту' : 'Ошибка при генерации видео');
     } finally {
       setLoading(false);
     }
@@ -93,14 +123,22 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     return <div>Загрузка...</div>;
   }
 
+  const statusLabel = STATUS_LABELS[post.status] ?? post.status;
+  const postTypeLabel = formatPostTypeLabel(post.template_type);
+  const images = post.images ?? [];
+  const videos = post.videos ?? [];
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-3xl font-bold">{post.title || `Пост #${post.id}`}</h1>
-          <div className="flex gap-2 mt-2">
-            <Badge>{post.status}</Badge>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <Badge>{statusLabel}</Badge>
+            {postTypeLabel && (
+              <Badge variant="outline">Тип: {postTypeLabel}</Badge>
+            )}
             {post.platforms?.map((platform) => (
               <Badge key={platform} variant="outline">
                 {platform}
@@ -143,13 +181,23 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
           </DropdownMenu>
 
           {/* Video generation button */}
-          <Button
-            disabled={!canEdit || !canGenerateVideo || loading}
-            variant={canGenerateVideo ? 'default' : 'secondary'}
-            onClick={handleGenerateVideo}
-          >
-            {canGenerateVideo ? 'Сгенерировать видео' : 'Сгенерировать видео (только dev)'}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              disabled={!canEdit || !canGenerateVideo || loading}
+              variant={canGenerateVideo ? 'default' : 'secondary'}
+              onClick={() => handleGenerateVideo()}
+            >
+              {canGenerateVideo ? 'Видео по изображению' : 'Сгенерировать видео (только dev)'}
+            </Button>
+            <Button
+              disabled={!canEdit || !canGenerateVideo || loading || !post.text}
+              variant={canGenerateVideo ? 'outline' : 'secondary'}
+              onClick={() => handleGenerateVideo({ source: 'text', method: 'veo' })}
+              title={!post.text ? 'Добавьте текст в пост, чтобы сгенерировать видео по тексту' : undefined}
+            >
+              Видео по тексту (VEO)
+            </Button>
+          </div>
 
           {/* Regenerate text */}
           <Button disabled={!canEdit || loading} variant="outline" onClick={handleRegenerateText}>
@@ -157,19 +205,45 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
           </Button>
         </div>
 
-        {/* Image preview */}
-        {post.image && (
+        {/* Image gallery */}
+        {images.length > 0 && (
           <div>
-            <h2 className="text-lg font-semibold mb-2">Изображение</h2>
-            <img src={post.image} alt={post.title || 'Post image'} className="max-w-2xl rounded-lg shadow-md" />
+            <h2 className="text-lg font-semibold mb-2">Изображения</h2>
+            <div className="grid gap-4 sm:grid-cols-3">
+              {images.map((image) => (
+                <div key={image.id} className="rounded-lg border bg-background p-2 shadow-sm">
+                  <img
+                    src={resolveMediaUrl(image.image)}
+                    alt={image.alt_text || post.title || `Изображение ${image.id}`}
+                    className="h-40 w-full rounded-md object-cover"
+                  />
+                  {image.alt_text && (
+                    <p className="mt-2 text-sm text-muted-foreground">{image.alt_text}</p>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
-        {/* Video preview */}
-        {post.video && (
+        {/* Video gallery */}
+        {videos.length > 0 && (
           <div>
             <h2 className="text-lg font-semibold mb-2">Видео</h2>
-            <video src={post.video} controls className="max-w-2xl rounded-lg shadow-md" />
+            <div className="grid gap-4 sm:grid-cols-2">
+              {videos.map((video) => (
+                <div key={video.id} className="rounded-lg border bg-background p-2 shadow-sm">
+                  <video
+                    src={resolveMediaUrl(video.video)}
+                    controls
+                    className="w-full rounded-md object-contain max-h-[60vh] bg-black"
+                  />
+                  {video.caption && (
+                    <p className="mt-2 text-sm text-muted-foreground">{video.caption}</p>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

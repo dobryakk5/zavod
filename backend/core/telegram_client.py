@@ -10,7 +10,9 @@ import asyncio
 import re
 import logging
 from typing import List, Dict, Optional
+from urllib.parse import urlparse
 from telethon import TelegramClient, errors
+from telethon.tl.functions.channels import GetFullChannelRequest
 from django.conf import settings
 import os
 
@@ -201,6 +203,44 @@ class TelegramContentCollector:
             logger.error(f"Ошибка при получении сообщений из канала {channel_username}: {e}", exc_info=True)
 
         return messages
+
+    async def get_channel_info(self, channel_username: str) -> Dict:
+        """
+        Получить базовую информацию о канале.
+
+        Args:
+            channel_username: Username канала (например, '@my_channel')
+
+        Returns:
+            dict: Информация о канале
+        """
+        if not self.client:
+            raise RuntimeError("Клиент не подключен. Вызовите connect() сначала.")
+
+        try:
+            entity = await self.client.get_entity(channel_username)
+            full_info = await self.client(GetFullChannelRequest(entity))
+
+            return {
+                'id': getattr(entity, 'id', None),
+                'title': getattr(entity, 'title', '') or '',
+                'username': getattr(entity, 'username', '') or channel_username,
+                'subscribers': getattr(full_info.full_chat, 'participants_count', 0) or 0,
+                'about': getattr(full_info.full_chat, 'about', '') or '',
+                'photo': getattr(entity, 'photo', None),
+            }
+        except errors.ChannelPrivateError:
+            logger.error(f"Нет доступа к каналу {channel_username} (приватный или заблокирован)")
+            raise
+        except errors.ChannelInvalidError:
+            logger.error(f"Неверный канал: {channel_username}")
+            raise
+        except ValueError as e:
+            logger.error(f"Некорректный канал {channel_username}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Ошибка при получении информации о канале {channel_username}: {e}", exc_info=True)
+            raise
 
     async def search_in_channels(
         self,
@@ -497,3 +537,40 @@ def run_async_task(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
+
+
+def normalize_telegram_channel_identifier(value: str) -> str:
+    """
+    Преобразовать URL или @username в валидный username канала.
+
+    Args:
+        value: Строка с URL или именем канала
+
+    Returns:
+        str: Username в формате '@channel'
+    """
+    if not value:
+        return ""
+
+    candidate = value.strip()
+    candidate = candidate.replace('https://', '').replace('http://', '')
+
+    if candidate.startswith('t.me/') or candidate.startswith('telegram.me/'):
+        candidate = candidate.split('/', 1)[1]
+
+    if '://' in candidate or '/' in candidate:
+        parsed = urlparse(candidate if '://' in candidate else f"https://{candidate}")
+        path = parsed.path.lstrip('/')
+        if path:
+            candidate = path.split('/')[0]
+        else:
+            candidate = parsed.netloc
+
+    candidate = candidate.replace('t.me/', '').replace('telegram.me/', '')
+    candidate = candidate.replace('joinchat/', '').split('?')[0]
+    candidate = candidate.strip('@').strip('/')
+
+    if not candidate:
+        return ""
+
+    return candidate if candidate.startswith('@') else f"@{candidate}"

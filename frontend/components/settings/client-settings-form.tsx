@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { CustomTextarea } from '@/components/ui/custom-textarea';
 import {
   Select,
   SelectContent,
@@ -30,10 +31,11 @@ import type { ClientSettings } from '@/lib/types';
 const settingsFormSchema = z.object({
   timezone: z.string().optional(),
   avatar: z.string().optional(),
-  logo: z.string().optional(),
-  website: z.string().url('Неверный URL').optional().or(z.literal('')),
-  description: z.string().optional(),
-  default_language: z.string().optional(),
+  pains: z.string().optional(),
+  desires: z.string().optional(),
+  objections: z.string().optional(),
+  ai_analysis_channel_url: z.string().optional(),
+  ai_analysis_channel_type: z.string().optional(),
 });
 
 type SettingsFormValues = z.infer<typeof settingsFormSchema>;
@@ -47,10 +49,11 @@ export function ClientSettingsForm() {
     defaultValues: {
       timezone: '',
       avatar: '',
-      logo: '',
-      website: '',
-      description: '',
-      default_language: 'ru',
+      pains: '',
+      desires: '',
+      objections: '',
+      ai_analysis_channel_url: '',
+      ai_analysis_channel_type: '',
     },
   });
 
@@ -65,10 +68,11 @@ export function ClientSettingsForm() {
       form.reset({
         timezone: data.timezone || '',
         avatar: data.avatar || '',
-        logo: data.logo || '',
-        website: data.website || '',
-        description: data.description || '',
-        default_language: data.default_language || 'ru',
+        pains: data.pains || '',
+        desires: data.desires || '',
+        objections: data.objections || '',
+        ai_analysis_channel_url: data.ai_analysis_channel_url || '',
+        ai_analysis_channel_type: data.ai_analysis_channel_type || '',
       });
     } catch (error) {
       toast.error('Не удалось загрузить настройки');
@@ -127,92 +131,128 @@ export function ClientSettingsForm() {
 
         <FormField
           control={form.control}
-          name="default_language"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Язык по умолчанию</FormLabel>
-              <Select onValueChange={field.onChange} value={field.value}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Выберите язык" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectItem value="ru">Русский</SelectItem>
-                  <SelectItem value="en">English</SelectItem>
-                  <SelectItem value="es">Español</SelectItem>
-                  <SelectItem value="fr">Français</SelectItem>
-                </SelectContent>
-              </Select>
-              <FormDescription>
-                Язык для генерации контента по умолчанию
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
           name="avatar"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>URL аватара</FormLabel>
+              <FormLabel>Портрет ЦА</FormLabel>
               <FormControl>
-                <Input placeholder="https://example.com/avatar.jpg" {...field} />
-              </FormControl>
-              <FormDescription>
-                URL изображения для аватара
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="logo"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>URL логотипа</FormLabel>
-              <FormControl>
-                <Input placeholder="https://example.com/logo.png" {...field} />
-              </FormControl>
-              <FormDescription>
-                URL изображения для логотипа
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="website"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Веб-сайт</FormLabel>
-              <FormControl>
-                <Input placeholder="https://example.com" {...field} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="description"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Описание</FormLabel>
-              <FormControl>
-                <Textarea
-                  placeholder="Краткое описание компании или проекта"
-                  className="min-h-[100px]"
+                <CustomTextarea
+                  placeholder="Описание целевой аудитории (например: 'Мама двоих детей, работает удалённо, хочет больше времени для себя')"
+                  className="min-h-[80px]"
                   {...field}
                 />
               </FormControl>
+              <FormDescription>
+                Кто ваша целевая аудитория
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="pains"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Боли</FormLabel>
+              <FormControl>
+                <CustomTextarea
+                  placeholder="Проблемы и боли целевой аудитории (например: 'нет времени на себя, стресс, лишний вес, низкая самооценка')"
+                  className="min-h-[80px]"
+                  {...field}
+                />
+              </FormControl>
+              <FormDescription>
+                Проблемы и боли вашей аудитории
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="desires"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Желания</FormLabel>
+              <FormControl>
+                <CustomTextarea
+                  placeholder="Желания и цели аудитории (например: 'похудеть к лету, научиться танцевать, найти хобби, познакомиться с новыми людьми')"
+                  className="min-h-[80px]"
+                  {...field}
+                />
+              </FormControl>
+              <FormDescription>
+                Желания и цели вашей аудитории
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="objections"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Возражения</FormLabel>
+              <FormControl>
+                <CustomTextarea
+                  placeholder="Страхи и возражения аудитории (например: 'дорого, нет времени, боюсь выглядеть глупо, не получится')"
+                  className="min-h-[80px]"
+                  {...field}
+                />
+              </FormControl>
+              <FormDescription>
+                Страхи и возражения вашей аудитории
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+
+        <FormField
+          control={form.control}
+          name="ai_analysis_channel_url"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>AI Анализ канала</FormLabel>
+              <FormControl>
+                <Input placeholder="https://t.me/example_channel" {...field} />
+              </FormControl>
+              <FormDescription>
+                URL канала для AI анализа
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="ai_analysis_channel_type"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Тип канала</FormLabel>
+              <Select onValueChange={field.onChange} value={field.value}>
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Выберите тип канала" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="telegram">Telegram</SelectItem>
+                  <SelectItem value="instagram">Instagram</SelectItem>
+                  <SelectItem value="youtube">YouTube</SelectItem>
+                  <SelectItem value="vkontakte">VKontakte</SelectItem>
+                </SelectContent>
+              </Select>
+              <FormDescription>
+                Тип канала для AI анализа
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}

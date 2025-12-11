@@ -4,9 +4,24 @@ from typing import Dict, List
 
 
 class Client(models.Model):
+    SYSTEM_SLUG = "system"
     name = models.CharField(max_length=255)
     slug = models.SlugField(unique=True)
     timezone = models.CharField(max_length=64, default="Europe/Helsinki")
+
+    # AI Analysis settings
+    ai_analysis_channel_url = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="AI Анализ канала",
+        help_text="URL канала для AI анализа (например: https://t.me/example_channel)"
+    )
+    ai_analysis_channel_type = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name="Тип канала",
+        help_text="Тип канала для анализа (например: telegram, instagram, youtube)"
+    )
 
     # Business description
     avatar = models.TextField(
@@ -129,6 +144,52 @@ class Client(models.Model):
     def __str__(self):
         return self.name
 
+    @property
+    def is_system(self) -> bool:
+        return self.slug == self.SYSTEM_SLUG
+
+    @classmethod
+    def get_system_client(cls):
+        client, _ = cls.objects.get_or_create(
+            slug=cls.SYSTEM_SLUG,
+            defaults={
+                "name": "System Templates",
+                "timezone": "UTC",
+            },
+        )
+        return client
+
+
+class ChannelAnalysis(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_IN_PROGRESS = "in_progress"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "Pending"),
+        (STATUS_IN_PROGRESS, "In progress"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="channel_analyses")
+    channel_url = models.CharField(max_length=255)
+    channel_type = models.CharField(max_length=50)
+    task_id = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    progress = models.PositiveIntegerField(default=0)
+    result = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"{self.client.name} – {self.channel_type} analysis ({self.status})"
+
 
 class UserTenantRole(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -186,6 +247,14 @@ class Post(models.Model):
         blank=True,
         related_name="posts",
         help_text="История, к которой относится этот пост"
+    )
+    template = models.ForeignKey(
+        "ContentTemplate",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="posts",
+        help_text="Шаблон, использованный для генерации поста"
     )
     episode_number = models.IntegerField(
         null=True,
@@ -577,6 +646,36 @@ class PostTone(models.Model):
         return f"[Системный] {self.label}"
 
 
+class ContentTemplateQuerySet(models.QuerySet):
+    def for_client(self, client: Client, include_system: bool = True):
+        conditions = []
+        if client:
+            conditions.append(models.Q(client=client))
+        if include_system:
+            conditions.append(models.Q(client__slug=Client.SYSTEM_SLUG))
+        if not conditions:
+            return self.none()
+
+        combined = conditions[0]
+        for condition in conditions[1:]:
+            combined |= condition
+        return self.filter(combined)
+
+    def only_system(self):
+        return self.filter(client__slug=Client.SYSTEM_SLUG)
+
+
+class ContentTemplateManager(models.Manager):
+    def get_queryset(self):
+        return ContentTemplateQuerySet(self.model, using=self._db)
+
+    def for_client(self, client: Client, include_system: bool = True):
+        return self.get_queryset().for_client(client, include_system=include_system)
+
+    def only_system(self):
+        return self.get_queryset().only_system()
+
+
 class ContentTemplate(models.Model):
     """Шаблон для AI генерации контента с настройками стиля"""
 
@@ -678,6 +777,8 @@ class ContentTemplate(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = ContentTemplateManager()
+
     class Meta:
         ordering = ("-created_at",)
         verbose_name = "Content Template"
@@ -696,6 +797,36 @@ class ContentTemplate(models.Model):
                 is_default=True
             ).exclude(id=self.id).update(is_default=False)
         super().save(*args, **kwargs)
+
+    @property
+    def is_system(self) -> bool:
+        client = getattr(self, "client", None)
+        return bool(client and client.is_system)
+
+    @classmethod
+    def get_for_client_or_system(cls, client: Client, template_id: int):
+        conditions = models.Q(client__slug=Client.SYSTEM_SLUG)
+        if client:
+            conditions |= models.Q(client=client)
+        return cls.objects.get(models.Q(id=template_id) & conditions)
+
+    @classmethod
+    def get_default_for_client(cls, client: Client):
+        if client:
+            template = cls.objects.filter(client=client, is_default=True).first()
+            if template:
+                return template
+
+        template = cls.objects.only_system().filter(is_default=True).first()
+        if template:
+            return template
+
+        if client:
+            template = cls.objects.filter(client=client).first()
+            if template:
+                return template
+
+        return cls.objects.only_system().first()
 
 
 class SEOKeywordSet(models.Model):
@@ -825,6 +956,7 @@ class SystemSetting(models.Model):
     """Глобальные настройки системы (singleton)."""
 
     DEFAULT_AI_MODEL = "x-ai/grok-4.1-fast:free"
+    DEFAULT_POST_AI_MODEL = DEFAULT_AI_MODEL
     DEFAULT_IMAGE_TIMEOUT = 120
     DEFAULT_VIDEO_TIMEOUT = 600
     DEFAULT_FALLBACK_AI_MODEL = "tngtech/deepseek-r1t2-chimera:free"
@@ -833,6 +965,12 @@ class SystemSetting(models.Model):
         max_length=255,
         default=DEFAULT_AI_MODEL,
         help_text="Модель OpenRouter по умолчанию для генерации контента (например, x-ai/grok-4.1-fast:free)"
+    )
+    post_ai_model = models.CharField(
+        max_length=255,
+        blank=True,
+        default=DEFAULT_POST_AI_MODEL,
+        help_text="Отдельная модель OpenRouter для генерации текстов постов"
     )
     fallback_ai_model = models.CharField(
         max_length=255,
@@ -882,6 +1020,7 @@ class SystemSetting(models.Model):
             pk=1,
             defaults={
                 "default_ai_model": cls.DEFAULT_AI_MODEL,
+                "post_ai_model": cls.DEFAULT_POST_AI_MODEL,
                 "fallback_ai_model": cls.DEFAULT_FALLBACK_AI_MODEL,
                 "image_generation_timeout": cls.DEFAULT_IMAGE_TIMEOUT,
                 "video_generation_timeout": cls.DEFAULT_VIDEO_TIMEOUT,

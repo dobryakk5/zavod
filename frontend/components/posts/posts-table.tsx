@@ -3,9 +3,9 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ApiError, apiFetch } from '@/lib/api';
-import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { formatTemplateDisplayName } from '@/lib/utils';
 
 export type Post = {
   id: number;
@@ -13,6 +13,7 @@ export type Post = {
   status: string;
   created_at: string;
   platforms: string[];
+  template_name?: string | null;
 };
 
 const STATUS_OPTIONS = [
@@ -117,29 +118,22 @@ export function PostsTable() {
           <TableHeader>
             <TableRow>
               <TableHead>Заголовок</TableHead>
-              <TableHead>Платформы</TableHead>
-              <TableHead>Статус</TableHead>
-              <TableHead>Создан</TableHead>
+              <TableHead>Тип поста</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {posts.map((post) => (
               <TableRow key={post.id}>
-                <TableCell className="font-medium">{post.title || `Пост #${post.id}`}</TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1">
-                    {post.platforms.map((platform) => (
-                      <Badge key={platform} variant="outline">
-                        {platform}
-                      </Badge>
-                    ))}
-                  </div>
+                <TableCell className="font-medium">
+                  <a
+                    href={`/posts/${post.id}`}
+                    className="text-primary hover:underline"
+                  >
+                    {post.title || `Пост #${post.id}`}
+                  </a>
                 </TableCell>
-                <TableCell>
-                  <Badge>{post.status}</Badge>
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {new Date(post.created_at).toLocaleString('ru-RU')}
+                <TableCell className="text-sm text-muted-foreground">
+                  {formatTemplateDisplayName(post.template_name) || 'Без шаблона'}
                 </TableCell>
               </TableRow>
             ))}

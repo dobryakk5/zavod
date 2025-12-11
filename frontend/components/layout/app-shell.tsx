@@ -8,10 +8,13 @@ import { Button } from '@/components/ui/button';
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 const navItems = [
+  { href: '/welcome', label: 'Приветствие' },
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/posts', label: 'Посты' },
   { href: '/schedule', label: 'Расписание' },
-  { href: '/analytics', label: 'Аналитика' }
+  { href: '/analytics', label: 'Аналитика' },
+  { href: '/seo', label: 'SEO' },
+  { href: '/settings', label: 'Настройки' }
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {

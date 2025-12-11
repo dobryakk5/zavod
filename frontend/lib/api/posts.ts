@@ -1,11 +1,5 @@
 import { apiFetch } from '../api';
-import type {
-  Post,
-  PostDetail,
-  TaskResponse,
-  GenerateImageRequest,
-  QuickPublishRequest,
-} from '../types';
+import type { Post, PostDetail, TaskResponse, GenerateImageRequest, GenerateVideoRequest, QuickPublishRequest } from '../types';
 
 export const postsApi = {
   /**
@@ -69,9 +63,10 @@ export const postsApi = {
   /**
    * Generate video from post image (requires dev mode or zavod client)
    */
-  generateVideo: async (id: number): Promise<TaskResponse> => {
+  generateVideo: async (id: number, options?: GenerateVideoRequest): Promise<TaskResponse> => {
     return apiFetch<TaskResponse>(`/posts/${id}/generate_video/`, {
       method: 'POST',
+      body: options,
     });
   },
 

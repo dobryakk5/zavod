@@ -70,7 +70,11 @@ export function PostForm({ post, onSubmit, loading = false }: PostFormProps) {
             <FormItem>
               <FormLabel>Заголовок</FormLabel>
               <FormControl>
-                <Input placeholder="Введите заголовок поста" {...field} />
+                <Input
+                  placeholder="Введите заголовок поста"
+                  className="bg-white text-black placeholder:text-gray-500 dark:bg-white dark:text-black"
+                  {...field}
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -86,7 +90,7 @@ export function PostForm({ post, onSubmit, loading = false }: PostFormProps) {
               <FormControl>
                 <Textarea
                   placeholder="Введите текст поста"
-                  className="min-h-[200px]"
+                  className="min-h-[200px] bg-white text-black placeholder:text-gray-500 dark:bg-white dark:text-black"
                   {...field}
                 />
               </FormControl>
@@ -104,7 +108,7 @@ export function PostForm({ post, onSubmit, loading = false }: PostFormProps) {
               <FormControl>
                 <Textarea
                   placeholder="Опишите, какое изображение нужно сгенерировать"
-                  className="min-h-[100px]"
+                  className="min-h-[100px] bg-white text-black placeholder:text-gray-500 dark:bg-white dark:text-black"
                   {...field}
                 />
               </FormControl>
