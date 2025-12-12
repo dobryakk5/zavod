@@ -119,3 +119,67 @@ Expose via proxy:
 - Keep `package-lock.json` committed; it defines reproducible installs.
 - Renovate/Dependabot should watch for Next.js canary updates; React 19 RC can change APIs quickly.
 - When rotating backend URLs or Telegram bots, update `.env.local` + redeploy; no code changes required unless routes change.
+
+
+### REDIS ubuntu###
+
+На **Ubuntu** Redis обычно запускают **через systemd**, а не вручную. Это проще, стабильнее и автоматически поднимается при перезагрузке.
+
+## ✅ Как запустить Redis на Ubuntu
+
+### 1. Убедись, что Redis установлен
+
+```bash
+redis-server --version
+```
+
+Если нет — установи:
+
+```bash
+sudo apt update
+sudo apt install redis-server
+```
+
+### 2. Включи systemd-режим (если нужен классический standalone)
+
+На новых Ubuntu Redis ставится в режиме supervised = systemd, обычно менять ничего не нужно.
+
+Проверить конфиг:
+
+```bash
+sudo nano /etc/redis/redis.conf
+```
+
+Проверь строку:
+
+```
+supervised systemd
+```
+
+(если стоит `no`, поменяй на `systemd`)
+
+### 3. Запусти службу Redis
+
+```bash
+sudo systemctl start redis-server
+```
+
+### 4. Включи автозапуск при загрузке
+
+```bash
+sudo systemctl enable redis-server
+```
+
+### 5. Проверить статус
+
+```bash
+systemctl status redis-server
+```
+
+### 6. Проверить, что Redis работает
+
+```bash
+redis-cli ping
+```
+
+
