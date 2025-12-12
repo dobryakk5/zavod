@@ -957,6 +957,7 @@ class SystemSetting(models.Model):
 
     DEFAULT_AI_MODEL = "x-ai/grok-4.1-fast:free"
     DEFAULT_POST_AI_MODEL = DEFAULT_AI_MODEL
+    DEFAULT_IMAGE_AI_MODEL = "google/gemini-2.5-flash-image"
     DEFAULT_IMAGE_TIMEOUT = 120
     DEFAULT_VIDEO_TIMEOUT = 600
     DEFAULT_FALLBACK_AI_MODEL = "tngtech/deepseek-r1t2-chimera:free"
@@ -977,6 +978,11 @@ class SystemSetting(models.Model):
         blank=True,
         default=DEFAULT_FALLBACK_AI_MODEL,
         help_text="Запасная модель OpenRouter, используется если основная недоступна"
+    )
+    image_generation_model = models.CharField(
+        max_length=255,
+        default=DEFAULT_IMAGE_AI_MODEL,
+        help_text="Модель OpenRouter для генерации изображений (например, google/gemini-2.5-flash-image)"
     )
     video_prompt_instructions = models.TextField(
         blank=True,
@@ -1021,6 +1027,7 @@ class SystemSetting(models.Model):
             defaults={
                 "default_ai_model": cls.DEFAULT_AI_MODEL,
                 "post_ai_model": cls.DEFAULT_POST_AI_MODEL,
+                "image_generation_model": cls.DEFAULT_IMAGE_AI_MODEL,
                 "fallback_ai_model": cls.DEFAULT_FALLBACK_AI_MODEL,
                 "image_generation_timeout": cls.DEFAULT_IMAGE_TIMEOUT,
                 "video_generation_timeout": cls.DEFAULT_VIDEO_TIMEOUT,

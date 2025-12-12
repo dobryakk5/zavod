@@ -9,10 +9,11 @@
 import asyncio
 import re
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from urllib.parse import urlparse
 from telethon import TelegramClient, errors
 from telethon.tl.functions.channels import GetFullChannelRequest
+from telethon.tl.functions.messages import GetDiscussionMessageRequest
 from django.conf import settings
 import os
 
@@ -37,6 +38,52 @@ class TelegramContentCollector:
         self.api_hash = api_hash
         self.session_name = session_name
         self.client = None
+
+    async def _fetch_discussion_comment_count(self, channel_entity, message_id: int) -> int:
+        """Запросить количество комментариев через GetDiscussionMessageRequest."""
+        if not self.client:
+            return 0
+        try:
+            discussion = await self.client(
+                GetDiscussionMessageRequest(
+                    peer=channel_entity,
+                    msg_id=message_id,
+                )
+            )
+            discussion_messages = getattr(discussion, 'messages', None) or []
+            if not discussion_messages:
+                return 0
+            replies = getattr(discussion_messages[0], 'replies', None)
+            if not replies:
+                return 0
+            comments = int(getattr(replies, 'comments', None) or 0)
+            if not comments:
+                comments = int(getattr(replies, 'replies', None) or 0)
+            return comments
+        except Exception as exc:
+            logger.debug("Не удалось получить обсуждение для сообщения %s: %s", message_id, exc)
+            return 0
+
+    async def _extract_message_counters(self, msg, channel_entity) -> Tuple[int, int]:
+        """Подсчитать реакции и комментарии для сообщения."""
+        total_reactions = 0
+        reactions = getattr(msg, 'reactions', None)
+        if reactions:
+            results = getattr(reactions, 'results', None) or []
+            for result in results:
+                total_reactions += int(getattr(result, 'count', 0) or 0)
+
+        comments = 0
+        replies = getattr(msg, 'replies', None)
+        if replies:
+            comments = int(getattr(replies, 'comments', None) or 0)
+            if not comments:
+                comments = int(getattr(replies, 'replies', None) or 0)
+
+        if comments == 0:
+            comments = await self._fetch_discussion_comment_count(channel_entity, msg.id)
+
+        return total_reactions, comments
 
     async def connect(self):
         """Подключиться к Telegram."""
@@ -107,8 +154,12 @@ class TelegramContentCollector:
         found_messages = []
 
         try:
+            channel_entity = await self.client.get_entity(channel)
+            channel_ref = str(channel if isinstance(channel, str) else getattr(channel_entity, 'username', '') or getattr(channel_entity, 'id', ''))
+            channel_url_part = channel_ref.lstrip('@')
+
             # Получаем сообщения из канала
-            async for msg in self.client.iter_messages(channel, limit=limit):
+            async for msg in self.client.iter_messages(channel_entity, limit=limit):
                 if not msg:
                     continue
 
@@ -119,16 +170,20 @@ class TelegramContentCollector:
                 # Получаем текст сообщения
                 text = msg.message or ''
 
+                reactions_count, comments = await self._extract_message_counters(msg, channel_entity)
+
                 # Проверяем совпадение с ключевыми словами
                 if pattern.search(text):
                     message_data = {
                         'id': msg.id,
                         'text': text,
                         'date': msg.date,
-                        'channel': channel,
-                        'url': f"https://t.me/{channel.lstrip('@')}/{msg.id}",
+                        'channel': channel_ref,
+                        'url': f"https://t.me/{channel_url_part}/{msg.id}",
                         'views': getattr(msg, 'views', 0) or 0,
                         'forwards': getattr(msg, 'forwards', 0) or 0,
+                        'reactions': reactions_count,
+                        'comments': comments,
                         # Дополнительная информация
                         'has_media': msg.media is not None,
                         'media_type': type(msg.media).__name__ if msg.media else None,
@@ -169,8 +224,12 @@ class TelegramContentCollector:
         messages = []
 
         try:
+            channel_entity = await self.client.get_entity(channel_username)
+            channel_ref = str(channel_username if isinstance(channel_username, str) else getattr(channel_entity, 'username', '') or getattr(channel_entity, 'id', ''))
+            channel_url_part = channel_ref.lstrip('@')
+
             # Получаем последние сообщения из канала
-            async for msg in self.client.iter_messages(channel_username, limit=limit):
+            async for msg in self.client.iter_messages(channel_entity, limit=limit):
                 if not msg:
                     continue
 
@@ -178,14 +237,17 @@ class TelegramContentCollector:
                 text = msg.message or ''
 
                 # Формируем данные сообщения
+                reactions_count, comments = await self._extract_message_counters(msg, channel_entity)
                 message_data = {
                     'id': msg.id,
                     'text': text,
                     'date': msg.date,
-                    'channel': channel_username,
-                    'url': f"https://t.me/{channel_username.lstrip('@')}/{msg.id}",
+                    'channel': channel_ref,
+                    'url': f"https://t.me/{channel_url_part}/{msg.id}",
                     'views': getattr(msg, 'views', 0) or 0,
                     'forwards': getattr(msg, 'forwards', 0) or 0,
+                    'reactions': reactions_count,
+                    'comments': comments,
                     'has_media': msg.media is not None,
                     'media_type': type(msg.media).__name__ if msg.media else None,
                 }

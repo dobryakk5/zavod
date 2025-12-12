@@ -858,7 +858,7 @@ seo_keywords = [ ... ]
             logger.error(f"Error generating video prompt: {e}", exc_info=True)
             return None
 
-    def generate_image(self, prompt: str, output_path: str, model: str = "pollinations") -> Optional[Dict[str, Any]]:
+    def generate_image(self, prompt: str, output_path: str, model: str = "openrouter") -> Optional[Dict[str, Any]]:
         """
         Генерация изображения с использованием вынесенного фото/видео модуля.
         """

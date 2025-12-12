@@ -29,7 +29,7 @@ from .models import (
     PostTone,
     SystemSetting,
 )
-from .system_settings import invalidate_system_settings_cache
+from .system_settings import invalidate_system_settings_cache, get_image_generation_model
 
 logger = logging.getLogger(__name__)
 
@@ -644,33 +644,19 @@ class PostAdmin(admin.ModelAdmin):
         """Кнопки для генерации изображения с помощью AI (две модели)"""
         if obj.pk:  # Только для существующих постов
             generate_url = reverse('core:generate_post_image', args=[obj.pk])
+            openrouter_display = f"OpenRouter ({get_image_generation_model()})"
             return format_html(
                 '''
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <button type="button" class="generate-image-btn" data-default-text="🎨 Pollinations (быстро)" onclick="generateImage('{url}', 'pollinations', this)"
+                    <button type="button" class="generate-image-btn" data-default-text="🖼️ Изображение" onclick="generateImage('{url}', 'openrouter', this)"
                     style="padding: 10px 15px; background-color: #417690; color: white;
                     border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                    🎨 Pollinations (быстро)</button>
+                    🖼️ Изображение</button>
 
-                    <button type="button" class="generate-image-btn" data-default-text="🍌 NanoBanana (Gemini)" onclick="generateImage('{url}', 'nanobanana', this)"
-                    style="padding: 10px 15px; background-color: #ff9800; color: white;
-                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                    🍌 NanoBanana (Gemini)</button>
-
-                    <button type="button" class="generate-image-btn" data-default-text="🤗 HuggingFace (FLUX)" onclick="generateImage('{url}', 'huggingface', this)"
-                    style="padding: 10px 15px; background-color: #9c27b0; color: white;
-                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                    🤗 HuggingFace (FLUX)</button>
-
-                    <button type="button" class="generate-image-btn" data-default-text="🌀 FLUX.2 (HF Space)" onclick="generateImage('{url}', 'flux2', this)"
+                    <button type="button" class="generate-image-btn" data-default-text="📸 VEO фото" onclick="generateImage('{url}', 'veo_photo', this)"
                     style="padding: 10px 15px; background-color: #5e35b1; color: white;
                     border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                    🌀 FLUX.2 (HF Space)</button>
-
-                    <button type="button" class="generate-image-btn" data-default-text="🌙 SORA Images" onclick="generateImage('{url}', 'sora_images', this)"
-                    style="padding: 10px 15px; background-color: #007bff; color: white;
-                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                    🌙 SORA Images</button>
+                    📸 VEO фото</button>
                 </div>
                 <div id="generate-status" style="margin-top: 10px; font-size: 13px;"></div>
                 <script>
@@ -693,8 +679,6 @@ class PostAdmin(admin.ModelAdmin):
                     const buttons = document.querySelectorAll('.generate-image-btn');
                     const statusDiv = document.getElementById('generate-status');
 
-                    console.log('Генерация изображения для URL:', baseUrl, 'модель:', model);
-
                     // Отключить все кнопки
                     buttons.forEach(btn => {{
                         btn.disabled = true;
@@ -704,11 +688,8 @@ class PostAdmin(admin.ModelAdmin):
                     clickedButton.textContent = 'Генерируется...';
 
                     const modelNames = {{
-                        'pollinations': 'Pollinations',
-                        'nanobanana': 'NanoBanana (Gemini)',
-                        'huggingface': 'HuggingFace (FLUX)',
-                        'flux2': 'FLUX.2 (HF Space)',
-                        'sora_images': 'SORA Images (TG Bot)'
+                        'openrouter': '{openrouter_display}',
+                        'veo_photo': 'VEO (Telegram бот)'
                     }};
                     const modelName = modelNames[model] || model;
                     statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Генерация изображения началась (' + modelName + ')...</span>';
@@ -725,7 +706,6 @@ class PostAdmin(admin.ModelAdmin):
                         credentials: 'same-origin'
                     }})
                     .then(response => {{
-                        console.log('Response status:', response.status);
                         if (!response.ok) {{
                             return response.json().then(data => {{
                                 throw new Error(data.error || 'Ошибка генерации');
@@ -734,7 +714,6 @@ class PostAdmin(admin.ModelAdmin):
                         return response.json();
                     }})
                     .then(data => {{
-                        console.log('Success:', data);
                         if (data.success) {{
                             statusDiv.innerHTML = '<span style="color: #28a745;">✓ ' + data.message + '</span>';
                             setTimeout(function() {{
@@ -745,7 +724,6 @@ class PostAdmin(admin.ModelAdmin):
                         }}
                     }})
                     .catch(error => {{
-                        console.error('Error:', error);
                         statusDiv.innerHTML = '<span style="color: #dc3545;">✗ Ошибка: ' + error.message + '</span>';
 
                         // Включить кнопки обратно
@@ -760,7 +738,8 @@ class PostAdmin(admin.ModelAdmin):
                 }}
                 </script>
                 ''',
-                url=generate_url
+                url=generate_url,
+                openrouter_display=openrouter_display
             )
         return "Сохраните пост, чтобы сгенерировать изображение"
     image_generate_button.short_description = "AI генерация"

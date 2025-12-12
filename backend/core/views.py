@@ -5,6 +5,7 @@ from django.views.decorators.http import require_POST
 from django.utils import timezone
 from .models import Post, Schedule, SocialAccount, Client
 from .tasks import generate_image_for_post, generate_video_from_image, publish_schedule, regenerate_post_text, analyze_telegram_channel_task
+from .system_settings import get_image_generation_model
 import json
 
 
@@ -19,7 +20,7 @@ def generate_post_image(request, post_id):
         post_id: ID поста
 
     Query parameters:
-        model: Модель для генерации ('pollinations', 'nanobanana', 'huggingface', 'flux2' или 'sora_images')
+        model: Режим генерации ('openrouter' или 'veo_photo')
 
     Returns:
         JsonResponse с результатом генерации
@@ -33,15 +34,17 @@ def generate_post_image(request, post_id):
             'error': 'Пост должен иметь текст для генерации изображения'
         }, status=400)
 
-    # Получить модель из параметров запроса (по умолчанию pollinations)
-    model_param = request.GET.get('model', 'pollinations')
+    # Получить модель из параметров запроса (по умолчанию OpenRouter)
+    model_param = (request.GET.get('model') or 'openrouter').lower()
     alias_map = {
-        'telegram_bot': 'sora_images',
+        'telegram_bot': 'veo_photo',
+        'sora_images': 'veo_photo',
+        'veo': 'veo_photo',
     }
     model = alias_map.get(model_param, model_param)
 
     # Валидация модели
-    allowed_models = ['pollinations', 'nanobanana', 'huggingface', 'flux2', 'sora_images']
+    allowed_models = {'openrouter', 'veo_photo'}
     if model not in allowed_models:
         return JsonResponse({
             'success': False,
@@ -52,11 +55,8 @@ def generate_post_image(request, post_id):
     generate_image_for_post.delay(post_id, model=model)
 
     model_name_map = {
-        'pollinations': 'Pollinations AI',
-        'nanobanana': 'NanoBanana (Gemini 2.5 Flash)',
-        'huggingface': 'HuggingFace (FLUX.1-dev)',
-        'flux2': 'FLUX.2 (HuggingFace Space)',
-        'sora_images': 'SORA Images (Telegram Bot)',
+        'openrouter': f"OpenRouter ({get_image_generation_model()})",
+        'veo_photo': 'VEO (Telegram)',
     }
     model_name = model_name_map.get(model, model)
 

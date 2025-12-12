@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    ChannelAnalysisViewSet,
     ClientInfoView,
     ClientSettingsView,
     ClientSummaryView,
@@ -38,6 +39,7 @@ router.register(r'social-accounts', SocialAccountViewSet, basename='social-accou
 router.register(r'post-types', PostTypeViewSet, basename='post-type')
 router.register(r'post-tones', PostToneViewSet, basename='post-tone')
 router.register(r'seo-keywords', SEOKeywordSetViewSet, basename='seo-keyword')
+router.register(r'channel-analyses', ChannelAnalysisViewSet, basename='channel-analysis')
 
 urlpatterns = [
     # Analytics endpoint (must be before router to avoid conflicts)

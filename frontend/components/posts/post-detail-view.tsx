@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import { postsApi } from '@/lib/api/posts';
 import { useCanGenerateVideo, useRole } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import type { GenerateVideoRequest, PostDetail } from '@/lib/types';
 import { toast } from 'sonner';
@@ -63,7 +62,7 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     loadPost();
   }, [postId]);
 
-  const handleGenerateImage = async (model: 'pollinations' | 'nanobanana' | 'huggingface' | 'flux2' | 'sora_images') => {
+  const handleGenerateImage = async (model: 'openrouter' | 'veo_photo') => {
     setLoading(true);
     try {
       await postsApi.generateImage(postId, model);
@@ -157,31 +156,15 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
 
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-3">
-          {/* Image generation dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button disabled={!canEdit || loading} variant="default">
-                Сгенерировать изображение
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem onClick={() => handleGenerateImage('pollinations')}>
-                Pollinations AI
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleGenerateImage('nanobanana')}>
-                Google Gemini (NanoBanana)
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleGenerateImage('huggingface')}>
-                HuggingFace FLUX.1
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleGenerateImage('flux2')}>
-                FLUX.2
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleGenerateImage('sora_images')}>
-                SORA Images
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* Image generation */}
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={!canEdit || loading} variant="default" onClick={() => handleGenerateImage('openrouter')}>
+              Изображение
+            </Button>
+            <Button disabled={!canEdit || loading} variant="outline" onClick={() => handleGenerateImage('veo_photo')}>
+              VEO фото
+            </Button>
+          </div>
 
           {/* Video generation button */}
           <div className="flex flex-wrap gap-2">

@@ -14,10 +14,9 @@ const buildApiUrl = (path: string) => {
 
 const navItems = [
   { href: '/welcome', label: 'Приветствие' },
-  { href: '/dashboard', label: 'Dashboard' },
+  { href: '/analytics', label: 'Аналитика' },
   { href: '/posts', label: 'Посты' },
   { href: '/schedule', label: 'Расписание' },
-  { href: '/analytics', label: 'Аналитика' },
   { href: '/seo', label: 'SEO' },
   { href: '/settings', label: 'Настройки' }
 ];

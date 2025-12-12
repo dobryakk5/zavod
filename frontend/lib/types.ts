@@ -253,7 +253,7 @@ export interface SEOKeywordSet {
 }
 
 export interface GenerateImageRequest {
-  model: 'pollinations' | 'nanobanana' | 'huggingface' | 'flux2' | 'sora_images';
+  model: 'openrouter' | 'veo_photo';
 }
 
 export interface GenerateVideoRequest {

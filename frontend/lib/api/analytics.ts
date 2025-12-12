@@ -1,10 +1,40 @@
 import { apiFetch } from '../api';
-import type { TaskResponse } from '../types';
 
 export interface ChannelAnalysisRequest {
   channel_url: string;
   channel_type: 'telegram' | 'instagram' | 'youtube' | 'vkontakte';
 }
+
+export type ChannelAnalysisResult = {
+  channel_name: string;
+  subscribers: number;
+  avg_views: number;
+  avg_engagement: number;
+  avg_reactions: number;
+  avg_comments: number;
+  top_posts: Array<{
+    title: string;
+    views: number;
+    engagement: number;
+    reactions: number;
+    comments: number;
+    url: string;
+  }>;
+  keywords: string[];
+  topics: string[];
+  content_types: string[];
+  posting_schedule: Array<{
+    day: string;
+    hour: number;
+    posts_count: number;
+  }>;
+  audience_profile?: {
+    avatar: string;
+    pains: string;
+    desires: string;
+    objections: string;
+  };
+};
 
 export interface ChannelAnalysisResponse {
   success: boolean;
@@ -17,27 +47,24 @@ export interface AnalysisStatusResponse {
   task_id: string;
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   progress?: number;
-  result?: {
-    channel_name: string;
-    subscribers: number;
-    avg_views: number;
-    avg_reach: number;
-    avg_engagement: number;
-    top_posts: Array<{
-      title: string;
-      views: number;
-      engagement: number;
-      url: string;
-    }>;
-    keywords: string[];
-    topics: string[];
-    content_types: string[];
-    posting_schedule: Array<{
-      day: string;
-      hour: number;
-      posts_count: number;
-    }>;
-  };
+  result?: ChannelAnalysisResult;
+  error?: string;
+}
+
+export interface ChannelAnalysisRecord {
+  id: number;
+  channel_url: string;
+  channel_type: 'telegram' | 'instagram' | 'youtube' | 'vkontakte';
+  task_id?: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  progress: number;
+  channel_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelAnalysisDetail extends ChannelAnalysisRecord {
+  result: ChannelAnalysisResult | null;
   error?: string;
 }
 
@@ -70,5 +97,19 @@ export const analyticsApi = {
       method: 'POST',
       body: { ...data, action: 'validate' },
     });
+  },
+
+  /**
+   * List previously analyzed channels
+   */
+  listAnalyses: async (): Promise<ChannelAnalysisRecord[]> => {
+    return apiFetch<ChannelAnalysisRecord[]>('/channel-analyses/');
+  },
+
+  /**
+   * Get stored analysis details
+   */
+  getAnalysisDetail: async (id: string | number): Promise<ChannelAnalysisDetail> => {
+    return apiFetch<ChannelAnalysisDetail>(`/channel-analyses/${id}/`);
   },
 };

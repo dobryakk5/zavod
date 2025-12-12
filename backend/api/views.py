@@ -32,6 +32,7 @@ from core.models import (
 )
 from core import tasks
 from core.telegram_client import normalize_telegram_channel_identifier
+from core.system_settings import get_image_generation_model
 
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
@@ -435,17 +436,41 @@ class PostViewSet(viewsets.ModelViewSet):
     def generate_image(self, request, pk=None):
         """
         Generate image for post using AI.
-        Model choices: pollinations, nanobanana, huggingface, flux2, sora_images
+        Model choices: openrouter, veo_photo
         """
         post = self.get_object()
-        model = request.data.get('model', 'pollinations')
+        model_param = (request.data.get('model') or 'openrouter').lower()
+        alias_map = {
+            'nanobanana': 'openrouter',
+            'pollinations': 'openrouter',
+            'huggingface': 'openrouter',
+            'flux2': 'openrouter',
+            'sora_images': 'veo_photo',
+            'telegram_bot': 'veo_photo',
+            'veo': 'veo_photo',
+        }
+        model = alias_map.get(model_param, model_param)
+        allowed_models = {'openrouter', 'veo_photo'}
+        if model not in allowed_models:
+            return Response(
+                {
+                    'success': False,
+                    'error': f'Unknown image model "{model_param}"'
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Call existing Celery task
         task = tasks.generate_image_for_post.delay(post.id, model)
 
+        model_names = {
+            'openrouter': f"OpenRouter ({get_image_generation_model()})",
+            'veo_photo': 'VEO (Telegram)',
+        }
+
         return Response({
             'success': True,
-            'message': f'Image generation started with model: {model}',
+            'message': f'Image generation started: {model_names.get(model, model)}',
             'task_id': task.id
         })
 

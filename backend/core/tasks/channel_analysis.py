@@ -7,7 +7,9 @@ import logging
 import re
 from collections import defaultdict
 from statistics import mean
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+import requests
 
 from celery import shared_task
 from django.conf import settings
@@ -25,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_TYPES = {"telegram"}
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+DEFAULT_ALERT_CHAT_ID = "7852511755"
 
 
 def _update_analysis(analysis: ChannelAnalysis, **fields) -> None:
@@ -59,11 +62,97 @@ def _prepare_posts_text(messages: List[Dict], limit: int = 12) -> str:
     return sample[:12000]
 
 
-def _extract_ai_topics(messages: List[Dict]) -> Dict[str, List[str]]:
+def _parse_ai_json_payload(raw_response: Optional[str]) -> Tuple[Optional[Dict], Optional[str]]:
+    if not raw_response:
+        return None, "empty response"
+
+    text = raw_response.strip()
+    if not text:
+        return None, "empty response"
+
+    json_match = re.search(r"\{.*\}", text, re.DOTALL)
+    payload = json_match.group(0) if json_match else text
+    try:
+        return json.loads(payload), None
+    except json.JSONDecodeError as exc:
+        preview = payload[:400].replace("\n", " ")
+        return None, f"{exc}: {preview}"
+
+
+def _send_telegram_alert(message: str) -> None:
+    token = getattr(settings, "TELEGRAM_BOT_TOKEN", "") or ""
+    chat_id = getattr(settings, "TELEGRAM_ALERT_USER_ID", "") or DEFAULT_ALERT_CHAT_ID
+    if not token or not chat_id:
+        logger.warning("Telegram alert is skipped (token or chat id missing)")
+        return
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message[:4000]},
+            timeout=10,
+        )
+        if response.status_code != 200:
+            logger.error("Failed to send Telegram alert: %s %s", response.status_code, response.text)
+    except Exception as exc:
+        logger.error("Error while sending Telegram alert: %s", exc, exc_info=True)
+
+
+def _notify_ai_failure(context: str, errors: List[str], analysis: Optional[ChannelAnalysis] = None) -> None:
+    if not errors:
+        return
+    analysis_info = ""
+    if analysis:
+        analysis_info = f" (analysis_id={analysis.id}, channel={analysis.channel_url})"
+    message = f"⚠️ AI ошибка {context}{analysis_info}:\n" + "\n".join(errors[:3])
+    logger.warning(message)
+    _send_telegram_alert(message)
+
+
+def _request_ai_json(
+    prompt: str,
+    *,
+    max_tokens: int,
+    temperature: float,
+    generator: AIContentGenerator,
+    context: str,
+    analysis: Optional[ChannelAnalysis] = None,
+) -> Optional[Dict]:
+    errors: List[str] = []
+
+    response = generator.get_ai_response(prompt, max_tokens=max_tokens, temperature=temperature)
+    data, error = _parse_ai_json_payload(response)
+    if data is not None:
+        return data
+    if error:
+        current_model = (generator.model or "primary").strip() or "primary"
+        errors.append(f"{current_model}: {error}")
+
+    fallback_model = (generator.fallback_model or "").strip()
+    if fallback_model:
+        fallback_response = generator.get_ai_response(
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            model=fallback_model,
+            allow_fallback=False,
+        )
+        fallback_data, fallback_error = _parse_ai_json_payload(fallback_response)
+        if fallback_data is not None:
+            return fallback_data
+        if fallback_error:
+            errors.append(f"{fallback_model}: {fallback_error}")
+
+    if errors:
+        _notify_ai_failure(context, errors, analysis)
+    return None
+
+
+def _extract_ai_topics(messages: List[Dict], analysis: Optional[ChannelAnalysis] = None) -> Dict[str, List[str]]:
     """Получить ключевые слова и темы при помощи AI."""
+    empty_response = {"keywords": [], "topics": [], "content_types": []}
     posts_text = _prepare_posts_text(messages)
     if not posts_text:
-        return {"keywords": [], "topics": [], "content_types": []}
+        return empty_response
 
     prompt = f"""Ты контент-аналитик. Проанализируй подборку постов из канала и выдели:
 1) keywords — до 10 ключевых слов или коротких фраз
@@ -81,29 +170,81 @@ def _extract_ai_topics(messages: List[Dict]) -> Dict[str, List[str]]:
 }}
 """
     generator = AIContentGenerator()
-    try:
-        response = generator.get_ai_response(prompt, max_tokens=800, temperature=0.3)
-        if not response:
-            return {"keywords": [], "topics": [], "content_types": []}
+    data = _request_ai_json(
+        prompt,
+        max_tokens=800,
+        temperature=0.3,
+        generator=generator,
+        context="при получении ключевых слов",
+        analysis=analysis,
+    )
 
-        json_match = re.search(r"\{.*\}", response, re.DOTALL)
-        payload = json_match.group(0) if json_match else response
-        data = json.loads(payload)
+    if not isinstance(data, dict):
+        return empty_response
 
-        def ensure_list(key: str) -> List[str]:
-            value = data.get(key, [])
-            if isinstance(value, list):
-                return [str(item)[:80] for item in value]
-            return []
+    def ensure_list(key: str) -> List[str]:
+        value = data.get(key, [])
+        if isinstance(value, list):
+            return [str(item)[:80] for item in value]
+        return []
 
-        return {
-            "keywords": ensure_list("keywords"),
-            "topics": ensure_list("topics"),
-            "content_types": ensure_list("content_types"),
-        }
-    except Exception as exc:
-        logger.warning("Не удалось получить AI инсайты для канала: %s", exc)
-        return {"keywords": [], "topics": [], "content_types": []}
+    return {
+        "keywords": ensure_list("keywords"),
+        "topics": ensure_list("topics"),
+        "content_types": ensure_list("content_types"),
+    }
+
+
+def _extract_audience_profile(messages: List[Dict], analysis: Optional[ChannelAnalysis] = None) -> Dict[str, str]:
+    """Получить описание целевой аудитории канала."""
+    posts_text = _prepare_posts_text(messages, limit=20)
+    if not posts_text:
+        return {}
+
+    prompt = f"""Проанализируй последние 20 постов из Telegram канала и определи профиль целевой аудитории.
+
+Эти посты обращены к аудитории. Определи:
+1) avatar — собирательный образ целевой аудитории
+2) pains — основные боли и проблемы
+3) desires — желания и цели
+4) objections — страхи и возражения, мешающие купить или попробовать
+
+Посты:
+{posts_text}
+
+Ответ верни в JSON:
+{{
+  "avatar": "кто они",
+  "pains": "их проблемы",
+  "desires": "их цели",
+  "objections": "их страхи"
+}}
+"""
+    generator = AIContentGenerator()
+    data = _request_ai_json(
+        prompt,
+        max_tokens=1200,
+        temperature=0.4,
+        generator=generator,
+        context="при определении профиля аудитории",
+        analysis=analysis,
+    )
+
+    if not isinstance(data, dict):
+        return {}
+
+    def clean(key: str) -> str:
+        value = data.get(key)
+        if isinstance(value, str):
+            return value.strip()
+        return ""
+
+    return {
+        "avatar": clean("avatar"),
+        "pains": clean("pains"),
+        "desires": clean("desires"),
+        "objections": clean("objections"),
+    }
 
 
 def _build_schedule(messages: List[Dict]) -> List[Dict]:
@@ -133,7 +274,11 @@ def _summarize_posts(messages: List[Dict]) -> Dict[str, float]:
     """Рассчитать метрики просмотров и вовлеченности."""
     views = [int(msg.get("views") or 0) for msg in messages if msg.get("views") is not None]
     avg_views = int(mean(views)) if views else 0
-    avg_reach = avg_views
+
+    reactions_values = [int(msg.get("reactions") or 0) for msg in messages]
+    comments_values = [int(msg.get("comments") or 0) for msg in messages]
+    avg_reactions = int(mean(reactions_values)) if reactions_values else 0
+    avg_comments = int(mean(comments_values)) if comments_values else 0
 
     engagement_rates = []
     for msg in messages:
@@ -150,18 +295,23 @@ def _summarize_posts(messages: List[Dict]) -> Dict[str, float]:
         title = text.split("\n")[0][:140] if text else f"Пост #{msg.get('id')}"
         views_count = int(msg.get("views") or 0)
         forwards = int(msg.get("forwards") or 0)
+        reactions_count = int(msg.get("reactions") or 0)
+        comments = int(msg.get("comments") or 0)
         engagement = round((forwards / views_count) * 100, 2) if views_count else 0.0
         top_posts.append({
             "title": title if title else f"Пост #{msg.get('id')}",
             "views": views_count,
             "engagement": engagement,
+            "reactions": reactions_count,
+            "comments": comments,
             "url": msg.get("url"),
         })
 
     return {
         "avg_views": avg_views,
-        "avg_reach": avg_reach,
         "avg_engagement": avg_engagement,
+        "avg_reactions": avg_reactions,
+        "avg_comments": avg_comments,
         "top_posts": top_posts,
     }
 
@@ -197,7 +347,8 @@ def _analyze_telegram_channel(analysis: ChannelAnalysis) -> Dict:
     stats = _summarize_posts(messages)
     _update_analysis(analysis, progress=70)
     schedule = _build_schedule(messages)
-    insights = _extract_ai_topics(messages)
+    insights = _extract_ai_topics(messages, analysis)
+    audience_profile = _extract_audience_profile(messages, analysis)
     _update_analysis(analysis, progress=90)
 
     channel_title = (channel_info or {}).get("title") or channel_identifier
@@ -207,13 +358,15 @@ def _analyze_telegram_channel(analysis: ChannelAnalysis) -> Dict:
         "channel_name": channel_title,
         "subscribers": subscribers,
         "avg_views": stats["avg_views"],
-        "avg_reach": stats["avg_reach"],
         "avg_engagement": stats["avg_engagement"],
+        "avg_reactions": stats["avg_reactions"],
+        "avg_comments": stats["avg_comments"],
         "top_posts": stats["top_posts"],
         "keywords": insights["keywords"],
         "topics": insights["topics"],
         "content_types": insights["content_types"],
         "posting_schedule": schedule,
+        "audience_profile": audience_profile,
     }
 
 

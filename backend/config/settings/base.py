@@ -185,6 +185,8 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
 # Telegram API Settings (системные credentials для всех клиентов)
 TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID", "")
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_ALERT_USER_ID = os.getenv("TELEGRAM_ALERT_USER_ID", "")
 
 LOGGING = {
     "version": 1,

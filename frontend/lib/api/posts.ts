@@ -51,7 +51,7 @@ export const postsApi = {
 
   /**
    * Generate image for post using AI
-   * @param model - One of: pollinations, nanobanana, huggingface, flux2, sora_images
+   * @param model - One of: openrouter, veo_photo
    */
   generateImage: async (id: number, model: GenerateImageRequest['model']): Promise<TaskResponse> => {
     return apiFetch<TaskResponse>(`/posts/${id}/generate_image/`, {

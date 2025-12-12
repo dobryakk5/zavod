@@ -3,6 +3,7 @@ from __future__ import annotations
 from rest_framework import serializers
 
 from core.models import (
+    ChannelAnalysis,
     Client,
     ContentTemplate,
     Post,
@@ -405,3 +406,103 @@ class PostToneSerializer(serializers.ModelSerializer):
         model = PostTone
         fields = ["id", "value", "label", "is_default", "created_at"]
         read_only_fields = ["id", "is_default", "created_at"]
+
+
+class ChannelAnalysisListSerializer(serializers.ModelSerializer):
+    """Short serializer for displaying channel analyses."""
+
+    channel_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChannelAnalysis
+        fields = [
+            "id",
+            "channel_url",
+            "channel_type",
+            "task_id",
+            "status",
+            "progress",
+            "channel_name",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_channel_name(self, obj: ChannelAnalysis) -> str | None:
+        result = obj.result or {}
+        if isinstance(result, dict):
+            return result.get("channel_name") or None
+        return None
+
+
+class ChannelAnalysisDetailSerializer(ChannelAnalysisListSerializer):
+    """Detailed serializer with AI result payload."""
+
+    result = serializers.SerializerMethodField()
+    error = serializers.CharField(allow_blank=True)
+
+    class Meta(ChannelAnalysisListSerializer.Meta):
+        fields = ChannelAnalysisListSerializer.Meta.fields + ["result", "error"]
+        read_only_fields = fields
+
+    def get_result(self, obj: ChannelAnalysis):
+        if obj.status != ChannelAnalysis.STATUS_COMPLETED:
+            return None
+
+        result = obj.result or {}
+        if not isinstance(result, dict):
+            return result
+
+        normalized = dict(result)
+        normalized["avg_reactions"] = normalized.get("avg_reactions", normalized.get("avg_likes", 0) or 0)
+        normalized["avg_comments"] = normalized.get("avg_comments", 0)
+        if "avg_likes" in normalized:
+            normalized.pop("avg_likes")
+        if "avg_reach" in normalized:
+            normalized.pop("avg_reach")
+
+        top_posts = normalized.get("top_posts") or []
+        normalized_posts = []
+        for post in top_posts:
+            if not isinstance(post, dict):
+                continue
+            entry = dict(post)
+            entry["reactions"] = entry.get("reactions", entry.get("likes", 0) or 0)
+            if "likes" in entry:
+                entry.pop("likes")
+            normalized_posts.append(entry)
+        normalized["top_posts"] = normalized_posts
+
+        profile = normalized.get("audience_profile") or {}
+
+        def clean_text(value):
+            if isinstance(value, str):
+                return value.strip()
+            if isinstance(value, list):
+                parts = [clean_text(item) for item in value]
+                return "\n".join(part for part in parts if part)
+            if isinstance(value, dict):
+                parts = [clean_text(item) for item in value.values()]
+                return "\n".join(part for part in parts if part)
+            if value is None:
+                return ""
+            return str(value).strip()
+
+        client = getattr(obj, "client", None)
+        client_profile = {
+            "avatar": clean_text(getattr(client, "avatar", "")) if client else "",
+            "pains": clean_text(getattr(client, "pains", "")) if client else "",
+            "desires": clean_text(getattr(client, "desires", "")) if client else "",
+            "objections": clean_text(getattr(client, "objections", "")) if client else "",
+        }
+
+        normalized_profile = {}
+        if isinstance(profile, dict):
+            for key in ("avatar", "pains", "desires", "objections"):
+                normalized_profile[key] = clean_text(profile.get(key)) or client_profile[key]
+        else:
+            normalized_profile = client_profile
+
+        normalized["audience_profile"] = normalized_profile
+
+        return normalized

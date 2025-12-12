@@ -12,6 +12,7 @@ FALLBACK_AI_MODEL_CACHE_KEY = "core:fallback_ai_model"
 VIDEO_PROMPT_INSTRUCTIONS_CACHE_KEY = "core:video_prompt_instructions"
 IMAGE_TIMEOUT_CACHE_KEY = "core:image_generation_timeout"
 VIDEO_TIMEOUT_CACHE_KEY = "core:video_generation_timeout"
+IMAGE_MODEL_CACHE_KEY = "core:image_generation_model"
 DEFAULT_AI_MODEL_CACHE_TIMEOUT = 60  # seconds
 
 
@@ -53,6 +54,15 @@ def _fetch_video_prompt_instructions_from_db() -> str:
     except Exception as exc:
         logger.warning("Failed to load SystemSetting: %s", exc)
         return ""
+
+
+def _fetch_image_generation_model_from_db() -> str:
+    try:
+        setting = SystemSetting.get_solo()
+        return setting.image_generation_model or SystemSetting.DEFAULT_IMAGE_AI_MODEL
+    except Exception as exc:
+        logger.warning("Failed to load SystemSetting image model: %s", exc)
+        return SystemSetting.DEFAULT_IMAGE_AI_MODEL
 
 
 def _fetch_image_generation_timeout_from_db() -> int:
@@ -133,6 +143,18 @@ def get_video_prompt_instructions(use_cache: bool = True) -> str:
     return instructions
 
 
+def get_image_generation_model(use_cache: bool = True) -> str:
+    """Return model name for image generation requests."""
+    if use_cache:
+        cached = cache.get(IMAGE_MODEL_CACHE_KEY)
+        if cached:
+            return cached
+    model_name = _fetch_image_generation_model_from_db()
+    if use_cache:
+        cache.set(IMAGE_MODEL_CACHE_KEY, model_name, DEFAULT_AI_MODEL_CACHE_TIMEOUT)
+    return model_name
+
+
 def get_image_generation_timeout(use_cache: bool = True) -> int:
     """Return timeout (seconds) for image generation workflows."""
     if use_cache:
@@ -162,5 +184,6 @@ def invalidate_system_settings_cache():
     cache.delete(POST_AI_MODEL_CACHE_KEY)
     cache.delete(FALLBACK_AI_MODEL_CACHE_KEY)
     cache.delete(VIDEO_PROMPT_INSTRUCTIONS_CACHE_KEY)
+    cache.delete(IMAGE_MODEL_CACHE_KEY)
     cache.delete(IMAGE_TIMEOUT_CACHE_KEY)
     cache.delete(VIDEO_TIMEOUT_CACHE_KEY)

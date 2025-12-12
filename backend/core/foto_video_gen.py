@@ -194,14 +194,22 @@ def generate_image(
     """
     Сгенерировать изображение выбранной моделью.
     """
-    logger.info("Генерация изображения (%s)", model)
+    normalized_model = (model or "openrouter").lower()
+    logger.info("Генерация изображения (%s)", normalized_model)
 
-    if model == "nanobanana":
+    if normalized_model in {"nanobanana", "openrouter"}:
         return _generate_image_openrouter(prompt, output_path, api_key, api_url)
-    if model == "huggingface":
+    if normalized_model == "huggingface":
         return _generate_image_huggingface(prompt, output_path, hf_client)
-    if model == "flux2":
+    if normalized_model == "flux2":
         return _generate_image_flux2(prompt, output_path)
+    if normalized_model == "veo_photo":
+        return {
+            "success": False,
+            "error": "veo_photo доступна только через Telegram бот, используйте generate_image_from_telegram_bot"
+        }
+    if normalized_model == "pollinations":
+        return _generate_image_pollinations(prompt, output_path)
     return _generate_image_pollinations(prompt, output_path)
 
 
@@ -501,7 +509,7 @@ def generate_image_from_telegram_bot(
                         return {
                             "success": True,
                             "image_path": downloaded,
-                            "model": "sora_images",
+                            "model": "veo_photo",
                             "cleanup_paths": [downloaded],
                             "response_text": image_response.raw_text or "",
                         }
@@ -567,7 +575,7 @@ def generate_image_from_telegram_bot(
     return {
         "success": True,
         "image_path": image_path,
-        "model": "sora_images",
+        "model": "veo_photo",
         "cleanup_paths": image_payload.get("cleanup_paths") or [image_path],
         "response_text": image_payload.get("response_text", ""),
     }
