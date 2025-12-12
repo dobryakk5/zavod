@@ -243,6 +243,7 @@ class SystemSettingAdmin(admin.ModelAdmin):
         "default_ai_model",
         "post_ai_model",
         "fallback_ai_model",
+        "image_generation_model",
         "image_generation_timeout",
         "video_generation_timeout",
         "updated_at",
@@ -250,7 +251,15 @@ class SystemSettingAdmin(admin.ModelAdmin):
     fieldsets = (
         (
             "AI настройки",
-            {"fields": ("default_ai_model", "post_ai_model", "fallback_ai_model", "video_prompt_instructions")},
+            {
+                "fields": (
+                    "default_ai_model",
+                    "post_ai_model",
+                    "fallback_ai_model",
+                    "image_generation_model",
+                    "video_prompt_instructions",
+                )
+            },
         ),
         ("Таймауты генерации", {"fields": ("image_generation_timeout", "video_generation_timeout")}),
         ("Служебное", {"fields": ("created_at", "updated_at")}),

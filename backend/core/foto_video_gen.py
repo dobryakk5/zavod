@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from .system_settings import (
+    get_image_generation_model,
     get_image_generation_timeout,
     get_video_generation_timeout,
 )
@@ -613,7 +614,8 @@ def _generate_image_openrouter(
 
     try:
         image_timeout = get_image_generation_timeout()
-        logger.info("Генерация через OpenRouter (google/gemini-2.5-flash-image)")
+        model = get_image_generation_model()
+        logger.info("Генерация через OpenRouter (%s)", model)
         response = requests.post(
             api_url,
             headers={
@@ -623,7 +625,7 @@ def _generate_image_openrouter(
                 "X-Title": "Content Factory Image Generator"
             },
             json={
-                "model": "google/gemini-2.5-flash-image",
+                "model": model,
                 "messages": [{"role": "user", "content": f"Generate an image: {prompt}"}]
             },
             timeout=image_timeout

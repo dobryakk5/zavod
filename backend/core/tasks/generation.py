@@ -1368,17 +1368,15 @@ def generate_videos_for_posts(post_ids: List[int], videos_per_post: int = 1):
 
 
 @shared_task
-def generate_image_for_post(post_id: int, model: str = "pollinations"):
+def generate_image_for_post(post_id: int, model: str = "openrouter"):
     """
     Сгенерировать изображение для поста используя AI.
 
     Args:
         post_id: ID поста (Post)
-        model: Модель для генерации изображения:
-            - "pollinations": Pollinations AI (бесплатный, по умолчанию)
-            - "nanobanana": OpenRouter google/gemini-2.5-flash-image
-            - "huggingface": HuggingFace with Nebius GPU (FLUX.1-dev)
-            - "sora_images": Генерация через Telegram бота SORA Images
+        model: Режим генерации изображения:
+            - "openrouter": модель OpenRouter из настроек SystemSetting
+            - "veo_photo": генерация через Telegram бота (например, VEO)
 
     Returns:
         True при успехе, False при ошибке
@@ -1387,10 +1385,23 @@ def generate_image_for_post(post_id: int, model: str = "pollinations"):
         # Получить Post
         post = Post.objects.select_related('client').get(id=post_id)
 
-        model_aliases = {"telegram_bot": "sora_images"}
-        if model in model_aliases:
-            logger.info("Модель %s преобразована в %s", model, model_aliases[model])
-            model = model_aliases[model]
+        normalized_model = (model or "openrouter").lower()
+        model_aliases = {
+            "nanobanana": "openrouter",
+            "pollinations": "openrouter",
+            "huggingface": "openrouter",
+            "flux2": "openrouter",
+            "sora_images": "veo_photo",
+            "telegram_bot": "veo_photo",
+            "veo": "veo_photo",
+        }
+        resolved_model = model_aliases.get(normalized_model, normalized_model)
+        if resolved_model not in {"openrouter", "veo_photo"}:
+            logger.error("Неизвестная модель генерации изображения: %s", model)
+            return False
+        if resolved_model != model:
+            logger.info("Модель %s преобразована в %s", model, resolved_model)
+        model = resolved_model
 
         logger.info(f"Генерация изображения для поста: {post.title} (ID={post.id}) с моделью '{model}'")
 
@@ -1438,16 +1449,25 @@ def generate_image_for_post(post_id: int, model: str = "pollinations"):
         result: Dict[str, Any] = {}
         final_image_path: Optional[str] = None
 
-        if model == "sora_images":
+        if model == "veo_photo":
             from ..core.foto_video_gen import generate_image_from_telegram_bot
 
-            bot_username = os.getenv("IMAGE_BOT_USERNAME", "@your_bot_username")
+            bot_username = (
+                os.getenv("IMAGE_BOT_USERNAME")
+                or os.getenv("VEO_BOT_USERNAME")
+                or "@your_bot_username"
+            )
             result = generate_image_from_telegram_bot(
                 prompt=image_prompt,
                 bot_username=bot_username,
-                session_path=os.getenv("IMAGE_BOT_SESSION_PATH"),
-                session_name=os.getenv("IMAGE_BOT_SESSION_NAME"),
-                timeout=os.getenv("IMAGE_BOT_TIMEOUT"),
+                session_path=(
+                    os.getenv("IMAGE_BOT_SESSION_PATH")
+                    or os.getenv("IMAGE_BOT_SESSION_FILE")
+                    or os.getenv("VEO_SESSION_PATH")
+                    or os.getenv("VEO_SESSION_FILE")
+                ),
+                session_name=os.getenv("IMAGE_BOT_SESSION_NAME") or os.getenv("VEO_SESSION_NAME"),
+                timeout=os.getenv("IMAGE_BOT_TIMEOUT") or os.getenv("VEO_TIMEOUT"),
                 api_id=os.getenv("TELEGRAM_API_ID"),
                 api_hash=os.getenv("TELEGRAM_API_HASH")
             )

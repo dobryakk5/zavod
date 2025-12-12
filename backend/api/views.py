@@ -36,6 +36,8 @@ from core.telegram_client import normalize_telegram_channel_identifier
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
 from .serializers import (
+    ChannelAnalysisDetailSerializer,
+    ChannelAnalysisListSerializer,
     ClientSettingsSerializer,
     ClientSummarySerializer,
     ContentTemplateSerializer,
@@ -1151,6 +1153,26 @@ class TgChannelView(APIView):
             payload['error'] = analysis.error or 'Анализ завершился с ошибкой'
 
         return Response(payload)
+
+
+class ChannelAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
+    """Expose stored channel analysis records."""
+
+    permission_classes = [IsTenantMember]
+    pagination_class = None
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return (
+            ChannelAnalysis.objects.filter(client=client)
+            .select_related("client")
+            .order_by("-created_at")
+        )
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ChannelAnalysisListSerializer
+        return ChannelAnalysisDetailSerializer
 
 
 class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):

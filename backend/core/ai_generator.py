@@ -157,6 +157,7 @@ class AIContentGenerator:
         max_tokens: int = 2000,
         temperature: float = 0.7,
         model: Optional[str] = None,
+        allow_fallback: bool = True,
     ) -> Optional[str]:
         """
         Send request to OpenRouter API with automatic fallback model.
@@ -180,7 +181,7 @@ class AIContentGenerator:
             return primary_response
 
         fallback_model = self.fallback_model.strip() if self.fallback_model else ""
-        if fallback_model and fallback_model != selected_model:
+        if allow_fallback and fallback_model and fallback_model != selected_model:
             logger.info("Primary model %s failed, trying fallback %s", selected_model, fallback_model)
             return self._call_openrouter(fallback_model, prompt, max_tokens, temperature)
 
