@@ -142,9 +142,10 @@ export function VkIntegrationsPanel() {
           <TableBody>
             {integrations.map((integration) => {
               const statusMeta = formatStatus(integration.status);
-              const groupLink = integration.screen_name
-                ? `https://vk.com/${integration.screen_name.replace(/^@/, '')}`
+              const screenName = integration.screen_name
+                ? integration.screen_name.replace(/^@/, '')
                 : null;
+              const groupLink = screenName ? `https://vk.com/${screenName}` : null;
               return (
                 <TableRow key={integration.id}>
                   <TableCell>
@@ -153,14 +154,14 @@ export function VkIntegrationsPanel() {
                     </div>
                     <div className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
                       <span>ID: {integration.group_id}</span>
-                      {groupLink && (
+                      {groupLink && screenName && (
                         <a
                           href={groupLink}
                           target="_blank"
                           rel="noreferrer"
                           className="inline-flex items-center gap-1 text-blue-600 hover:underline"
                         >
-                          {integration.screen_name.replace(/^@/, '')}
+                          {screenName}
                           <ExternalLink className="h-3 w-3" />
                         </a>
                       )}
