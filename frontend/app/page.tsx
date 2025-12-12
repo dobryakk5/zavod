@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import SolarLabLanding from './landing';
 
 export default function LandingPage() {
-  redirect('/welcome');
+  return <SolarLabLanding />;
 }

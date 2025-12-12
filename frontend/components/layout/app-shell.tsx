@@ -5,7 +5,12 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000')
+  .replace(/\/$/, '');
+const buildApiUrl = (path: string) => {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `${API_BASE_URL}${normalizedPath}`;
+};
 
 const navItems = [
   { href: '/welcome', label: 'Приветствие' },
@@ -23,14 +28,14 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const onLogout = async () => {
     try {
-      await fetch(`${API_URL}/api/auth/logout/`, {
+      await fetch(buildApiUrl('/auth/logout/'), {
         method: 'POST',
         credentials: 'include'
       });
     } catch (error) {
       console.error('logout failed', error);
     }
-    router.push('/login');
+    router.push('/');
   };
 
   if (pathname === '/' || pathname.startsWith('/login')) {

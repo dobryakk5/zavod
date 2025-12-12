@@ -5,6 +5,10 @@ from dotenv import load_dotenv
 import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+RUNSERVER_LOG_FILE = LOG_DIR / "runserver.log"
+CELERY_LOG_FILE = LOG_DIR / "celery.log"
 
 # Load environment variables from .env file
 load_dotenv(BASE_DIR / '.env')
@@ -130,6 +134,7 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+CELERYD_HIJACK_ROOT_LOGGER = False
 
 # AI Content Generation
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -180,3 +185,50 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
 # Telegram API Settings (системные credentials для всех клиентов)
 TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID", "")
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[%(asctime)s] %(levelname)s %(name)s:%(lineno)d %(message)s",
+        },
+        "simple": {
+            "format": "%(levelname)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
+        "runserver_file": {
+            "level": "INFO",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": RUNSERVER_LOG_FILE,
+            "maxBytes": 5 * 1024 * 1024,
+            "backupCount": 5,
+            "formatter": "verbose",
+        },
+        "celery_file": {
+            "level": "INFO",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": CELERY_LOG_FILE,
+            "maxBytes": 5 * 1024 * 1024,
+            "backupCount": 5,
+            "formatter": "verbose",
+        },
+    },
+    "loggers": {
+        "django.server": {
+            "handlers": ["console", "runserver_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "celery": {
+            "handlers": ["console", "celery_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
