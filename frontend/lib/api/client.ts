@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { ClientInfo, ClientSettings, ClientSummary } from '../types';
+import type { ClientInfo, ClientSettings, ClientSummary, ExpertBooksResponse } from '../types';
 
 export const clientApi = {
   /**
@@ -30,6 +30,21 @@ export const clientApi = {
     return apiFetch<ClientSettings>('/client/settings/', {
       method: 'PATCH',
       body: data,
+    });
+  },
+
+  /**
+   * Generate expert book recommendations using AI
+   */
+  generateExpertBooks: async (payload: {
+    pains?: string;
+    desires?: string;
+    avatar?: string;
+    language?: string;
+  }): Promise<ExpertBooksResponse> => {
+    return apiFetch<ExpertBooksResponse>('/client/expert-books/', {
+      method: 'POST',
+      body: payload,
     });
   },
 };

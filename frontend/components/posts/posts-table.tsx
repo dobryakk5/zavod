@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ApiError, apiFetch } from '@/lib/api';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatTemplateDisplayName } from '@/lib/utils';
+import { Loader2 } from 'lucide-react';
+import { subscribeToPostGenerationStart } from '@/lib/post-generation-events';
 
 export type Post = {
   id: number;
@@ -14,6 +16,12 @@ export type Post = {
   created_at: string;
   platforms: string[];
   template_name?: string | null;
+};
+
+type PostPlaceholder = {
+  id: string;
+  templateName?: string;
+  createdAt: string;
 };
 
 const STATUS_OPTIONS = [
@@ -38,13 +46,17 @@ export function PostsTable() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [placeholders, setPlaceholders] = useState<PostPlaceholder[]>([]);
+  const lastPostIdsRef = useRef<Set<number>>(new Set());
 
   const status = searchParams.get('status') || '';
   const platform = searchParams.get('platform') || '';
 
-  useEffect(() => {
-    const loadPosts = async () => {
-      setLoading(true);
+  const loadPosts = useCallback(
+    async ({ showLoading = true }: { showLoading?: boolean } = {}) => {
+      if (showLoading) {
+        setLoading(true);
+      }
       setError(null);
       try {
         const params = new URLSearchParams();
@@ -53,7 +65,21 @@ export function PostsTable() {
 
         const query = params.toString();
         const data = await apiFetch<Post[]>(`/posts/${query ? `?${query}` : ''}`);
+        const previousIds = new Set(lastPostIdsRef.current);
         setPosts(data);
+
+        const newPostCount = data.filter((post) => !previousIds.has(post.id)).length;
+        lastPostIdsRef.current = new Set(data.map((post) => post.id));
+
+        if (newPostCount > 0) {
+          setPlaceholders((prev) => {
+            if (prev.length === 0) {
+              return prev;
+            }
+            const removeCount = Math.min(prev.length, newPostCount);
+            return prev.slice(removeCount);
+          });
+        }
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
           router.push('/login');
@@ -61,12 +87,49 @@ export function PostsTable() {
           setError('Не удалось загрузить посты');
         }
       } finally {
-        setLoading(false);
+        if (showLoading) {
+          setLoading(false);
+        }
       }
-    };
+    },
+    [platform, router, status]
+  );
 
+  useEffect(() => {
     loadPosts();
-  }, [platform, router, status]);
+  }, [loadPosts]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToPostGenerationStart(({ count, templateName }) => {
+      const parsedCount = typeof count === 'number' ? count : Number(count);
+      const safeCount =
+        Number.isFinite(parsedCount) && parsedCount ? Math.max(1, Math.floor(parsedCount)) : 1;
+      const createdAt = new Date().toISOString();
+      const newPlaceholders: PostPlaceholder[] = Array.from({ length: safeCount }, (_, index) => ({
+        id: `placeholder-${createdAt}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+        templateName,
+        createdAt,
+      }));
+      setPlaceholders((prev) => [...prev, ...newPlaceholders]);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (placeholders.length === 0) {
+      return;
+    }
+
+    loadPosts({ showLoading: false });
+    const intervalId = setInterval(() => {
+      loadPosts({ showLoading: false });
+    }, 5000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [placeholders.length, loadPosts]);
 
   const updateQuery = (key: string, value: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -112,9 +175,11 @@ export function PostsTable() {
       {error && <div className="text-sm text-destructive">{error}</div>}
       {loading && <div>Загрузка...</div>}
 
-      {!loading && posts.length === 0 && <div className="text-sm text-muted-foreground">Постов пока нет.</div>}
+      {!loading && posts.length === 0 && placeholders.length === 0 && (
+        <div className="text-sm text-muted-foreground">Постов пока нет.</div>
+      )}
 
-      {!loading && posts.length > 0 && (
+      {!loading && (posts.length > 0 || placeholders.length > 0) && (
         <Table>
           <TableHeader>
             <TableRow>
@@ -123,6 +188,19 @@ export function PostsTable() {
             </TableRow>
           </TableHeader>
           <TableBody>
+            {placeholders.map((placeholder) => (
+              <TableRow key={placeholder.id}>
+                <TableCell className="font-medium">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Новый пост создается
+                  </div>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {placeholder.templateName || 'Тип уточняется'}
+                </TableCell>
+              </TableRow>
+            ))}
             {posts.map((post) => (
               <TableRow key={post.id}>
                 <TableCell className="font-medium">

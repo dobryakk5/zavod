@@ -41,6 +41,7 @@ WEEKDAY_LABELS = [
 ]
 
 MAX_WEEKLY_POSTS = 21
+TIE_BREAKER_DAY_ORDER = [0, 2, 4, 1, 3, 5, 6]
 
 
 def _get_client_timezone(client: Client):
@@ -104,38 +105,66 @@ def _collect_existing_weekdays(client: Client, template: ContentTemplate, week_s
     return blocked
 
 
+def _collect_week_day_load(client: Client, week_start_local) -> Dict[int, int]:
+    """Подсчитать количество уже запланированных публикаций по дням целевой недели."""
+    client_tz = _get_client_timezone(client)
+    week_start_utc = week_start_local.astimezone(dt_timezone.utc)
+    week_end_utc = week_start_utc + timedelta(days=7)
+
+    counts: Dict[int, int] = defaultdict(int)
+    schedules_qs = Schedule.objects.filter(
+        client=client,
+        scheduled_at__gte=week_start_utc,
+        scheduled_at__lt=week_end_utc,
+    )
+    for schedule in schedules_qs:
+        local_dt = schedule.scheduled_at.astimezone(client_tz)
+        counts[local_dt.weekday()] += 1
+
+    return counts
+
+
 def _build_weekly_slots(
     start_local,
     total_count: int,
     blocked_days: Optional[Set[int]] = None,
+    weekday_counts: Optional[Dict[int, int]] = None,
 ) -> List[Tuple[Any, int]]:
     if total_count <= 0:
         return []
 
     per_day_usage: Dict[int, int] = defaultdict(int)
     permanent_blocked = set(blocked_days or set())
-    used_in_batch: Set[int] = set()
     slots: List[Tuple[Any, int]] = []
+    counts: Dict[int, int] = defaultdict(int)
 
-    for idx in range(total_count):
-        day_fraction = idx / total_count
-        proposed_offset = min(6, int(day_fraction * 7))
-        day_offset = proposed_offset
-        attempts = 0
-        while attempts < 7:
-            if day_offset not in permanent_blocked and day_offset not in used_in_batch:
-                break
-            day_offset = (day_offset + 1) % 7
-            attempts += 1
-        if attempts < 7:
-            used_in_batch.add(day_offset)
-        else:
-            day_offset = proposed_offset
+    if weekday_counts:
+        for day_index, value in weekday_counts.items():
+            try:
+                day_key = int(day_index)
+            except (TypeError, ValueError):
+                continue
+            counts[day_key] = value
+
+    def _tie_breaker(day: int) -> int:
+        try:
+            return TIE_BREAKER_DAY_ORDER.index(day)
+        except ValueError:
+            return len(TIE_BREAKER_DAY_ORDER) + day
+
+    for _ in range(total_count):
+        ordered_days = sorted(
+            range(7),
+            key=lambda day: (counts[day], _tie_breaker(day)),
+        )
+        available_days = [day for day in ordered_days if day not in permanent_blocked]
+        day_offset = available_days[0] if available_days else ordered_days[0]
 
         in_day_index = per_day_usage[day_offset]
         scheduled_local = start_local + timedelta(days=day_offset, hours=in_day_index * 2)
         slots.append((scheduled_local, day_offset))
         per_day_usage[day_offset] = in_day_index + 1
+        counts[day_offset] += 1
 
     return slots
 
@@ -157,6 +186,7 @@ def _build_template_config(template: ContentTemplate, client: Client, prompt_typ
         "desires": client.desires or "",
         "objections": client.objections or "",
         "brand": client.name or "",
+        "books": client.expert_books or "",
     }
 
 
@@ -318,6 +348,7 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
             "pains": trend.client.pains or "",
             "desires": trend.client.desires or "",
             "objections": trend.client.objections or "",
+            "books": trend.client.expert_books or "",
         }
 
         # Создать AI генератор
@@ -500,6 +531,7 @@ def generate_posts_from_seo_keyword_set(
         "pains": client.pains or "",
         "desires": client.desires or "",
         "objections": client.objections or "",
+        "books": client.expert_books or "",
     }
 
     topic_name = ""
@@ -672,6 +704,7 @@ def generate_posts_with_videos_from_seo_keyword_set(
         "pains": client.pains or "",
         "desires": client.desires or "",
         "objections": client.objections or "",
+        "books": client.expert_books or "",
     }
 
     topic_name = ""
@@ -940,7 +973,8 @@ def generate_weekly_posts_from_template(
 
     start_local = _get_next_week_start_local(client)
     blocked_days = _collect_existing_weekdays(client, template, start_local)
-    slots = _build_weekly_slots(start_local, posts_count, blocked_days)
+    weekday_counts = _collect_week_day_load(client, start_local)
+    slots = _build_weekly_slots(start_local, posts_count, blocked_days, weekday_counts)
     if not slots:
         return {"success": False, "error": "no_slots"}
 
@@ -1862,8 +1896,13 @@ def regenerate_post_text(post_id: int):
 
         logger.info(f"Регенерация текста для поста: {post.title[:60]}")
 
-        # Инициализация AI генератора
         generator = AIContentGenerator()
+        existing_tags = post.tags if isinstance(post.tags, list) else []
+        generated_by = (post.generated_by or "").lower()
+        has_seo_tag = any(isinstance(tag, str) and tag.lower() == "seo" for tag in existing_tags)
+        is_seo_post = bool(not post.story and (has_seo_tag or generated_by in {"seo-keywords", "seo_keywords"}))
+        seo_keyword_used: Optional[str] = None
+        use_seo_generation = False
 
         # Если пост из истории
         if post.story:
@@ -1874,7 +1913,6 @@ def regenerate_post_text(post_id: int):
                 logger.error(f"Эпизод {post.episode_number} не найден в истории {story.id}")
                 return False
 
-            # Получаем конфигурацию шаблона
             if story.template:
                 template_config = {
                     "tone": story.template.tone,
@@ -1896,7 +1934,6 @@ def regenerate_post_text(post_id: int):
                     "additional_instructions": "",
                 }
 
-            # Информация о клиенте
             client_info = {
                 "brand": post.client.name or "",
                 "avatar": post.client.avatar or "",
@@ -1905,7 +1942,6 @@ def regenerate_post_text(post_id: int):
                 "objections": post.client.objections or "",
             }
 
-            # Регенерация из эпизода
             result = generator.generate_post_from_episode(
                 story_title=story.title,
                 episode_title=episode["title"],
@@ -1917,41 +1953,89 @@ def regenerate_post_text(post_id: int):
             )
 
         else:
-            # Пост из тренда (обычный пост)
-            # Получаем исходный тренд
-            trend = post.source_trends.first()
+            template_for_post = post.template
+            if not template_for_post and post.client:
+                template_for_post = ContentTemplate.get_default_for_client(post.client)
 
-            if not trend:
-                logger.error(f"Не найден исходный тренд для поста {post.id}")
-                return False
+            def _template_config_with_fallback(prompt_type: str):
+                if template_for_post:
+                    return _build_template_config(template_for_post, post.client, prompt_type=prompt_type)
+                return {
+                    "tone": "friendly",
+                    "length": "medium",
+                    "language": "ru",
+                    "type": "selling",
+                    "include_hashtags": True,
+                    "max_hashtags": 5,
+                    "additional_instructions": "",
+                    "brand": post.client.name or "",
+                    "avatar": post.client.avatar or "",
+                    "pains": post.client.pains or "",
+                    "desires": post.client.desires or "",
+                    "objections": post.client.objections or "",
+                    "books": post.client.expert_books or "",
+                    "seo_prompt_template": "",
+                    "trend_prompt_template": "",
+                    "prompt_type": prompt_type,
+                }
 
-            # Получаем шаблон (пока используем дефолтный)
-            template_config = {
-                "tone": "friendly",
-                "length": "medium",
-                "language": "ru",
-                "type": "selling",
-                "include_hashtags": True,
-                "max_hashtags": 5,
-                "additional_instructions": "",
-                "brand": post.client.name or "",
-                "avatar": post.client.avatar or "",
-                "pains": post.client.pains or "",
-                "desires": post.client.desires or "",
-                "objections": post.client.objections or "",
-                "seo_prompt_template": "",
-                "trend_prompt_template": "",
-                "prompt_type": "trend",
-            }
+            trend = None
+            try:
+                trend = post.source_trends.select_related("topic").first()
+            except Exception:
+                trend = post.source_trends.first()
 
-            # Регенерация из тренда
-            result = generator.generate_post_text(
-                trend_title=trend.title,
-                trend_description=trend.description,
-                trend_url=trend.url or "",
-                topic_name=trend.topic.name,
-                template_config=template_config
-            )
+            should_use_seo = bool(is_seo_post or not trend)
+
+            if should_use_seo:
+                use_seo_generation = True
+                keywords_map = _get_latest_seo_keywords_for_client(post.client)
+                keywords_pool: List[str] = []
+                if keywords_map:
+                    primary_keywords = keywords_map.get("seo_keywords") or []
+                    keywords_pool.extend(primary_keywords)
+                    if not keywords_pool:
+                        for group_keywords in keywords_map.values():
+                            if isinstance(group_keywords, list):
+                                keywords_pool.extend(group_keywords)
+                cleaned_keywords = [kw.strip() for kw in keywords_pool if isinstance(kw, str) and kw.strip()]
+
+                if not cleaned_keywords:
+                    logger.error(
+                        "Не найдены SEO ключевые фразы для клиента %s при регенерации поста %s",
+                        post.client_id,
+                        post.id,
+                    )
+                    return False
+
+                seo_keyword_used = random.choice(cleaned_keywords)
+                logger.info(
+                    "Регенерация SEO поста %s по ключу '%s'",
+                    post.id,
+                    seo_keyword_used,
+                )
+                template_config = _template_config_with_fallback("seo")
+                topic_name = post.client.name or post.client.slug or "business"
+                result = generator.generate_post_text(
+                    trend_title=f"SEO keyword: {seo_keyword_used}",
+                    trend_description=f"Regenerated from SEO keywords for post {post.id}",
+                    trend_url="",
+                    topic_name=topic_name,
+                    template_config=template_config,
+                    seo_keywords={"seo_keywords": [seo_keyword_used]},
+                )
+            else:
+                template_config = _template_config_with_fallback("trend")
+                topic_name = trend.topic.name if trend.topic else (post.client.name or post.client.slug or "business")
+                seo_keywords = _get_latest_seo_keywords_for_client(post.client)
+                result = generator.generate_post_text(
+                    trend_title=trend.title,
+                    trend_description=trend.description,
+                    trend_url=trend.url or "",
+                    topic_name=topic_name,
+                    template_config=template_config,
+                    seo_keywords=seo_keywords or None,
+                )
 
         if not result.get("success"):
             logger.error(f"Ошибка регенерации поста: {result.get('error')}")
@@ -1960,7 +2044,26 @@ def regenerate_post_text(post_id: int):
         # Обновляем пост
         post.title = result["title"]
         post.text = result["text"]
-        post.tags = result.get("hashtags", [])
+
+        raw_hashtags = result.get("hashtags", [])
+        tags_payload: List[str] = []
+        if isinstance(raw_hashtags, list):
+            tags_payload.extend(raw_hashtags)
+        if use_seo_generation:
+            if seo_keyword_used:
+                tags_payload.append(seo_keyword_used)
+            tags_payload.append("seo")
+
+        cleaned_tags: List[str] = []
+        seen_tags: Set[str] = set()
+        for tag in tags_payload:
+            if isinstance(tag, str):
+                normalized = tag.strip()
+                if normalized and normalized not in seen_tags:
+                    seen_tags.add(normalized)
+                    cleaned_tags.append(normalized)
+
+        post.tags = cleaned_tags
         post.regeneration_count += 1
         post.save()
 

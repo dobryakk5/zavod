@@ -160,6 +160,9 @@ export interface ContentTemplate {
 
 export interface Schedule {
   id: number;
+  post: number;
+  social_account: number;
+  social_account_name?: string;
   platform: Platform;
   post_title: string;
   scheduled_at: string;
@@ -197,6 +200,8 @@ export interface ClientSettings {
   pains?: string;
   desires?: string;
   objections?: string;
+  expert_books?: string;
+  telegram_client_channel?: string;
   logo?: string;
   website?: string;
   ai_analysis_channel_url?: string;
@@ -206,6 +211,20 @@ export interface ClientSettings {
   youtube_source_channels?: string;
   instagram_source_accounts?: string;
   vkontakte_source_groups?: string;
+}
+
+export interface ExpertBookItem {
+  title: string;
+  author?: string;
+  reason?: string;
+}
+
+export interface ExpertBooksResponse {
+  success: boolean;
+  books?: ExpertBookItem[];
+  text?: string;
+  error?: string;
+  saved?: boolean;
 }
 
 export interface ClientInfo {

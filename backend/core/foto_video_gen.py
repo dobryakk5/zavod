@@ -1,5 +1,7 @@
+import ast
 import asyncio
 import base64
+import json
 import logging
 import os
 import re
@@ -12,7 +14,7 @@ import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
 from io import BytesIO
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -52,8 +54,32 @@ except ImportError:  # pragma: no cover - Windows
 SESSION_THREAD_LOCKS: Dict[str, threading.RLock] = {}
 SESSION_THREAD_LOCKS_GUARD = threading.Lock()
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+URL_PATTERN = re.compile(r'https?://[^\s<>"{}|\\^`[\]]+')
+BASE64_ALLOWED_CHARS_RE = re.compile(r"^[A-Za-z0-9+/=\s]+$")
+BASE64_FIELD_PATTERN = re.compile(
+    r"(?:image_base64|b64_json|base64)[^A-Za-z0-9+/=]{0,10}([A-Za-z0-9+/=\r\n]+)",
+    re.IGNORECASE
+)
+BASE64_BLOB_PATTERN = re.compile(r"([A-Za-z0-9+/=\r\n]{100,})")
+DATA_IMAGE_BASE64_RE = re.compile(r"base64[, ](.+)", re.S)
 VIDEO_RESPONSE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 VIDEO_RESPONSE_CACHE_LOCK = threading.Lock()
+
+
+def is_probably_base64(value: str) -> bool:
+    """Heuristic + strict validator to ensure strings are real base64 blobs."""
+    if not value:
+        return False
+    candidate = value.strip()
+    if len(candidate) < 200:
+        return False
+    if not BASE64_ALLOWED_CHARS_RE.fullmatch(candidate):
+        return False
+    try:
+        base64.b64decode(candidate, validate=True)
+        return True
+    except Exception:
+        return False
 
 WAN_NEGATIVE_PROMPT = (
     "色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 静止, 整体发灰, 最差质量, "
@@ -611,6 +637,156 @@ def _generate_image_pollinations(prompt: str, output_path: str) -> Dict[str, Any
         return {"success": False, "error": str(exc)}
 
 
+def _extract_openrouter_image_payload(payload: Any) -> Tuple[Optional[str], Optional[str]]:
+    """Return first found image URL or base64 string from OpenRouter-like payloads."""
+    image_url: Optional[str] = None
+    image_base64: Optional[str] = None
+
+    def parse_structured_string(value: str) -> Optional[Any]:
+        if not value:
+            return None
+        stripped_value = value.strip()
+        if not stripped_value or stripped_value[0] not in "{[":
+            return None
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                return parser(stripped_value)
+            except Exception:
+                continue
+        return None
+
+    def assign_base64(value: Optional[str]):
+        nonlocal image_base64
+        if image_base64 or not isinstance(value, str):
+            return
+        stripped = value.strip()
+        if stripped and is_probably_base64(stripped):
+            image_base64 = stripped
+
+    def try_assign_data_uri(value: Optional[str]) -> bool:
+        if not isinstance(value, str):
+            return False
+        stripped = value.strip()
+        if not stripped.startswith("data:image"):
+            return False
+        match = DATA_IMAGE_BASE64_RE.search(stripped)
+        if not match:
+            return False
+        candidate = match.group(1).strip()
+        if is_probably_base64(candidate):
+            assign_base64(candidate)
+            return True
+        return False
+
+    def assign_url(value: Optional[str]):
+        nonlocal image_url
+        if image_url or not isinstance(value, str):
+            return
+        stripped = value.strip()
+        if not stripped:
+            return
+        if try_assign_data_uri(stripped):
+            return
+        if stripped.startswith("http://") or stripped.startswith("https://"):
+            image_url = stripped
+        elif is_probably_base64(stripped):
+            assign_base64(stripped)
+
+    def assign_image_value(value: Any):
+        if image_url or image_base64:
+            return
+        if isinstance(value, dict):
+            for key in ("url", "b64_json", "base64", "image_base64", "data"):
+                if key in value:
+                    assign_image_value(value[key])
+                    if image_url or image_base64:
+                        return
+        elif isinstance(value, list):
+            for entry in value:
+                assign_image_value(entry)
+                if image_url or image_base64:
+                    return
+        else:
+            assign_url(value)
+
+    def walk(node: Any):
+        if image_url or image_base64 or node is None:
+            return
+        if isinstance(node, dict):
+            node_type = node.get("type")
+            if node_type in {"output_image", "image"}:
+                assign_image_value(node.get("image_url"))
+                assign_image_value(node.get("image_base64"))
+                assign_image_value(node.get("b64_json"))
+                assign_image_value(node.get("base64"))
+                assign_image_value(node.get("image"))
+
+                if image_url or image_base64:
+                    return
+            if "image_url" in node:
+                assign_image_value(node["image_url"])
+                if image_url or image_base64:
+                    return
+            for key in ("image_base64", "b64_json", "base64"):
+                if key in node:
+                    assign_image_value(node[key])
+                    if image_url or image_base64:
+                        return
+            if "images" in node:
+                walk(node["images"])
+                if image_url or image_base64:
+                    return
+            for key in ("content", "data", "message", "choices", "result", "outputs", "response"):
+                if key in node:
+                    walk(node[key])
+                    if image_url or image_base64:
+                        return
+            if node_type in {"tool_result", "tool_response"} and "content" in node:
+                walk(node["content"])
+                if image_url or image_base64:
+                    return
+            if "text" in node and isinstance(node["text"], str):
+                urls = URL_PATTERN.findall(node["text"])
+                if urls:
+                    assign_url(urls[0])
+        elif isinstance(node, list):
+            for entry in node:
+                walk(entry)
+                if image_url or image_base64:
+                    break
+        elif isinstance(node, str):
+            stripped_node = node.strip()
+            if not stripped_node:
+                return
+            if try_assign_data_uri(stripped_node):
+                return
+
+            structured = parse_structured_string(stripped_node)
+            if structured is not None:
+                walk(structured)
+                if image_url or image_base64:
+                    return
+
+            urls = URL_PATTERN.findall(stripped_node)
+            if urls:
+                assign_url(urls[0])
+                if image_url or image_base64:
+                    return
+
+            keyword_match = BASE64_FIELD_PATTERN.search(stripped_node)
+            if keyword_match:
+                assign_base64(keyword_match.group(1).strip())
+                if image_url or image_base64:
+                    return
+
+            blob_match = BASE64_BLOB_PATTERN.search(stripped_node)
+            if blob_match:
+                assign_base64(blob_match.group(1))
+
+    walk(payload)
+    return image_url, image_base64
+
+
 def _generate_image_openrouter(
     prompt: str,
     output_path: str,
@@ -624,6 +800,17 @@ def _generate_image_openrouter(
         image_timeout = get_image_generation_timeout()
         model = get_image_generation_model()
         logger.info("Генерация через OpenRouter (%s)", model)
+        request_payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"Generate an image: {prompt}"
+                }
+            ],
+            "modalities": ["image", "text"]
+        }
+
         response = requests.post(
             api_url,
             headers={
@@ -632,10 +819,7 @@ def _generate_image_openrouter(
                 "HTTP-Referer": "https://zavod-content-factory.com",
                 "X-Title": "Content Factory Image Generator"
             },
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": f"Generate an image: {prompt}"}]
-            },
+            json=request_payload,
             timeout=image_timeout
         )
 
@@ -647,36 +831,43 @@ def _generate_image_openrouter(
             }
 
         data = response.json()
-        image_url = None
-        image_base64 = None
+        message = None
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            first_choice = choices[0] or {}
+            if not isinstance(first_choice, dict):
+                first_choice = {}
+            message = first_choice.get("message") or {}
 
-        if data.get("choices"):
-            message = data["choices"][0].get("message", {})
-            content = message.get("content", "")
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and "image_url" in item:
-                        img_data = item["image_url"]
-                        url_value = img_data.get("url") if isinstance(img_data, dict) else img_data
-                        if isinstance(url_value, str):
-                            if url_value.startswith("data:image"):
-                                image_base64 = url_value
-                            else:
-                                image_url = url_value
-            elif isinstance(content, str):
-                if content.startswith("data:image"):
-                    image_base64 = content
-                else:
-                    urls = re.findall(r'https?://[^\s<>"{}|\\^`[\]]+', content)
-                    if urls:
-                        image_url = urls[0]
+        if isinstance(message, dict):
+            images_block = message.get("images")
+            if isinstance(images_block, list) and images_block:
+                for idx, image_entry in enumerate(images_block, start=1):
+                    url_preview = None
+                    if isinstance(image_entry, dict):
+                        image_url_obj = image_entry.get("image_url")
+                        if isinstance(image_url_obj, dict):
+                            url_preview = image_url_obj.get("url")
+                        elif isinstance(image_url_obj, str):
+                            url_preview = image_url_obj
+                    if url_preview:
+                        logger.info(
+                            "OpenRouter вернул изображение %s: %s...",
+                            idx,
+                            url_preview[:60]
+                        )
 
-            if not image_url and not image_base64 and "image_url" in message:
-                image_url = message["image_url"]
+        image_url, image_base64 = _extract_openrouter_image_payload(data)
 
         if image_base64:
             base64_data = image_base64.split(",", 1)[1] if "," in image_base64 else image_base64
-            image_bytes = base64.b64decode(base64_data)
+            base64_data = "".join(base64_data.split())
+            try:
+                image_bytes = base64.b64decode(base64_data)
+            except Exception as decode_exc:  # pragma: no cover - unexpected data shape
+                logger.error("Не удалось декодировать base64 изображение: %s", decode_exc)
+                return {"success": False, "error": "Invalid base64 data from OpenRouter"}
+
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             with open(output_path, "wb") as f:
                 f.write(image_bytes)
@@ -684,6 +875,7 @@ def _generate_image_openrouter(
                 "success": True,
                 "image_path": output_path,
                 "image_url": None,
+                "image_base64": image_base64,
                 "model": "nanobanana"
             }
 
@@ -704,6 +896,7 @@ def _generate_image_openrouter(
                 "success": True,
                 "image_path": output_path,
                 "image_url": image_url,
+                "image_base64": None,
                 "model": "nanobanana"
             }
 

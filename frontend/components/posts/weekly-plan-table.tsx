@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatTemplateDisplayName } from '@/lib/utils';
+import { emitPostGenerationStart } from '@/lib/post-generation-events';
 
 interface PlanWeeklyResponse {
   success: boolean;
@@ -68,6 +69,11 @@ export function WeeklyPlanTable() {
       });
 
       toast.success(response.message || 'Генерация запущена');
+      const templateLabel = formatTemplateDisplayName(template.name) || template.name;
+      emitPostGenerationStart({
+        count: parsed,
+        templateName: templateLabel
+      });
     } catch (err) {
       if (err instanceof ApiError) {
         let message = 'Не удалось запустить генерацию';

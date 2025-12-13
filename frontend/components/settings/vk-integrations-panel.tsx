@@ -39,6 +39,8 @@ const formatStatus = (status?: string): { label: string; className: string } => 
   }
 
   switch (status) {
+    case 'active':
+      return { label: 'Активен', className: 'text-green-600 border-green-600' };
     case 'pending':
       return { label: 'Ожидание', className: 'text-blue-600 border-blue-600' };
     case 'error':

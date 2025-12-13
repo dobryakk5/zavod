@@ -17,7 +17,9 @@ from core.models import (
     Story,
     Topic,
     TrendItem,
+    VkIntegration,
 )
+from core.telegram_client import normalize_telegram_channel_identifier
 
 
 class PostSerializer(serializers.ModelSerializer):
@@ -34,12 +36,45 @@ class PostSerializer(serializers.ModelSerializer):
 
 
 class ScheduleSerializer(serializers.ModelSerializer):
-    platform = serializers.CharField(source="social_account.platform")
-    post_title = serializers.CharField(source="post.title")
+    post = serializers.PrimaryKeyRelatedField(queryset=Post.objects.all())
+    social_account = serializers.PrimaryKeyRelatedField(queryset=SocialAccount.objects.all())
+    platform = serializers.CharField(source="social_account.platform", read_only=True)
+    post_title = serializers.CharField(source="post.title", read_only=True)
+    social_account_name = serializers.CharField(source="social_account.name", read_only=True)
 
     class Meta:
         model = Schedule
-        fields = ["id", "platform", "post_title", "scheduled_at", "status"]
+        fields = [
+            "id",
+            "post",
+            "post_title",
+            "social_account",
+            "social_account_name",
+            "platform",
+            "scheduled_at",
+            "status",
+        ]
+        read_only_fields = ["platform", "post_title", "social_account_name", "status"]
+
+    def validate(self, attrs):
+        """
+        Ensure that post and social account belong to the active client.
+        """
+        client = self.context.get("client")
+
+        post = attrs.get("post") or getattr(self.instance, "post", None)
+        social_account = attrs.get("social_account") or getattr(self.instance, "social_account", None)
+
+        if client:
+            if post and post.client_id != client.id:
+                raise serializers.ValidationError("Пост не принадлежит текущему клиенту")
+            if social_account and social_account.client_id != client.id:
+                raise serializers.ValidationError("Аккаунт не принадлежит текущему клиенту")
+
+        if post and social_account and post.client_id != social_account.client_id:
+            raise serializers.ValidationError("Пост и аккаунт должны принадлежать одному клиенту")
+
+        return attrs
 
 
 class PlatformCountSerializer(serializers.Serializer):
@@ -362,6 +397,34 @@ class SocialAccountSerializer(serializers.ModelSerializer):
         }
 
 
+class VkIntegrationSerializer(serializers.ModelSerializer):
+    """Serializer for VK integrations."""
+
+    owner_name = serializers.SerializerMethodField()
+    owner_id = serializers.IntegerField(source="owner.id", read_only=True)
+
+    class Meta:
+        model = VkIntegration
+        fields = [
+            "id",
+            "group_id",
+            "group_name",
+            "screen_name",
+            "status",
+            "last_published_at",
+            "created_at",
+            "updated_at",
+            "owner_id",
+            "owner_name",
+            "extra",
+        ]
+        read_only_fields = fields
+
+    def get_owner_name(self, obj: VkIntegration) -> str:
+        full_name = obj.owner.get_full_name()
+        return full_name or obj.owner.get_username()
+
+
 class ClientSettingsSerializer(serializers.ModelSerializer):
     """
     Client settings serializer.
@@ -378,6 +441,8 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "pains",
             "desires",
             "objections",
+            "expert_books",
+            "telegram_client_channel",
             "ai_analysis_channel_url",
             "ai_analysis_channel_type",
             "telegram_source_channels",
@@ -387,6 +452,11 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "vkontakte_source_groups",
         ]
         read_only_fields = ["slug"]  # slug is readonly
+
+    def validate_telegram_client_channel(self, value: str | None) -> str:
+        if not value:
+            return ""
+        return normalize_telegram_channel_identifier(value)
 
 
 

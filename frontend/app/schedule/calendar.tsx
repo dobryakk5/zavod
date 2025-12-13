@@ -4,22 +4,17 @@ import React, {useState, useMemo, useEffect} from 'react';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Button} from '@/components/ui/button';
 import {Badge} from '@/components/ui/badge';
-import {ApiError, apiFetch} from '@/lib/api';
+import {ApiError} from '@/lib/api';
+import {schedulesApi} from '@/lib/api/schedules';
 import {useRouter} from 'next/navigation';
+import type {Schedule} from '@/lib/types';
 
 // dnd-kit
 import {DndContext, closestCenter, type DragEndEvent} from '@dnd-kit/core';
 import {SortableContext, rectSortingStrategy, useSortable} from '@dnd-kit/sortable';
 import {CSS} from '@dnd-kit/utilities';
 
-type ScheduleItem = {
-  id: number;
-  platform: string;
-  post_title: string;
-  planned_at: string;
-  status: string;
-  post: number;
-};
+type ScheduleItem = Schedule;
 
 type CalendarItem = {
   id: string;
@@ -94,7 +89,7 @@ function generateMonthDates(refDate: Date){
 }
 
 function scheduleToCalendarItem(schedule: ScheduleItem): CalendarItem {
-  const date = new Date(schedule.planned_at);
+  const date = new Date(schedule.scheduled_at);
   const time = date.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
 
   return {
@@ -125,7 +120,7 @@ export default function ContentCalendarPage(){
       setLoading(true);
       setError(null);
       try {
-        const data = await apiFetch<ScheduleItem[]>('/schedules/');
+        const data = await schedulesApi.list();
         setSchedules(data);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
@@ -153,7 +148,7 @@ export default function ContentCalendarPage(){
 
     // Distribute schedules into dates
     schedules.forEach(schedule => {
-      const date = new Date(schedule.planned_at);
+      const date = new Date(schedule.scheduled_at);
       const key = formatKey(date);
       if (!map[key]) map[key] = [];
       map[key].push(scheduleToCalendarItem(schedule));
@@ -187,13 +182,8 @@ export default function ContentCalendarPage(){
 
   async function updateScheduleDate(scheduleId: number, newDate: string) {
     try {
-      await apiFetch(`/schedules-manage/${scheduleId}/`, {
-        method: 'PATCH',
-        body: { planned_at: newDate }
-      });
-
-      // Reload schedules after update
-      const data = await apiFetch<ScheduleItem[]>('/schedules/');
+      await schedulesApi.update(scheduleId, { scheduled_at: newDate });
+      const data = await schedulesApi.list();
       setSchedules(data);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {

@@ -18,9 +18,8 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { CustomTextarea } from '@/components/ui/custom-textarea';
+import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -37,8 +36,12 @@ const settingsFormSchema = z.object({
   pains: z.string().optional(),
   desires: z.string().optional(),
   objections: z.string().optional(),
-  ai_analysis_channel_url: z.string().optional(),
-  ai_analysis_channel_type: z.string().optional(),
+  expert_books: z.string().optional(),
+  telegram_source_channels: z.string().optional(),
+  rss_source_feeds: z.string().optional(),
+  youtube_source_channels: z.string().optional(),
+  instagram_source_accounts: z.string().optional(),
+  vkontakte_source_groups: z.string().optional(),
 });
 
 type SettingsFormValues = z.infer<typeof settingsFormSchema>;
@@ -47,6 +50,7 @@ export function ClientSettingsForm() {
   const [settings, setSettings] = useState<ClientSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [generatingSEO, setGeneratingSEO] = useState(false);
+  const [generatingBooks, setGeneratingBooks] = useState(false);
   const { canEdit } = useRole();
 
   const form = useForm<SettingsFormValues>({
@@ -57,8 +61,12 @@ export function ClientSettingsForm() {
       pains: '',
       desires: '',
       objections: '',
-      ai_analysis_channel_url: '',
-      ai_analysis_channel_type: '',
+      expert_books: '',
+      telegram_source_channels: '',
+      rss_source_feeds: '',
+      youtube_source_channels: '',
+      instagram_source_accounts: '',
+      vkontakte_source_groups: '',
     },
   });
 
@@ -76,8 +84,12 @@ export function ClientSettingsForm() {
         pains: data.pains || '',
         desires: data.desires || '',
         objections: data.objections || '',
-        ai_analysis_channel_url: data.ai_analysis_channel_url || '',
-        ai_analysis_channel_type: data.ai_analysis_channel_type || '',
+        expert_books: data.expert_books || '',
+        telegram_source_channels: data.telegram_source_channels || '',
+        rss_source_feeds: data.rss_source_feeds || '',
+        youtube_source_channels: data.youtube_source_channels || '',
+        instagram_source_accounts: data.instagram_source_accounts || '',
+        vkontakte_source_groups: data.vkontakte_source_groups || '',
       });
     } catch (error) {
       toast.error('Не удалось загрузить настройки');
@@ -110,6 +122,41 @@ export function ClientSettingsForm() {
       toast.error('Не удалось запустить SEO-анализ');
     } finally {
       setGeneratingSEO(false);
+    }
+  };
+
+  const handleGenerateBooks = async () => {
+    if (!canEdit || generatingBooks) {
+      return;
+    }
+    const { pains = '', desires = '', avatar = '' } = form.getValues();
+    if (!pains.trim() && !desires.trim()) {
+      toast.error('Заполните блоки «Боли» или «Желания», чтобы подобрать книги');
+      return;
+    }
+    setGeneratingBooks(true);
+    try {
+      const response = await clientApi.generateExpertBooks({
+        pains,
+        desires,
+        avatar,
+      });
+      if (response.success) {
+        if (response.text) {
+          form.setValue('expert_books', response.text, { shouldDirty: false });
+          setSettings((prev) => (prev ? { ...prev, expert_books: response.text } : prev));
+        }
+        const successMessage = response.saved
+          ? 'Подборка книг сохранена'
+          : 'Подборка книг обновлена';
+        toast.success(successMessage);
+      } else {
+        toast.error(response.error || 'Не удалось подобрать книги');
+      }
+    } catch (error) {
+      toast.error('Не удалось подобрать книги');
+    } finally {
+      setGeneratingBooks(false);
     }
   };
 
@@ -234,50 +281,150 @@ export function ClientSettingsForm() {
           )}
         />
 
-
         <FormField
           control={form.control}
-          name="ai_analysis_channel_url"
+          name="expert_books"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>AI Анализ канала</FormLabel>
+              <FormLabel>Книги экспертов</FormLabel>
               <FormControl>
-                <Input placeholder="https://t.me/example_channel" {...field} />
+                <CustomTextarea
+                  placeholder="По одной книге на строку, например: «Атомные привычки — Джеймс Клир: помогает выстроить новые ритуалы»"
+                  className="min-h-[120px]"
+                  {...field}
+                />
               </FormControl>
               <FormDescription>
-                URL канала для AI анализа
+                Список книг, которые вы рекомендуете своей аудитории. Можно сгенерировать автоматически с учётом болей и желаний.
               </FormDescription>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleGenerateBooks}
+                  disabled={!canEdit || generatingBooks}
+                >
+                  {generatingBooks ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Подбираем...
+                    </>
+                  ) : (
+                    'Найти книги для ЦА'
+                  )}
+                </Button>
+                {!canEdit && (
+                  <p className="text-xs text-muted-foreground">
+                    Кнопка доступна владельцу и редактору.
+                  </p>
+                )}
+              </div>
               <FormMessage />
             </FormItem>
           )}
         />
 
-        <FormField
-          control={form.control}
-          name="ai_analysis_channel_type"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Тип канала</FormLabel>
-              <Select onValueChange={field.onChange} value={field.value}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Выберите тип канала" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectItem value="telegram">Telegram</SelectItem>
-                  <SelectItem value="instagram">Instagram</SelectItem>
-                  <SelectItem value="youtube">YouTube</SelectItem>
-                  <SelectItem value="vkontakte">VKontakte</SelectItem>
-                </SelectContent>
-              </Select>
-              <FormDescription>
-                Тип канала для AI анализа
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+        <div className="space-y-4 rounded-lg border border-slate-200 p-4">
+          <div>
+            <p className="text-base font-semibold">Источники контента</p>
+            <p className="text-sm text-muted-foreground">
+              Добавьте ссылки или идентификаторы через запятую (можно переносить на новую строку). Здесь
+              хранится только список источников — токены не требуются.
+            </p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField
+              control={form.control}
+              name="telegram_source_channels"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Telegram каналы</FormLabel>
+                  <FormControl>
+                    <CustomTextarea
+                      placeholder="@rian_ru, @tjournal"
+                      className="min-h-[80px]"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>Указывайте @username или ссылку, через запятую.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="rss_source_feeds"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>RSS / Atom фиды</FormLabel>
+                  <FormControl>
+                    <CustomTextarea
+                      placeholder="https://lenta.ru/rss, https://example.com/feed.xml"
+                      className="min-h-[80px]"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>Полные URL фидов.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="youtube_source_channels"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>YouTube каналы</FormLabel>
+                  <FormControl>
+                    <CustomTextarea
+                      placeholder="UC_x5XG1OV2P6uZZ5FSM9Ttw, @channel_handle"
+                      className="min-h-[80px]"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>ID канала или @handle, через запятую.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="instagram_source_accounts"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Instagram аккаунты</FormLabel>
+                  <FormControl>
+                    <CustomTextarea
+                      placeholder="username1, username2"
+                      className="min-h-[80px]"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>Список usernames.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="vkontakte_source_groups"
+              render={({ field }) => (
+                <FormItem className="md:col-span-2">
+                  <FormLabel>VK сообщества</FormLabel>
+                  <FormControl>
+                    <CustomTextarea
+                      placeholder="apiclub, https://vk.com/thecode"
+                      className="min-h-[80px]"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>screen name или ссылка, через запятую.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </div>
 
         <Button type="submit" disabled={loading}>
           {loading ? 'Сохранение...' : 'Сохранить изменения'}

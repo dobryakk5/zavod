@@ -202,6 +202,12 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
     DEFAULT_CLIENT_ORIGINS,
 ).split(",")
 
+# VK integration defaults (override in env for production)
+VK_CLIENT_ID = os.getenv("VK_CLIENT_ID", "")
+VK_CLIENT_SECRET = os.getenv("VK_CLIENT_SECRET", "")
+VK_REDIRECT_URI = os.getenv("VK_REDIRECT_URI", "http://localhost:4000/api/vk/callback/")
+VK_API_VERSION = os.getenv("VK_API_VERSION", "5.131")
+
 # Telegram API Settings (системные credentials для всех клиентов)
 TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID", "")
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")

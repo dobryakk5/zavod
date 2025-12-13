@@ -1,12 +1,27 @@
 import { apiFetch } from '../api';
 import type { Schedule, TaskResponse } from '../types';
 
+type ScheduleFilters = {
+  post?: number;
+};
+
+type SchedulePayload = {
+  post: number;
+  social_account: number;
+  scheduled_at: string;
+};
+
 export const schedulesApi = {
   /**
-   * List all schedules for the current client
+   * List schedules for the current client (optionally filtered by post)
    */
-  list: async (): Promise<Schedule[]> => {
-    return apiFetch<Schedule[]>('/schedules/');
+  list: async (filters?: ScheduleFilters): Promise<Schedule[]> => {
+    const params = new URLSearchParams();
+    if (filters?.post) {
+      params.set('post', String(filters.post));
+    }
+    const query = params.toString();
+    return apiFetch<Schedule[]>(`/schedules/${query ? `?${query}` : ''}`);
   },
 
   /**
@@ -19,7 +34,7 @@ export const schedulesApi = {
   /**
    * Create a new schedule
    */
-  create: async (data: Partial<Schedule>): Promise<Schedule> => {
+  create: async (data: SchedulePayload): Promise<Schedule> => {
     return apiFetch<Schedule>('/schedules-manage/', {
       method: 'POST',
       body: data,
@@ -29,7 +44,7 @@ export const schedulesApi = {
   /**
    * Update an existing schedule
    */
-  update: async (id: number, data: Partial<Schedule>): Promise<Schedule> => {
+  update: async (id: number, data: Partial<SchedulePayload>): Promise<Schedule> => {
     return apiFetch<Schedule>(`/schedules-manage/${id}/`, {
       method: 'PATCH',
       body: data,

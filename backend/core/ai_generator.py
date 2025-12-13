@@ -64,6 +64,7 @@ def _parse_ai_json_response(raw_response: str) -> Tuple[Optional[Dict[str, Any]]
 
     last_error: Optional[json.JSONDecodeError] = None
     last_text = clean_response
+    decoder = json.JSONDecoder()
 
     for candidate in attempts:
         try:
@@ -71,6 +72,13 @@ def _parse_ai_json_response(raw_response: str) -> Tuple[Optional[Dict[str, Any]]
         except json.JSONDecodeError as exc:
             last_error = exc
             last_text = candidate
+            try:
+                parsed_obj, end_index = decoder.raw_decode(candidate)
+                if parsed_obj is not None:
+                    truncated = candidate[:end_index]
+                    return parsed_obj, truncated, None
+            except json.JSONDecodeError:
+                continue
 
     return None, last_text, last_error
 
@@ -222,7 +230,7 @@ class AIContentGenerator:
 
                 Переменные доступные в кастомных промптах:
                 {topic_name}, {tone}, {length}, {language}, {type}, {avatar},
-                {pains}, {desires}, {objections}, {seo_keywords}, {keyword},
+                {pains}, {desires}, {objections}, {books}, {seo_keywords}, {keyword},
                 {trend_title}, {trend_description}, {trend_url}
             seo_keywords: Optional dict with keyword groups:
                 - commercial: ["купить ...", ...]
@@ -262,6 +270,7 @@ class AIContentGenerator:
             pains = template_config.get("pains", "")
             desires = template_config.get("desires", "")
             objections = template_config.get("objections", "")
+            books = template_config.get("books", "")
 
             # Извлечь случайные SEO-ключи из каждой группы
             import random
@@ -314,6 +323,7 @@ class AIContentGenerator:
                 "pains": pains,
                 "desires": desires,
                 "objections": objections,
+                "books": books,
                 "seo_keywords": seo_keywords_for_prompt or "",
                 "keyword": first_keyword or "",
             }
@@ -761,6 +771,121 @@ seo_keywords = [ ... ]
             return {
                 "success": False,
                 "error": str(e)
+            }
+
+    def generate_book_recommendations(
+        self,
+        pains: str = "",
+        desires: str = "",
+        avatar: str = "",
+        brand: str = "",
+        language: str = "ru",
+    ) -> Dict[str, Any]:
+        """Подобрать книги, подходящие под боли и желания аудитории."""
+        try:
+            lang_name = "русском" if language == "ru" else "английском"
+            pains_text = (pains or "").strip() or "не указаны"
+            desires_text = (desires or "").strip() or "не указаны"
+            avatar_text = (avatar or "").strip() or "не описан"
+            brand_text = (brand or "").strip() or "без названия"
+
+            prompt = f"""
+Ты — эксперт по персонализированным подборкам книг для предпринимателей и экспертов.
+
+БРЕНД/ПРОЕКТ: {brand_text}
+ОПИСАНИЕ АВАТАРА: {avatar_text}
+КЛЮЧЕВЫЕ БОЛИ: {pains_text}
+КЛЮЧЕВЫЕ ЖЕЛАНИЯ: {desires_text}
+
+Найди 10 книг (на русском или в переводе), которые помогут этой аудитории решить проблемы и достичь желаемого.
+
+ТРЕБОВАНИЯ:
+- Указывай точное название и автора книги.
+- Добавь 1–2 предложения, почему книга пригодится именно этой аудитории.
+- Ориентируйся на практические, прикладные и вдохновляющие издания.
+- Пиши на {lang_name} языке.
+
+ФОРМАТ ОТВЕТА, СТРОГО JSON:
+{{
+  "books": [
+    {{"title": "Название", "author": "Автор", "reason": "Почему книга полезна"}},
+    ...
+  ]
+}}
+
+Верни ровно 10 элементов. Никаких пояснений вне JSON.
+"""
+
+            ai_response = self.get_ai_response(prompt, max_tokens=1800, temperature=0.4)
+            if not ai_response:
+                return {"success": False, "error": "Не удалось получить ответ от AI"}
+
+            parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+            if parse_error:
+                logger.error(f"Failed to parse book recommendations: {normalized_text}")
+                return {
+                    "success": False,
+                    "error": f"Ошибка разбора JSON: {str(parse_error)}",
+                    "raw_response": normalized_text,
+                }
+
+            result = parsed_result or {}
+            raw_books = result.get("books")
+            if not isinstance(raw_books, list):
+                return {
+                    "success": False,
+                    "error": "AI не вернул список книг",
+                    "raw_response": result,
+                }
+
+            cleaned_books = []
+            for item in raw_books:
+                if isinstance(item, dict):
+                    title = str(item.get("title", "")).strip()
+                    author = str(item.get("author", "")).strip()
+                    reason = str(item.get("reason", "")).strip()
+                else:
+                    text_value = str(item).strip()
+                    parts = text_value.split("—", 1)
+                    title = parts[0].strip()
+                    author = parts[1].strip() if len(parts) > 1 else ""
+                    reason = ""
+                if not title:
+                    continue
+                cleaned_books.append({
+                    "title": title,
+                    "author": author,
+                    "reason": reason or "Помогает проработать ключевые задачи аудитории"
+                })
+                if len(cleaned_books) >= 10:
+                    break
+
+            if not cleaned_books:
+                return {
+                    "success": False,
+                    "error": "AI вернул пустой список книг",
+                    "raw_response": result,
+                }
+
+            lines = [
+                f"{idx + 1}. {book['title']}" +
+                (f" — {book['author']}" if book['author'] else "") +
+                (f": {book['reason']}" if book['reason'] else "")
+                for idx, book in enumerate(cleaned_books)
+            ]
+
+            return {
+                "success": True,
+                "books": cleaned_books,
+                "text": "\n".join(lines),
+                "raw_response": result,
+            }
+
+        except Exception as exc:
+            logger.error(f"Error generating book recommendations: {exc}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(exc),
             }
 
     def generate_image_prompt(self, post_title: str, post_text: str) -> Optional[str]:

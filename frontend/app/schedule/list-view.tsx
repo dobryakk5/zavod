@@ -2,21 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ApiError, apiFetch } from '@/lib/api';
+import { ApiError } from '@/lib/api';
+import { schedulesApi } from '@/lib/api/schedules';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-
-type ScheduleItem = {
-  id: number;
-  platform: string;
-  post_title: string;
-  planned_at: string;
-  status: string;
-};
+import type { Schedule } from '@/lib/types';
 
 export default function ScheduleListView() {
   const router = useRouter();
-  const [items, setItems] = useState<ScheduleItem[]>([]);
+  const [items, setItems] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,7 +19,7 @@ export default function ScheduleListView() {
       setLoading(true);
       setError(null);
       try {
-        const data = await apiFetch<ScheduleItem[]>('/schedules/');
+        const data = await schedulesApi.list();
         setItems(data);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
@@ -78,7 +72,7 @@ export default function ScheduleListView() {
                     <Badge variant="outline">{item.platform}</Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {new Date(item.planned_at).toLocaleString('ru-RU', {
+                    {new Date(item.scheduled_at).toLocaleString('ru-RU', {
                       day: 'numeric',
                       month: 'long',
                       year: 'numeric',

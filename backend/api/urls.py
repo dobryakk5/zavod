@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     ChannelAnalysisViewSet,
+    ClientExpertBooksView,
     ClientInfoView,
     ClientSettingsView,
     ClientSummaryView,
@@ -23,6 +24,10 @@ from .views import (
     TopicViewSet,
     TrendItemViewSet,
     TgChannelView,
+    VkIntegrationViewSet,
+    VkConnectView,
+    VkCallbackView,
+    VkPublishView,
 )
 
 app_name = 'api'
@@ -40,6 +45,7 @@ router.register(r'post-types', PostTypeViewSet, basename='post-type')
 router.register(r'post-tones', PostToneViewSet, basename='post-tone')
 router.register(r'seo-keywords', SEOKeywordSetViewSet, basename='seo-keyword')
 router.register(r'channel-analyses', ChannelAnalysisViewSet, basename='channel-analysis')
+router.register(r'vk/integrations', VkIntegrationViewSet, basename='vk-integration')
 
 urlpatterns = [
     # Analytics endpoint (must be before router to avoid conflicts)
@@ -55,10 +61,16 @@ urlpatterns = [
     path('client/info/', ClientInfoView.as_view(), name='client-info'),
     path('client/summary/', ClientSummaryView.as_view(), name='client-summary'),
     path('client/settings/', ClientSettingsView.as_view(), name='client-settings'),
+    path('client/expert-books/', ClientExpertBooksView.as_view(), name='client-expert-books'),
 
     # Legacy list views (kept for backward compatibility)
     path('posts-list/', PostsListView.as_view(), name='posts-list'),
     path('schedules/', ScheduleListView.as_view(), name='schedules'),
+
+    # VK integration endpoints
+    path('vk/connect/', VkConnectView.as_view(), name='vk-connect'),
+    path('vk/callback/', VkCallbackView.as_view(), name='vk-callback'),
+    path('vk/post_with_photos/', VkPublishView.as_view(), name='vk-post-with-photos'),
 
     # Include router URLs
     path('', include(router.urls)),

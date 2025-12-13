@@ -44,6 +44,11 @@ class Client(models.Model):
         verbose_name="Возражения/страхи",
         help_text="Страхи и возражения аудитории (например: 'дорого, нет времени, боюсь выглядеть глупо, не получится')"
     )
+    expert_books = models.TextField(
+        blank=True,
+        verbose_name="Книги экспертов",
+        help_text="Подборка книг для целевой аудитории (по одна на строку)"
+    )
 
     # Telegram settings
     telegram_client_channel = models.CharField(
@@ -208,6 +213,45 @@ class UserTenantRole(models.Model):
 
     def __str__(self):
         return f"{self.user} @ {self.client} ({self.role})"
+
+
+class VkIntegration(models.Model):
+    STATUS_ACTIVE = "active"
+    STATUS_PENDING = "pending"
+    STATUS_ERROR = "error"
+    STATUS_DISABLED = "disabled"
+
+    STATUS_CHOICES = (
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_PENDING, "Pending"),
+        (STATUS_ERROR, "Error"),
+        (STATUS_DISABLED, "Disabled"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="vk_integrations")
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="vk_integrations",
+    )
+    group_id = models.BigIntegerField()
+    group_name = models.CharField(max_length=255, blank=True)
+    screen_name = models.CharField(max_length=255, blank=True)
+    access_token = models.TextField()
+    user_id = models.BigIntegerField(blank=True, null=True)
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    last_published_at = models.DateTimeField(blank=True, null=True)
+    extra = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("client", "group_id")
+        ordering = ("-updated_at",)
+
+    def __str__(self):
+        suffix = f" @ {self.client}" if self.client_id else ""
+        return f"VK {self.group_id}{suffix}"
 
 
 class SocialAccount(models.Model):
@@ -741,7 +785,7 @@ class ContentTemplate(models.Model):
         help_text=(
             "Шаблон промпта для генерации на основе SEO ключевых фраз. "
             "Плейсхолдеры: {seo_keywords}, {topic_name}, {tone}, {length}, {language}, "
-            "{type}, {avatar}, {pains}, {desires}, {objections}"
+            "{type}, {avatar}, {pains}, {desires}, {objections}, {books}"
         )
     )
     trend_prompt_template = models.TextField(

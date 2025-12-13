@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from urllib.parse import parse_qsl
+import logging
+import secrets
+from urllib.parse import parse_qsl, urlencode
+
+import requests
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Count, F, Q
-from django.shortcuts import get_object_or_404
-from rest_framework import generics, status, viewsets
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404, redirect
+from django.utils import timezone
+from rest_framework import generics, status, viewsets, mixins
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,6 +25,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 
 from core.audience_profiles import merge_audience_profiles
+from core.ai_generator import AIContentGenerator
 from core.models import (
     Client,
     ContentTemplate,
@@ -30,6 +39,7 @@ from core.models import (
     TrendItem,
     ChannelAnalysis,
     SEOKeywordSet,
+    VkIntegration,
 )
 from core import tasks
 from core.telegram_client import normalize_telegram_channel_identifier
@@ -55,6 +65,7 @@ from .serializers import (
     TopicSerializer,
     TrendItemDetailSerializer,
     TrendItemSerializer,
+    VkIntegrationSerializer,
     SEOKeywordSetSerializer,
 )
 from .utils import get_active_client
@@ -66,6 +77,140 @@ COOKIE_SAMESITE = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
 COOKIE_MAX_AGE = int(getattr(settings, "JWT_COOKIE_MAX_AGE", 60 * 60))  # 1 hour for access token
 REFRESH_COOKIE_MAX_AGE = int(getattr(settings, "JWT_REFRESH_COOKIE_MAX_AGE", 60 * 60 * 24 * 7))
 MAX_WEEKLY_POSTS = 21
+VK_SCOPE = "wall,photos,groups,offline"
+VK_TIMEOUT = 15
+
+logger = logging.getLogger(__name__)
+
+
+class VkApiError(Exception):
+    """Raised when VK API responds with an error."""
+
+    def __init__(self, message: str, payload: dict | None = None):
+        super().__init__(message)
+        self.payload = payload or {}
+
+
+def _missing_vk_settings() -> list[str]:
+    missing: list[str] = []
+    if not getattr(settings, "VK_CLIENT_ID", ""):
+        missing.append("VK_CLIENT_ID")
+    if not getattr(settings, "VK_CLIENT_SECRET", ""):
+        missing.append("VK_CLIENT_SECRET")
+    if not getattr(settings, "VK_REDIRECT_URI", ""):
+        missing.append("VK_REDIRECT_URI")
+    return missing
+
+
+def _popup_response(message: str, *, success: bool = True, title: str = "VK интеграция"):
+    """
+    Returns a tiny HTML page that notifies the user and attempts to close the popup.
+    """
+    status_value = "success" if success else "error"
+    html = f"""
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+    <style>
+      body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; padding: 24px; }}
+    </style>
+  </head>
+  <body>
+    <p>{message}</p>
+    <script>
+      try {{
+        window.opener && window.opener.postMessage({{ type: 'vk-connect', status: '{status_value}' }}, '*');
+      }} catch (err) {{}}
+      setTimeout(function () {{ window.close(); }}, 1200);
+    </script>
+  </body>
+</html>
+    """.strip()
+    return HttpResponse(html)
+
+
+def _vk_api_request(method: str, *, access_token: str, params: dict | None = None,
+                    http_method: str = "get"):
+    url = f"https://api.vk.com/method/{method}"
+    payload = dict(params or {})
+    payload.setdefault("access_token", access_token)
+    payload.setdefault("v", getattr(settings, "VK_API_VERSION", "5.131"))
+
+    if http_method.lower() == "post":
+        response = requests.post(url, data=payload, timeout=VK_TIMEOUT)
+    else:
+        response = requests.get(url, params=payload, timeout=VK_TIMEOUT)
+
+    data = response.json()
+    if "error" in data:
+        raise VkApiError(data["error"].get("error_msg", "VK API error"), data["error"])
+    return data.get("response")
+
+
+def _normalize_group_identifier(value: str) -> str:
+    slug = value.strip()
+    slug = slug.replace("https://vk.com/", "").replace("http://vk.com/", "")
+    slug = slug.replace("vk.com/", "")
+    slug = slug.lstrip("@")
+    for prefix in ("public", "club"):
+        if slug.startswith(prefix):
+            slug = slug[len(prefix):]
+    if slug.startswith("-"):
+        slug = slug[1:]
+    return slug
+
+
+def _fetch_admin_groups(access_token: str, user_id: int | None) -> list[dict]:
+    params = {
+        "extended": 1,
+        "filter": "admin",
+        "fields": "screen_name,type,members_count",
+    }
+    if user_id:
+        params["user_id"] = user_id
+    response = _vk_api_request("groups.get", access_token=access_token, params=params)
+    if isinstance(response, dict):
+        items = response.get("items", [])
+    else:
+        items = response or []
+    return [item for item in items if item.get("is_admin")]
+
+
+def _fetch_single_group(access_token: str, identifier: str) -> dict:
+    response = _vk_api_request(
+        "groups.getById",
+        access_token=access_token,
+        params={"group_id": identifier, "fields": "is_admin,screen_name,type,members_count"},
+    )
+    if not response:
+        raise VkApiError("Группа не найдена")
+    group = response[0]
+    if not group.get("is_admin"):
+        raise VkApiError("У вас нет прав администратора этой группы")
+    return group
+
+
+def _save_vk_integration(client: Client, owner, group_data: dict, access_token: str, user_id: int | None):
+    group_id = int(group_data.get("id"))
+    defaults = {
+        "owner": owner,
+        "group_name": group_data.get("name", ""),
+        "screen_name": group_data.get("screen_name", ""),
+        "access_token": access_token,
+        "user_id": user_id,
+        "status": VkIntegration.STATUS_ACTIVE,
+        "extra": {
+            "type": group_data.get("type"),
+            "members_count": group_data.get("members_count"),
+        },
+    }
+    VkIntegration.objects.update_or_create(
+        client=client,
+        group_id=group_id,
+        defaults=defaults,
+    )
 
 
 def set_token_cookie(response: Response, key: str, value: str, max_age: int):
@@ -392,11 +537,15 @@ class ScheduleListView(generics.ListAPIView):
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
-        return (
+        queryset = (
             Schedule.objects.filter(client=client)
             .select_related("post", "social_account")
             .order_by("scheduled_at")
         )
+        post_id = self.request.query_params.get("post")
+        if post_id:
+            queryset = queryset.filter(post_id=post_id)
+        return queryset
 
 
 # ============================================================================
@@ -849,9 +998,18 @@ class ScheduleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
-        return Schedule.objects.filter(client=client).select_related(
+        queryset = Schedule.objects.filter(client=client).select_related(
             'post', 'social_account'
         ).order_by('scheduled_at')
+        post_id = self.request.query_params.get("post")
+        if post_id:
+            queryset = queryset.filter(post_id=post_id)
+        return queryset
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["client"] = get_active_client(self.request.user)
+        return context
 
     def perform_create(self, serializer):
         client = get_active_client(self.request.user)
@@ -887,6 +1045,239 @@ class SocialAccountViewSet(viewsets.ModelViewSet):
         serializer.save(client=client)
 
 
+class VkIntegrationViewSet(mixins.ListModelMixin,
+                           mixins.DestroyModelMixin,
+                           viewsets.GenericViewSet):
+    """List or delete VK integrations for the active client."""
+
+    permission_classes = [IsTenantOwnerOrEditor]
+    serializer_class = VkIntegrationSerializer
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return (
+            VkIntegration.objects.filter(client=client)
+            .select_related("owner")
+            .order_by("-updated_at")
+        )
+
+
+class VkConnectView(APIView):
+    """Starts VK OAuth flow and redirects user to VK."""
+
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def get(self, request):
+        # Ensure current user has an active client (raises if not)
+        get_active_client(request.user)
+
+        missing = _missing_vk_settings()
+        if missing:
+            msg = (
+                "VK OAuth не настроен. Укажите переменные "
+                f"{', '.join(missing)} на сервере."
+            )
+            return _popup_response(msg, success=False)
+
+        state = secrets.token_urlsafe(16)
+        request.session["vk_oauth_state"] = state
+        target_group = request.query_params.get("group_id")
+        if target_group:
+            request.session["vk_target_group"] = target_group
+        request.session.modified = True
+
+        params = {
+            "client_id": settings.VK_CLIENT_ID,
+            "display": "page",
+            "redirect_uri": settings.VK_REDIRECT_URI,
+            "scope": VK_SCOPE,
+            "response_type": "code",
+            "state": state,
+            "v": getattr(settings, "VK_API_VERSION", "5.131"),
+        }
+        auth_url = "https://oauth.vk.com/authorize?" + urlencode(params)
+        return redirect(auth_url)
+
+
+class VkCallbackView(APIView):
+    """Handles VK OAuth callback, saves integrations and closes the popup."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        missing = _missing_vk_settings()
+        if missing:
+            msg = (
+                "VK OAuth не настроен. Обратитесь к администратору: "
+                f"{', '.join(missing)}"
+            )
+            return _popup_response(msg, success=False)
+
+        provided_state = request.GET.get("state")
+        saved_state = request.session.pop("vk_oauth_state", None)
+        if not provided_state or provided_state != saved_state:
+            return _popup_response("Некорректный ответ авторизации VK", success=False)
+
+        code = request.GET.get("code")
+        if not code:
+            error_description = request.GET.get("error_description") or "VK не вернул код авторизации"
+            return _popup_response(error_description, success=False)
+
+        try:
+            client = get_active_client(request.user)
+        except PermissionDenied:
+            return _popup_response("Пользователь не привязан к клиенту", success=False)
+
+        token_url = "https://oauth.vk.com/access_token"
+        params = {
+            "client_id": settings.VK_CLIENT_ID,
+            "client_secret": settings.VK_CLIENT_SECRET,
+            "redirect_uri": settings.VK_REDIRECT_URI,
+            "code": code,
+        }
+        try:
+            token_response = requests.get(token_url, params=params, timeout=VK_TIMEOUT)
+            token_data = token_response.json()
+        except requests.RequestException as exc:
+            logger.exception("VK token exchange failed: %s", exc)
+            return _popup_response("Не удалось связаться с VK. Попробуйте позже.", success=False)
+
+        if "error" in token_data:
+            message = token_data.get("error_description") or token_data.get("error") or "Ошибка VK OAuth"
+            return _popup_response(f"Ошибка VK OAuth: {message}", success=False)
+
+        access_token = token_data.get("access_token")
+        user_id = token_data.get("user_id")
+        if not access_token:
+            return _popup_response("VK не вернул токен доступа", success=False)
+
+        target_group = request.GET.get("group_id") or request.session.pop("vk_target_group", None)
+        groups: list[dict]
+        try:
+            if target_group:
+                identifier = _normalize_group_identifier(str(target_group))
+                groups = [_fetch_single_group(access_token, identifier)]
+            else:
+                groups = _fetch_admin_groups(access_token, user_id)
+        except VkApiError as exc:
+            logger.warning("VK group fetch error: %s", exc)
+            return _popup_response(str(exc), success=False)
+        except requests.RequestException as exc:
+            logger.exception("VK group fetch failed: %s", exc)
+            return _popup_response("Не удалось получить список групп VK", success=False)
+
+        if not groups:
+            return _popup_response("VK не нашёл групп, где вы администратор.", success=False)
+
+        for group in groups:
+            _save_vk_integration(client, request.user, group, access_token, user_id)
+
+        message = "Группа успешно подключена." if len(groups) == 1 else f"Подключено групп: {len(groups)}."
+        return _popup_response(f"{message} Это окно можно закрыть.")
+
+
+class VkPublishView(APIView):
+    """Publishes a post with optional images to VK."""
+
+    permission_classes = [IsTenantOwnerOrEditor]
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request):
+        client = get_active_client(request.user)
+
+        integration_id = request.data.get("integration_id")
+        if not integration_id:
+            return Response({"success": False, "error": "Не указана интеграция VK"}, status=status.HTTP_400_BAD_REQUEST)
+
+        integration = get_object_or_404(VkIntegration, id=integration_id, client=client)
+        message = (request.data.get("message") or "").strip()
+        images = request.FILES.getlist("images")
+
+        if not message and not images:
+            return Response(
+                {"success": False, "error": "Добавьте текст или изображение для публикации"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            attachments = self._upload_images(integration, images) if images else []
+            params = {
+                "owner_id": -abs(int(integration.group_id)),
+                "from_group": 1,
+                "message": message,
+            }
+            if attachments:
+                params["attachments"] = ",".join(attachments)
+            vk_response = _vk_api_request(
+                "wall.post",
+                access_token=integration.access_token,
+                params=params,
+                http_method="post",
+            )
+        except (VkApiError, ValueError) as exc:
+            logger.warning("VK publish error: %s", exc)
+            integration.status = VkIntegration.STATUS_ERROR
+            integration.save(update_fields=["status"])
+            return Response(
+                {"success": False, "error": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except requests.RequestException as exc:
+            logger.exception("VK publish request failed: %s", exc)
+            integration.status = VkIntegration.STATUS_ERROR
+            integration.save(update_fields=["status"])
+            return Response(
+                {"success": False, "error": "Не удалось отправить данные в VK"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        integration.status = VkIntegration.STATUS_ACTIVE
+        integration.last_published_at = timezone.now()
+        integration.save(update_fields=["status", "last_published_at"])
+
+        return Response({"success": True, "vk_response": vk_response})
+
+    def _upload_images(self, integration: VkIntegration, files):
+        attachments: list[str] = []
+        for upload_file in files:
+            server_info = _vk_api_request(
+                "photos.getWallUploadServer",
+                access_token=integration.access_token,
+                params={"group_id": integration.group_id},
+            )
+            upload_url = server_info.get("upload_url")
+            if not upload_url:
+                raise VkApiError("VK не вернул адрес загрузки изображений")
+
+            upload_file.seek(0)
+            try:
+                upload_response = requests.post(
+                    upload_url,
+                    files={"photo": (upload_file.name, upload_file.read(), upload_file.content_type or "image/jpeg")},
+                    timeout=VK_TIMEOUT,
+                )
+                upload_data = upload_response.json()
+            except requests.RequestException as exc:
+                raise VkApiError("Не удалось загрузить изображение в VK") from exc
+            except ValueError as exc:
+                raise VkApiError("VK вернул некорректный ответ при загрузке изображения") from exc
+
+            save_response = _vk_api_request(
+                "photos.saveWallPhoto",
+                access_token=integration.access_token,
+                params={
+                    "group_id": integration.group_id,
+                    "photo": upload_data.get("photo"),
+                    "server": upload_data.get("server"),
+                    "hash": upload_data.get("hash"),
+                },
+                http_method="post",
+            )
+            for item in save_response or []:
+                attachments.append(f"photo{item['owner_id']}_{item['id']}")
+        return attachments
+
+
 class ClientSettingsView(APIView):
     """
     API view for getting and updating client settings.
@@ -909,6 +1300,75 @@ class ClientSettingsView(APIView):
         serializer.save()
         return Response(serializer.data)
 
+
+class ClientExpertBooksView(APIView):
+    """AI-powered expert book recommendations for active client audience."""
+
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        pains = request.data.get("pains") or client.pains or ""
+        desires = request.data.get("desires") or client.desires or ""
+        avatar = request.data.get("avatar") or client.avatar or ""
+        language = request.data.get("language") or "ru"
+
+        if not (pains or desires):
+            return Response(
+                {
+                    "success": False,
+                    "error": "Укажите хотя бы одну боль или желание аудитории",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            generator = AIContentGenerator()
+        except ValueError as exc:
+            return Response(
+                {"success": False, "error": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        result = generator.generate_book_recommendations(
+            pains=pains,
+            desires=desires,
+            avatar=avatar,
+            brand=client.name,
+            language=language,
+        )
+
+        saved = False
+        if result.get("success"):
+            text_value = str(result.get("text") or "").strip()
+            if not text_value:
+                books_list = result.get("books")
+                if isinstance(books_list, list):
+                    lines = []
+                    for idx, item in enumerate(books_list, start=1):
+                        if isinstance(item, dict):
+                            title = str(item.get("title") or "").strip()
+                            author = str(item.get("author") or "").strip()
+                            reason = str(item.get("reason") or "").strip()
+                        else:
+                            title = str(item or "").strip()
+                            author = ""
+                            reason = ""
+                        if not title:
+                            continue
+                        suffix = f" — {author}" if author else ""
+                        reason_text = f": {reason}" if reason else ""
+                        lines.append(f"{idx}. {title}{suffix}{reason_text}")
+                    text_value = "\n".join(lines).strip()
+            if text_value:
+                client.expert_books = text_value
+                client.save(update_fields=["expert_books"])
+                saved = True
+                result["text"] = text_value
+        result["saved"] = saved
+
+        http_status = status.HTTP_200_OK if result.get("success") else status.HTTP_502_BAD_GATEWAY
+        return Response(result, status=http_status)
 
 
 class PostTypeViewSet(viewsets.ModelViewSet):
