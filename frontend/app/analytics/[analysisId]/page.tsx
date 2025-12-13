@@ -23,9 +23,7 @@ import {
 } from '@/components/ui/table';
 
 type AnalyticsDetailPageProps = {
-  params: {
-    analysisId: string;
-  };
+  params: Promise<{ analysisId: string }>;
 };
 
 type AudienceProfile = NonNullable<ChannelAnalysisResult['audience_profile']>;
@@ -62,7 +60,10 @@ const DAY_NAMES_RU: Record<string, string> = {
 };
 
 export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps) {
-  const resolvedParams = typeof params?.then === 'function' ? use(params) : params;
+  const resolvedParams =
+    typeof (params as unknown as { then?: unknown })?.then === 'function'
+      ? use(params)
+      : (params as unknown as { analysisId: string });
   const router = useRouter();
   const [analysis, setAnalysis] = useState<ChannelAnalysisDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
