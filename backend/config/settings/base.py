@@ -16,7 +16,27 @@ load_dotenv(BASE_DIR / '.env')
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me")  # поменяешь потом на нормальный
 DEBUG = os.getenv("DEBUG", "True") == "True"
 
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
+DEFAULT_ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "solarlab.media",
+    "adm.solarlab.media",
+]
+
+def _parse_hosts(hosts_value: str) -> list[str]:
+    return [host.strip() for host in hosts_value.split(",") if host.strip()]
+
+env_allowed_hosts_raw = os.getenv("ALLOWED_HOSTS")
+if env_allowed_hosts_raw:
+    parsed_hosts = _parse_hosts(env_allowed_hosts_raw)
+    if "*" in parsed_hosts:
+        ALLOWED_HOSTS = ["*"]
+    else:
+        # Append defaults to ensure production domains (adm.solarlab.media, etc.) always whitelisted
+        ALLOWED_HOSTS = list(dict.fromkeys(parsed_hosts + DEFAULT_ALLOWED_HOSTS))
+else:
+    ALLOWED_HOSTS = DEFAULT_ALLOWED_HOSTS
 
 INSTALLED_APPS = [
     # Django
