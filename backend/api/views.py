@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 
+from core.audience_profiles import merge_audience_profiles
 from core.models import (
     Client,
     ContentTemplate,
@@ -1198,6 +1199,61 @@ class ChannelAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == "list":
             return ChannelAnalysisListSerializer
         return ChannelAnalysisDetailSerializer
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="merge_audience",
+        permission_classes=[IsTenantOwnerOrEditor],
+    )
+    def merge_audience(self, request, pk=None):
+        """Добавить описание ЦА из анализа канала в профиль клиента."""
+        client = get_active_client(request.user)
+        analysis = self.get_object()
+
+        if analysis.client_id != client.id:
+            return Response({"success": False, "error": "Анализ не принадлежит текущему клиенту"}, status=status.HTTP_403_FORBIDDEN)
+
+        if analysis.status != ChannelAnalysis.STATUS_COMPLETED:
+            return Response({"success": False, "error": "Анализ ещё не завершён"}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = analysis.result if isinstance(analysis.result, dict) else {}
+        profile = result.get("audience_profile")
+
+        def _has_text(value) -> bool:
+            if isinstance(value, str):
+                return bool(value.strip())
+            if isinstance(value, (list, tuple)):
+                return any(_has_text(item) for item in value)
+            if isinstance(value, dict):
+                return any(_has_text(item) for item in value.values())
+            return bool(value)
+
+        if not isinstance(profile, dict) or not any(_has_text(value) for value in profile.values()):
+            return Response(
+                {"success": False, "error": "Для этого анализа нет описания целевой аудитории"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        current_profile = {
+            "avatar": client.avatar or "",
+            "pains": client.pains or "",
+            "desires": client.desires or "",
+            "objections": client.objections or "",
+        }
+
+        merged_profile = merge_audience_profiles(current_profile, profile)
+        for field, value in merged_profile.items():
+            setattr(client, field, value)
+        client.save(update_fields=["avatar", "pains", "desires", "objections"])
+
+        return Response(
+            {
+                "success": True,
+                "message": "Описание целевой аудитории обновлено в настройках клиента",
+                "client_profile": merged_profile,
+            }
+        )
 
 
 class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):

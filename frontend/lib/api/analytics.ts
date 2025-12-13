@@ -68,6 +68,17 @@ export interface ChannelAnalysisDetail extends ChannelAnalysisRecord {
   error?: string;
 }
 
+export interface MergeAudienceResponse {
+  success: boolean;
+  message: string;
+  client_profile: {
+    avatar: string;
+    pains: string;
+    desires: string;
+    objections: string;
+  };
+}
+
 export const analyticsApi = {
   /**
    * Analyze a channel to extract insights
@@ -111,5 +122,14 @@ export const analyticsApi = {
    */
   getAnalysisDetail: async (id: string | number): Promise<ChannelAnalysisDetail> => {
     return apiFetch<ChannelAnalysisDetail>(`/channel-analyses/${id}/`);
+  },
+
+  /**
+   * Merge channel audience profile into client settings
+   */
+  mergeAudienceProfile: async (id: string | number): Promise<MergeAudienceResponse> => {
+    return apiFetch<MergeAudienceResponse>(`/channel-analyses/${id}/merge_audience/`, {
+      method: 'POST',
+    });
   },
 };

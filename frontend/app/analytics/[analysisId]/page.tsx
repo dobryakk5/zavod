@@ -4,7 +4,12 @@ import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { analyticsApi, type ChannelAnalysisDetail, type ChannelAnalysisRecord } from '@/lib/api/analytics';
+import {
+  analyticsApi,
+  type ChannelAnalysisDetail,
+  type ChannelAnalysisRecord,
+  type ChannelAnalysisResult,
+} from '@/lib/api/analytics';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,11 +22,20 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
-type PageProps = {
+type AnalyticsDetailPageProps = {
   params: {
     analysisId: string;
   };
 };
+
+type AudienceProfile = NonNullable<ChannelAnalysisResult['audience_profile']>;
+
+const AUDIENCE_FIELDS: Array<{ label: string; key: keyof AudienceProfile }> = [
+  { label: 'Аватар клиента', key: 'avatar' },
+  { label: 'Боли', key: 'pains' },
+  { label: 'Хотелки', key: 'desires' },
+  { label: 'Возражения и страхи', key: 'objections' },
+];
 
 const statusLabels: Record<ChannelAnalysisRecord['status'], string> = {
   pending: 'В очереди',
@@ -47,11 +61,13 @@ const DAY_NAMES_RU: Record<string, string> = {
   Sunday: 'Воскресенье',
 };
 
-export default function AnalysisDetailPage({ params }: PageProps) {
+export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps) {
   const resolvedParams = typeof params?.then === 'function' ? use(params) : params;
   const router = useRouter();
   const [analysis, setAnalysis] = useState<ChannelAnalysisDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isMergingAudience, setIsMergingAudience] = useState(false);
+  const [clientProfile, setClientProfile] = useState<AudienceProfile | null>(null);
   const formatNumber = (value?: number | null) => (value ?? 0).toLocaleString('ru-RU');
   const formatDateTime = (value: string) => new Date(value).toLocaleString('ru-RU');
 
@@ -79,8 +95,30 @@ export default function AnalysisDetailPage({ params }: PageProps) {
     };
   }, [resolvedParams.analysisId]);
 
+  useEffect(() => {
+    setClientProfile(null);
+  }, [resolvedParams.analysisId]);
+
   const result = analysis?.result ?? null;
   const audienceProfile = result?.audience_profile;
+  const hasAudienceProfileData =
+    !!audienceProfile && AUDIENCE_FIELDS.some(({ key }) => (audienceProfile[key] ?? '').trim().length > 0);
+
+  const handleMergeAudience = async () => {
+    if (!analysis || !analysis.id || !hasAudienceProfileData) {
+      return;
+    }
+    setIsMergingAudience(true);
+    try {
+      const response = await analyticsApi.mergeAudienceProfile(analysis.id);
+      setClientProfile(response.client_profile);
+      toast.success(response.message || 'Описание ЦА клиента обновлено');
+    } catch (error) {
+      toast.error('Не удалось обновить описание клиента');
+    } finally {
+      setIsMergingAudience(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -253,23 +291,25 @@ export default function AnalysisDetailPage({ params }: PageProps) {
 
           <section>
             <Card>
-              <CardHeader>
-                <CardTitle>Целевая аудитория</CardTitle>
-                <p className="text-sm text-gray-500">К кому обращаются на канале</p>
+              <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <CardTitle>Целевая аудитория</CardTitle>
+                  <p className="text-sm text-gray-500">К кому обращаются на канале</p>
+                </div>
+                {hasAudienceProfileData && (
+                  <Button variant="secondary" onClick={handleMergeAudience} disabled={isMergingAudience}>
+                    {isMergingAudience ? 'Добавляем...' : 'Добавить в настройки клиента'}
+                  </Button>
+                )}
               </CardHeader>
               <CardContent>
                 {audienceProfile && Object.values(audienceProfile).some((value) => value?.trim()) ? (
                   <dl className="space-y-4">
-                    {[
-                      { label: 'Аватар клиента', key: 'avatar' },
-                      { label: 'Боли', key: 'pains' },
-                      { label: 'Хотелки', key: 'desires' },
-                      { label: 'Возражения и страхи', key: 'objections' },
-                    ].map((item) => (
+                    {AUDIENCE_FIELDS.map((item) => (
                       <div key={item.key} className="space-y-1">
                         <dt className="text-sm font-medium text-gray-500">{item.label}</dt>
                         <dd className="text-base text-gray-900 whitespace-pre-line">
-                          {audienceProfile?.[item.key as keyof typeof audienceProfile]?.trim() || '—'}
+                          {audienceProfile?.[item.key]?.trim() || '—'}
                         </dd>
                       </div>
                     ))}
@@ -278,6 +318,21 @@ export default function AnalysisDetailPage({ params }: PageProps) {
                   <p className="text-sm text-gray-500">
                     Данные ещё не собраны. Запустите анализ канала повторно, чтобы получить портрет аудитории.
                   </p>
+                )}
+                {clientProfile && (
+                  <div className="mt-6 rounded-lg border border-green-100 bg-green-50 p-4">
+                    <p className="text-sm font-semibold text-green-900">Профиль клиента обновлён</p>
+                    <dl className="mt-3 space-y-3">
+                      {AUDIENCE_FIELDS.map((item) => (
+                        <div key={`client-${item.key}`} className="space-y-1">
+                          <dt className="text-xs font-medium uppercase tracking-wide text-green-800">{item.label}</dt>
+                          <dd className="text-sm text-green-900 whitespace-pre-line">
+                            {clientProfile?.[item.key]?.trim() || '—'}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
                 )}
               </CardContent>
             </Card>
