@@ -3,8 +3,11 @@
 import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Loader2 } from 'lucide-react';
 import * as z from 'zod';
 import { clientApi } from '@/lib/api/client';
+import { seoApi } from '@/lib/api/seo';
+import { useRole } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import {
   Form,
@@ -43,6 +46,8 @@ type SettingsFormValues = z.infer<typeof settingsFormSchema>;
 export function ClientSettingsForm() {
   const [settings, setSettings] = useState<ClientSettings | null>(null);
   const [loading, setLoading] = useState(false);
+  const [generatingSEO, setGeneratingSEO] = useState(false);
+  const { canEdit } = useRole();
 
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsFormSchema),
@@ -89,6 +94,22 @@ export function ClientSettingsForm() {
       toast.error('Ошибка при сохранении настроек');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGenerateSEO = async () => {
+    if (!canEdit || generatingSEO) {
+      return;
+    }
+    setGeneratingSEO(true);
+    try {
+      const response = await seoApi.generate();
+      toast.success(response.message || 'Генерация SEO запущена');
+    } catch (error) {
+      console.error('Failed to start SEO generation', error);
+      toast.error('Не удалось запустить SEO-анализ');
+    } finally {
+      setGeneratingSEO(false);
     }
   };
 
@@ -261,6 +282,35 @@ export function ClientSettingsForm() {
         <Button type="submit" disabled={loading}>
           {loading ? 'Сохранение...' : 'Сохранить изменения'}
         </Button>
+
+        <div className="space-y-3 rounded-lg border border-dashed border-slate-200 p-4">
+          <div>
+            <p className="text-base font-semibold">Генерация SEO групп</p>
+            <p className="text-sm text-muted-foreground">
+              Создаёт новый комплект SEO-групп (боли, желания, возражения и ключевые фразы) для текущего клиента.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleGenerateSEO}
+            disabled={!canEdit || generatingSEO}
+          >
+            {generatingSEO ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Генерация...
+              </>
+            ) : (
+              'Создать SEO-подборку'
+            )}
+          </Button>
+          {!canEdit && (
+            <p className="text-xs text-muted-foreground">
+              Кнопка доступна владельцу и редактору.
+            </p>
+          )}
+        </div>
       </form>
     </Form>
   );

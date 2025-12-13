@@ -6,7 +6,12 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Контент-кабинет',
-  description: 'Личный кабинет клиента контент-сервиса'
+  description: 'Личный кабинет клиента контент-сервиса',
+  icons: {
+    icon: '/favicon.ico',
+    shortcut: '/favicon.ico',
+    apple: '/favicon.ico'
+  }
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

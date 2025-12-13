@@ -17,7 +17,9 @@ export class ApiError extends Error {
   }
 }
 
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
+const normalizeBaseUrl = (url: string) => url.replace(/\/+$/, '');
+
+export const API_BASE_URL = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api');
 export const BACKEND_BASE_URL = API_BASE_URL.replace(/\/api\/?$/, '');
 
 let isRefreshing = false;
@@ -64,8 +66,16 @@ export async function apiFetch<TResponse>(endpoint: string, options: ApiRequestO
   const hasJsonBody = body !== undefined && !isFormData;
   const requestBody = hasJsonBody ? JSON.stringify(body) : body;
 
+  const isAbsoluteEndpoint = /^https?:\/\//i.test(endpoint);
+  const normalizedEndpoint = isAbsoluteEndpoint
+    ? endpoint
+    : endpoint.startsWith('/')
+      ? endpoint
+      : `/${endpoint}`;
+  const requestUrl = isAbsoluteEndpoint ? normalizedEndpoint : `${API_BASE_URL}${normalizedEndpoint}`;
+
   const makeRequest = async (): Promise<Response> => {
-    return fetch(`${API_BASE_URL}${endpoint}`, {
+    return fetch(requestUrl, {
       method,
       headers: {
         ...(hasJsonBody ? { 'Content-Type': 'application/json' } : {}),

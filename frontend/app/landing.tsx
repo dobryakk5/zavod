@@ -11,14 +11,14 @@ export default function SolarLabLanding() {
       <header className="w-full max-w-6xl mx-auto px-6 py-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-300 via-yellow-200 to-orange-200 flex items-center justify-center shadow-md">
-              <Image
-                src="/solarlab-logo.png"
-                alt="SolarLab AI"
-                width={28}
-                height={28}
-              />
-            </div>
+            <Image
+              src="/solarlab-logo.png"
+              alt="SolarLab AI"
+              width={40}
+              height={40}
+              className="h-10 w-10 object-contain"
+              priority
+            />
             <div>
               <div className="text-lg font-semibold">SolarLab</div>
             </div>
