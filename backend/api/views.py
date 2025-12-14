@@ -43,6 +43,7 @@ from core.models import (
 )
 from core import tasks
 from core.telegram_client import normalize_telegram_channel_identifier
+from core.social_accounts import sync_client_default_telegram_account
 from core.system_settings import get_image_generation_model
 
 from .authentication import CookieJWTAuthentication
@@ -1038,6 +1039,7 @@ class SocialAccountViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
+        sync_client_default_telegram_account(client)
         return SocialAccount.objects.filter(client=client).order_by('platform', 'name')
 
     def perform_create(self, serializer):

@@ -20,6 +20,7 @@ from core.models import (
     VkIntegration,
 )
 from core.telegram_client import normalize_telegram_channel_identifier
+from core.social_accounts import sync_client_default_telegram_account
 
 
 class PostSerializer(serializers.ModelSerializer):
@@ -456,7 +457,17 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
     def validate_telegram_client_channel(self, value: str | None) -> str:
         if not value:
             return ""
-        return normalize_telegram_channel_identifier(value)
+        return normalize_telegram_channel_identifier(str(value))
+
+    def update(self, instance, validated_data):
+        channel_provided = "telegram_client_channel" in validated_data
+        updated_client = super().update(instance, validated_data)
+        if channel_provided:
+            sync_client_default_telegram_account(
+                updated_client,
+                channel_value=validated_data.get("telegram_client_channel"),
+            )
+        return updated_client
 
 
 
