@@ -34,17 +34,24 @@ def generate_post_image(request, post_id):
             'error': 'Пост должен иметь текст для генерации изображения'
         }, status=400)
 
-    # Получить модель из параметров запроса (по умолчанию OpenRouter)
-    model_param = (request.GET.get('model') or 'openrouter').lower()
+    # Получить модель из тела запроса или query параметров
+    model_param = (request.POST.get('model') or request.GET.get('model') or '').lower()
     alias_map = {
         'telegram_bot': 'veo_photo',
         'sora_images': 'veo_photo',
         'veo': 'veo_photo',
+        'giga': 'giga_photo',
+        'gigachat': 'giga_photo',
     }
     model = alias_map.get(model_param, model_param)
 
+    # If no model specified, use the method from SystemSetting
+    if not model:
+        from .system_settings import get_image_generation_method
+        model = get_image_generation_method()
+
     # Валидация модели
-    allowed_models = {'openrouter', 'veo_photo'}
+    allowed_models = {'openrouter', 'veo_photo', 'giga_photo'}
     if model not in allowed_models:
         return JsonResponse({
             'success': False,
@@ -55,8 +62,9 @@ def generate_post_image(request, post_id):
     generate_image_for_post.delay(post_id, model=model)
 
     model_name_map = {
-        'openrouter': f"OpenRouter ({get_image_generation_model()})",
-        'veo_photo': 'VEO (Telegram)',
+        'openrouter': 'OpenRouter API',
+        'veo_photo': 'VEO (Telegram бот)',
+        'giga_photo': 'GigaChat (Telegram бот)',
     }
     model_name = model_name_map.get(model, model)
 

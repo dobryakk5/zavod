@@ -29,7 +29,7 @@ from .models import (
     PostTone,
     SystemSetting,
 )
-from .system_settings import invalidate_system_settings_cache, get_image_generation_model
+from .system_settings import invalidate_system_settings_cache, get_image_generation_model, get_image_generation_method
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +243,8 @@ class SystemSettingAdmin(admin.ModelAdmin):
         "default_ai_model",
         "post_ai_model",
         "fallback_ai_model",
-        "image_generation_model",
+        "image_generation_method",
+        "image_openrouter_model",
         "image_generation_timeout",
         "video_generation_timeout",
         "updated_at",
@@ -256,7 +257,8 @@ class SystemSettingAdmin(admin.ModelAdmin):
                     "default_ai_model",
                     "post_ai_model",
                     "fallback_ai_model",
-                    "image_generation_model",
+                    "image_generation_method",
+                    "image_openrouter_model",
                     "video_prompt_instructions",
                 )
             },
@@ -641,22 +643,49 @@ class PostAdmin(admin.ModelAdmin):
     image_preview.short_description = "Превью изображения"
 
     def image_generate_button(self, obj):
-        """Кнопки для генерации изображения с помощью AI (две модели)"""
+        """Кнопка для генерации изображения с помощью AI"""
         if obj.pk:  # Только для существующих постов
             generate_url = reverse('core:generate_post_image', args=[obj.pk])
-            openrouter_display = f"OpenRouter ({get_image_generation_model()})"
-            return format_html(
-                '''
-                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <button type="button" class="generate-image-btn" data-default-text="🖼️ Изображение" onclick="generateImage('{url}', 'openrouter', this)"
-                    style="padding: 10px 15px; background-color: #417690; color: white;
-                    border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                    🖼️ Изображение</button>
+            generation_method = get_image_generation_method()
 
-                    <button type="button" class="generate-image-btn" data-default-text="📸 VEO фото" onclick="generateImage('{url}', 'veo_photo', this)"
-                    style="padding: 10px 15px; background-color: #5e35b1; color: white;
+            # Определяем текст и цвет кнопки в зависимости от метода
+            method_configs = {
+                'openrouter': {
+                    'text': f"🖼️ Изображение (OpenRouter)",
+                    'color': '#417690'
+                },
+                'veo_photo': {
+                    'text': f"📸 Изображение (VEO)",
+                    'color': '#5e35b1'
+                },
+                'giga_photo': {
+                    'text': f"🎨 Изображение (Giga)",
+                    'color': '#2e7d32'
+                }
+            }
+            method_display_names = {
+                'openrouter': f"OpenRouter ({get_image_generation_model()})",
+                'veo_photo': 'VEO (Telegram бот)',
+                'giga_photo': 'GigaChat (Telegram бот)'
+            }
+
+            config = method_configs.get(generation_method, method_configs['openrouter'])
+            method_label = method_display_names.get(generation_method, generation_method)
+            settings_url = reverse('admin:core_systemsetting_changelist')
+
+            return format_html(
+                f'''
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button type="button" class="generate-image-btn" data-default-text="{config["text"]}" data-method-label="{method_label}" onclick="generateImage('{generate_url}', this)"
+                    style="padding: 10px 15px; background-color: {config["color"]}; color: white;
                     border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                    📸 VEO фото</button>
+                    {config["text"]}</button>
+                </div>
+                <div style="margin-top: 6px; font-size: 12px; color: #6c757d;">
+                    Используется метод <strong>{method_label}</strong> из
+                    <a href="{settings_url}" target="_blank" style="color: inherit; text-decoration: underline;">
+                        системных настроек
+                    </a>
                 </div>
                 <div id="generate-status" style="margin-top: 10px; font-size: 13px;"></div>
                 <script>
@@ -675,9 +704,10 @@ class PostAdmin(admin.ModelAdmin):
                     return cookieValue;
                 }}
 
-                function generateImage(baseUrl, model, clickedButton) {{
+                function generateImage(baseUrl, clickedButton) {{
                     const buttons = document.querySelectorAll('.generate-image-btn');
                     const statusDiv = document.getElementById('generate-status');
+                    const methodLabel = clickedButton.dataset.methodLabel || 'выбранный метод';
 
                     // Отключить все кнопки
                     buttons.forEach(btn => {{
@@ -686,23 +716,17 @@ class PostAdmin(admin.ModelAdmin):
                     }});
 
                     clickedButton.textContent = 'Генерируется...';
-
-                    const modelNames = {{
-                        'openrouter': '{openrouter_display}',
-                        'veo_photo': 'VEO (Telegram бот)'
-                    }};
-                    const modelName = modelNames[model] || model;
-                    statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Генерация изображения началась (' + modelName + ')...</span>';
+                    statusDiv.innerHTML = '<span style="color: #007bff;">⏳ Генерация изображения началась (' + methodLabel + ')...</span>';
 
                     const csrftoken = getCookie('csrftoken');
-                    const url = baseUrl + '?model=' + model;
 
-                    fetch(url, {{
+                    fetch(baseUrl, {{
                         method: 'POST',
                         headers: {{
                             'X-CSRFToken': csrftoken,
                             'Content-Type': 'application/json',
                         }},
+                        body: JSON.stringify({{}}),
                         credentials: 'same-origin'
                     }})
                     .then(response => {{
@@ -738,11 +762,10 @@ class PostAdmin(admin.ModelAdmin):
                 }}
                 </script>
                 ''',
-                url=generate_url,
-                openrouter_display=openrouter_display
+                url=generate_url
             )
         return "Сохраните пост, чтобы сгенерировать изображение"
-    image_generate_button.short_description = "AI генерация"
+    image_generate_button.short_description = "AI фото"
 
     def video_generate_button(self, obj):
         """Кнопка генерации видео из текущего изображения поста."""
@@ -1017,16 +1040,16 @@ class PostAdmin(admin.ModelAdmin):
         """Сгенерировать изображение для выбранных постов"""
         from .tasks import generate_image_for_post
 
-        # Фильтровать только посты без изображения
-        posts_without_image = queryset.filter(image='')
-        count = posts_without_image.count()
+        # Фильтровать только посты без изображений
+        posts_without_images = queryset.filter(images__isnull=True)
+        count = posts_without_images.count()
 
         if count == 0:
             self.message_user(request, "Все выбранные посты уже имеют изображения", level="warning")
             return
 
         # Запустить задачи генерации
-        for post in posts_without_image:
+        for post in posts_without_images:
             generate_image_for_post.delay(post.id)
 
         self.message_user(request, f"Запущена генерация изображений для {count} постов")

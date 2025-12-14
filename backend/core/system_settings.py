@@ -13,6 +13,7 @@ VIDEO_PROMPT_INSTRUCTIONS_CACHE_KEY = "core:video_prompt_instructions"
 IMAGE_TIMEOUT_CACHE_KEY = "core:image_generation_timeout"
 VIDEO_TIMEOUT_CACHE_KEY = "core:video_generation_timeout"
 IMAGE_MODEL_CACHE_KEY = "core:image_generation_model"
+IMAGE_METHOD_CACHE_KEY = "core:image_generation_method"
 DEFAULT_AI_MODEL_CACHE_TIMEOUT = 60  # seconds
 
 
@@ -56,10 +57,19 @@ def _fetch_video_prompt_instructions_from_db() -> str:
         return ""
 
 
+def _fetch_image_generation_method_from_db() -> str:
+    try:
+        setting = SystemSetting.get_solo()
+        return setting.image_generation_method or "openrouter"
+    except Exception as exc:
+        logger.warning("Failed to load SystemSetting image method: %s", exc)
+        return "openrouter"
+
+
 def _fetch_image_generation_model_from_db() -> str:
     try:
         setting = SystemSetting.get_solo()
-        return setting.image_generation_model or SystemSetting.DEFAULT_IMAGE_AI_MODEL
+        return setting.image_openrouter_model or SystemSetting.DEFAULT_IMAGE_AI_MODEL
     except Exception as exc:
         logger.warning("Failed to load SystemSetting image model: %s", exc)
         return SystemSetting.DEFAULT_IMAGE_AI_MODEL
@@ -143,6 +153,18 @@ def get_video_prompt_instructions(use_cache: bool = True) -> str:
     return instructions
 
 
+def get_image_generation_method(use_cache: bool = True) -> str:
+    """Return method for image generation ('openrouter', 'veo_photo', 'giga_photo')."""
+    if use_cache:
+        cached = cache.get(IMAGE_METHOD_CACHE_KEY)
+        if cached:
+            return cached
+    method = _fetch_image_generation_method_from_db()
+    if use_cache:
+        cache.set(IMAGE_METHOD_CACHE_KEY, method, DEFAULT_AI_MODEL_CACHE_TIMEOUT)
+    return method
+
+
 def get_image_generation_model(use_cache: bool = True) -> str:
     """Return model name for image generation requests."""
     if use_cache:
@@ -184,6 +206,7 @@ def invalidate_system_settings_cache():
     cache.delete(POST_AI_MODEL_CACHE_KEY)
     cache.delete(FALLBACK_AI_MODEL_CACHE_KEY)
     cache.delete(VIDEO_PROMPT_INSTRUCTIONS_CACHE_KEY)
+    cache.delete(IMAGE_METHOD_CACHE_KEY)
     cache.delete(IMAGE_MODEL_CACHE_KEY)
     cache.delete(IMAGE_TIMEOUT_CACHE_KEY)
     cache.delete(VIDEO_TIMEOUT_CACHE_KEY)

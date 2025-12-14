@@ -4,6 +4,7 @@ import os
 import queue
 import random
 import threading
+import time
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from zoneinfo import ZoneInfo
 
 from django.core.files import File
+from django.db import close_old_connections
 from django.utils import timezone
 
 from ..models import (
@@ -26,7 +28,12 @@ from ..models import (
     Schedule,
     SocialAccount,
 )
+from core.foto_video_gen import (
+    generate_image_from_telegram_bot,
+    generate_image_from_gigachat_bot,
+)
 from ..ai_generator import AIContentGenerator
+from ..system_settings import get_image_generation_method
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +49,29 @@ WEEKDAY_LABELS = [
 
 MAX_WEEKLY_POSTS = 21
 TIE_BREAKER_DAY_ORDER = [0, 2, 4, 1, 3, 5, 6]
+
+
+def _get_post_for_task(post_id: int, attempts: int = 3, delay: float = 0.2) -> Optional[Post]:
+    """
+    Best-effort lookup for a Post inside Celery workers.
+
+    SQLite + prefork workers sometimes keep stale DB connections alive.
+    Closing the old connection before each attempt mitigates this.
+    """
+    for attempt in range(1, attempts + 1):
+        close_old_connections()
+        try:
+            return Post.objects.select_related("client").get(id=post_id)
+        except Post.DoesNotExist:
+            if attempt < attempts:
+                logger.warning(
+                    "Post %s not found on attempt %s/%s, retrying...",
+                    post_id,
+                    attempt,
+                    attempts,
+                )
+                time.sleep(delay * attempt)
+    return None
 
 
 def _get_client_timezone(client: Client):
@@ -1402,42 +1432,35 @@ def generate_videos_for_posts(post_ids: List[int], videos_per_post: int = 1):
 
 
 @shared_task
-def generate_image_for_post(post_id: int, model: str = "openrouter"):
+def generate_image_for_post(post_id: int, model: Optional[str] = None):
     """
     Сгенерировать изображение для поста используя AI.
 
     Args:
         post_id: ID поста (Post)
-        model: Режим генерации изображения:
-            - "openrouter": модель OpenRouter из настроек SystemSetting
-            - "veo_photo": генерация через Telegram бота (например, VEO)
 
     Returns:
         True при успехе, False при ошибке
     """
     try:
-        # Получить Post
-        post = Post.objects.select_related('client').get(id=post_id)
-
-        normalized_model = (model or "openrouter").lower()
-        model_aliases = {
-            "nanobanana": "openrouter",
-            "pollinations": "openrouter",
-            "huggingface": "openrouter",
-            "flux2": "openrouter",
-            "sora_images": "veo_photo",
-            "telegram_bot": "veo_photo",
-            "veo": "veo_photo",
-        }
-        resolved_model = model_aliases.get(normalized_model, normalized_model)
-        if resolved_model not in {"openrouter", "veo_photo"}:
-            logger.error("Неизвестная модель генерации изображения: %s", model)
+        post = _get_post_for_task(post_id)
+        if not post:
+            logger.error(
+                "Пост с ID %s не найден в базе данных даже после повторных попыток",
+                post_id,
+            )
             return False
-        if resolved_model != model:
-            logger.info("Модель %s преобразована в %s", model, resolved_model)
-        model = resolved_model
 
-        logger.info(f"Генерация изображения для поста: {post.title} (ID={post.id}) с моделью '{model}'")
+        # Получить метод генерации из аргумента или настроек
+        generation_method = model or get_image_generation_method()
+        allowed_methods = {"openrouter", "veo_photo", "giga_photo"}
+        if generation_method not in allowed_methods:
+            logger.warning(
+                "Unknown image generation method '%s', falling back to system default",
+                generation_method,
+            )
+            generation_method = get_image_generation_method()
+        logger.info(f"Генерация изображения для поста: {post.title} (ID={post.id}) методом '{generation_method}'")
 
         # Проверить, что у поста есть текст
         if not post.text:
@@ -1477,15 +1500,13 @@ def generate_image_for_post(post_id: int, model: str = "openrouter"):
         temp_image_path = os.path.join(settings.MEDIA_ROOT, 'temp', image_filename)
         os.makedirs(os.path.dirname(temp_image_path), exist_ok=True)
 
-        logger.info(f"Генерация изображения моделью '{model}' и сохранение в {temp_image_path}...")
+        logger.info(f"Генерация изображения методом '{generation_method}' и сохранение в {temp_image_path}...")
 
         cleanup_paths: Set[str] = set()
         result: Dict[str, Any] = {}
         final_image_path: Optional[str] = None
 
-        if model == "veo_photo":
-            from ..core.foto_video_gen import generate_image_from_telegram_bot
-
+        if generation_method == "veo_photo":
             bot_username = (
                 os.getenv("IMAGE_BOT_USERNAME")
                 or os.getenv("VEO_BOT_USERNAME")
@@ -1507,11 +1528,40 @@ def generate_image_for_post(post_id: int, model: str = "openrouter"):
             )
             final_image_path = result.get("image_path")
             cleanup_paths.update(result.get("cleanup_paths") or [])
+        elif generation_method == "giga_photo":
+            # Переводим промпт на русский для GigaChat
+            try:
+                russian_prompt = generator.get_ai_response(
+                    f"Переведи этот промпт для генерации изображения на русский язык. Сохрани стиль и детали, но сделай его на русском: {image_prompt}",
+                    max_tokens=300,
+                    temperature=0.3
+                )
+                if russian_prompt:
+                    image_prompt = russian_prompt.strip()
+                    logger.info(f"Промпт переведен на русский: {image_prompt[:100]}")
+            except Exception as e:
+                logger.warning(f"Не удалось перевести промпт на русский: {e}")
+
+            result = generate_image_from_gigachat_bot(
+                prompt=image_prompt,
+                session_path=(
+                    os.getenv("GIGA_BOT_SESSION_PATH")
+                    or os.getenv("GIGA_BOT_SESSION_FILE")
+                    or os.getenv("TELEGRAM_SESSION_PATH")
+                ),
+                session_name=os.getenv("GIGA_BOT_SESSION_NAME"),
+                timeout=os.getenv("GIGA_BOT_TIMEOUT"),
+                api_id=os.getenv("TELEGRAM_API_ID"),
+                api_hash=os.getenv("TELEGRAM_API_HASH")
+            )
+            final_image_path = result.get("image_path")
+            cleanup_paths.update(result.get("cleanup_paths") or [])
         else:
+            # Для openrouter используем generator.generate_image
             result = generator.generate_image(
                 prompt=image_prompt,
                 output_path=temp_image_path,
-                model=model
+                model="openrouter"
             )
             final_image_path = temp_image_path
             cleanup_paths.add(temp_image_path)
@@ -1543,7 +1593,7 @@ def generate_image_for_post(post_id: int, model: str = "openrouter"):
                 post_image.image.save(image_filename, File(f), save=True)
 
             logger.info(f"Изображение успешно сохранено в пост {post.id}: {post_image.image.url}")
-            logger.info(f"Использована модель: {result.get('model', model)}")
+            logger.info(f"Использован метод генерации: {generation_method}, модель: {result.get('model', generation_method)}")
 
             return True
 
@@ -1561,9 +1611,6 @@ def generate_image_for_post(post_id: int, model: str = "openrouter"):
                 except OSError:
                     pass
 
-    except Post.DoesNotExist:
-        logger.error(f"Пост с ID {post_id} не найден")
-        return False
     except Exception as e:
         logger.error(f"Ошибка при генерации изображения для поста {post_id}: {e}", exc_info=True)
         return False

@@ -271,9 +271,6 @@ export interface SEOKeywordSet {
   created_at: string;
 }
 
-export interface GenerateImageRequest {
-  model: 'openrouter' | 'veo_photo';
-}
 
 export interface GenerateVideoRequest {
   source?: 'image' | 'text';

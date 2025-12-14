@@ -1008,6 +1008,12 @@ class SystemSetting(models.Model):
     DEFAULT_VIDEO_TIMEOUT = 600
     DEFAULT_FALLBACK_AI_MODEL = "tngtech/deepseek-r1t2-chimera:free"
 
+    IMAGE_GENERATION_METHODS = [
+        ('openrouter', 'OpenRouter API'),
+        ('veo_photo', 'VEO фото (Telegram бот)'),
+        ('giga_photo', 'Giga фото'),
+    ]
+
     default_ai_model = models.CharField(
         max_length=255,
         default=DEFAULT_AI_MODEL,
@@ -1025,9 +1031,16 @@ class SystemSetting(models.Model):
         default=DEFAULT_FALLBACK_AI_MODEL,
         help_text="Запасная модель OpenRouter, используется если основная недоступна"
     )
-    image_generation_model = models.CharField(
+    image_generation_method = models.CharField(
+        max_length=50,
+        choices=IMAGE_GENERATION_METHODS,
+        default='openrouter',
+        help_text="Метод генерации изображений"
+    )
+    image_openrouter_model = models.CharField(
         max_length=255,
         default=DEFAULT_IMAGE_AI_MODEL,
+        verbose_name="Image OpenRouter model",
         help_text="Модель OpenRouter для генерации изображений (например, google/gemini-2.5-flash-image)"
     )
     video_prompt_instructions = models.TextField(
@@ -1073,7 +1086,8 @@ class SystemSetting(models.Model):
             defaults={
                 "default_ai_model": cls.DEFAULT_AI_MODEL,
                 "post_ai_model": cls.DEFAULT_POST_AI_MODEL,
-                "image_generation_model": cls.DEFAULT_IMAGE_AI_MODEL,
+                "image_generation_method": "openrouter",
+                "image_openrouter_model": cls.DEFAULT_IMAGE_AI_MODEL,
                 "fallback_ai_model": cls.DEFAULT_FALLBACK_AI_MODEL,
                 "image_generation_timeout": cls.DEFAULT_IMAGE_TIMEOUT,
                 "video_generation_timeout": cls.DEFAULT_VIDEO_TIMEOUT,

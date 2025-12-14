@@ -44,7 +44,7 @@ from core.models import (
 from core import tasks
 from core.telegram_client import normalize_telegram_channel_identifier
 from core.social_accounts import sync_client_default_telegram_account
-from core.system_settings import get_image_generation_model
+from core.system_settings import get_image_generation_model, get_image_generation_method
 
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
@@ -587,21 +587,29 @@ class PostViewSet(viewsets.ModelViewSet):
     def generate_image(self, request, pk=None):
         """
         Generate image for post using AI.
-        Model choices: openrouter, veo_photo
+        Uses image_generation_method from SystemSetting if no model specified.
+        Model choices: openrouter, veo_photo, giga_photo
         """
         post = self.get_object()
-        model_param = (request.data.get('model') or 'openrouter').lower()
-        alias_map = {
-            'nanobanana': 'openrouter',
-            'pollinations': 'openrouter',
-            'huggingface': 'openrouter',
-            'flux2': 'openrouter',
-            'sora_images': 'veo_photo',
-            'telegram_bot': 'veo_photo',
-            'veo': 'veo_photo',
-        }
-        model = alias_map.get(model_param, model_param)
-        allowed_models = {'openrouter', 'veo_photo'}
+        model_param = (request.data.get('model') or '').lower()
+
+        # If no model specified, use the method from SystemSetting
+        if not model_param:
+            model = get_image_generation_method()
+        else:
+            alias_map = {
+                'nanobanana': 'openrouter',
+                'pollinations': 'openrouter',
+                'huggingface': 'openrouter',
+                'flux2': 'openrouter',
+                'sora_images': 'veo_photo',
+                'telegram_bot': 'veo_photo',
+                'veo': 'veo_photo',
+                'giga': 'giga_photo',
+            }
+            model = alias_map.get(model_param, model_param)
+
+        allowed_models = {'openrouter', 'veo_photo', 'giga_photo'}
         if model not in allowed_models:
             return Response(
                 {
@@ -612,7 +620,7 @@ class PostViewSet(viewsets.ModelViewSet):
             )
 
         # Call existing Celery task
-        task = tasks.generate_image_for_post.delay(post.id, model)
+        task = tasks.generate_image_for_post.delay(post.id, model=model)
 
         model_names = {
             'openrouter': f"OpenRouter ({get_image_generation_model()})",

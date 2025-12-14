@@ -27,11 +27,13 @@ from asgiref.sync import sync_to_async
 SESSION_TYPES = {
     "publisher": "session_publisher_client_{client_id}",
     "collector": "session_collector_client_{client_id}",
+    "giga_bot": "giga_generator",
 }
 
 SESSION_DESCRIPTIONS = {
     "publisher": "Публикация постов через User API",
     "collector": "Сбор Telegram трендов (требуется User API)",
+    "giga_bot": "Генерация изображений через GigaChat бот",
 }
 
 
@@ -39,36 +41,79 @@ def list_clients():
     return list(Client.objects.all())
 
 
-def get_session_name(client_id: int, session_type: str) -> str:
+def get_session_name(client_id: int | None, session_type: str) -> str:
     if session_type not in SESSION_TYPES:
         raise ValueError(f"Неизвестный тип сессии: {session_type}")
-    return SESSION_TYPES[session_type].format(client_id=client_id)
+
+    template = SESSION_TYPES[session_type]
+    if "{client_id}" in template:
+        if client_id is None:
+            raise ValueError(f"Тип сессии {session_type} требует client_id")
+        return template.format(client_id=client_id)
+    else:
+        return template
 
 
-async def authorize_client(client_id: int, session_type: str):
-    """Авторизовать Telegram сессию для клиента."""
-    try:
-        client = await sync_to_async(Client.objects.get)(id=client_id)
-    except Client.DoesNotExist:
-        print(f"❌ Клиент с ID {client_id} не найден")
-        return False
+async def authorize_session(client_id: int | None, session_type: str):
+    """Авторизовать Telegram сессию."""
+    if session_type == "giga_bot":
+        # Для GigaChat бота используем общие настройки из переменных окружения
+        api_id = os.getenv("TELEGRAM_API_ID")
+        api_hash = os.getenv("TELEGRAM_API_HASH")
 
-    if not client.telegram_api_id or not client.telegram_api_hash:
-        print(f"❌ У клиента '{client.name}' не настроены telegram_api_id и telegram_api_hash")
-        return False
+        if not api_id or not api_hash:
+            print("❌ TELEGRAM_API_ID и TELEGRAM_API_HASH не найдены в переменных окружения")
+            print("   Установите их в .env файле или переменных окружения")
+            return False
 
-    session_name = get_session_name(client.id, session_type)
-    sessions_dir = os.path.join(os.path.dirname(__file__), '..', 'telegram_sessions')
-    os.makedirs(sessions_dir, exist_ok=True)
-    session_path = os.path.join(sessions_dir, session_name)
+        try:
+            api_id = int(api_id)
+        except ValueError:
+            print("❌ TELEGRAM_API_ID должен быть числом")
+            return False
 
-    print(f"🔐 Авторизация для клиента: {client.name} (ID: {client.id})")
-    print(f"📱 API ID: {client.telegram_api_id}")
+        client_name = "GigaChat Bot"
+        client_id_display = "общий"
+
+    else:
+        # Для других типов сессий нужен клиент
+        if client_id is None:
+            print("❌ client_id обязателен для этого типа сессии")
+            return False
+
+        try:
+            client = await sync_to_async(Client.objects.get)(id=client_id)
+        except Client.DoesNotExist:
+            print(f"❌ Клиент с ID {client_id} не найден")
+            return False
+
+        if not client.telegram_api_id or not client.telegram_api_hash:
+            print(f"❌ У клиента '{client.name}' не настроены telegram_api_id и telegram_api_hash")
+            return False
+
+        api_id = client.telegram_api_id
+        api_hash = client.telegram_api_hash
+        client_name = client.name
+        client_id_display = str(client.id)
+
+    session_name = get_session_name(client_id, session_type)
+
+    if session_type == "giga_bot":
+        # For giga_bot, create session in backend directory to match foto_video_gen.py expectations
+        sessions_dir = os.path.join(os.path.dirname(__file__), '..')
+        session_path = os.path.join(sessions_dir, session_name)
+    else:
+        sessions_dir = os.path.join(os.path.dirname(__file__), '..', 'telegram_sessions')
+        os.makedirs(sessions_dir, exist_ok=True)
+        session_path = os.path.join(sessions_dir, session_name)
+
+    print(f"🔐 Авторизация для: {client_name} (ID: {client_id_display})")
+    print(f"📱 API ID: {api_id}")
     print(f"🎯 Тип сессии: {session_type} – {SESSION_DESCRIPTIONS.get(session_type, '')}")
     print(f"📂 Сессия будет сохранена в: {session_path}.session")
     print()
 
-    telegram_client = TelegramClient(session_path, client.telegram_api_id, client.telegram_api_hash)
+    telegram_client = TelegramClient(session_path, api_id, api_hash)
 
     try:
         print("🚀 Подключаемся к Telegram...")
@@ -107,7 +152,7 @@ def parse_args():
         "--session-type",
         choices=SESSION_TYPES.keys(),
         default="publisher",
-        help="Тип сессии: publisher (публикация постов) или collector (сбор трендов)"
+        help="Тип сессии: publisher (публикация постов), collector (сбор трендов), giga_bot (GigaChat бот)"
     )
     return parser.parse_args()
 
@@ -115,7 +160,7 @@ def parse_args():
 async def main(args):
     """Главная функция."""
     print("=" * 70)
-    print("Скрипт авторизации Telegram User API")
+    print("Скрипт авторизации Telegram сессий")
     print("=" * 70)
     print()
     print("⚠️  ВНИМАНИЕ: Рекомендуется использовать Bot API вместо User API")
@@ -137,17 +182,20 @@ async def main(args):
         print(f"  {has_api} {c.id}: {c.name}")
     print()
 
-    # Получаем ID клиента
+    # Получаем ID клиента (для giga_bot не требуется)
     client_id = args.client_id
-    if client_id is None:
-        try:
-            client_id = int(input("Введите ID клиента для авторизации: "))
-        except (ValueError, EOFError):
-            print("❌ Неверный ID")
-            return
+    if args.session_type != "giga_bot":
+        if client_id is None:
+            try:
+                client_id = int(input("Введите ID клиента для авторизации: "))
+            except (ValueError, EOFError):
+                print("❌ Неверный ID")
+                return
+    elif client_id is not None:
+        print("⚠️  Для типа сессии giga_bot client_id игнорируется")
 
     print()
-    success = await authorize_client(client_id, args.session_type)
+    success = await authorize_session(client_id, args.session_type)
 
     if success:
         print()

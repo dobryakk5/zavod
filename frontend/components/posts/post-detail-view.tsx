@@ -33,7 +33,7 @@ const SCHEDULE_STATUS_STYLES: Record<string, string> = {
 };
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api').replace(/\/api\/?$/, '/');
-const MEDIA_FEATURES_AVAILABLE = false;
+const MEDIA_FEATURES_AVAILABLE = true;
 
 const resolveMediaUrl = (url?: string | null) => {
   if (!url) return '';
@@ -107,10 +107,10 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     loadSchedules();
   }, [loadSchedules]);
 
-  const handleGenerateImage = async (model: 'openrouter' | 'veo_photo') => {
+  const handleGenerateImage = async () => {
     setLoading(true);
     try {
-      await postsApi.generateImage(postId, model);
+      await postsApi.generateImage(postId);
       toast.success('Генерация изображения запущена');
       // Reload post after a delay to show the new image
       setTimeout(async () => {
@@ -217,11 +217,8 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
           <div className="flex flex-wrap gap-3">
             {/* Image generation */}
             <div className="flex flex-wrap gap-2">
-              <Button disabled={imageGenerationDisabled} variant="default" onClick={() => handleGenerateImage('openrouter')}>
+              <Button disabled={imageGenerationDisabled} variant="default" onClick={handleGenerateImage}>
                 Изображение
-              </Button>
-              <Button disabled={imageGenerationDisabled} variant="outline" onClick={() => handleGenerateImage('veo_photo')}>
-                VEO фото
               </Button>
             </div>
 
