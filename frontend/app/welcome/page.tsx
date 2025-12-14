@@ -79,9 +79,9 @@ export default function LoggedInLanding() {
               <MessageCircle className="h-5 w-5 text-amber-600" />
             </div>
           </div>
-          <p className="mt-4 text-sm text-slate-600">Конкретные рекомендации по позиционированию, тону и каналам продвижения — на основе анализа.</p>
+          <p className="mt-4 text-sm text-slate-600">Конкретные рекомендации по позиционированию и SEO.</p>
           <div className="mt-4">
-            <Link href="#strategy" className="inline-flex items-center gap-2 text-sm font-medium text-amber-600 hover:underline">Получить рекомендации <ArrowRight className="h-4 w-4"/></Link>
+            <Link href="/seo" className="inline-flex items-center gap-2 text-sm font-medium text-amber-600 hover:underline">Получить рекомендации <ArrowRight className="h-4 w-4"/></Link>
           </div>
         </div>
 
@@ -95,9 +95,9 @@ export default function LoggedInLanding() {
               <CheckCircle className="h-5 w-5 text-emerald-600" />
             </div>
           </div>
-          <p className="mt-4 text-sm text-slate-600">Готовый план постов на 2 недели с темами, подтемами и CTA — можно сразу копировать.</p>
+          <p className="mt-4 text-sm text-slate-600">Готовый план постов с темами, подтемами и CTA — можно сразу копировать.</p>
           <div className="mt-4">
-            <Link href="#plan" className="inline-flex items-center gap-2 text-sm font-medium text-emerald-600 hover:underline">Сгенерировать план <ArrowRight className="h-4 w-4"/></Link>
+            <Link href="/posts" className="inline-flex items-center gap-2 text-sm font-medium text-emerald-600 hover:underline">Сгенерировать план <ArrowRight className="h-4 w-4"/></Link>
           </div>
         </div>
       </div>

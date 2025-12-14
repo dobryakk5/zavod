@@ -1,0 +1,14 @@
+[Unit]
+Description=Django Server
+After=network.target
+
+[Service]
+Type=simple
+User=nextu
+WorkingDirectory=/var/py/zavod/backend 
+ExecStart=/var/py/zavod/venv/bin/python manage.py runserver 0.0.0.0:8000
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
