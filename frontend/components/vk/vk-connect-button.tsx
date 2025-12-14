@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
+import { Button, type ButtonProps } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { getVkConnectUrl } from '@/lib/api/vk';
 
@@ -10,6 +10,8 @@ interface VkConnectButtonProps {
   disabled?: boolean;
   className?: string;
   children?: ReactNode;
+  variant?: ButtonProps['variant'];
+  size?: ButtonProps['size'];
 }
 
 /**
@@ -20,6 +22,8 @@ export function VkConnectButton({
   disabled,
   className,
   children,
+  variant,
+  size,
 }: VkConnectButtonProps) {
   const [connecting, setConnecting] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -72,6 +76,8 @@ export function VkConnectButton({
       onClick={handleClick}
       disabled={disabled || connecting}
       className={className}
+      variant={variant}
+      size={size}
     >
       {children ?? (connecting ? 'Ожидание авторизации...' : 'Подключить группу VK')}
     </Button>

@@ -1,11 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { socialAccountsApi } from '@/lib/api/socialAccounts';
-import { clientApi } from '@/lib/api/client';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
 import {
   Table,
   TableBody,
@@ -14,210 +10,454 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Plus, Trash2, Edit } from 'lucide-react';
-import { toast } from 'sonner';
+import { socialAccountsApi } from '@/lib/api/socialAccounts';
+import { clientApi } from '@/lib/api/client';
+import { vkApi } from '@/lib/api/vk';
+import { VkConnectButton } from '@/components/vk/vk-connect-button';
 import { useRole } from '@/lib/hooks';
-import type { SocialAccount } from '@/lib/types';
-import { VkIntegrationsPanel } from './vk-integrations-panel';
+import { toast } from 'sonner';
+import { Edit, ExternalLink, Plus, Trash2 } from 'lucide-react';
+import type { Platform, SocialAccount, VkIntegration } from '@/lib/types';
+
+type RowLink = {
+  label: string;
+  url: string;
+};
+
+type TableRowData = {
+  id: string;
+  platformKey: Platform;
+  platformLabel: string;
+  name: string;
+  link: RowLink | null;
+  source: 'social' | 'vk';
+  socialAccount?: SocialAccount;
+  vkIntegration?: VkIntegration;
+  isPlaceholder?: boolean;
+};
+
+const PLATFORM_LABELS: Record<Platform, string> = {
+  telegram: 'Telegram',
+  instagram: 'Instagram',
+  youtube: 'YouTube',
+  vkontakte: 'VKontakte',
+};
+
+const formatLinkLabel = (value: string) => value.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+
+const getExtraString = (
+  extra: Record<string, unknown> | undefined,
+  key: string,
+): string | null => {
+  if (!extra) {
+    return null;
+  }
+  const value = extra[key];
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+};
+
+const buildTelegramLink = (rawValue: string): RowLink => {
+  if (/^https?:\/\//i.test(rawValue)) {
+    return {
+      label: formatLinkLabel(rawValue),
+      url: rawValue,
+    };
+  }
+  const handle = rawValue.replace(/^@/, '');
+  return {
+    label: rawValue.startsWith('@') ? rawValue : `@${handle}`,
+    url: `https://t.me/${handle}`,
+  };
+};
+
+const getSocialAccountLink = (account: SocialAccount): RowLink | null => {
+  const extra = account.extra as Record<string, unknown> | undefined;
+
+  const channel = getExtraString(extra, 'channel');
+  if (channel) {
+    return buildTelegramLink(channel);
+  }
+
+  const url = getExtraString(extra, 'url') ?? getExtraString(extra, 'link');
+  if (url) {
+    return {
+      label: formatLinkLabel(url),
+      url,
+    };
+  }
+
+  if (account.platform === 'instagram' && account.username) {
+    const handle = account.username.replace(/^@/, '');
+    return {
+      label: `instagram.com/${handle}`,
+      url: `https://instagram.com/${handle}`,
+    };
+  }
+
+  return null;
+};
+
+const getVkIntegrationLink = (integration: VkIntegration): RowLink | null => {
+  const slug = integration.screen_name
+    ? integration.screen_name.replace(/^@/, '')
+    : integration.group_id
+    ? `club${integration.group_id}`
+    : null;
+
+  if (!slug) {
+    return null;
+  }
+
+  return {
+    label: `vk.com/${slug}`,
+    url: `https://vk.com/${slug}`,
+  };
+};
+
+const normalizeTelegramChannel = (rawValue: string): string => {
+  let candidate = rawValue.trim();
+  candidate = candidate.replace(/^https?:\/\//i, '');
+  candidate = candidate.replace(/^t\.me\//i, '').replace(/^telegram\.me\//i, '');
+  candidate = candidate.replace(/^@/, '').replace(/\/$/, '');
+  if (!candidate) {
+    return '';
+  }
+  return candidate.startsWith('@') ? candidate : `@${candidate}`;
+};
 
 export function SocialAccountsManager() {
   const { canEdit } = useRole();
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [telegramChannel, setTelegramChannel] = useState('');
-  const [telegramLoading, setTelegramLoading] = useState(true);
-  const [telegramSaving, setTelegramSaving] = useState(false);
+  const [vkIntegrations, setVkIntegrations] = useState<VkIntegration[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadAccounts();
-    loadTelegramChannel();
-  }, []);
-
-  const loadAccounts = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await socialAccountsApi.list();
-      setAccounts(data);
+      const [accountsData, vkData] = await Promise.all([
+        socialAccountsApi.list(),
+        vkApi.listIntegrations(),
+      ]);
+      setAccounts(accountsData);
+      setVkIntegrations(vkData);
     } catch (error) {
-      toast.error('Не удалось загрузить аккаунты');
+      console.error(error);
+      toast.error('Не удалось загрузить социальные аккаунты');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const loadTelegramChannel = async () => {
-    setTelegramLoading(true);
-    try {
-      const data = await clientApi.getSettings();
-      setTelegramChannel(data.telegram_client_channel || '');
-    } catch (error) {
-      console.error(error);
-      toast.error('Не удалось загрузить Telegram канал');
-    } finally {
-      setTelegramLoading(false);
-    }
-  };
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-  const handleSaveTelegramChannel = async () => {
-    if (telegramSaving) {
-      return;
-    }
-    setTelegramSaving(true);
-    try {
-      const trimmedChannel = telegramChannel.trim();
-      const response = await clientApi.updateSettings({ telegram_client_channel: trimmedChannel });
-      const savedValue = response.telegram_client_channel || '';
-      setTelegramChannel(savedValue);
-      toast.success(savedValue ? 'Telegram канал сохранен' : 'Канал очищен');
-    } catch (error) {
-      console.error(error);
-      toast.error('Не удалось сохранить канал');
-    } finally {
-      setTelegramSaving(false);
-    }
-  };
-
-  const handleDelete = async (id: number) => {
-    if (!confirm('Вы уверены, что хотите удалить этот аккаунт?')) {
+  const handleAddAccount = async (platform?: Platform) => {
+    if (!canEdit) {
       return;
     }
 
+    let targetPlatform = platform;
+    if (!targetPlatform) {
+      const choice = prompt('Укажите платформу (telegram, instagram, youtube)');
+      if (!choice) {
+        return;
+      }
+      const normalizedChoice = choice.trim().toLowerCase() as Platform;
+      if (!PLATFORM_LABELS[normalizedChoice]) {
+        toast.error('Неизвестная платформа');
+        return;
+      }
+      targetPlatform = normalizedChoice;
+    }
+
+    if (targetPlatform === 'vkontakte') {
+      toast.info('Используйте кнопку VK для подключения группы.');
+      return;
+    }
+
+    const defaultName =
+      targetPlatform === 'telegram' ? '@example_channel' : `${PLATFORM_LABELS[targetPlatform]} аккаунт`;
+    const nameOrHandle = prompt('Введите название или ссылку на канал', defaultName);
+    if (!nameOrHandle) {
+      return;
+    }
+    const trimmedValue = nameOrHandle.trim();
+    if (!trimmedValue) {
+      toast.error('Пустое значение');
+      return;
+    }
+
+    let preparedName = trimmedValue;
+    const extra: Record<string, unknown> = { source: 'manual' };
+
+    if (targetPlatform === 'telegram') {
+      const channel = normalizeTelegramChannel(trimmedValue);
+      if (!channel) {
+        toast.error('Введите корректный Telegram канал');
+        return;
+      }
+      extra.channel = channel;
+      preparedName = channel;
+    } else {
+      extra.url = trimmedValue;
+    }
+
     try {
-      await socialAccountsApi.delete(id);
-      toast.success('Аккаунт успешно удален');
-      await loadAccounts();
+      await socialAccountsApi.create({
+        platform: targetPlatform,
+        name: preparedName,
+        access_token: '',
+        extra,
+      });
+      toast.success('Аккаунт добавлен');
+      await loadData();
     } catch (error) {
-      toast.error('Ошибка при удалении аккаунта');
+      console.error(error);
+      toast.error('Не удалось создать аккаунт');
     }
   };
 
-  const getPlatformBadgeColor = (platform: string) => {
-    switch (platform) {
-      case 'instagram':
-        return 'bg-pink-500 text-white';
-      case 'telegram':
-        return 'bg-blue-500 text-white';
-      case 'youtube':
-        return 'bg-red-500 text-white';
-      case 'vkontakte':
-        return 'bg-sky-700 text-white';
-      default:
-        return 'bg-gray-500 text-white';
+  const handleEditRow = async (row: TableRowData) => {
+    if (!canEdit || row.isPlaceholder) {
+      return;
+    }
+
+    if (row.source === 'social' && row.socialAccount?.platform === 'telegram') {
+      const extra = row.socialAccount.extra as Record<string, unknown> | undefined;
+      const currentChannel = getExtraString(extra, 'channel') ?? '';
+      const newChannel = prompt('Укажите Telegram канал для публикаций', currentChannel) ?? undefined;
+      if (newChannel === undefined) {
+        return;
+      }
+      try {
+        const payload = newChannel.trim();
+        await clientApi.updateSettings({ telegram_client_channel: payload });
+        toast.success(payload ? 'Telegram канал обновлен' : 'Канал очищен');
+        await loadData();
+      } catch (error) {
+        console.error(error);
+        toast.error('Не удалось сохранить Telegram канал');
+      }
+      return;
+    }
+
+    toast.info(`Редактирование настроек для ${row.platformLabel} появится позже`);
+  };
+
+  const handleDeleteSocialAccount = async (accountId?: number) => {
+    if (!canEdit || !accountId || !confirm('Удалить этот социальный аккаунт?')) {
+      return;
+    }
+
+    try {
+      await socialAccountsApi.delete(accountId);
+      toast.success('Аккаунт удален');
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      toast.error('Не удалось удалить аккаунт');
     }
   };
+
+  const handleDeleteVkIntegration = async (integration?: VkIntegration) => {
+    if (!canEdit || !integration) {
+      return;
+    }
+    if (!confirm('Отключить эту группу VK?')) {
+      return;
+    }
+    try {
+      await vkApi.deleteIntegration(integration.id);
+      toast.success('Группа VK отключена');
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      toast.error('Не удалось отключить группу VK');
+    }
+  };
+
+  const rows: TableRowData[] = useMemo(() => {
+    const socialRows: TableRowData[] = accounts.map((account) => {
+      const extra = account.extra as Record<string, unknown> | undefined;
+      const displayName =
+        account.platform === 'telegram'
+          ? getExtraString(extra, 'channel') ?? account.name
+          : account.name;
+
+      return {
+        id: `social-${account.id}`,
+        platformKey: account.platform,
+        platformLabel: PLATFORM_LABELS[account.platform] ?? account.platform,
+        name: displayName,
+        link: getSocialAccountLink(account),
+        source: 'social',
+        socialAccount: account,
+      };
+    });
+
+    const platformsReferenced = new Set(socialRows.map((row) => row.platformKey));
+
+    if (!platformsReferenced.has('telegram')) {
+      socialRows.push({
+        id: 'telegram-placeholder',
+        platformKey: 'telegram',
+        platformLabel: PLATFORM_LABELS.telegram,
+        name: 'Не подключено',
+        link: null,
+        source: 'social',
+        isPlaceholder: true,
+      });
+    }
+
+    if (vkIntegrations.length === 0) {
+      return [
+        ...socialRows,
+        {
+          id: 'vk-placeholder',
+          platformKey: 'vkontakte',
+          platformLabel: PLATFORM_LABELS.vkontakte,
+          name: 'Не подключено',
+          link: null,
+          source: 'vk',
+          isPlaceholder: true,
+        },
+      ];
+    }
+
+    const vkRows: TableRowData[] = vkIntegrations.map((integration) => ({
+      id: `vk-${integration.id}`,
+      platformKey: 'vkontakte',
+      platformLabel: PLATFORM_LABELS.vkontakte,
+      name: integration.group_name || `Группа #${integration.group_id}`,
+      link: getVkIntegrationLink(integration),
+      source: 'vk',
+      vkIntegration: integration,
+    }));
+
+    return [...socialRows, ...vkRows];
+  }, [accounts, vkIntegrations]);
 
   return (
-    <div className="space-y-10">
-      <section className="space-y-4">
-        <div className="space-y-1">
-          <h2 className="text-2xl font-bold">Telegram канал для публикации</h2>
-          <p className="text-sm text-gray-600 max-w-2xl">
-            Этот канал используется при ручной публикации и в расписаниях. Укажите ссылку на канал, @username
-            или t.me/идентификатор (как на странице аналитики Telegram).
+    <section className="space-y-4">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Социальные аккаунты</h2>
+          <p className="text-sm text-muted-foreground">
+            Управляйте каналами для публикаций. Сейчас поддерживаются Telegram и VKontakte.
           </p>
         </div>
-        <div className="flex flex-col gap-3 md:flex-row md:items-center">
-          <Input
-            type="text"
-            value={telegramChannel}
-            onChange={(event) => setTelegramChannel(event.target.value)}
-            placeholder="https://t.me/example_channel или @example_channel"
-            disabled={telegramLoading || !canEdit}
-            className="md:flex-1"
-          />
-          <Button
-            type="button"
-            onClick={handleSaveTelegramChannel}
-            disabled={!canEdit || telegramLoading || telegramSaving}
-          >
-            {telegramSaving ? 'Сохранение...' : 'Сохранить канал'}
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Можно вставить ссылку, @username или t.me/handle — мы автоматически приведем её к нужному формату.
-        </p>
-      </section>
-
-      <section className="space-y-4">
-        <div className="flex justify-between items-center">
-          <h2 className="text-2xl font-bold">Социальные аккаунты</h2>
-          {canEdit && (
-            <Button
-              size="sm"
-              onClick={() =>
-                toast.info('Скоро появится мастер подключения аккаунтов. Пока доступно подключение групп VK ниже на странице.')
-              }
-            >
+        {canEdit && (
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => loadData()} disabled={loading}>
+              Обновить список
+            </Button>
+            <Button size="sm" onClick={() => handleAddAccount()}>
               <Plus className="h-4 w-4 mr-2" />
               Добавить аккаунт
             </Button>
-          )}
-        </div>
-
-        {loading ? (
-          <div className="text-center py-8 text-gray-500">Загрузка аккаунтов...</div>
-        ) : accounts.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            Нет подключенных аккаунтов
           </div>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Платформа</TableHead>
-                <TableHead>Название</TableHead>
-                <TableHead>Имя пользователя</TableHead>
-                <TableHead>Статус</TableHead>
-                <TableHead className="text-right">Действия</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {accounts.map((account) => (
-                <TableRow key={account.id}>
-                  <TableCell>
-                    <Badge className={getPlatformBadgeColor(account.platform)}>
-                      {account.platform}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="font-medium">{account.name}</TableCell>
-                  <TableCell className="text-gray-600">
-                    {account.username || '—'}
-                  </TableCell>
-                  <TableCell>
-                    {account.is_active ? (
-                      <Badge variant="outline" className="text-green-600 border-green-600">
-                        Активен
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-gray-400 border-gray-400">
-                        Неактивен
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {canEdit && (
-                      <div className="flex gap-2 justify-end">
-                        <Button variant="ghost" size="sm">
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDelete(account.id)}
-                        >
-                          <Trash2 className="h-4 w-4 text-red-500" />
-                        </Button>
-                      </div>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
         )}
-      </section>
+      </div>
 
-      <VkIntegrationsPanel />
-    </div>
+      {loading ? (
+        <div className="rounded-md border border-dashed py-8 text-center text-muted-foreground">
+          Загружаем социальные аккаунты...
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="rounded-md border border-dashed py-8 text-center text-muted-foreground">
+          Пока нет подключенных соцсетей.
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Платформа</TableHead>
+              <TableHead>Название</TableHead>
+              <TableHead>Ссылка</TableHead>
+              <TableHead className="text-right">Действия</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={row.id}>
+                <TableCell className="font-medium">{row.platformLabel}</TableCell>
+                <TableCell>{row.name || '—'}</TableCell>
+                <TableCell>
+                  {row.link ? (
+                    <a
+                      href={row.link.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-primary hover:underline"
+                    >
+                      {row.link.label}
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {canEdit ? (
+                    <div className="flex justify-end gap-2">
+                      {row.platformKey === 'vkontakte' ? (
+                        <VkConnectButton
+                          onConnected={loadData}
+                          variant="ghost"
+                          size="icon"
+                          className="border border-transparent hover:border-muted"
+                        >
+                          <Plus className="h-4 w-4" />
+                        </VkConnectButton>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleAddAccount(row.platformKey)}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleEditRow(row)}
+                        disabled={row.isPlaceholder}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          if (row.source === 'vk') {
+                            handleDeleteVkIntegration(row.vkIntegration);
+                          } else {
+                            handleDeleteSocialAccount(row.socialAccount?.id);
+                          }
+                        }}
+                        disabled={row.isPlaceholder}
+                      >
+                        <Trash2 className="h-4 w-4 text-red-500" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Нет доступа</span>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </section>
   );
 }

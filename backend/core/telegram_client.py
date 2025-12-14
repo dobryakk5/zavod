@@ -582,6 +582,36 @@ class TelegramPublisher:
             logger.error(error_msg, exc_info=True)
             return {'success': False, 'error': error_msg}
 
+    async def get_channel_title(self, channel: str) -> Optional[str]:
+        """
+        Получить человеко-понятное название Telegram канала.
+
+        Args:
+            channel: Username или ID канала
+
+        Returns:
+            Строка с названием или username (если названия нет)
+        """
+        if not self.client:
+            raise RuntimeError("Клиент не подключен. Вызовите connect() сначала.")
+
+        entity = await self.client.get_entity(channel)
+        title = getattr(entity, "title", None)
+        if title:
+            return str(title)
+
+        username = getattr(entity, "username", None)
+        if username:
+            username = str(username)
+            return username if username.startswith("@") else f"@{username}"
+
+        first_name = getattr(entity, "first_name", None)
+        last_name = getattr(entity, "last_name", None)
+        if first_name or last_name:
+            return f"{first_name or ''} {last_name or ''}".strip()
+
+        return None
+
 
 def run_async_task(coro):
     """

@@ -1,17 +1,107 @@
 from __future__ import annotations
 
+import logging
+
 from typing import Optional
 
 from .models import Client, SocialAccount
-from .telegram_client import normalize_telegram_channel_identifier
+from .telegram_client import (
+    TelegramPublisher,
+    normalize_telegram_channel_identifier,
+    run_async_task,
+)
 
 
-DEFAULT_TELEGRAM_ACCOUNT_NAME = "Telegram канал из настроек"
+logger = logging.getLogger(__name__)
 
 
-def _build_default_account_name(channel: str) -> str:
-    """Собрать человеко-понятное имя аккаунта на основе канала."""
-    return f"{DEFAULT_TELEGRAM_ACCOUNT_NAME} ({channel})"
+def _publisher_session_name(client: Client) -> str:
+    return f"session_publisher_client_{client.id}"
+
+
+def _fetch_telegram_channel_title(
+    client: Client,
+    channel: str,
+    *,
+    bot_token: Optional[str] = None,
+) -> Optional[str]:
+    if not client.telegram_api_id or not client.telegram_api_hash:
+        return None
+
+    publisher = TelegramPublisher(
+        api_id=client.telegram_api_id,
+        api_hash=client.telegram_api_hash,
+        session_name=_publisher_session_name(client),
+        bot_token=bot_token or None,
+    )
+
+    async def _task():
+        await publisher.connect()
+        try:
+            return await publisher.get_channel_title(channel)
+        finally:
+            await publisher.disconnect()
+
+    try:
+        return run_async_task(_task())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Не удалось получить название Telegram канала %s: %s", channel, exc)
+        return None
+
+
+def ensure_telegram_account_metadata(
+    social_account: SocialAccount,
+    *,
+    channel_value: Optional[str] = None,
+    force_refresh: bool = False,
+) -> Optional[str]:
+    """
+    Обновить название Telegram SocialAccount, получив его из API.
+    """
+    if social_account.platform != "telegram":
+        return None
+
+    extra = dict(social_account.extra or {})
+    normalized_channel = normalize_telegram_channel_identifier(
+        channel_value or extra.get("channel") or ""
+    )
+    if not normalized_channel:
+        return None
+
+    changed = False
+    if extra.get("channel") != normalized_channel:
+        extra["channel"] = normalized_channel
+        changed = True
+
+    channel_title = extra.get("channel_title")
+    need_fetch = force_refresh or changed or not channel_title
+    fetched_title = None
+
+    if need_fetch:
+        fetched_title = _fetch_telegram_channel_title(
+            social_account.client,
+            normalized_channel,
+            bot_token=social_account.access_token or None,
+        )
+        if fetched_title:
+            extra["channel_title"] = fetched_title
+            channel_title = fetched_title
+            changed = True
+
+    desired_name = channel_title or normalized_channel
+
+    if social_account.extra != extra:
+        social_account.extra = extra
+        changed = True
+
+    if desired_name and social_account.name != desired_name:
+        social_account.name = desired_name
+        changed = True
+
+    if changed:
+        social_account.save(update_fields=["name", "extra"])
+
+    return desired_name
 
 
 def sync_client_default_telegram_account(
@@ -48,21 +138,16 @@ def sync_client_default_telegram_account(
             account.delete()
         return None
 
-    desired_name = _build_default_account_name(normalized_channel)
-
     if account:
-        updated_fields: list[str] = []
         extra = dict(account.extra or {})
+        channel_changed = extra.get("channel") != normalized_channel
+        updated_fields: list[str] = []
 
-        if extra.get("channel") != normalized_channel or extra.get("source") != "client_settings":
-            extra["channel"] = normalized_channel
+        if channel_changed or extra.get("source") != "client_settings":
             extra["source"] = "client_settings"
+            extra["channel"] = normalized_channel
             account.extra = extra
             updated_fields.append("extra")
-
-        if account.name != desired_name:
-            account.name = desired_name
-            updated_fields.append("name")
 
         if account.access_token is None:
             account.access_token = ""
@@ -70,16 +155,22 @@ def sync_client_default_telegram_account(
 
         if updated_fields:
             account.save(update_fields=updated_fields)
-
+        ensure_telegram_account_metadata(
+            account,
+            channel_value=normalized_channel,
+            force_refresh=channel_changed,
+        )
         return account
 
-    return SocialAccount.objects.create(
+    account = SocialAccount.objects.create(
         client=client,
         platform="telegram",
-        name=desired_name,
+        name=normalized_channel,
         access_token="",
         extra={
             "channel": normalized_channel,
             "source": "client_settings",
         },
     )
+    ensure_telegram_account_metadata(account, channel_value=normalized_channel, force_refresh=True)
+    return account

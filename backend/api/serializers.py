@@ -20,6 +20,7 @@ from core.models import (
     VkIntegration,
 )
 from core.telegram_client import normalize_telegram_channel_identifier
+from core.social_accounts import ensure_telegram_account_metadata
 from core.social_accounts import sync_client_default_telegram_account
 
 
@@ -396,6 +397,34 @@ class SocialAccountSerializer(serializers.ModelSerializer):
             "access_token": {"write_only": True},
             "refresh_token": {"write_only": True},
         }
+
+    def _maybe_refresh_telegram(self, instance: SocialAccount, extra_payload):
+        if instance.platform != "telegram":
+            return
+
+        channel_value = None
+        if isinstance(extra_payload, dict):
+            raw_channel = extra_payload.get("channel")
+            if isinstance(raw_channel, str):
+                channel_value = raw_channel
+
+        ensure_telegram_account_metadata(
+            instance,
+            channel_value=channel_value,
+            force_refresh=bool(channel_value),
+        )
+
+    def create(self, validated_data):
+        extra_payload = validated_data.get("extra")
+        instance = super().create(validated_data)
+        self._maybe_refresh_telegram(instance, extra_payload)
+        return instance
+
+    def update(self, instance, validated_data):
+        extra_payload = validated_data.get("extra")
+        instance = super().update(instance, validated_data)
+        self._maybe_refresh_telegram(instance, extra_payload)
+        return instance
 
 
 class VkIntegrationSerializer(serializers.ModelSerializer):

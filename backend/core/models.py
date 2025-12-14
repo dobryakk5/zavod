@@ -267,6 +267,8 @@ class SocialAccount(models.Model):
     access_token = models.TextField()
     refresh_token = models.TextField(blank=True, null=True)
     extra = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.client} – {self.platform} ({self.name})"
