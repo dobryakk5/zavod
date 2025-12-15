@@ -64,6 +64,18 @@ class Client(models.Model):
         verbose_name="Video prompt (deprecated)",
         help_text="Устаревшее поле. Используйте base_video_prompt и add_video_prompt"
     )
+    last_image_generation_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        verbose_name="Последняя генерация изображения",
+        help_text="Время запуска последней генерации изображения"
+    )
+    last_video_generation_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        verbose_name="Последняя генерация видео",
+        help_text="Время запуска последней генерации видео"
+    )
 
     # Telegram settings
     telegram_client_channel = models.CharField(
@@ -179,6 +191,27 @@ class Client(models.Model):
         )
         return client
 
+    @classmethod
+    def _get_default_video_prompt_client(cls):
+        """
+        Возвращает клиента, чьи настройки видео-промптов используются как дефолтные.
+        """
+        default_client_id = getattr(settings, "DEFAULT_VIDEO_PROMPT_CLIENT_ID", 3)
+        if not default_client_id:
+            return None
+        try:
+            default_client_id = int(default_client_id)
+        except (TypeError, ValueError):
+            return None
+        if default_client_id <= 0:
+            return None
+        return cls.objects.filter(pk=default_client_id).only(
+            "id",
+            "base_video_prompt",
+            "add_video_prompt",
+            "video_prompt",
+        ).first()
+
     def get_video_prompt_template(self) -> str:
         """
         Return additional video instructions (client-specific) with graceful fallbacks.
@@ -193,6 +226,13 @@ class Client(models.Model):
         if self.video_prompt and self.video_prompt.strip():
             return self.video_prompt.strip()
 
+        default_client = self._get_default_video_prompt_client()
+        if default_client and default_client.pk != self.pk:
+            if default_client.add_video_prompt and default_client.add_video_prompt.strip():
+                return default_client.add_video_prompt.strip()
+            if default_client.video_prompt and default_client.video_prompt.strip():
+                return default_client.video_prompt.strip()
+
         # Final fallback to system-level defaults (если заданы)
         from .system_settings import get_video_prompt_instructions
         return get_video_prompt_instructions().strip()
@@ -201,6 +241,12 @@ class Client(models.Model):
         """Return base instructions for AI video prompt generation."""
         if self.base_video_prompt and self.base_video_prompt.strip():
             return self.base_video_prompt.strip()
+
+        default_client = self._get_default_video_prompt_client()
+        if default_client and default_client.pk != self.pk:
+            inherited_instructions = (default_client.base_video_prompt or "").strip()
+            if inherited_instructions:
+                return inherited_instructions
 
         # Default instructions for AI prompt generation
         return """Ты — режиссёр и сценарист коротких вертикальных видео TikTok/Reels. На входе у тебя текст поста.

@@ -40,6 +40,8 @@ export interface PostMediaImage {
   order: number;
   created_at: string;
   updated_at: string;
+  width?: number;
+  height?: number;
 }
 
 export interface PostMediaVideo {
@@ -211,6 +213,8 @@ export interface ClientSettings {
   youtube_source_channels?: string;
   instagram_source_accounts?: string;
   vkontakte_source_groups?: string;
+  last_image_generation_at?: string | null;
+  last_video_generation_at?: string | null;
 }
 
 export interface ExpertBookItem {
@@ -232,6 +236,8 @@ export interface ClientInfo {
     id: number;
     name: string;
     slug: string;
+    last_image_generation_at?: string | null;
+    last_video_generation_at?: string | null;
   };
   role: UserRole;
 }

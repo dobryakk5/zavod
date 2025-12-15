@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+from datetime import timedelta
 from urllib.parse import parse_qsl, urlencode
 
 import requests
@@ -82,8 +83,29 @@ REFRESH_COOKIE_MAX_AGE = int(getattr(settings, "JWT_REFRESH_COOKIE_MAX_AGE", 60 
 MAX_WEEKLY_POSTS = 21
 VK_SCOPE = "wall,photos,groups,offline"
 VK_TIMEOUT = 15
+MEDIA_GENERATION_COOLDOWN = timedelta(hours=1)
 
 logger = logging.getLogger(__name__)
+
+
+def _cooldown_remaining(last_triggered_at):
+    """Return remaining cooldown timedelta for media generation."""
+    if not last_triggered_at:
+        return timedelta(0)
+    cooldown_ends_at = last_triggered_at + MEDIA_GENERATION_COOLDOWN
+    remaining = cooldown_ends_at - timezone.now()
+    if remaining.total_seconds() <= 0:
+        return timedelta(0)
+    return remaining
+
+
+def _format_cooldown_message(kind: str, remaining: timedelta) -> str:
+    """Return user-friendly cooldown message in Russian."""
+    total_seconds = int(max(0, remaining.total_seconds()))
+    minutes, seconds = divmod(total_seconds, 60)
+    if minutes > 0:
+        return f"Генерация {kind} будет доступна через {minutes} мин {seconds:02d} сек"
+    return f"Генерация {kind} будет доступна через {seconds} сек"
 
 
 class VkApiError(Exception):
@@ -484,6 +506,8 @@ class ClientInfoView(APIView):
                 'id': client.id,
                 'name': client.name,
                 'slug': client.slug,
+                'last_image_generation_at': client.last_image_generation_at,
+                'last_video_generation_at': client.last_video_generation_at,
             },
             'role': role,
         })
@@ -593,6 +617,20 @@ class PostViewSet(viewsets.ModelViewSet):
         Model choices: openrouter, veo_photo, giga_photo
         """
         post = self.get_object()
+        client = post.client
+        remaining = _cooldown_remaining(client.last_image_generation_at)
+        if remaining:
+            cooldown_ends_at = client.last_image_generation_at + MEDIA_GENERATION_COOLDOWN
+            return Response(
+                {
+                    'success': False,
+                    'error': _format_cooldown_message('изображения', remaining),
+                    'cooldown_seconds': int(remaining.total_seconds()),
+                    'cooldown_ends_at': cooldown_ends_at,
+                    'cooldown_type': 'image',
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         model_param = (request.data.get('model') or '').lower()
 
         # If no model specified, use the method from SystemSetting
@@ -623,6 +661,8 @@ class PostViewSet(viewsets.ModelViewSet):
 
         # Call existing Celery task
         task = tasks.generate_image_for_post.delay(post.id, model=model)
+        client.last_image_generation_at = timezone.now()
+        client.save(update_fields=["last_image_generation_at"])
 
         model_names = {
             'openrouter': f"OpenRouter ({get_image_generation_model()})",
@@ -642,6 +682,17 @@ class PostViewSet(viewsets.ModelViewSet):
         Only available in DEBUG mode or for zavod client.
         """
         post = self.get_object()
+        client = post.client
+        remaining = _cooldown_remaining(client.last_video_generation_at)
+        if remaining:
+            cooldown_ends_at = client.last_video_generation_at + MEDIA_GENERATION_COOLDOWN
+            return Response({
+                'success': False,
+                'error': _format_cooldown_message('видео', remaining),
+                'cooldown_seconds': int(remaining.total_seconds()),
+                'cooldown_ends_at': cooldown_ends_at,
+                'cooldown_type': 'video',
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         method = (request.data.get('method') or 'wan').lower()
         allowed_methods = {'wan', 'veo'}
@@ -679,6 +730,8 @@ class PostViewSet(viewsets.ModelViewSet):
 
         # Call existing Celery task
         task = tasks.generate_video_from_image.delay(post.id, method=method, source=source)
+        client.last_video_generation_at = timezone.now()
+        client.save(update_fields=["last_video_generation_at"])
 
         return Response({
             'success': True,

@@ -97,10 +97,19 @@ class ClientSummarySerializer(serializers.Serializer):
 
 
 class PostImageSerializer(serializers.ModelSerializer):
+    width = serializers.SerializerMethodField()
+    height = serializers.SerializerMethodField()
+
+    def get_width(self, obj):
+        return obj.image.width if obj.image else None
+
+    def get_height(self, obj):
+        return obj.image.height if obj.image else None
+
     class Meta:
         model = PostImage
-        fields = ["id", "image", "alt_text", "order", "created_at", "updated_at"]
-        read_only_fields = ["id", "image", "alt_text", "order", "created_at", "updated_at"]
+        fields = ["id", "image", "alt_text", "order", "created_at", "updated_at", "width", "height"]
+        read_only_fields = ["id", "image", "alt_text", "order", "created_at", "updated_at", "width", "height"]
 
 
 class PostVideoSerializer(serializers.ModelSerializer):
@@ -480,8 +489,10 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "youtube_source_channels",
             "instagram_source_accounts",
             "vkontakte_source_groups",
+            "last_image_generation_at",
+            "last_video_generation_at",
         ]
-        read_only_fields = ["slug"]  # slug is readonly
+        read_only_fields = ["slug", "last_image_generation_at", "last_video_generation_at"]  # slug is readonly
 
     def validate_telegram_client_channel(self, value: str | None) -> str:
         if not value:

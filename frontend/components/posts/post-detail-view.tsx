@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { SyntheticEvent } from 'react';
 import { postsApi } from '@/lib/api/posts';
 import { schedulesApi } from '@/lib/api/schedules';
-import { useCanGenerateVideo, useRole } from '@/lib/hooks';
+import { ApiError } from '@/lib/api';
+import { useClient } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
@@ -37,6 +39,7 @@ const SCHEDULE_STATUS_STYLES: Record<string, string> = {
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api').replace(/\/api\/?$/, '/');
 const MEDIA_FEATURES_AVAILABLE = true;
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
 const resolveMediaUrl = (url?: string | null) => {
   if (!url) return '';
@@ -57,13 +60,69 @@ const formatPostTypeLabel = (value?: string | null) => {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
+const formatCooldownDuration = (ms: number) => {
+  if (ms <= 0) {
+    return 'несколько секунд';
+  }
+  const totalSeconds = Math.ceil(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0 && seconds > 0) {
+    return `${minutes} мин ${seconds.toString().padStart(2, '0')} сек`;
+  }
+  if (minutes > 0) {
+    return `${minutes} мин`;
+  }
+  return `${seconds} сек`;
+};
+
+const computeCooldownUntil = (isoDate?: string | null): Date | null => {
+  if (!isoDate) {
+    return null;
+  }
+  const timestamp = Date.parse(isoDate);
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+  return new Date(timestamp + ONE_HOUR_MS);
+};
+
+const parseApiErrorPayload = (error: unknown): { message?: string; cooldownEndsAt?: Date | null } => {
+  if (error instanceof ApiError) {
+    if (error.body) {
+      try {
+        const payload = JSON.parse(error.body) as {
+          error?: string;
+          cooldown_ends_at?: string;
+        };
+        const cooldownEndsAt = payload.cooldown_ends_at ? new Date(payload.cooldown_ends_at) : null;
+        return {
+          message: typeof payload.error === 'string' ? payload.error : undefined,
+          cooldownEndsAt: cooldownEndsAt && !Number.isNaN(cooldownEndsAt.getTime()) ? cooldownEndsAt : null,
+        };
+      } catch {
+        return { message: error.message };
+      }
+    }
+    return { message: error.message };
+  }
+  if (error instanceof Error) {
+    return { message: error.message };
+  }
+  return {};
+};
+
 interface PostDetailViewProps {
   postId: number;
 }
 
 export function PostDetailView({ postId }: PostDetailViewProps) {
-  const { canEdit } = useRole();
-  const { canGenerateVideo } = useCanGenerateVideo();
+  const { data: clientInfo } = useClient();
+  const role = clientInfo?.role ?? null;
+  const canEdit = role === 'owner' || role === 'editor';
+  const clientSlug = clientInfo?.client?.slug;
+  const isDevMode = process.env.NEXT_PUBLIC_DEV_MODE === 'true';
+  const canGenerateVideo = isDevMode || clientSlug === 'zavod';
   const [post, setPost] = useState<PostDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [imageGenerationLoading, setImageGenerationLoading] = useState(false);
@@ -74,6 +133,12 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
   const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null);
   const [imageToDelete, setImageToDelete] = useState<number | null>(null);
   const [videoToDelete, setVideoToDelete] = useState<number | null>(null);
+  const [videoAspectRatios, setVideoAspectRatios] = useState<Record<number, number>>({});
+  const [imageCooldownUntil, setImageCooldownUntil] = useState<Date | null>(null);
+  const [videoCooldownUntil, setVideoCooldownUntil] = useState<Date | null>(null);
+  const [showImageCooldownMessage, setShowImageCooldownMessage] = useState(false);
+  const [showVideoCooldownMessage, setShowVideoCooldownMessage] = useState(false);
+  const [cooldownClock, setCooldownClock] = useState(() => Date.now());
 
   const loadPost = useCallback(async () => {
     try {
@@ -123,6 +188,44 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     loadSchedules();
   }, [loadSchedules]);
 
+  useEffect(() => {
+    setImageCooldownUntil(computeCooldownUntil(clientInfo?.client?.last_image_generation_at));
+    setVideoCooldownUntil(computeCooldownUntil(clientInfo?.client?.last_video_generation_at));
+  }, [clientInfo?.client?.last_image_generation_at, clientInfo?.client?.last_video_generation_at]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setCooldownClock(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!imageCooldownUntil) {
+      setShowImageCooldownMessage(false);
+      return undefined;
+    }
+    if (imageCooldownUntil.getTime() <= Date.now()) {
+      setShowImageCooldownMessage(false);
+      return undefined;
+    }
+    setShowImageCooldownMessage(true);
+    const timeout = setTimeout(() => setShowImageCooldownMessage(false), 5000);
+    return () => clearTimeout(timeout);
+  }, [imageCooldownUntil]);
+
+  useEffect(() => {
+    if (!videoCooldownUntil) {
+      setShowVideoCooldownMessage(false);
+      return undefined;
+    }
+    if (videoCooldownUntil.getTime() <= Date.now()) {
+      setShowVideoCooldownMessage(false);
+      return undefined;
+    }
+    setShowVideoCooldownMessage(true);
+    const timeout = setTimeout(() => setShowVideoCooldownMessage(false), 5000);
+    return () => clearTimeout(timeout);
+  }, [videoCooldownUntil]);
+
   // Cleanup polling interval on unmount
   useEffect(() => {
     return () => {
@@ -139,6 +242,7 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     setImageGenerationLoading(true);
     try {
       await postsApi.generateImage(postId);
+      setImageCooldownUntil(new Date(Date.now() + ONE_HOUR_MS));
       toast.success('Генерация изображения запущена');
 
       // Start polling every 5 seconds to check if image is ready
@@ -172,24 +276,33 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
       }, 300000);
 
     } catch (err) {
-      toast.error('Ошибка при генерации изображения');
+      const { message, cooldownEndsAt } = parseApiErrorPayload(err);
+      if (cooldownEndsAt) {
+        setImageCooldownUntil(cooldownEndsAt);
+      }
+      toast.error(message || 'Ошибка при генерации изображения');
       stopImageGenerationPolling();
     }
   };
 
   const handleGenerateVideo = async (options?: GenerateVideoRequest) => {
     setLoading(true);
+    const isTextVideo = options?.source === 'text';
     try {
       await postsApi.generateVideo(postId, options);
-      const isTextVideo = options?.source === 'text';
+      setVideoCooldownUntil(new Date(Date.now() + ONE_HOUR_MS));
       toast.success(isTextVideo ? 'Генерация видео по тексту запущена' : 'Генерация видео запущена');
       // Reload post after a delay to show the new video
       setTimeout(async () => {
         const updatedPost = await postsApi.get(postId);
         setPost(updatedPost);
-      }, options?.source === 'text' ? 6000 : 5000);
+      }, isTextVideo ? 6000 : 5000);
     } catch (err) {
-      toast.error(options?.source === 'text' ? 'Ошибка при генерации видео по тексту' : 'Ошибка при генерации видео');
+      const { message, cooldownEndsAt } = parseApiErrorPayload(err);
+      if (cooldownEndsAt) {
+        setVideoCooldownUntil(cooldownEndsAt);
+      }
+      toast.error(message || (isTextVideo ? 'Ошибка при генерации видео по тексту' : 'Ошибка при генерации видео'));
     } finally {
       setLoading(false);
     }
@@ -270,10 +383,27 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     setVideoToDelete(null);
   };
 
+  const handleVideoMetadataLoaded = useCallback(
+    (videoId: number, event: SyntheticEvent<HTMLVideoElement>) => {
+      const { videoWidth, videoHeight } = event.currentTarget;
+      if (!videoWidth || !videoHeight) {
+        return;
+      }
+      const ratio = Math.max(0.5, Math.min(2.0, videoWidth / videoHeight));
+      setVideoAspectRatios((prev) => {
+        if (prev[videoId] === ratio) {
+          return prev;
+        }
+        return { ...prev, [videoId]: ratio };
+      });
+    },
+    [],
+  );
+
   const handleImageClick = (image: { image: string; alt_text?: string; id: number }) => {
     setSelectedImage({
       src: resolveMediaUrl(image.image),
-      alt: image.alt_text || post.title || `Изображение ${image.id}`
+      alt: image.alt_text || post?.title || `Изображение ${image.id}`
     });
   };
 
@@ -285,12 +415,19 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     return <div>Загрузка...</div>;
   }
 
+  const nowMs = cooldownClock;
   const statusLabel = STATUS_LABELS[post.status] ?? post.status;
   const postTypeLabel = formatPostTypeLabel(post.template_type);
   const images = post.images ?? [];
   const videos = post.videos ?? [];
-  const imageGenerationDisabled = !canEdit || imageGenerationLoading || !MEDIA_FEATURES_AVAILABLE;
-  const videoGenerationDisabled = !canEdit || loading || !MEDIA_FEATURES_AVAILABLE || !canGenerateVideo;
+  const isImageOnCooldown = Boolean(imageCooldownUntil && imageCooldownUntil.getTime() > nowMs);
+  const isVideoOnCooldown = Boolean(videoCooldownUntil && videoCooldownUntil.getTime() > nowMs);
+  const imageCooldownRemainingMs = isImageOnCooldown && imageCooldownUntil ? imageCooldownUntil.getTime() - nowMs : 0;
+  const videoCooldownRemainingMs = isVideoOnCooldown && videoCooldownUntil ? videoCooldownUntil.getTime() - nowMs : 0;
+  const imageCooldownLabel = isImageOnCooldown ? formatCooldownDuration(imageCooldownRemainingMs) : '';
+  const videoCooldownLabel = isVideoOnCooldown ? formatCooldownDuration(videoCooldownRemainingMs) : '';
+  const imageGenerationDisabled = !canEdit || imageGenerationLoading || !MEDIA_FEATURES_AVAILABLE || isImageOnCooldown;
+  const videoGenerationDisabled = !canEdit || loading || !MEDIA_FEATURES_AVAILABLE || !canGenerateVideo || isVideoOnCooldown;
   const videoFromTextDisabled = videoGenerationDisabled || !post.text;
 
   return (
@@ -324,35 +461,49 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
         <div>
           <div className="flex flex-wrap gap-3">
             {/* Image generation */}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                disabled={imageGenerationDisabled}
-                variant="default"
-                onClick={handleGenerateImage}
-                className={imageGenerationLoading ? 'animate-pulse' : ''}
-              >
-                {imageGenerationLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Изображение
-              </Button>
+            <div className="flex flex-col gap-1">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={imageGenerationDisabled}
+                  variant="default"
+                  onClick={handleGenerateImage}
+                  className={imageGenerationLoading ? 'animate-pulse' : ''}
+                >
+                  {imageGenerationLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Изображение
+                </Button>
+              </div>
+              {isImageOnCooldown && showImageCooldownMessage && (
+                <p className="text-xs text-muted-foreground">
+                  Повторная генерация изображения будет доступна через {imageCooldownLabel}.
+                </p>
+              )}
             </div>
 
             {/* Video generation button */}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                disabled={videoGenerationDisabled}
-                variant={MEDIA_FEATURES_AVAILABLE && canGenerateVideo ? 'default' : 'secondary'}
-                onClick={() => handleGenerateVideo()}
-              >
-                {canGenerateVideo ? 'Видео по изображению' : 'Сгенерировать видео (только dev)'}
-              </Button>
-              <Button
-                disabled={videoFromTextDisabled}
-                variant={MEDIA_FEATURES_AVAILABLE && canGenerateVideo ? 'outline' : 'secondary'}
-                onClick={() => handleGenerateVideo({ source: 'text', method: 'veo' })}
-                title={!post.text ? 'Добавьте текст в пост, чтобы сгенерировать видео по тексту' : undefined}
-              >
-                Видео по тексту (VEO)
-              </Button>
+            <div className="flex flex-col gap-1">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={videoGenerationDisabled}
+                  variant={MEDIA_FEATURES_AVAILABLE && canGenerateVideo ? 'default' : 'secondary'}
+                  onClick={() => handleGenerateVideo()}
+                >
+                  {canGenerateVideo ? 'Видео по изображению' : 'Сгенерировать видео (только dev)'}
+                </Button>
+                <Button
+                  disabled={videoFromTextDisabled}
+                  variant={MEDIA_FEATURES_AVAILABLE && canGenerateVideo ? 'default' : 'secondary'}
+                  onClick={() => handleGenerateVideo({ source: 'text', method: 'veo' })}
+                  title={!post.text ? 'Добавьте текст в пост, чтобы сгенерировать видео по тексту' : undefined}
+                >
+                  Видео по тексту
+                </Button>
+              </div>
+              {isVideoOnCooldown && showVideoCooldownMessage && (
+                <p className="text-xs text-muted-foreground">
+                  Повторная генерация видео будет доступна через {videoCooldownLabel}.
+                </p>
+              )}
             </div>
 
             {/* Regenerate text */}
@@ -436,18 +587,37 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
         </div>
 
         {/* Image gallery */}
-        {images.length > 0 && (
+        {(images.length > 0 || imageGenerationLoading) && (
           <div>
             <h2 className="text-lg font-semibold mb-2">Изображения</h2>
             <div className="grid gap-4 sm:grid-cols-3">
-              {images.map((image) => (
-                <div key={image.id} className="rounded-lg border bg-background p-2 shadow-sm relative group">
-                  <img
-                    src={resolveMediaUrl(image.image)}
-                    alt={image.alt_text || post.title || `Изображение ${image.id}`}
-                    className="h-40 w-full rounded-md object-cover cursor-pointer"
-                    onClick={() => handleImageClick(image)}
-                  />
+              {imageGenerationLoading && (
+                <div className="rounded-lg border bg-background p-2 shadow-sm">
+                  <div className="aspect-square bg-gray-100 rounded-md flex items-center justify-center">
+                    <div className="text-center">
+                      <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-gray-400" />
+                      <p className="text-sm text-gray-500">Генерация изображения...</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {images.map((image) => {
+                const aspectRatio = image.width && image.height ? image.width / image.height : 4 / 3;
+                const clampedRatio = Math.max(0.5, Math.min(2.0, aspectRatio));
+
+                return (
+                  <div key={image.id} className="rounded-lg border bg-background p-2 shadow-sm relative group">
+                    <div
+                      className="w-full overflow-hidden rounded-md"
+                      style={{ aspectRatio: `${clampedRatio}` }}
+                    >
+                      <img
+                        src={resolveMediaUrl(image.image)}
+                        alt={image.alt_text || post.title || `Изображение ${image.id}`}
+                        className="w-full h-full object-contain cursor-pointer"
+                        onClick={() => handleImageClick(image)}
+                      />
+                    </div>
                   {canEdit && (
                     <div className="absolute top-2 right-2">
                       {/* Delete confirmation menu */}
@@ -493,7 +663,8 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
                     <p className="mt-2 text-sm text-muted-foreground">{image.alt_text}</p>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -528,63 +699,83 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
         </Dialog>
 
         {/* Video gallery */}
-        {videos.length > 0 && (
+        {(videos.length > 0 || loading) && (
           <div>
             <h2 className="text-lg font-semibold mb-2">Видео</h2>
-            <div className="grid gap-4 sm:grid-cols-2">
-              {videos.map((video) => (
-                <div key={video.id} className="rounded-lg border bg-background p-2 shadow-sm relative group">
-                  <video
-                    src={resolveMediaUrl(video.video)}
-                    controls
-                    className="w-full rounded-md object-contain max-h-[60vh] bg-black"
-                  />
-                  {canEdit && (
-                    <div className="absolute top-2 right-2">
-                      {/* Delete confirmation menu */}
-                      {videoToDelete === video.id && (
-                        <div className="absolute top-full right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg z-10 p-2 min-w-[120px]">
-                          <p className="text-sm font-medium mb-2 text-gray-700">Удалить?</p>
-                          <div className="flex gap-1">
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              className="flex-1 text-xs"
-                              onClick={handleConfirmVideoDelete}
-                            >
-                              Да
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="flex-1 text-xs"
-                              onClick={handleCancelVideoDelete}
-                            >
-                              Нет
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Trash button */}
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className={`opacity-0 group-hover:opacity-100 transition-opacity ${
-                          videoToDelete === video.id ? 'opacity-100' : ''
-                        }`}
-                        onClick={() => handleShowVideoDeleteMenu(video.id)}
-                        title="Удалить видео"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+            <div className="grid gap-4 sm:grid-cols-3">
+              {loading && (
+                <div className="rounded-lg border bg-background p-2 shadow-sm">
+                  <div className="aspect-video bg-gray-900 rounded-md flex items-center justify-center">
+                    <div className="text-center">
+                      <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-gray-400" />
+                      <p className="text-sm text-gray-400">Генерация видео...</p>
                     </div>
-                  )}
-                  {video.caption && (
-                    <p className="mt-2 text-sm text-muted-foreground">{video.caption}</p>
-                  )}
+                  </div>
                 </div>
-              ))}
+              )}
+              {videos.map((video) => {
+                const aspectRatio = videoAspectRatios[video.id] ?? 16 / 9;
+
+                return (
+                  <div key={video.id} className="rounded-lg border bg-background p-2 shadow-sm relative group">
+                    <div
+                      className="w-full overflow-hidden rounded-md bg-black"
+                      style={{ aspectRatio: `${aspectRatio}` }}
+                    >
+                      <video
+                        src={resolveMediaUrl(video.video)}
+                        controls
+                        className="w-full h-full object-contain"
+                        onLoadedMetadata={(event) => handleVideoMetadataLoaded(video.id, event)}
+                      />
+                    </div>
+                    {canEdit && (
+                      <div className="absolute top-2 right-2">
+                        {/* Delete confirmation menu */}
+                        {videoToDelete === video.id && (
+                          <div className="absolute top-full right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg z-10 p-2 min-w-[120px]">
+                            <p className="text-sm font-medium mb-2 text-gray-700">Удалить?</p>
+                            <div className="flex gap-1">
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                className="flex-1 text-xs"
+                                onClick={handleConfirmVideoDelete}
+                              >
+                                Да
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1 text-xs"
+                                onClick={handleCancelVideoDelete}
+                              >
+                                Нет
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Trash button */}
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className={`opacity-0 group-hover:opacity-100 transition-opacity ${
+                            videoToDelete === video.id ? 'opacity-100' : ''
+                          }`}
+                          onClick={() => handleShowVideoDeleteMenu(video.id)}
+                          title="Удалить видео"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    )}
+                    {video.caption && (
+                      <p className="mt-2 text-sm text-muted-foreground">{video.caption}</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

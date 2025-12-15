@@ -104,8 +104,9 @@ def publish_schedule(schedule_id: int):
                 return
 
             # Создаем publisher
-            # Если в SocialAccount есть access_token, используем его как bot_token
-            bot_token = social_account.access_token if social_account.access_token else None
+            # Используем TELEGRAM_BOT_TOKEN из settings (глобальный токен бота)
+            from django.conf import settings
+            bot_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', None)
 
             publisher = TelegramPublisher(
                 api_id=client.telegram_api_id,
