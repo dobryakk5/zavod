@@ -81,6 +81,50 @@ def is_probably_base64(value: str) -> bool:
     except Exception:
         return False
 
+
+def _extract_direct_image_url(text: Optional[str]) -> Optional[str]:
+    """Find a direct image URL (png/jpg/webp) inside arbitrary bot text."""
+    if not text:
+        return None
+    for raw_url in URL_PATTERN.findall(text):
+        candidate = raw_url.strip("()[]<>., ")
+        lowered = candidate.lower()
+        base = lowered.split("?", 1)[0]
+        if base.endswith((".png", ".jpg", ".jpeg", ".webp")):
+            return candidate
+    return None
+
+
+def _download_remote_image(url: str) -> Optional[str]:
+    """Download an image by direct link into a temp file and return the path."""
+    try:
+        timeout = max(5, get_image_generation_timeout())
+    except Exception:
+        timeout = 120
+
+    try:
+        response = requests.get(url, timeout=timeout)
+    except Exception as exc:
+        logger.error("Не удалось скачать изображение по ссылке %s: %s", url, exc)
+        return None
+
+    if response.status_code != 200:
+        logger.error("Скачивание изображения %s завершилось с кодом %s", url, response.status_code)
+        return None
+
+    parsed = urllib.parse.urlparse(url)
+    ext = os.path.splitext(parsed.path)[1]
+    if not ext or ext.lower() not in [".png", ".jpg", ".jpeg", ".webp"]:
+        ext = ".png"
+
+    fd, temp_path = tempfile.mkstemp(suffix=ext)
+    os.close(fd)
+    with open(temp_path, "wb") as tmp_file:
+        tmp_file.write(response.content)
+
+    logger.info("Изображение скачано из прямой ссылки %s -> %s", url, temp_path)
+    return temp_path
+
 WAN_NEGATIVE_PROMPT = (
     "色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 静止, 整体发灰, 最差质量, "
     "低质量, JPEG压缩残留, 丑陋的, 残缺的, 多余的手指, 画得不好的手部, 画得不好的脸部, 畸形的, 毁容的, "
@@ -173,11 +217,20 @@ def _take_first_sentences(text: str, limit: int = 3) -> str:
     return " ".join(result_parts)
 
 
-def _normalize_prompt_signature(value: Optional[str], max_length: int = 500) -> str:
-    """Нормализовать промпт для сравнения (без регистра и лишних пробелов)."""
+def _normalize_prompt_signature(
+    value: Optional[str],
+    max_length: int = 500,
+    sentence_limit: int = 1,
+) -> str:
+    """
+    Нормализовать промпт для сравнения (без регистра и лишних пробелов).
+
+    Для сопоставления ответов читаем только первые sentence_limit предложений,
+    по умолчанию сверяем первое предложение, чтобы не требовать полного промпта.
+    """
     if not value:
         return ""
-    head = _take_first_sentences(value)
+    head = _take_first_sentences(value, limit=sentence_limit)
     normalized = re.sub(r"\s+", " ", head).strip().lower()
     return normalized[:max_length]
 
@@ -491,11 +544,16 @@ def generate_image_from_telegram_bot(
                         
                         if sora_button:
                             logger.info("[IMAGE BOT Thread %s] Нажимаю кнопку: %s", thread_id, sora_button.text)
-                            await client(GetBotCallbackAnswerRequest(
-                                peer=bot_username,
-                                msg_id=response.id,
-                                data=sora_button.data
-                            ))
+                            button_data = getattr(sora_button, "data", None)
+                            if button_data:
+                                await client(GetBotCallbackAnswerRequest(
+                                    peer=bot_username,
+                                    msg_id=response.id,
+                                    data=button_data
+                                ))
+                            else:
+                                # Некоторые боты отправляют обычные клавиатурные кнопки.
+                                await conv.send_message(sora_button.text)
                             logger.info("[IMAGE BOT Thread %s] Кнопка SORA Images нажата", thread_id)
                         else:
                             logger.error("[IMAGE BOT Thread %s] Кнопка SORA Images не найдена", thread_id)
@@ -517,43 +575,63 @@ def generate_image_from_telegram_bot(
                     await conv.send_message(prompt)
                     logger.info("[IMAGE BOT Thread %s] Промпт отправлен, ожидание изображения...", thread_id)
 
-                    # Шаг 5: Получаем ответ с изображением
-                    try:
-                        image_response = await conv.get_response(timeout=timeout)
-                        logger.info("[IMAGE BOT Thread %s] Получен ответ с изображением", thread_id)
-                    except asyncio.TimeoutError:
-                        logger.error("Бот не ответил с изображением в течение %s секунд", timeout)
-                        return None
+                    # Шаг 5: Получаем ответы бота и ждём изображение или прямую ссылку
+                    followup_attempts = 6
+                    for attempt in range(followup_attempts):
+                        try:
+                            image_response = await conv.get_response(timeout=timeout)
+                        except asyncio.TimeoutError:
+                            logger.error("Бот не ответил с изображением в течение %s секунд", timeout)
+                            return None
 
-                    # Шаг 6: Обрабатываем ответ
-                    if image_response.media:
-                        # Скачиваем изображение
-                        fd, temp_path = tempfile.mkstemp(suffix=".png")
-                        os.close(fd)
-                        downloaded = await client.download_media(image_response.media, file=temp_path)
-                        
-                        logger.info("[IMAGE BOT Thread %s] Изображение успешно скачано: %s", thread_id, downloaded)
-                        
-                        return {
-                            "success": True,
-                            "image_path": downloaded,
-                            "model": "veo_photo",
-                            "cleanup_paths": [downloaded],
-                            "response_text": image_response.raw_text or "",
-                        }
-                    else:
-                        # Проверяем, есть ли текстовый ответ с ошибкой
-                        error_text = image_response.raw_text or ""
-                        if error_text:
-                            logger.error("[IMAGE BOT Thread %s] Ошибка от бота: %s", thread_id, error_text)
+                        response_text = (image_response.raw_text or "").strip()
+                        if response_text:
+                            logger.info(
+                                "[IMAGE BOT Thread %s] Ответ бота (%s/%s): %s",
+                                thread_id,
+                                attempt + 1,
+                                followup_attempts,
+                                response_text[:120],
+                            )
+
+                        if image_response.media:
+                            fd, temp_path = tempfile.mkstemp(suffix=".png")
+                            os.close(fd)
+                            downloaded = await client.download_media(image_response.media, file=temp_path)
+                            logger.info("[IMAGE BOT Thread %s] Изображение успешно скачано: %s", thread_id, downloaded)
                             return {
-                                "success": False,
-                                "error": f"Bot error: {error_text}",
-                                "response_text": error_text
+                                "success": True,
+                                "image_path": downloaded,
+                                "model": "veo_photo",
+                                "cleanup_paths": [downloaded],
+                                "response_text": response_text,
                             }
-                        else:
-                            logger.error("[IMAGE BOT Thread %s] Бот не прислал изображение", thread_id)
-                            return {"success": False, "error": "Bot did not send an image"}
+
+                        direct_url = _extract_direct_image_url(response_text)
+                        if direct_url:
+                            logger.info("[IMAGE BOT Thread %s] Найдена прямая ссылка на изображение: %s", thread_id, direct_url)
+                            downloaded = _download_remote_image(direct_url)
+                            if not downloaded:
+                                return {
+                                    "success": False,
+                                    "error": f"Не удалось скачать изображение по ссылке: {direct_url}",
+                                    "response_text": response_text,
+                                }
+                            return {
+                                "success": True,
+                                "image_path": downloaded,
+                                "model": "veo_photo",
+                                "cleanup_paths": [downloaded],
+                                "response_text": response_text,
+                            }
+
+                        if response_text:
+                            continue
+
+                        logger.info("[IMAGE BOT Thread %s] Получено пустое сообщение без медиа, ждем дальше", thread_id)
+
+                    logger.error("[IMAGE BOT Thread %s] Бот не прислал изображение после %s сообщений", thread_id, followup_attempts)
+                    return {"success": False, "error": "Bot did not send an image"}
 
             except asyncio.TimeoutError:
                 logger.error("Бот не ответил в течение %s секунд (conversation)", timeout)
@@ -639,302 +717,38 @@ def _generate_image_pollinations(prompt: str, output_path: str) -> Dict[str, Any
         return {"success": False, "error": str(exc)}
 
 
-def generate_image_from_gigachat_bot(
-    prompt: str,
-    **options: Any
-) -> Dict[str, Any]:
-    """
-    Создать изображение через Telegram бота GigaChat (@gigachat_bot).
-
-    GigaChat - нейросеть от Сбера для генерации текста, изображений, музыки.
-
-    Процесс:
-    1) Отправляет команду /start для инициализации
-    2) Ищет и нажимает кнопку для генерации изображений (🎨, "Картинки", "Изображения")
-    3) Отправляет промпт и получает изображение
-
-    Требуемые переменные окружения:
-    - TELEGRAM_API_ID: API ID для Telegram
-    - TELEGRAM_API_HASH: API Hash для Telegram
-    - GIGA_BOT_SESSION_PATH (опционально): путь к файлу сессии
-    - GIGA_BOT_SESSION_NAME (опционально): имя сессии, по умолчанию "giga_generator"
-    - GIGA_BOT_TIMEOUT (опционально): таймаут в секундах
-
-    Args:
-        prompt: Текстовый промпт для генерации изображения
-        **options: Дополнительные параметры:
-            - session_path: Путь к файлу сессии
-            - session_name: Имя сессии
-            - timeout: Таймаут в секундах
-            - api_id: Telegram API ID
-            - api_hash: Telegram API Hash
-
-    Returns:
-        Dict с результатом генерации
-    """
-    if not TELETHON_AVAILABLE:
-        return {"success": False, "error": "telethon не установлен. Установите пакет telethon."}
-
-    if not prompt:
-        return {"success": False, "error": "Промпт обязателен для генерации изображения"}
-
-    bot_username = "gigachat_bot"
-    # Переменные окружения для GigaChat бота:
-    # GIGA_BOT_SESSION_PATH - путь к файлу сессии
-    # GIGA_BOT_SESSION_NAME - имя сессии (по умолчанию: giga_generator)
-    # GIGA_BOT_TIMEOUT - таймаут в секундах
-    session_path = (
-        options.get("session_path")
-        or os.getenv("GIGA_BOT_SESSION_PATH")
-        or os.getenv("GIGA_BOT_SESSION_FILE")
-        or os.getenv("TELEGRAM_SESSION_PATH")
-    )
-    session_name_raw = options.get("session_name") or os.getenv("GIGA_BOT_SESSION_NAME", "giga_generator")
-    session_label = session_path or session_name_raw
-
-    if session_path:
-        expanded_path = os.path.abspath(os.path.expanduser(session_path))
-        if expanded_path.endswith(".session"):
-            session_name = expanded_path[:-8]
-            session_file = expanded_path
-        else:
-            session_name = expanded_path
-            session_file = expanded_path + ".session"
-        session_label = session_file
-        logger.info("Используется файл сессии Telethon: %s", session_file)
-    else:
-        # Для GigaChat бота используем папку telegram_sessions
-        if session_name_raw == "giga_generator":
-            session_name = f"telegram_sessions/{session_name_raw}"
-        else:
-            session_name = session_name_raw
-        session_file = f"{session_name}.session"
-
-    session_dir = os.path.dirname(session_name)
-    if session_dir and not os.path.exists(session_dir):
-        os.makedirs(session_dir, exist_ok=True)
-
-    timeout_value = options.get("timeout")
-    if timeout_value is None:
-        env_timeout = os.getenv("GIGA_BOT_TIMEOUT")
-        if env_timeout:
-            try:
-                timeout_value = int(env_timeout)
-            except ValueError:
-                logger.warning("Некорректное значение GIGA_BOT_TIMEOUT: %s", env_timeout)
-                timeout_value = None
-        if timeout_value is None:
-            timeout_value = get_image_generation_timeout()
-    try:
-        timeout = max(30, int(timeout_value))
-    except (TypeError, ValueError):
-        timeout = get_image_generation_timeout()
-
-    api_id = (
-        options.get("api_id")
-        or os.getenv("TELEGRAM_API_ID")
-        or os.getenv("TG_API_ID")
-        or os.getenv("API_ID")
-    )
-    api_hash = (
-        options.get("api_hash")
-        or os.getenv("TELEGRAM_API_HASH")
-        or os.getenv("TG_API_HASH")
-        or os.getenv("API_HASH")
-    )
-
-    if not api_id or not api_hash:
-        return {
-            "success": False,
-            "error": "TELEGRAM_API_ID (или TG_API_ID/API_ID) и TELEGRAM_API_HASH (TG_API_HASH/API_HASH) обязательны для генерации изображений через GigaChat бот"
-        }
-
-    try:
-        api_id = int(api_id)
-    except ValueError:
-        return {"success": False, "error": "TELEGRAM_API_ID должен быть числом"}
-
-    cleanup_session_files: List[str] = []
-
-    async def _giga_bot_coroutine() -> Optional[Dict[str, Any]]:
-        session_base = session_name[:-8] if session_name.endswith('.session') else session_name
-        thread_id = threading.get_ident()
-        unique_suffix = uuid.uuid4().hex[:6]
-        thread_session_name = f"{session_base}_thread_{thread_id}_{unique_suffix}"
-        thread_session_file = f"{thread_session_name}.session"
-        cleanup_session_files.clear()
-        cleanup_session_files.extend([
-            thread_session_file,
-            f"{thread_session_file}-journal",
-            f"{thread_session_file}-wal",
-        ])
-
-        source_session_file = f"{session_base}.session"
-
-        logger.info("[GIGA BOT Thread %s] Начало инициализации клиента", thread_id)
-        logger.info("[GIGA BOT Thread %s] Базовая сессия: %s", thread_id, source_session_file)
-        logger.info("[GIGA BOT Thread %s] Сессия потока: %s", thread_id, thread_session_file)
-
-        thread_session_dir = os.path.dirname(thread_session_file)
-        if thread_session_dir:
-            os.makedirs(thread_session_dir, exist_ok=True)
-
-        with _telethon_session_lock(source_session_file):
-            if os.path.exists(source_session_file):
-                try:
-                    shutil.copy2(source_session_file, thread_session_file)
-                    logger.info(
-                        "[GIGA BOT Thread %s] Скопирована сессия: %s -> %s",
-                        thread_id,
-                        source_session_file,
-                        thread_session_file
-                    )
-                except Exception as e:
-                    logger.warning("[GIGA BOT Thread %s] Не удалось скопировать сессию: %s", thread_id, e)
-            else:
-                logger.warning("[GIGA BOT Thread %s] Исходная сессия не найдена: %s", thread_id, source_session_file)
-
-        logger.info("[GIGA BOT Thread %s] Создание TelegramClient с сессией: %s", thread_id, thread_session_name)
-        client = TelegramClient(thread_session_name, api_id, api_hash)
-
-        try:
-            logger.info("[GIGA BOT Thread %s] Попытка подключения к Telegram...", thread_id)
-            await client.connect()
-            logger.info("[GIGA BOT Thread %s] Успешно подключено к Telegram", thread_id)
-
-            logger.info("[GIGA BOT Thread %s] Проверка авторизации...", thread_id)
-            if not await client.is_user_authorized():
-                raise RuntimeError(
-                    f"Telethon session '{session_label}' не авторизована. "
-                    "Запустите backend/core/foto_video_gen.py (или scripts/authorize_telegram.py) и пройдите вход в Telegram."
-                )
-            logger.info("[GIGA BOT Thread %s] Авторизация подтверждена", thread_id)
-
-            try:
-                logger.info("[GIGA BOT Thread %s] Получение бота %s...", thread_id, bot_username)
-                bot = await client.get_entity(bot_username)
-                logger.info("[GIGA BOT Thread %s] Бот получен: %s", thread_id, bot_username)
-            except AuthKeyUnregisteredError as auth_err:
-                raise RuntimeError(
-                    f"Telethon session '{session_label}' требует повторной авторизации: {auth_err}. "
-                    "Удалите файл сессии и выполните вход снова через backend/core/foto_video_gen.py или scripts/authorize_telegram.py."
-                ) from auth_err
-            except Exception:
-                raise
-
-            try:
-                logger.info("[GIGA BOT Thread %s] Начало разговора с ботом (timeout=%s)...", thread_id, timeout)
-                async with client.conversation(bot, timeout=timeout) as conv:
-                    # Отправляем промпт напрямую без /start и поиска кнопок
-                    logger.info("[GIGA BOT Thread %s] Отправка промпта: %s", thread_id, prompt[:100])
-                    await conv.send_message(prompt)
-                    logger.info("[GIGA BOT Thread %s] Промпт отправлен, ожидание ответа...", thread_id)
-
-                    # Шаг 1: Получаем первый ответ (текстовое приветствие)
-                    try:
-                        greeting_response = await conv.get_response(timeout=30)  # Короткий таймаут для приветствия
-                        logger.info("[GIGA BOT Thread %s] Получен первый ответ (приветствие): %s", thread_id, greeting_response.raw_text or "")
-                    except asyncio.TimeoutError:
-                        logger.warning("[GIGA BOT Thread %s] Таймаут ожидания первого ответа", thread_id)
-
-                    # Шаг 2: Получаем второй ответ с изображением
-                    try:
-                        image_response = await conv.get_response(timeout=timeout)
-                        logger.info("[GIGA BOT Thread %s] Получен ответ с изображением", thread_id)
-                    except asyncio.TimeoutError:
-                        logger.error("GigaChat бот не ответил с изображением в течение %s секунд", timeout)
-                        return None
-
-                    # Шаг 3: Обрабатываем ответ
-                    if image_response.media:
-                        # Скачиваем изображение
-                        fd, temp_path = tempfile.mkstemp(suffix=".png")
-                        os.close(fd)
-                        downloaded = await client.download_media(image_response.media, file=temp_path)
-
-                        logger.info("[GIGA BOT Thread %s] Изображение успешно скачано: %s", thread_id, downloaded)
-
-                        return {
-                            "success": True,
-                            "image_path": downloaded,
-                            "model": "giga_photo",
-                            "cleanup_paths": [downloaded],
-                            "response_text": image_response.raw_text or "",
-                        }
-                    else:
-                        # Проверяем, есть ли текстовый ответ с ошибкой
-                        error_text = image_response.raw_text or ""
-                        if error_text:
-                            logger.error("[GIGA BOT Thread %s] Ошибка от GigaChat бота: %s", thread_id, error_text)
-                            return {
-                                "success": False,
-                                "error": f"GigaChat bot error: {error_text}",
-                                "response_text": error_text
-                            }
-                        else:
-                            logger.error("[GIGA BOT Thread %s] GigaChat бот не прислал изображение", thread_id)
-                            return {"success": False, "error": "GigaChat bot did not send an image"}
-
-            except asyncio.TimeoutError:
-                logger.error("GigaChat бот не ответил в течение %s секунд (conversation)", timeout)
-                return None
-
-        finally:
-            await client.disconnect()
-            if os.path.exists(thread_session_file):
-                try:
-                    with _telethon_session_lock(source_session_file):
-                        shutil.copy2(thread_session_file, source_session_file)
-                        logger.info(
-                            "[GIGA BOT Thread %s] Сессия потока синхронизирована обратно в базовую",
-                            thread_id
-                        )
-                except Exception as sync_exc:
-                    logger.warning(
-                        "[GIGA BOT Thread %s] Не удалось обновить базовую сессию: %s",
-                        thread_id,
-                        sync_exc
-                    )
-
-    try:
-        image_payload = asyncio.run(_giga_bot_coroutine())
-    except Exception as exc:
-        logger.error("Ошибка общения с GigaChat ботом для генерации изображения: %s", exc, exc_info=True)
-        return {"success": False, "error": str(exc)}
-    finally:
-        for temp_path in cleanup_session_files:
-            if not temp_path:
-                continue
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                    if temp_path.endswith(".session"):
-                        logger.info("[GIGA BOT] Удалена временная сессия: %s", temp_path)
-                except OSError:
-                    pass
-
-    if not image_payload:
-        return {"success": False, "error": "Не удалось получить изображение от GigaChat бота"}
-
-    image_path = image_payload.get("image_path")
-    if not image_path or not os.path.exists(image_path):
-        return {"success": False, "error": "Не удалось получить изображение от GigaChat бота"}
-
-    return {
-        "success": True,
-        "image_path": image_path,
-        "model": "giga_photo",
-        "cleanup_paths": image_payload.get("cleanup_paths") or [image_path],
-        "response_text": image_payload.get("response_text", ""),
-    }
-
-
 def _generate_image_giga(prompt: str, output_path: str) -> Dict[str, Any]:
-    """Генерация изображений через Telegram бота GigaChat."""
-    if not TELETHON_AVAILABLE:
-        return {"success": False, "error": "telethon не установлен. Установите пакет telethon."}
+    """Генерация изображений через Giga API (предполагаемый сервис)."""
+    try:
+        image_timeout = get_image_generation_timeout()
 
-    return generate_image_from_gigachat_bot(prompt)
+        # Для Giga фото будем использовать Pollinations как fallback пока
+        # TODO: Заменить на реальный Giga API когда будет доступен
+        encoded_prompt = urllib.parse.quote(prompt)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true&style=giga"
+        logger.info("Giga фото запрос: %s", image_url)
+
+        response = requests.get(image_url, timeout=image_timeout)
+        if response.status_code != 200:
+            logger.error("Ошибка Giga фото HTTP %s", response.status_code)
+            return {"success": False, "error": f"HTTP error {response.status_code}"}
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, "wb") as f:
+            f.write(response.content)
+
+        return {
+            "success": True,
+            "image_path": output_path,
+            "image_url": image_url,
+            "model": "giga_photo"
+        }
+    except requests.exceptions.Timeout:
+        logger.error("Таймаут Giga фото")
+        return {"success": False, "error": "Request timeout"}
+    except Exception as exc:
+        logger.error("Ошибка Giga фото: %s", exc, exc_info=True)
+        return {"success": False, "error": str(exc)}
 
 
 def _extract_openrouter_image_payload(payload: Any) -> Tuple[Optional[str], Optional[str]]:
@@ -1483,7 +1297,9 @@ def _generate_video_veo(
         return {"success": False, "error": "TELEGRAM_API_ID должен быть числом"}
 
     caption = prompt or options.get("fallback_prompt") or "Please animate this image"
-    expected_prompt_signature = _normalize_prompt_signature(caption)
+    # Убрать markdown форматирование перед созданием сигнатуры
+    caption_clean = re.sub(r'\*+', '', caption).strip()
+    expected_prompt_signature = _normalize_prompt_signature(caption_clean)
     matched_prompt_fragment: Optional[str] = None
     cached_payload = _pop_video_response(expected_prompt_signature)
     if cached_payload:
@@ -1595,11 +1411,15 @@ def _generate_video_veo(
                         
                         if veo_button:
                             logger.info("[VEO Thread %s] Нажимаю кнопку: %s", thread_id, veo_button.text)
-                            await client(GetBotCallbackAnswerRequest(
-                                peer=bot_username,
-                                msg_id=response.id,
-                                data=veo_button.data
-                            ))
+                            button_data = getattr(veo_button, "data", None)
+                            if button_data:
+                                await client(GetBotCallbackAnswerRequest(
+                                    peer=bot_username,
+                                    msg_id=response.id,
+                                    data=button_data
+                                ))
+                            else:
+                                await conv.send_message(veo_button.text)
                             logger.info("[VEO Thread %s] Кнопка Veo нажата", thread_id)
                         else:
                             logger.error("[VEO Thread %s] Кнопка Veo не найдена", thread_id)
@@ -1638,7 +1458,11 @@ def _generate_video_veo(
                         nonlocal matched_prompt_fragment
                         resp_text = resp.raw_text or ""
                         fragment_raw = _extract_response_prompt_fragment(resp_text)
-                        fragment_signature = _normalize_prompt_signature(fragment_raw)
+                        # Убрать markdown форматирование перед созданием сигнатуры
+                        fragment_raw_clean = re.sub(r'\*+', '', fragment_raw).strip() if fragment_raw else None
+                        fragment_signature = _normalize_prompt_signature(fragment_raw_clean)
+                        # Очищенная версия caption для логирования
+                        caption_clean_local = re.sub(r'\*+', '', caption).strip()
                         if fragment_raw:
                             matched_prompt_fragment = fragment_raw
                         if fragment_signature and expected_prompt_signature:
@@ -1650,6 +1474,19 @@ def _generate_video_veo(
                                 logger.warning(
                                     "[VEO Thread %s] Ответ относится к другому промпту, ожидаем совпадение...",
                                     thread_id
+                                )
+                                # Получить оригинальные промпты для отображения (уже очищенные от markdown)
+                                original_expected = _take_first_sentences(caption_clean_local, 1)
+                                original_received = _take_first_sentences(fragment_raw_clean, 1) if fragment_raw_clean else fragment_signature
+                                logger.warning(
+                                    "[VEO Thread %s] Ожидаемое первое предложение: '%s'",
+                                    thread_id,
+                                    original_expected
+                                )
+                                logger.warning(
+                                    "[VEO Thread %s] Полученное первое предложение: '%s'",
+                                    thread_id,
+                                    original_received
                                 )
                                 return None
                             if fragment_raw:

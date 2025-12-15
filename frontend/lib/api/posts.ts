@@ -86,4 +86,22 @@ export const postsApi = {
       body: data,
     });
   },
+
+  /**
+   * Delete a specific image from a post
+   */
+  deleteImage: async (postId: number, imageId: number): Promise<{ success: boolean; message: string }> => {
+    return apiFetch<{ success: boolean; message: string }>(`/posts/${postId}/delete_image/?image_id=${imageId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * Delete a specific video from a post
+   */
+  deleteVideo: async (postId: number, videoId: number): Promise<{ success: boolean; message: string }> => {
+    return apiFetch<{ success: boolean; message: string }>(`/posts/${postId}/delete_video/?video_id=${videoId}`, {
+      method: 'DELETE',
+    });
+  },
 };

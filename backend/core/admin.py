@@ -105,6 +105,11 @@ class ClientAdmin(admin.ModelAdmin):
             "fields": ("avatar", "pains", "desires", "objections"),
             "description": "Эта информация используется AI для генерации более персонализированного контента, который попадает в боли и желания вашей аудитории"
         }),
+        ("Видео", {
+            "fields": ("base_video_prompt", "add_video_prompt", "video_prompt"),
+            "description": "Настройте инструкции для генерации видео именно для этого клиента. Используйте base_video_prompt для базовых инструкций AI и add_video_prompt для дополнительных пожеланий.",
+            "classes": ("collapse",),
+        }),
         ("Telegram", {
             "fields": ("telegram_client_channel", "analyze_channel_button", "telegram_api_id", "telegram_api_hash", "telegram_source_channels"),
             "classes": ("collapse",),

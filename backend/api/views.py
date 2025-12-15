@@ -30,6 +30,8 @@ from core.models import (
     Client,
     ContentTemplate,
     Post,
+    PostImage,
+    PostVideo,
     PostTone,
     PostType,
     Schedule,
@@ -799,6 +801,96 @@ class PostViewSet(viewsets.ModelViewSet):
             'success': True,
             'message': f'Запущена генерация {posts_count} постов по шаблону «{template.name}»',
             'task_id': task.id
+        })
+
+    @action(detail=True, methods=['delete'], permission_classes=[IsTenantOwnerOrEditor])
+    def delete_image(self, request, pk=None):
+        """
+        Delete a specific image from the post.
+        Requires image_id in query parameters.
+        """
+        post = self.get_object()
+        image_id = request.query_params.get('image_id')
+
+        if not image_id:
+            return Response({
+                'success': False,
+                'error': 'image_id parameter is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            image_id_int = int(image_id)
+        except (TypeError, ValueError):
+            return Response({
+                'success': False,
+                'error': 'image_id must be an integer'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Find the image and verify it belongs to this post
+        try:
+            image = PostImage.objects.get(id=image_id_int, post=post)
+        except PostImage.DoesNotExist:
+            return Response({
+                'success': False,
+                'error': 'Image not found or does not belong to this post'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # Delete the image file and database record
+        if image.image:
+            # Delete the file from storage
+            image.image.delete(save=False)
+
+        # Delete the database record
+        image.delete()
+
+        return Response({
+            'success': True,
+            'message': 'Image deleted successfully'
+        })
+
+    @action(detail=True, methods=['delete'], permission_classes=[IsTenantOwnerOrEditor])
+    def delete_video(self, request, pk=None):
+        """
+        Delete a specific video from the post.
+        Requires video_id in query parameters.
+        """
+        post = self.get_object()
+        video_id = request.query_params.get('video_id')
+
+        if not video_id:
+            return Response({
+                'success': False,
+                'error': 'video_id parameter is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            video_id_int = int(video_id)
+        except (TypeError, ValueError):
+            return Response({
+                'success': False,
+                'error': 'video_id must be an integer'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Find the video and verify it belongs to this post
+        try:
+            video = PostVideo.objects.get(id=video_id_int, post=post)
+        except PostVideo.DoesNotExist:
+            return Response({
+                'success': False,
+                'error': 'Video not found or does not belong to this post'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # Delete the video file and database record
+        if video.video:
+            # Delete the file from storage
+            video.video.delete(save=False)
+
+        # Delete the database record
+        video.delete()
+
+        return Response({
+            'success': True,
+            'message': 'Video deleted successfully'
         })
 
 

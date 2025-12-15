@@ -4,7 +4,6 @@ import os
 import queue
 import random
 import threading
-import time
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,7 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from zoneinfo import ZoneInfo
 
 from django.core.files import File
-from django.db import close_old_connections
 from django.utils import timezone
 
 from ..models import (
@@ -28,12 +26,12 @@ from ..models import (
     Schedule,
     SocialAccount,
 )
-from core.foto_video_gen import (
-    generate_image_from_telegram_bot,
-    generate_image_from_gigachat_bot,
-)
-from ..ai_generator import AIContentGenerator
+from ..ai_generator import AIContentGenerator, merge_video_prompt_with_additional
 from ..system_settings import get_image_generation_method
+from ..video_postprocessing import (
+    apply_text_overlays_to_video,
+    build_overlay_scenes_from_post,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,29 +47,6 @@ WEEKDAY_LABELS = [
 
 MAX_WEEKLY_POSTS = 21
 TIE_BREAKER_DAY_ORDER = [0, 2, 4, 1, 3, 5, 6]
-
-
-def _get_post_for_task(post_id: int, attempts: int = 3, delay: float = 0.2) -> Optional[Post]:
-    """
-    Best-effort lookup for a Post inside Celery workers.
-
-    SQLite + prefork workers sometimes keep stale DB connections alive.
-    Closing the old connection before each attempt mitigates this.
-    """
-    for attempt in range(1, attempts + 1):
-        close_old_connections()
-        try:
-            return Post.objects.select_related("client").get(id=post_id)
-        except Post.DoesNotExist:
-            if attempt < attempts:
-                logger.warning(
-                    "Post %s not found on attempt %s/%s, retrying...",
-                    post_id,
-                    attempt,
-                    attempts,
-                )
-                time.sleep(delay * attempt)
-    return None
 
 
 def _get_client_timezone(client: Client):
@@ -217,6 +192,7 @@ def _build_template_config(template: ContentTemplate, client: Client, prompt_typ
         "objections": client.objections or "",
         "brand": client.name or "",
         "books": client.expert_books or "",
+        "video_prompt": client.get_video_prompt_template(),
     }
 
 
@@ -261,7 +237,6 @@ def _build_text_video_prompt(post: Post) -> str:
         parts.append(f"Business/topic: {topic_name}")
     if base_text:
         parts.append(f"Script idea:\n{base_text}")
-
     return "\n".join(parts)
 
 
@@ -1155,22 +1130,34 @@ def _generate_videos_for_single_post(
     videos_per_post = max(1, int(videos_per_post))
     max_attempts = max(1, int(max_attempts))
 
-    video_prompt = prompt_generator.generate_video_prompt(
+    extra_instructions = ""
+    base_instructions = None
+    if getattr(post, "client_id", None):
+        try:
+            extra_instructions = (post.client.get_video_prompt_template() or "").strip()
+            base_instructions = post.client.get_base_video_prompt_instructions()
+        except Client.DoesNotExist:
+            extra_instructions = ""
+            base_instructions = None
+
+    video_prompt_body = prompt_generator.generate_video_prompt(
         post_title=post.title or "",
         post_text=post.text or "",
-        language=language
+        language=language,
+        extra_instructions=extra_instructions,
+        base_instructions=base_instructions,
     )
-    if not video_prompt:
-        video_prompt = _build_text_video_prompt(post)
+    if not video_prompt_body:
+        video_prompt_body = _build_text_video_prompt(post)
 
     prompts: Dict[int, str] = {}
     for video_idx in range(1, videos_per_post + 1):
-        prompt_to_use = video_prompt
+        prompt_to_use = video_prompt_body
         if videos_per_post > 1:
             prompt_to_use = (
-                f"{video_prompt}\nVariation #{video_idx}: distinct cinematic take, camera work and pacing."
+                f"{video_prompt_body}\nVariation #{video_idx}: distinct cinematic take, camera work and pacing."
             )
-        prompts[video_idx] = prompt_to_use
+        prompts[video_idx] = merge_video_prompt_with_additional(prompt_to_use, extra_instructions)
 
     video_state: Dict[int, Dict[str, Any]] = {
         idx: {"attempts": 0, "success": False}
@@ -1438,28 +1425,46 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
 
     Args:
         post_id: ID поста (Post)
+        model: Явно указанный метод генерации (openrouter, veo_photo, giga_photo)
 
     Returns:
         True при успехе, False при ошибке
     """
     try:
-        post = _get_post_for_task(post_id)
-        if not post:
-            logger.error(
-                "Пост с ID %s не найден в базе данных даже после повторных попыток",
-                post_id,
-            )
-            return False
+        # Получить Post
+        post = Post.objects.select_related('client').get(id=post_id)
 
-        # Получить метод генерации из аргумента или настроек
-        generation_method = model or get_image_generation_method()
+        alias_map = {
+            "nanobanana": "openrouter",
+            "pollinations": "openrouter",
+            "huggingface": "openrouter",
+            "flux2": "openrouter",
+            "sora_images": "veo_photo",
+            "telegram_bot": "veo_photo",
+            "veo": "veo_photo",
+            "giga": "giga_photo",
+            "gigachat": "giga_photo",
+        }
+
+        def _normalize_method(raw_value: Optional[str]) -> str:
+            value = (raw_value or "").strip().lower()
+            return alias_map.get(value, value)
+
+        provided_method = _normalize_method(model)
+        generation_method = provided_method or _normalize_method(get_image_generation_method())
         allowed_methods = {"openrouter", "veo_photo", "giga_photo"}
         if generation_method not in allowed_methods:
+            fallback = _normalize_method(get_image_generation_method()) or "openrouter"
+            if fallback not in allowed_methods:
+                fallback = "openrouter"
             logger.warning(
-                "Unknown image generation method '%s', falling back to system default",
+                "Unknown image generation method '%s' (requested='%s'), falling back to '%s'",
                 generation_method,
+                (model or "").strip(),
+                fallback,
             )
-            generation_method = get_image_generation_method()
+            generation_method = fallback
+
         logger.info(f"Генерация изображения для поста: {post.title} (ID={post.id}) методом '{generation_method}'")
 
         # Проверить, что у поста есть текст
@@ -1507,61 +1512,31 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
         final_image_path: Optional[str] = None
 
         if generation_method == "veo_photo":
-            bot_username = (
-                os.getenv("IMAGE_BOT_USERNAME")
-                or os.getenv("VEO_BOT_USERNAME")
-                or "@your_bot_username"
-            )
+            from ..foto_video_gen import generate_image_from_telegram_bot
+
+            # Используем бота syntxaibot для VEO фото (как и для видео)
+            bot_username = "syntxaibot"
+
+            # Используем общую сессию telegram_sessions/session_collector_client_3
+            session_name = "telegram_sessions/session_collector_client_3"
+
             result = generate_image_from_telegram_bot(
                 prompt=image_prompt,
                 bot_username=bot_username,
-                session_path=(
-                    os.getenv("IMAGE_BOT_SESSION_PATH")
-                    or os.getenv("IMAGE_BOT_SESSION_FILE")
-                    or os.getenv("VEO_SESSION_PATH")
-                    or os.getenv("VEO_SESSION_FILE")
-                ),
-                session_name=os.getenv("IMAGE_BOT_SESSION_NAME") or os.getenv("VEO_SESSION_NAME"),
-                timeout=os.getenv("IMAGE_BOT_TIMEOUT") or os.getenv("VEO_TIMEOUT"),
-                api_id=os.getenv("TELEGRAM_API_ID"),
-                api_hash=os.getenv("TELEGRAM_API_HASH")
-            )
-            final_image_path = result.get("image_path")
-            cleanup_paths.update(result.get("cleanup_paths") or [])
-        elif generation_method == "giga_photo":
-            # Переводим промпт на русский для GigaChat
-            try:
-                russian_prompt = generator.get_ai_response(
-                    f"Переведи этот промпт для генерации изображения на русский язык. Сохрани стиль и детали, но сделай его на русском: {image_prompt}",
-                    max_tokens=300,
-                    temperature=0.3
-                )
-                if russian_prompt:
-                    image_prompt = russian_prompt.strip()
-                    logger.info(f"Промпт переведен на русский: {image_prompt[:100]}")
-            except Exception as e:
-                logger.warning(f"Не удалось перевести промпт на русский: {e}")
-
-            result = generate_image_from_gigachat_bot(
-                prompt=image_prompt,
-                session_path=(
-                    os.getenv("GIGA_BOT_SESSION_PATH")
-                    or os.getenv("GIGA_BOT_SESSION_FILE")
-                    or os.getenv("TELEGRAM_SESSION_PATH")
-                ),
-                session_name=os.getenv("GIGA_BOT_SESSION_NAME"),
-                timeout=os.getenv("GIGA_BOT_TIMEOUT"),
+                session_name=session_name,
+                timeout=os.getenv("IMAGE_BOT_TIMEOUT") or os.getenv("VEO_TIMEOUT") or 300,
                 api_id=os.getenv("TELEGRAM_API_ID"),
                 api_hash=os.getenv("TELEGRAM_API_HASH")
             )
             final_image_path = result.get("image_path")
             cleanup_paths.update(result.get("cleanup_paths") or [])
         else:
-            # Для openrouter используем generator.generate_image
+            # Для openrouter и giga_photo используем generator.generate_image
+            model_for_generator = "openrouter" if generation_method == "openrouter" else generation_method
             result = generator.generate_image(
                 prompt=image_prompt,
                 output_path=temp_image_path,
-                model="openrouter"
+                model=model_for_generator
             )
             final_image_path = temp_image_path
             cleanup_paths.add(temp_image_path)
@@ -1575,7 +1550,7 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
             return False
 
         if not final_image_path or not os.path.exists(final_image_path):
-            logger.error("Не найден сгенерированный файл изображения (model=%s)", model)
+            logger.error("Не найден сгенерированный файл изображения (model=%s)", generation_method)
             for path in cleanup_paths:
                 if path and os.path.exists(path):
                     os.remove(path)
@@ -1611,6 +1586,9 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
                 except OSError:
                     pass
 
+    except Post.DoesNotExist:
+        logger.error(f"Пост с ID {post_id} не найден")
+        return False
     except Exception as e:
         logger.error(f"Ошибка при генерации изображения для поста {post_id}: {e}", exc_info=True)
         return False
@@ -1640,9 +1618,24 @@ def generate_video_from_image(post_id: int, method: Optional[str] = None, source
             source_type
         )
 
+        client_instructions = ""
+        base_instructions = None
+        if getattr(post, "client_id", None):
+            try:
+                client_instructions = (post.client.get_video_prompt_template() or "").strip()
+                base_instructions = post.client.get_base_video_prompt_instructions()
+            except Client.DoesNotExist:
+                client_instructions = ""
+                base_instructions = None
+
         video_prompt = None
         if post.text:
-            video_prompt = generator.generate_video_prompt(post.title, post.text)
+            video_prompt = generator.generate_video_prompt(
+                post.title,
+                post.text,
+                extra_instructions=client_instructions,
+                base_instructions=base_instructions,
+            )
         if video_prompt:
             logger.info("Используем AI-промпт для видео: %s", video_prompt[:120])
 
@@ -1656,7 +1649,8 @@ def generate_video_from_image(post_id: int, method: Optional[str] = None, source
                 logger.error("Метод %s не поддерживает генерацию по тексту", selected_method)
                 return False
 
-            final_prompt = video_prompt or _build_text_video_prompt(post)
+            base_prompt_body = video_prompt or _build_text_video_prompt(post)
+            final_prompt = merge_video_prompt_with_additional(base_prompt_body, client_instructions)
             result = generator.generate_video_from_text(
                 prompt=final_prompt,
                 method=selected_method
@@ -1676,12 +1670,13 @@ def generate_video_from_image(post_id: int, method: Optional[str] = None, source
                 "形态畸形的肢体, 手指融合, 静止不动的画面, 杂乱的背景, 三条腿, 背景人很多, 倒着走"
             )
 
-            final_prompt = video_prompt or default_prompt
+            base_prompt_body = video_prompt or default_prompt
             if selected_method == "veo":
-                final_prompt = (
-                    final_prompt +
+                base_prompt_body = (
+                    base_prompt_body +
                     "\nUse the provided post image as the starting frame and animate it with cinematic motion."
                 )
+            final_prompt = merge_video_prompt_with_additional(base_prompt_body, client_instructions)
             result = generator.generate_video_from_image(
                 image_path=primary_image.image.path,
                 prompt=final_prompt,
@@ -1698,9 +1693,35 @@ def generate_video_from_image(post_id: int, method: Optional[str] = None, source
             logger.error("Видео не найдено после генерации для поста %s", post.id)
             return False
 
+        temp_video_paths: List[str] = [video_temp_path]
+        final_video_path = video_temp_path
+
+        overlay_scenes = build_overlay_scenes_from_post(
+            post.title,
+            post.text,
+        )
+        if overlay_scenes:
+            overlay_result = apply_text_overlays_to_video(video_temp_path, overlay_scenes)
+            if overlay_result.get("success") and overlay_result.get("video_path"):
+                final_video_path = overlay_result["video_path"]
+                temp_video_paths.append(final_video_path)
+                logger.info(
+                    "Добавлены титры к видео поста %s (использовано %s сцен)",
+                    post.id,
+                    len(overlay_scenes),
+                )
+            else:
+                logger.warning(
+                    "Не удалось добавить титры к видео поста %s: %s",
+                    post.id,
+                    overlay_result.get("error") or "неизвестная ошибка",
+                )
+        else:
+            logger.info("Пост %s не содержит текста для титров, пропускаем наложение", post.id)
+
         video_filename = f"post_{post.id}_{uuid.uuid4().hex[:8]}.mp4"
 
-        with open(video_temp_path, "rb") as video_file:
+        with open(final_video_path, "rb") as video_file:
             post_video = PostVideo(
                 post=post,
                 order=post.videos.count(),
@@ -1708,7 +1729,9 @@ def generate_video_from_image(post_id: int, method: Optional[str] = None, source
             post_video.caption = (post.title or "")[:255]
             post_video.video.save(video_filename, File(video_file), save=True)
 
-        for path in set(result.get("cleanup_paths", []) + [video_temp_path]):
+        existing_cleanup = set(result.get("cleanup_paths") or [])
+        cleanup_candidates = existing_cleanup | {path for path in temp_video_paths if path}
+        for path in cleanup_candidates:
             if path and os.path.exists(path):
                 try:
                     os.remove(path)

@@ -49,6 +49,21 @@ class Client(models.Model):
         verbose_name="Книги экспертов",
         help_text="Подборка книг для целевой аудитории (по одна на строку)"
     )
+    base_video_prompt = models.TextField(
+        blank=True,
+        verbose_name="Base video prompt",
+        help_text="Базовые инструкции для AI генерации промпта видео (инструкции для режиссера)"
+    )
+    add_video_prompt = models.TextField(
+        blank=True,
+        verbose_name="Additional video prompt",
+        help_text="Дополнительные инструкции для генерации видео (клиентские пожелания)"
+    )
+    video_prompt = models.TextField(
+        blank=True,
+        verbose_name="Video prompt (deprecated)",
+        help_text="Устаревшее поле. Используйте base_video_prompt и add_video_prompt"
+    )
 
     # Telegram settings
     telegram_client_channel = models.CharField(
@@ -163,6 +178,37 @@ class Client(models.Model):
             },
         )
         return client
+
+    def get_video_prompt_template(self) -> str:
+        """
+        Return additional video instructions (client-specific) with graceful fallbacks.
+
+        Base/creative инструкции приходят из base_video_prompt, а здесь хранятся
+        технические пожелания для финального промпта.
+        """
+        if self.add_video_prompt and self.add_video_prompt.strip():
+            return self.add_video_prompt.strip()
+
+        # Fallback to old video_prompt field for backward compatibility
+        if self.video_prompt and self.video_prompt.strip():
+            return self.video_prompt.strip()
+
+        # Final fallback to system-level defaults (если заданы)
+        from .system_settings import get_video_prompt_instructions
+        return get_video_prompt_instructions().strip()
+
+    def get_base_video_prompt_instructions(self) -> str:
+        """Return base instructions for AI video prompt generation."""
+        if self.base_video_prompt and self.base_video_prompt.strip():
+            return self.base_video_prompt.strip()
+
+        # Default instructions for AI prompt generation
+        return """Ты — режиссёр и сценарист коротких вертикальных видео TikTok/Reels. На входе у тебя текст поста.
+
+1. Сделай вовлекающий, визуально насыщенный prompt на английском языке.
+2. Описывай сцену, настроение, движения камеры, переходы, ключевые визуальные объекты.
+3. Стиль — современный, динамичный, вдохновляющий. Максимум 3 предложения.
+4. Не добавляй хештеги, кавычки и технические команды."""
 
 
 class ChannelAnalysis(models.Model):

@@ -32,6 +32,25 @@ _COMMENTED_VALUE_RE = re.compile(r'#\s*(?=")')
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
+def merge_video_prompt_with_additional(
+    base_prompt: Optional[str],
+    additional_prompt: Optional[str],
+) -> str:
+    """
+    Append client-specific technical instructions to the base video prompt.
+
+    Base prompt отвечает за творческую часть, а additional_prompt содержит
+    технические ограничения (например, язык, тип персонажей).
+    """
+    base = (base_prompt or "").strip()
+    additional = (additional_prompt or "").strip()
+    if additional:
+        if base:
+            return f"{base}\n\n{additional}"
+        return additional
+    return base
+
+
 def _normalize_ai_json_response(raw_response: str) -> str:
     text = (raw_response or "").strip()
     if text.startswith('```json'):
@@ -942,24 +961,37 @@ seo_keywords = [ ... ]
             logger.error(f"Error generating image prompt: {e}", exc_info=True)
             return None
 
-    def generate_video_prompt(self, post_title: str, post_text: str, language: str = "ru") -> Optional[str]:
+    def generate_video_prompt(
+        self,
+        post_title: str,
+        post_text: str,
+        language: str = "ru",
+        extra_instructions: Optional[str] = None,
+        base_instructions: Optional[str] = None,
+    ) -> Optional[str]:
         """Сгенерировать промпт для короткого вовлекающего видео по тексту поста."""
         try:
             lang_name = "русском" if language == "ru" else "английском"
-            extra_video_instructions = get_video_prompt_instructions().strip()
+            extra_video_instructions = (extra_instructions or "").strip()
+            if not extra_video_instructions:
+                extra_video_instructions = get_video_prompt_instructions().strip()
             admin_instructions_block = ""
             if extra_video_instructions:
                 admin_instructions_block = (
                     "\nДополнительные пожелания от администратора (учти их в ответе):\n"
                     f"{extra_video_instructions}\n"
                 )
-            prompt = f"""
-Ты — режиссёр и сценарист коротких вертикальных видео TikTok/Reels. На входе у тебя текст поста.
+
+            # Use base_instructions if provided, otherwise use default
+            if not base_instructions:
+                base_instructions = """Ты — режиссёр и сценарист коротких вертикальных видео TikTok/Reels. На входе у тебя текст поста.
 
 1. Сделай вовлекающий, визуально насыщенный prompt на английском языке.
 2. Описывай сцену, настроение, движения камеры, переходы, ключевые визуальные объекты.
 3. Стиль — современный, динамичный, вдохновляющий. Максимум 3 предложения.
-4. Не добавляй хештеги, кавычки и технические команды.
+4. Не добавляй хештеги, кавычки и технические команды."""
+
+            prompt = f"""{base_instructions}
 {admin_instructions_block}
 
 Пост ({lang_name}):
@@ -1113,6 +1145,7 @@ seo_keywords = [ ... ]
         template_copy = dict(template_config)
         template_copy.setdefault("prompt_type", "seo")
         template_copy.setdefault("type", "selling")  # Дефолтный тип для SEO-постов
+        client_video_prompt = (template_copy.get("video_prompt") or "").strip()
 
         logger.info(
             "Старт пакетной генерации: группа=%s, постов=%s, видео_на_пост=%s",
@@ -1156,7 +1189,8 @@ seo_keywords = [ ... ]
             base_video_prompt = self.generate_video_prompt(
                 post_title=post_result.get("title", ""),
                 post_text=post_result.get("text", ""),
-                language=language
+                language=language,
+                extra_instructions=client_video_prompt,
             )
             if not base_video_prompt:
                 base_video_prompt = self._build_fallback_video_prompt(
@@ -1174,6 +1208,7 @@ seo_keywords = [ ... ]
                         f"{base_video_prompt}\nVariation #{video_idx}: offer a distinct cinematic take,"
                         " pacing and camera work."
                     )
+                final_prompt = merge_video_prompt_with_additional(variation_prompt, client_video_prompt)
 
                 logger.info(
                     "[%s/%s] Генерация видео %s/%s через VEO (%s)",
@@ -1185,14 +1220,14 @@ seo_keywords = [ ... ]
                 )
 
                 video_result = self.generate_video_from_text(
-                    prompt=variation_prompt,
+                    prompt=final_prompt,
                     method=requested_method,
                     **video_params
                 )
 
                 video_entry = {
                     "index": video_idx,
-                    "prompt": variation_prompt,
+                    "prompt": final_prompt,
                     "success": bool(video_result.get("success")),
                     "video_path": video_result.get("video_path"),
                     "error": video_result.get("error"),
