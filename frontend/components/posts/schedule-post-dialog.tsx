@@ -115,7 +115,7 @@ export function SchedulePostDialog({ postId, disabled = false, onScheduled }: Sc
           Запланировать
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md bg-white text-gray-900 dark:bg-white dark:text-gray-900 dark:border-gray-200">
         <DialogHeader>
           <DialogTitle>Запланировать публикацию</DialogTitle>
           <DialogDescription>

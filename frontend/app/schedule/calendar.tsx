@@ -9,15 +9,19 @@ import {schedulesApi} from '@/lib/api/schedules';
 import {useRouter} from 'next/navigation';
 import type {Schedule} from '@/lib/types';
 import {cn} from '@/lib/utils';
+import Link from 'next/link';
 
 // dnd-kit
 import {
   DndContext,
   closestCenter,
   DragOverlay,
+  PointerSensor,
   type DragEndEvent,
   type DragStartEvent,
   useDroppable,
+  useSensor,
+  useSensors,
 } from '@dnd-kit/core';
 import {SortableContext, rectSortingStrategy, useSortable} from '@dnd-kit/sortable';
 import {CSS} from '@dnd-kit/utilities';
@@ -27,6 +31,7 @@ type ScheduleItem = Schedule;
 type CalendarItem = {
   id: string;
   scheduleId: number;
+  postId: number;
   title: string;
   time: string;
   platform: string;
@@ -47,7 +52,16 @@ function CalendarCard({item}: {item: CalendarItem}){
   return (
     <Card className="mb-3 shadow-sm cursor-move hover:shadow-md transition-shadow">
       <CardHeader className="flex flex-row items-center justify-between gap-2 p-3">
-        <CardTitle className="text-sm font-medium">{item.title}</CardTitle>
+        <CardTitle className="text-sm font-medium text-blue-600">
+          <Link
+            href={`/posts/${item.postId}`}
+            className="hover:underline focus-visible:underline focus-visible:outline-none"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {item.title}
+          </Link>
+        </CardTitle>
         <div className="text-xs text-slate-500">{item.time}</div>
       </CardHeader>
       <CardContent className="p-3 pt-0">
@@ -141,12 +155,147 @@ function scheduleToCalendarItem(schedule: ScheduleItem): CalendarItem {
   return {
     id: `schedule-${schedule.id}`,
     scheduleId: schedule.id,
+    postId: schedule.post,
     title: schedule.post_title,
     time,
     platform: schedule.platform,
     status: schedule.status,
     excerpt: `${schedule.platform} • ${schedule.status}`
   };
+}
+
+type WeekViewProps = {
+  weekDates: Date[];
+  itemsByDate: ItemsByDate;
+};
+
+function WeekViewContent({weekDates, itemsByDate}: WeekViewProps){
+  const todayKey = formatKey(new Date());
+
+  return (
+    <div className="min-w-[1000px] grid grid-cols-7 gap-4">
+      {weekDates.map(d=>{
+        const k = formatKey(d);
+        const items = itemsByDate[k] || [];
+        const isToday = todayKey === k;
+        const containerClass = cn(
+          'rounded-lg p-2 min-h-[160px]',
+          isToday ? 'bg-blue-50' : 'bg-slate-50'
+        );
+
+        return (
+          <DroppableContainer key={k} id={k} className={containerClass}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`text-sm font-medium ${isToday ? 'text-blue-600' : ''}`}>
+                {d.toLocaleDateString('ru-RU',{weekday:'short', day:'numeric'})}
+              </div>
+              <div className="text-xs text-slate-500">{items.length}</div>
+            </div>
+
+            <SortableContext items={items.map(i=>i.id)} strategy={rectSortingStrategy}>
+              {items.map(item=> <SortableCard key={item.id} item={item} />)}
+            </SortableContext>
+          </DroppableContainer>
+        );
+      })}
+    </div>
+  );
+}
+
+type MonthViewProps = {
+  monthDates: Date[];
+  itemsByDate: ItemsByDate;
+  cursor: Date;
+};
+
+function MonthViewContent({monthDates, itemsByDate, cursor}: MonthViewProps){
+  const todayKey = formatKey(new Date());
+
+  return (
+    <div className="min-w-[1000px]">
+      <div className="grid grid-cols-7 gap-2">
+        {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => (
+          <div key={day} className="text-center text-xs font-medium text-slate-500 pb-2">
+            {day}
+          </div>
+        ))}
+
+        {monthDates.map(d=>{
+          const k = formatKey(d);
+          const items = itemsByDate[k] || [];
+          const isCurrentMonth = d.getMonth() === cursor.getMonth();
+          const isToday = todayKey === k;
+          const containerClass = cn(
+            'border rounded p-2 min-h-[120px]',
+            isToday
+              ? 'bg-blue-50 border-blue-300'
+              : isCurrentMonth
+              ? 'bg-white'
+              : 'bg-slate-50 text-slate-400'
+          );
+
+          return (
+            <DroppableContainer
+              key={k}
+              id={k}
+              className={containerClass}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className={`text-xs font-medium ${isToday ? 'text-blue-600' : ''}`}>
+                  {d.getDate()}
+                </div>
+                {items.length > 0 && (
+                  <div className="text-xs text-slate-500">{items.length}</div>
+                )}
+              </div>
+
+              <SortableContext items={items.map(i=>i.id)} strategy={rectSortingStrategy}>
+                {items.slice(0,2).map(item=> <SortableCard key={item.id} item={item} />)}
+                {items.length > 2 && (
+                  <div className="text-xs text-slate-500 mt-1 text-center">
+                    +{items.length - 2} еще
+                  </div>
+                )}
+              </SortableContext>
+            </DroppableContainer>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+type DayViewProps = {
+  cursor: Date;
+  itemsByDate: ItemsByDate;
+};
+
+function DayViewContent({cursor, itemsByDate}: DayViewProps){
+  const k = formatKey(cursor);
+  const items = itemsByDate[k] || [];
+
+  return (
+    <div className="min-w-[600px]">
+      <DroppableContainer id={k} className="rounded-lg p-4 bg-white border min-h-[300px]">
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-lg font-semibold">
+            {cursor.toLocaleDateString('ru-RU',{weekday:'long', day:'numeric', month:'long'})}
+          </div>
+          <div className="text-sm text-slate-500">{items.length} публикаций</div>
+        </div>
+
+        <SortableContext items={items.map(i=>i.id)} strategy={rectSortingStrategy}>
+          {items.length > 0 ? (
+            items.map(item=> <SortableCard key={item.id} item={item} />)
+          ) : (
+            <div className="text-center text-slate-400 py-8">
+              Публикаций на этот день нет
+            </div>
+          )}
+        </SortableContext>
+      </DroppableContainer>
+    </div>
+  );
 }
 
 export default function ContentCalendarPage(){
@@ -212,6 +361,7 @@ export default function ContentCalendarPage(){
     }
     return null;
   }, [activeId, itemsByDate]);
+  const sensors = useSensors(useSensor(PointerSensor));
 
   function prev(){
     const c = new Date(cursor);
@@ -294,151 +444,6 @@ export default function ContentCalendarPage(){
     updateScheduleDate(item.scheduleId, newDateIso);
   }
 
-  // Renderers for views
-  function WeekView(){
-    return (
-      <div className="min-w-[1000px] grid grid-cols-7 gap-4">
-        <DndContext
-          collisionDetection={closestCenter}
-          onDragEnd={onDragEnd}
-          onDragStart={onDragStart}
-          onDragCancel={onDragCancel}
-        >
-          {weekDates.map(d=>{
-            const k = formatKey(d);
-            const items = itemsByDate[k] || [];
-            const isToday = formatKey(new Date()) === k;
-            const containerClass = cn(
-              'rounded-lg p-2 min-h-[160px]',
-              isToday ? 'bg-blue-50' : 'bg-slate-50'
-            );
-
-            return (
-              <DroppableContainer key={k} id={k} className={containerClass}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className={`text-sm font-medium ${isToday ? 'text-blue-600' : ''}`}>
-                    {d.toLocaleDateString('ru-RU',{weekday:'short', day:'numeric'})}
-                  </div>
-                  <div className="text-xs text-slate-500">{items.length}</div>
-                </div>
-
-                <SortableContext items={items.map(i=>i.id)} strategy={rectSortingStrategy}>
-                  {items.map(item=> <SortableCard key={item.id} item={item} />)}
-                </SortableContext>
-              </DroppableContainer>
-            );
-          })}
-          <DragOverlay>
-            {activeItem ? <CalendarCard item={activeItem} /> : null}
-          </DragOverlay>
-        </DndContext>
-      </div>
-    );
-  }
-
-  function MonthView(){
-    return (
-      <div className="min-w-[1000px]">
-        <DndContext
-          collisionDetection={closestCenter}
-          onDragEnd={onDragEnd}
-          onDragStart={onDragStart}
-          onDragCancel={onDragCancel}
-        >
-          <div className="grid grid-cols-7 gap-2">
-            {/* Header with day names */}
-            {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => (
-              <div key={day} className="text-center text-xs font-medium text-slate-500 pb-2">
-                {day}
-              </div>
-            ))}
-
-            {monthDates.map(d=>{
-              const k = formatKey(d);
-              const items = itemsByDate[k] || [];
-              const isCurrentMonth = d.getMonth() === cursor.getMonth();
-              const isToday = formatKey(new Date()) === k;
-              const containerClass = cn(
-                'border rounded p-2 min-h-[120px]',
-                isToday
-                  ? 'bg-blue-50 border-blue-300'
-                  : isCurrentMonth
-                  ? 'bg-white'
-                  : 'bg-slate-50 text-slate-400'
-              );
-
-              return (
-                <DroppableContainer
-                  key={k}
-                  id={k}
-                  className={containerClass}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className={`text-xs font-medium ${isToday ? 'text-blue-600' : ''}`}>
-                      {d.getDate()}
-                    </div>
-                    {items.length > 0 && (
-                      <div className="text-xs text-slate-500">{items.length}</div>
-                    )}
-                  </div>
-
-                  <SortableContext items={items.map(i=>i.id)} strategy={rectSortingStrategy}>
-                    {items.slice(0,2).map(item=> <SortableCard key={item.id} item={item} />)}
-                    {items.length > 2 && (
-                      <div className="text-xs text-slate-500 mt-1 text-center">
-                        +{items.length - 2} еще
-                      </div>
-                    )}
-                  </SortableContext>
-                </DroppableContainer>
-              );
-            })}
-          </div>
-          <DragOverlay>
-            {activeItem ? <CalendarCard item={activeItem} /> : null}
-          </DragOverlay>
-        </DndContext>
-      </div>
-    );
-  }
-
-  function DayView(){
-    const k = formatKey(cursor);
-    const items = itemsByDate[k] || [];
-    return (
-      <div className="min-w-[600px]">
-        <DndContext
-          collisionDetection={closestCenter}
-          onDragEnd={onDragEnd}
-          onDragStart={onDragStart}
-          onDragCancel={onDragCancel}
-        >
-          <DroppableContainer id={k} className="rounded-lg p-4 bg-white border min-h-[300px]">
-            <div className="flex items-center justify-between mb-4">
-              <div className="text-lg font-semibold">
-                {cursor.toLocaleDateString('ru-RU',{weekday:'long', day:'numeric', month:'long'})}
-              </div>
-              <div className="text-sm text-slate-500">{items.length} публикаций</div>
-            </div>
-
-            <SortableContext items={items.map(i=>i.id)} strategy={rectSortingStrategy}>
-              {items.length > 0 ? (
-                items.map(item=> <SortableCard key={item.id} item={item} />)
-              ) : (
-                <div className="text-center text-slate-400 py-8">
-                  Публикаций на этот день нет
-                </div>
-              )}
-            </SortableContext>
-          </DroppableContainer>
-          <DragOverlay>
-            {activeItem ? <CalendarCard item={activeItem} /> : null}
-          </DragOverlay>
-        </DndContext>
-      </div>
-    );
-  }
-
   if (loading) {
     return (
       <div className="p-6 max-w-full">
@@ -497,11 +502,32 @@ export default function ContentCalendarPage(){
         </div>
       </header>
 
-      <div className="overflow-x-auto">
-        {view==='week' && <WeekView />}
-        {view==='month' && <MonthView />}
-        {view==='day' && <DayView />}
-      </div>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={onDragEnd}
+        onDragStart={onDragStart}
+        onDragCancel={onDragCancel}
+      >
+        <div className="overflow-x-auto">
+          {view==='week' && (
+            <WeekViewContent weekDates={weekDates} itemsByDate={itemsByDate} />
+          )}
+          {view==='month' && (
+            <MonthViewContent
+              monthDates={monthDates}
+              itemsByDate={itemsByDate}
+              cursor={cursor}
+            />
+          )}
+          {view==='day' && (
+            <DayViewContent cursor={cursor} itemsByDate={itemsByDate} />
+          )}
+        </div>
+        <DragOverlay>
+          {activeItem ? <CalendarCard item={activeItem} /> : null}
+        </DragOverlay>
+      </DndContext>
     </div>
   );
 }
