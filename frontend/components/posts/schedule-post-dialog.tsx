@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/select';
 import { schedulesApi } from '@/lib/api/schedules';
 import { socialAccountsApi } from '@/lib/api/socialAccounts';
+import { postsApi } from '@/lib/api/posts';
 import type { SocialAccount } from '@/lib/types';
 
 interface SchedulePostDialogProps {
@@ -29,6 +30,24 @@ interface SchedulePostDialogProps {
   disabled?: boolean;
   onScheduled?: () => void | Promise<void>;
 }
+
+type ContentSelection = {
+  text: boolean;
+  image: boolean;
+  video: boolean;
+};
+
+const createDefaultContentSelection = (): ContentSelection => ({
+  text: true,
+  image: true,
+  video: true,
+});
+
+const CONTENT_OPTIONS: Array<{ key: keyof ContentSelection; label: string }> = [
+  { key: 'text', label: 'Текст' },
+  { key: 'image', label: 'Фото' },
+  { key: 'video', label: 'Видео' },
+];
 
 const getDefaultDateTimeValue = () => {
   const date = new Date();
@@ -42,7 +61,11 @@ export function SchedulePostDialog({ postId, disabled = false, onScheduled }: Sc
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [scheduledAt, setScheduledAt] = useState<string>(getDefaultDateTimeValue());
   const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [loadingPostSettings, setLoadingPostSettings] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [contentSelection, setContentSelection] = useState<ContentSelection>(() => createDefaultContentSelection());
+  const [initialContentSelection, setInitialContentSelection] =
+    useState<ContentSelection>(() => createDefaultContentSelection());
 
   const loadAccounts = useCallback(async () => {
     setLoadingAccounts(true);
@@ -63,12 +86,34 @@ export function SchedulePostDialog({ postId, disabled = false, onScheduled }: Sc
     }
   }, []);
 
+  const loadPostContentSettings = useCallback(async () => {
+    setLoadingPostSettings(true);
+    try {
+      const post = await postsApi.get(postId);
+      const nextSelection: ContentSelection = {
+        text: post.publish_text ?? true,
+        image: post.publish_image ?? true,
+        video: post.publish_video ?? true,
+      };
+      setContentSelection(nextSelection);
+      setInitialContentSelection(nextSelection);
+    } catch (err) {
+      toast.error('Не удалось загрузить данные поста');
+      const fallbackSelection = createDefaultContentSelection();
+      setContentSelection(fallbackSelection);
+      setInitialContentSelection(fallbackSelection);
+    } finally {
+      setLoadingPostSettings(false);
+    }
+  }, [postId]);
+
   useEffect(() => {
     if (open) {
       setScheduledAt(getDefaultDateTimeValue());
       loadAccounts();
+      loadPostContentSettings();
     }
-  }, [open, loadAccounts]);
+  }, [open, loadAccounts, loadPostContentSettings]);
 
   const handleSchedule = async () => {
     if (!selectedAccountId) {
@@ -80,8 +125,28 @@ export function SchedulePostDialog({ postId, disabled = false, onScheduled }: Sc
       return;
     }
 
+    const hasSelectedContent = Object.values(contentSelection).some(Boolean);
+    if (!hasSelectedContent) {
+      toast.error('Выберите хотя бы один тип контента');
+      return;
+    }
+
     setSaving(true);
     try {
+      const shouldUpdatePostSettings =
+        contentSelection.text !== initialContentSelection.text ||
+        contentSelection.image !== initialContentSelection.image ||
+        contentSelection.video !== initialContentSelection.video;
+
+      if (shouldUpdatePostSettings) {
+        await postsApi.update(postId, {
+          publish_text: contentSelection.text,
+          publish_image: contentSelection.image,
+          publish_video: contentSelection.video,
+        });
+        setInitialContentSelection({ ...contentSelection });
+      }
+
       await schedulesApi.create({
         post: postId,
         social_account: Number(selectedAccountId),
@@ -107,6 +172,8 @@ export function SchedulePostDialog({ postId, disabled = false, onScheduled }: Sc
     accounts.length === 0 ||
     !selectedAccountId ||
     !scheduledAt;
+
+  const isSaveDisabled = isActionDisabled || loadingPostSettings;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -165,11 +232,37 @@ export function SchedulePostDialog({ postId, disabled = false, onScheduled }: Sc
                 Используется часовой пояс вашего браузера.
               </p>
             </div>
+            <div className="space-y-2">
+              <Label>Содержимое</Label>
+              <div className="flex flex-wrap gap-4 text-sm">
+                {CONTENT_OPTIONS.map((option) => (
+                  <label
+                    key={option.key}
+                    className="inline-flex items-center gap-2 text-sm font-medium text-gray-900"
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-2 focus:ring-gray-900 disabled:cursor-not-allowed"
+                      checked={contentSelection[option.key]}
+                      onChange={(event) =>
+                        setContentSelection((prev) => ({
+                          ...prev,
+                          [option.key]: event.target.checked,
+                        }))
+                      }
+                      disabled={loadingPostSettings || saving}
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">Отметьте части поста для публикации.</p>
+            </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setOpen(false)}>
                 Отмена
               </Button>
-              <Button onClick={handleSchedule} disabled={isActionDisabled}>
+              <Button onClick={handleSchedule} disabled={isSaveDisabled}>
                 {saving ? 'Сохраняем...' : 'Сохранить'}
               </Button>
             </div>

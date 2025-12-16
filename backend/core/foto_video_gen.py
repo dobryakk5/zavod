@@ -1386,191 +1386,242 @@ def _generate_video_veo(
             try:
                 logger.info("[VEO Thread %s] Начало разговора с ботом (timeout=%s)...", thread_id, timeout)
                 async with client.conversation(bot, timeout=timeout) as conv:
-                    # Шаг 1: Отправляем команду /video
-                    logger.info("[VEO Thread %s] Отправка команды /video...", thread_id)
-                    await conv.send_message("/video")
-                    
-                    # Ждем ответа с кнопками
-                    try:
-                        response = await conv.get_response(timeout=5)
-                        logger.info("[VEO Thread %s] Получен ответ на /video", thread_id)
-                    except asyncio.TimeoutError:
-                        logger.warning("[VEO Thread %s] Таймаут ожидания ответа на /video", thread_id)
-                        return None
+                    async def _select_video_mode(target_mode: str) -> bool:
+                        """
+                        Открыть меню /video и нажать нужную кнопку (Veo либо SORA).
+                        """
+                        mode_label = "VEO" if target_mode == "veo" else "SORA"
+                        logger.info(
+                            "[VEO Thread %s] Отправка команды /video для режима %s...",
+                            thread_id,
+                            mode_label
+                        )
+                        await conv.send_message("/video")
+                        try:
+                            response = await conv.get_response(timeout=5)
+                            logger.info("[VEO Thread %s] Получен ответ на /video", thread_id)
+                        except asyncio.TimeoutError:
+                            logger.warning("[VEO Thread %s] Таймаут ожидания ответа на /video", thread_id)
+                            return False
 
-                    # Шаг 2: Ищем и нажимаем кнопку "⭕️ Veo"
-                    if response.reply_markup:
-                        veo_button = None
+                        if not response.reply_markup:
+                            logger.error("[VEO Thread %s] Нет inline-кнопок в ответе на /video", thread_id)
+                            return False
+
+                        button_patterns = ["Veo", "⭕️"] if target_mode == "veo" else ["SORA", "🌙"]
+                        target_button = None
                         for row in response.reply_markup.rows:
                             for button in row.buttons:
-                                if "Veo" in button.text or "⭕️" in button.text:
-                                    veo_button = button
+                                button_text = (button.text or "").strip()
+                                if any(pattern in button_text for pattern in button_patterns):
+                                    target_button = button
                                     break
-                            if veo_button:
+                            if target_button:
                                 break
-                        
-                        if veo_button:
-                            logger.info("[VEO Thread %s] Нажимаю кнопку: %s", thread_id, veo_button.text)
-                            button_data = getattr(veo_button, "data", None)
-                            if button_data:
-                                await client(GetBotCallbackAnswerRequest(
-                                    peer=bot_username,
-                                    msg_id=response.id,
-                                    data=button_data
-                                ))
-                            else:
-                                await conv.send_message(veo_button.text)
-                            logger.info("[VEO Thread %s] Кнопка Veo нажата", thread_id)
+
+                        if not target_button:
+                            logger.error("[VEO Thread %s] Кнопка %s не найдена", thread_id, mode_label)
+                            return False
+
+                        logger.info("[VEO Thread %s] Нажимаю кнопку: %s", thread_id, target_button.text)
+                        button_data = getattr(target_button, "data", None)
+                        if button_data:
+                            await client(GetBotCallbackAnswerRequest(
+                                peer=bot_username,
+                                msg_id=response.id,
+                                data=button_data
+                            ))
                         else:
-                            logger.error("[VEO Thread %s] Кнопка Veo не найдена", thread_id)
+                            await conv.send_message(target_button.text)
+                        logger.info("[VEO Thread %s] Кнопка %s нажата", thread_id, mode_label)
+
+                        try:
+                            await conv.get_response(timeout=5)
+                            logger.info("[VEO Thread %s] Получено подтверждение выбора режима", thread_id)
+                        except asyncio.TimeoutError:
+                            logger.warning("[VEO Thread %s] Таймаут ожидания подтверждения режима", thread_id)
+                            return False
+
+                        return True
+
+                    async def _run_generation_attempt(mode_name: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+                        """
+                        Вернуть payload, либо признак необходимости переключиться на SORA.
+                        """
+                        mode_label = "VEO" if mode_name == "veo" else "SORA"
+                        if not await _select_video_mode(mode_name):
+                            return None, False
+
+                        logger.info(
+                            "[VEO Thread %s] Отправка %s боту (%s режим)...",
+                            thread_id,
+                            "текста" if text_only else "файла",
+                            mode_label
+                        )
+                        if text_only:
+                            await conv.send_message(caption)
+                        else:
+                            await conv.send_file(bot, image_path, caption=caption)
+                        logger.info("[VEO Thread %s] Сообщение отправлено, ожидание ответа...", thread_id)
+
+                        try:
+                            response = await conv.get_response()
+                            logger.info("[VEO Thread %s] Получен первый ответ от бота", thread_id)
+                        except asyncio.TimeoutError:
+                            logger.error("Бот VEO не ответил в течение %s секунд", timeout)
+                            return None, False
+
+                        deadline = time.time() + timeout
+                        timed_out = False
+
+                        async def _handle_response(resp) -> Optional[Dict[str, Any]]:
+                            nonlocal matched_prompt_fragment
+                            resp_text = resp.raw_text or ""
+                            fragment_raw = _extract_response_prompt_fragment(resp_text)
+                            # Убрать markdown форматирование перед созданием сигнатуры
+                            fragment_raw_clean = re.sub(r'\*+', '', fragment_raw).strip() if fragment_raw else None
+                            fragment_signature = _normalize_prompt_signature(fragment_raw_clean)
+                            # Очищенная версия caption для логирования
+                            caption_clean_local = re.sub(r'\*+', '', caption).strip()
+                            if fragment_raw:
+                                matched_prompt_fragment = fragment_raw
+                            if fragment_signature and expected_prompt_signature:
+                                matches_expected = (
+                                    fragment_signature in expected_prompt_signature
+                                    or expected_prompt_signature in fragment_signature
+                                )
+                                if not matches_expected:
+                                    logger.warning(
+                                        "[VEO Thread %s] Ответ относится к другому промпту, ожидаем совпадение...",
+                                        thread_id
+                                    )
+                                    # Получить оригинальные промпты для отображения (уже очищенные от markdown)
+                                    original_expected = _take_first_sentences(caption_clean_local, 1)
+                                    original_received = _take_first_sentences(fragment_raw_clean, 1) if fragment_raw_clean else fragment_signature
+                                    logger.warning(
+                                        "[VEO Thread %s] Ожидаемое первое предложение: '%s'",
+                                        thread_id,
+                                        original_expected
+                                    )
+                                    logger.warning(
+                                        "[VEO Thread %s] Полученное первое предложение: '%s'",
+                                        thread_id,
+                                        original_received
+                                    )
+                                    return None
+                                if fragment_raw:
+                                    logger.info(
+                                        "[VEO Thread %s] Ответ подтвержден по промпту: %s",
+                                        thread_id,
+                                        fragment_raw[:120]
+                                    )
+                            if resp_text:
+                                url_match = re.search(r'https?://\S+', resp_text)
+                                if url_match:
+                                    direct_url = url_match.group(0)
+                                    logger.info("Получена прямая ссылка от VEO: %s", direct_url)
+                                    downloaded_path = _download_url(direct_url)
+                                    if downloaded_path:
+                                        target_signature = fragment_signature or expected_prompt_signature
+                                        payload = {
+                                            "success": True,
+                                            "video_path": downloaded_path,
+                                            "model": "veo",
+                                            "cleanup_paths": [downloaded_path],
+                                            "response_prompt_fragment": matched_prompt_fragment or fragment_raw or "",
+                                            "prompt_signature": target_signature,
+                                        }
+                                        if target_signature and target_signature != expected_prompt_signature:
+                                            _cache_video_response(target_signature, payload)
+                                            logger.info(
+                                                "[VEO Thread %s] Видео сохранено в кеш для другого промпта (%s)",
+                                                thread_id,
+                                                target_signature
+                                            )
+                                            return None
+                                        return payload
+                                    logger.warning(
+                                        "Не удалось скачать видео по ссылке %s, пробуем следующие ответы.", direct_url
+                                    )
+                            if resp.media:
+                                fd, temp_path = tempfile.mkstemp(suffix=".mp4")
+                                os.close(fd)
+                                downloaded = await client.download_media(resp.media, file=temp_path)
+                                target_signature = fragment_signature or expected_prompt_signature
+                                payload = {
+                                    "success": True,
+                                    "video_path": downloaded,
+                                    "model": "veo",
+                                    "cleanup_paths": [downloaded],
+                                    "response_prompt_fragment": matched_prompt_fragment or fragment_raw or "",
+                                    "prompt_signature": target_signature,
+                                }
+                                if target_signature and target_signature != expected_prompt_signature:
+                                    _cache_video_response(target_signature, payload)
+                                    logger.info(
+                                        "[VEO Thread %s] Видео сохранено в кеш для другого промпта (%s)",
+                                        thread_id,
+                                        target_signature
+                                    )
+                                    return None
+                                return payload
                             return None
-                    else:
-                        logger.error("[VEO Thread %s] Нет inline-кнопок в ответе на /video", thread_id)
-                        return None
 
-                    # Шаг 3: Ждем подтверждение выбора режима
-                    try:
-                        mode_response = await conv.get_response(timeout=5)
-                        logger.info("[VEO Thread %s] Получено подтверждение выбора режима", thread_id)
-                    except asyncio.TimeoutError:
-                        logger.warning("[VEO Thread %s] Таймаут ожидания подтверждения режима", thread_id)
-                        return None
+                        def _needs_sora_switch(resp_text: str, current_mode: str) -> bool:
+                            if current_mode != "veo" or not resp_text:
+                                return False
+                            normalized = resp_text.lower().replace("ё", "е")
+                            return "попробуйте еще раз" in normalized
 
-                    # Шаг 4: Отправляем изображение или текст
-                    logger.info("[VEO Thread %s] Отправка %s боту...", thread_id, "текста" if text_only else "файла")
-                    if text_only:
-                        await conv.send_message(caption)
-                    else:
-                        await conv.send_file(bot, image_path, caption=caption)
-                    logger.info("[VEO Thread %s] Сообщение отправлено, ожидание ответа...", thread_id)
-
-                    try:
-                        response = await conv.get_response()
-                        logger.info("[VEO Thread %s] Получен первый ответ от бота", thread_id)
-                    except asyncio.TimeoutError:
-                        logger.error("Бот VEO не ответил в течение %s секунд", timeout)
-                        return None
-
-                    deadline = time.time() + timeout
-                    timed_out = False
-
-                    async def _handle_response(resp) -> Optional[Dict[str, Any]]:
-                        nonlocal matched_prompt_fragment
-                        resp_text = resp.raw_text or ""
-                        fragment_raw = _extract_response_prompt_fragment(resp_text)
-                        # Убрать markdown форматирование перед созданием сигнатуры
-                        fragment_raw_clean = re.sub(r'\*+', '', fragment_raw).strip() if fragment_raw else None
-                        fragment_signature = _normalize_prompt_signature(fragment_raw_clean)
-                        # Очищенная версия caption для логирования
-                        caption_clean_local = re.sub(r'\*+', '', caption).strip()
-                        if fragment_raw:
-                            matched_prompt_fragment = fragment_raw
-                        if fragment_signature and expected_prompt_signature:
-                            matches_expected = (
-                                fragment_signature in expected_prompt_signature
-                                or expected_prompt_signature in fragment_signature
-                            )
-                            if not matches_expected:
-                                logger.warning(
-                                    "[VEO Thread %s] Ответ относится к другому промпту, ожидаем совпадение...",
+                        while True:
+                            response_text = (response.raw_text or "").strip()
+                            if _needs_sora_switch(response_text, mode_name):
+                                logger.info(
+                                    "[VEO Thread %s] Получено сообщение 'попробуйте еще раз', подготовка переключения на SORA",
                                     thread_id
                                 )
-                                # Получить оригинальные промпты для отображения (уже очищенные от markdown)
-                                original_expected = _take_first_sentences(caption_clean_local, 1)
-                                original_received = _take_first_sentences(fragment_raw_clean, 1) if fragment_raw_clean else fragment_signature
-                                logger.warning(
-                                    "[VEO Thread %s] Ожидаемое первое предложение: '%s'",
-                                    thread_id,
-                                    original_expected
-                                )
-                                logger.warning(
-                                    "[VEO Thread %s] Полученное первое предложение: '%s'",
-                                    thread_id,
-                                    original_received
-                                )
-                                return None
-                            if fragment_raw:
-                                logger.info(
-                                    "[VEO Thread %s] Ответ подтвержден по промпту: %s",
-                                    thread_id,
-                                    fragment_raw[:120]
-                                )
-                        if resp_text:
-                            url_match = re.search(r'https?://\S+', resp_text)
-                            if url_match:
-                                direct_url = url_match.group(0)
-                                logger.info("Получена прямая ссылка от VEO: %s", direct_url)
-                                downloaded_path = _download_url(direct_url)
-                                if downloaded_path:
-                                    target_signature = fragment_signature or expected_prompt_signature
-                                    payload = {
-                                        "success": True,
-                                        "video_path": downloaded_path,
-                                        "model": "veo",
-                                        "cleanup_paths": [downloaded_path],
-                                        "response_prompt_fragment": matched_prompt_fragment or fragment_raw or "",
-                                        "prompt_signature": target_signature,
-                                    }
-                                    if target_signature and target_signature != expected_prompt_signature:
-                                        _cache_video_response(target_signature, payload)
-                                        logger.info(
-                                            "[VEO Thread %s] Видео сохранено в кеш для другого промпта (%s)",
-                                            thread_id,
-                                            target_signature
-                                        )
-                                        return None
-                                    return payload
-                                logger.warning(
-                                    "Не удалось скачать видео по ссылке %s, пробуем следующие ответы.", direct_url
-                                )
-                        if resp.media:
-                            fd, temp_path = tempfile.mkstemp(suffix=".mp4")
-                            os.close(fd)
-                            downloaded = await client.download_media(resp.media, file=temp_path)
-                            target_signature = fragment_signature or expected_prompt_signature
-                            payload = {
-                                "success": True,
-                                "video_path": downloaded,
-                                "model": "veo",
-                                "cleanup_paths": [downloaded],
-                                "response_prompt_fragment": matched_prompt_fragment or fragment_raw or "",
-                                "prompt_signature": target_signature,
-                            }
-                            if target_signature and target_signature != expected_prompt_signature:
-                                _cache_video_response(target_signature, payload)
-                                logger.info(
-                                    "[VEO Thread %s] Видео сохранено в кеш для другого промпта (%s)",
-                                    thread_id,
-                                    target_signature
-                                )
-                                return None
+                                return None, True
+
+                            result_payload = await _handle_response(response)
+                            if result_payload:
+                                return result_payload, False
+
+                            cached_after_response = _take_cached_payload("after foreign response")
+                            if cached_after_response:
+                                return cached_after_response, False
+
+                            remaining = deadline - time.time()
+                            if remaining <= 0:
+                                timed_out = True
+                                break
+                            try:
+                                response = await conv.get_response(timeout=remaining)
+                            except asyncio.TimeoutError:
+                                timed_out = True
+                                break
+
+                        if timed_out:
+                            logger.error("Бот VEO не прислал видео в течение %s секунд (conversation)", timeout)
+                            cached_timeout_payload = _take_cached_payload("conversation timeout")
+                            if cached_timeout_payload:
+                                return cached_timeout_payload, False
+                            return None, False
+
+                    modes_queue: List[str] = ["veo"]
+                    sora_requested = False
+                    while modes_queue:
+                        current_mode = modes_queue.pop(0)
+                        payload, request_sora = await _run_generation_attempt(current_mode)
+                        if payload:
                             return payload
-                        return None
-
-                    while True:
-                        result_payload = await _handle_response(response)
-                        if result_payload:
-                            return result_payload
-                        cached_after_response = _take_cached_payload("after foreign response")
-                        if cached_after_response:
-                            return cached_after_response
-
-                        remaining = deadline - time.time()
-                        if remaining <= 0:
-                            timed_out = True
-                            break
-                        try:
-                            response = await conv.get_response(timeout=remaining)
-                        except asyncio.TimeoutError:
-                            timed_out = True
-                            break
-
-                    if timed_out:
-                        logger.error("Бот VEO не прислал видео в течение %s секунд (conversation)", timeout)
-                        cached_timeout_payload = _take_cached_payload("conversation timeout")
-                        if cached_timeout_payload:
-                            return cached_timeout_payload
-                        return None
+                        if request_sora and not sora_requested:
+                            sora_requested = True
+                            logger.info("[VEO Thread %s] Переключаемся на режим SORA", thread_id)
+                            modes_queue.append("sora")
+                            continue
+                        if request_sora and sora_requested:
+                            logger.warning("[VEO Thread %s] Повторный запрос переключения на SORA проигнорирован", thread_id)
+                    return None
 
             except asyncio.TimeoutError:
                 logger.error("Бот VEO не ответил в течение %s секунд (conversation)", timeout)
