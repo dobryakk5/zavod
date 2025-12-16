@@ -4,6 +4,12 @@ redis-server /opt/homebrew/etc/redis.conf
 celery -A config worker -l info
 python manage.py runserver
 
+celery -A config worker -l info -Q media --concurrency=1 
+for the single media worker and 
+
+celery -A config worker -l info -Q celery --concurrency=5
+(or similar) for all text/other tasks. Only the worker that listens to media will take the heavy photo/video jobs.
+
 # Frontend DevOps Guide
 
 Path: `/Users/pavellebedev/Desktop/proj/zavod/frontend`

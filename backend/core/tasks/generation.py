@@ -638,7 +638,7 @@ def generate_posts_from_seo_keyword_set(
     }
 
 
-@shared_task
+@shared_task(queue="media")
 def generate_posts_with_videos_from_seo_keyword_set(
     seo_keyword_set_id: int,
     template_id: int,
@@ -1391,7 +1391,7 @@ def _generate_videos_batch(posts: List[Post], videos_per_post: int = 1, language
     }
 
 
-@shared_task
+@shared_task(queue="media")
 def generate_videos_for_posts(post_ids: List[int], videos_per_post: int = 1):
     """Сгенерировать указанное количество видео для существующих постов."""
 
@@ -1427,7 +1427,7 @@ def generate_videos_for_posts(post_ids: List[int], videos_per_post: int = 1):
     return _generate_videos_batch(ordered_posts, videos_per_post)
 
 
-@shared_task
+@shared_task(queue="media")
 def generate_image_for_post(post_id: int, model: Optional[str] = None):
     """
     Сгенерировать изображение для поста используя AI.
@@ -1619,7 +1619,7 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
         return False
 
 
-@shared_task
+@shared_task(queue="media")
 def generate_video_from_image(post_id: int, method: Optional[str] = None, source: str = "image"):
     """Создать короткое видео для поста (по изображению или тексту)."""
     try:
