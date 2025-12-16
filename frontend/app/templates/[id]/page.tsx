@@ -11,14 +11,14 @@ import Link from 'next/link';
 import { useRole } from '@/lib/hooks';
 import type { ContentTemplate } from '@/lib/types';
 
+type TemplateRouteParams = { id: string };
+type TemplateRouteParamsInput =
+  | TemplateRouteParams
+  | Promise<TemplateRouteParams>
+  | undefined;
+
 interface TemplatePageProps {
-  params:
-    | {
-        id: string;
-      }
-    | Promise<{
-        id: string;
-      }>;
+  params?: Promise<TemplateRouteParams>;
 }
 
 export default function TemplatePage({ params }: TemplatePageProps) {
@@ -30,10 +30,15 @@ export default function TemplatePage({ params }: TemplatePageProps) {
 
   useEffect(() => {
     let isActive = true;
+    const paramsInput = params as TemplateRouteParamsInput;
 
-    Promise.resolve(params)
+    Promise.resolve(paramsInput)
       .then((resolved) => {
         if (!isActive) return;
+        if (!resolved) {
+          setTemplateId(null);
+          return;
+        }
         const parsedId = Number.parseInt(resolved.id, 10);
         setTemplateId(Number.isNaN(parsedId) ? null : parsedId);
       })

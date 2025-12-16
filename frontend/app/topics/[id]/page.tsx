@@ -14,14 +14,14 @@ import Link from 'next/link';
 import { useRole } from '@/lib/hooks';
 import type { TopicDetail, TrendItem } from '@/lib/types';
 
+type TopicRouteParams = { id: string };
+type TopicRouteParamsInput =
+  | TopicRouteParams
+  | Promise<TopicRouteParams>
+  | undefined;
+
 interface TopicPageProps {
-  params:
-    | {
-        id: string;
-      }
-    | Promise<{
-        id: string;
-      }>;
+  params?: Promise<TopicRouteParams>;
 }
 
 export default function TopicPage({ params }: TopicPageProps) {
@@ -34,10 +34,15 @@ export default function TopicPage({ params }: TopicPageProps) {
 
   useEffect(() => {
     let isActive = true;
+    const paramsInput = params as TopicRouteParamsInput;
 
-    Promise.resolve(params)
+    Promise.resolve(paramsInput)
       .then((resolved) => {
         if (!isActive) return;
+        if (!resolved) {
+          setTopicId(null);
+          return;
+        }
         const parsedId = Number.parseInt(resolved.id, 10);
         setTopicId(Number.isNaN(parsedId) ? null : parsedId);
       })

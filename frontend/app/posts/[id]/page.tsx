@@ -13,14 +13,14 @@ import Link from 'next/link';
 import { useRole } from '@/lib/hooks';
 import type { PostDetail } from '@/lib/types';
 
+type PostRouteParams = { id: string };
+type PostRouteParamsInput =
+  | PostRouteParams
+  | Promise<PostRouteParams>
+  | undefined;
+
 interface PostPageProps {
-  params:
-    | {
-        id: string;
-      }
-    | Promise<{
-        id: string;
-      }>;
+  params?: Promise<PostRouteParams>;
 }
 
 export default function PostPage({ params }: PostPageProps) {
@@ -33,10 +33,15 @@ export default function PostPage({ params }: PostPageProps) {
 
   useEffect(() => {
     let isActive = true;
+    const paramsInput = params as PostRouteParamsInput;
 
-    Promise.resolve(params)
+    Promise.resolve(paramsInput)
       .then((resolved) => {
         if (!isActive) return;
+        if (!resolved) {
+          setPostId(null);
+          return;
+        }
         const parsedId = Number.parseInt(resolved.id, 10);
         setPostId(Number.isNaN(parsedId) ? null : parsedId);
       })
