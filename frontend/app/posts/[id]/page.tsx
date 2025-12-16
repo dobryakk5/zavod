@@ -14,9 +14,13 @@ import { useRole } from '@/lib/hooks';
 import type { PostDetail } from '@/lib/types';
 
 interface PostPageProps {
-  params: Promise<{
-    id: string;
-  }>;
+  params:
+    | {
+        id: string;
+      }
+    | Promise<{
+        id: string;
+      }>;
 }
 
 export default function PostPage({ params }: PostPageProps) {
@@ -28,7 +32,23 @@ export default function PostPage({ params }: PostPageProps) {
   const [postId, setPostId] = useState<number | null>(null);
 
   useEffect(() => {
-    params.then((p) => setPostId(parseInt(p.id)));
+    let isActive = true;
+
+    Promise.resolve(params)
+      .then((resolved) => {
+        if (!isActive) return;
+        const parsedId = Number.parseInt(resolved.id, 10);
+        setPostId(Number.isNaN(parsedId) ? null : parsedId);
+      })
+      .catch(() => {
+        if (isActive) {
+          setPostId(null);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
   }, [params]);
 
   useEffect(() => {

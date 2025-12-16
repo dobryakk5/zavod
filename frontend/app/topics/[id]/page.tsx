@@ -15,9 +15,13 @@ import { useRole } from '@/lib/hooks';
 import type { TopicDetail, TrendItem } from '@/lib/types';
 
 interface TopicPageProps {
-  params: Promise<{
-    id: string;
-  }>;
+  params:
+    | {
+        id: string;
+      }
+    | Promise<{
+        id: string;
+      }>;
 }
 
 export default function TopicPage({ params }: TopicPageProps) {
@@ -29,7 +33,23 @@ export default function TopicPage({ params }: TopicPageProps) {
   const [topicId, setTopicId] = useState<number | null>(null);
 
   useEffect(() => {
-    params.then((p) => setTopicId(parseInt(p.id)));
+    let isActive = true;
+
+    Promise.resolve(params)
+      .then((resolved) => {
+        if (!isActive) return;
+        const parsedId = Number.parseInt(resolved.id, 10);
+        setTopicId(Number.isNaN(parsedId) ? null : parsedId);
+      })
+      .catch(() => {
+        if (isActive) {
+          setTopicId(null);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
   }, [params]);
 
   useEffect(() => {

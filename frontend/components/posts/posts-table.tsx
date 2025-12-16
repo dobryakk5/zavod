@@ -12,6 +12,7 @@ import { subscribeToPostGenerationStart } from '@/lib/post-generation-events';
 export type Post = {
   id: number;
   title: string;
+  hook_title?: string;
   status: string;
   created_at: string;
   platforms: string[];
@@ -210,6 +211,10 @@ export function PostsTable() {
                   >
                     {post.title || `Пост #${post.id}`}
                   </a>
+                  <div className="text-sm text-muted-foreground mt-1">
+                    <span className="font-semibold">Цепляющий заголовок:</span>{' '}
+                    {post.hook_title?.trim() || 'не сгенерирован'}
+                  </div>
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {formatTemplateDisplayName(post.template_name) || 'Без шаблона'}

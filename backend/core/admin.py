@@ -565,7 +565,7 @@ class PostAdmin(admin.ModelAdmin):
         "created_at",
     )
     list_filter = ("client", "status", "story", "created_at")
-    search_fields = ("title", "text", "client__name")
+    search_fields = ("title", "hook_title", "text", "client__name")
     autocomplete_fields = ("client", "created_by", "story")
     inlines = [PostImageInline, PostVideoInline, ScheduleInline]
     readonly_fields = (
@@ -583,7 +583,7 @@ class PostAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Базовая информация", {
-            "fields": ("client", "title", "status", "tags"),
+            "fields": ("client", "title", "hook_title", "status", "tags"),
         }),
         ("Связь с историей", {
             "fields": ("story", "episode_number"),
@@ -679,16 +679,16 @@ class PostAdmin(admin.ModelAdmin):
             settings_url = reverse('admin:core_systemsetting_changelist')
 
             return format_html(
-                f'''
+                '''
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <button type="button" class="generate-image-btn" data-default-text="{config["text"]}" data-method-label="{method_label}" onclick="generateImage('{generate_url}', this)"
-                    style="padding: 10px 15px; background-color: {config["color"]}; color: white;
+                    <button type="button" class="generate-image-btn" data-default-text="{}" data-method-label="{}" onclick="generateImage('{}', this)"
+                    style="padding: 10px 15px; background-color: {}; color: white;
                     border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                    {config["text"]}</button>
+                    {}</button>
                 </div>
                 <div style="margin-top: 6px; font-size: 12px; color: #6c757d;">
-                    Используется метод <strong>{method_label}</strong> из
-                    <a href="{settings_url}" target="_blank" style="color: inherit; text-decoration: underline;">
+                    Используется метод <strong>{}</strong> из
+                    <a href="{}" target="_blank" style="color: inherit; text-decoration: underline;">
                         системных настроек
                     </a>
                 </div>
@@ -767,7 +767,13 @@ class PostAdmin(admin.ModelAdmin):
                 }}
                 </script>
                 ''',
-                url=generate_url
+                config["text"],
+                method_label,
+                generate_url,
+                config["color"],
+                config["text"],
+                method_label,
+                settings_url
             )
         return "Сохраните пост, чтобы сгенерировать изображение"
     image_generate_button.short_description = "AI фото"

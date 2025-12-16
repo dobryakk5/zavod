@@ -26,6 +26,7 @@ import type { PostDetail } from '@/lib/types';
 
 const postFormSchema = z.object({
   title: z.string().min(1, 'Заголовок обязателен').max(200, 'Максимум 200 символов'),
+  hook_title: z.string().max(100, 'Максимум 100 символов').optional(),
   text: z.string().min(1, 'Текст обязателен'),
   status: z.enum(['draft', 'ready', 'approved', 'scheduled', 'published']),
   topic: z.number().optional(),
@@ -45,6 +46,7 @@ export function PostForm({ post, onSubmit, loading = false }: PostFormProps) {
     resolver: zodResolver(postFormSchema),
     defaultValues: {
       title: post?.title || '',
+      hook_title: post?.hook_title || '',
       text: post?.text || '',
       status: post?.status || 'draft',
       topic: post?.topic || undefined,
@@ -76,6 +78,25 @@ export function PostForm({ post, onSubmit, loading = false }: PostFormProps) {
                   {...field}
                 />
               </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="hook_title"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Цепляющий заголовок</FormLabel>
+              <FormControl>
+                <Input
+                  placeholder="Например: Это работает!"
+                  className="bg-white text-black placeholder:text-gray-500 dark:bg-white dark:text-black"
+                  {...field}
+                />
+              </FormControl>
+              <FormDescription>Короткий заголовок до 3 слов для привлечения внимания</FormDescription>
               <FormMessage />
             </FormItem>
           )}

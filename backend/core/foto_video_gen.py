@@ -377,7 +377,7 @@ def generate_image_from_telegram_bot(
         or os.getenv("IMAGE_BOT_SESSION_FILE")
         or os.getenv("TELEGRAM_SESSION_PATH")
     )
-    session_name_raw = options.get("session_name") or os.getenv("IMAGE_BOT_SESSION_NAME", "image_generator")
+    session_name_raw = options.get("session_name") or os.getenv("IMAGE_BOT_SESSION_NAME", "telegram_sessions/image_generator")
     session_label = session_path or session_name_raw
     
     if session_path:
@@ -1238,7 +1238,7 @@ def _generate_video_veo(
         or os.getenv("VEO_SESSION_FILE")
         or os.getenv("TELEGRAM_SESSION_PATH")
     )
-    session_name_raw = options.get("session_name") or os.getenv("VEO_SESSION_NAME", "veo_generator")
+    session_name_raw = options.get("session_name") or os.getenv("VEO_SESSION_NAME", "telegram_sessions/veo_generator")
     session_label = session_path or session_name_raw
     if session_path:
         expanded_path = os.path.abspath(os.path.expanduser(session_path))

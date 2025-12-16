@@ -27,6 +27,7 @@ export type UserRole = 'owner' | 'editor' | 'viewer';
 export interface Post {
   id: number;
   title: string;
+  hook_title?: string;
   status: PostStatus;
   created_at: string;
   platforms?: string[];
@@ -56,6 +57,7 @@ export interface PostMediaVideo {
 export interface PostDetail {
   id: number;
   title?: string;
+  hook_title?: string;
   text?: string;
   image?: string;
   video?: string;

@@ -32,6 +32,7 @@ from ..video_postprocessing import (
     apply_text_overlays_to_video,
     build_overlay_scenes_from_post,
 )
+from ..photo_postprocessing import apply_text_overlay_to_image
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +392,7 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
         # Создать Post
         post_title = result['title']
         post_text = result['text']
+        hook_title = result.get('hook_title', '')
         hashtags = result.get('hashtags', [])
 
         # Собрать теги (только хэштеги от AI, без мета-информации)
@@ -401,6 +403,7 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
             client=trend.client,
             template=template,
             title=post_title,
+            hook_title=hook_title,
             text=post_text,
             status="draft",  # Требует модерации
             tags=tags,
@@ -605,10 +608,12 @@ def generate_posts_from_seo_keyword_set(
                     seen.add(normalized)
                     deduped_tags.append(normalized)
 
+        hook_title = result.get("hook_title", "")
         Post.objects.create(
             client=client,
             template=template,
             title=result["title"],
+            hook_title=hook_title,
             text=result["text"],
             status="draft",
             tags=deduped_tags,
@@ -878,10 +883,12 @@ def generate_posts_with_videos_from_seo_keyword_set(
             tags = _dedupe_tags(tags)
 
             try:
+                hook_title = post_result.get("hook_title", "")
                 post = Post.objects.create(
                     client=client,
                     template=template,
                     title=(post_result.get("title") or keyword or "SEO post")[:255],
+                    hook_title=hook_title,
                     text=post_result.get("text") or "",
                     status="draft",
                     tags=tags,
@@ -1064,10 +1071,12 @@ def generate_weekly_posts_from_template(
                 seen.add(normalized)
                 deduped.append(normalized)
 
+        hook_title = result.get("hook_title", "")
         post = Post.objects.create(
             client=client,
             template=template,
             title=result["title"],
+            hook_title=hook_title,
             text=result["text"],
             status="draft",
             tags=deduped,
@@ -1558,9 +1567,25 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
 
         cleanup_paths.add(final_image_path)
 
+        # Шаг 2.5: Нанести hook_title на изображение, если он есть
+        processed_image_path = final_image_path
+        if post.hook_title and post.hook_title.strip():
+            logger.info(f"Нанесение hook_title на изображение: '{post.hook_title}'")
+            overlay_result = apply_text_overlay_to_image(
+                input_image_path=final_image_path,
+                text=post.hook_title.strip(),
+            )
+            if overlay_result.get("success") and overlay_result.get("image_path"):
+                processed_image_path = overlay_result["image_path"]
+                cleanup_paths.add(processed_image_path)
+                word_used = overlay_result.get("word_used", "")
+                logger.info(f"Hook_title нанесен на изображение, использовано слово: '{word_used}'")
+            else:
+                logger.warning(f"Не удалось нанести hook_title на изображение: {overlay_result.get('error')}")
+
         # Шаг 3: Сохранить изображение среди PostImage
         try:
-            with open(final_image_path, 'rb') as f:
+            with open(processed_image_path, 'rb') as f:
                 post_image = PostImage(
                     post=post,
                     order=post.images.count(),
@@ -1916,12 +1941,14 @@ def generate_posts_from_story(story_id: int):
                 continue
 
             # Создание поста
+            hook_title = result.get("hook_title", "")
             post = Post.objects.create(
                 client=story.client,
                 template=story.template,
                 story=story,
                 episode_number=episode_number,
                 title=result["title"],
+                hook_title=hook_title,
                 text=result["text"],
                 status="ready",
                 tags=result.get("hashtags", []),
@@ -2113,6 +2140,7 @@ def regenerate_post_text(post_id: int):
 
         # Обновляем пост
         post.title = result["title"]
+        post.hook_title = result.get("hook_title", "")
         post.text = result["text"]
 
         raw_hashtags = result.get("hashtags", [])

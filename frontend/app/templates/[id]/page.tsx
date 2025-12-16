@@ -12,9 +12,13 @@ import { useRole } from '@/lib/hooks';
 import type { ContentTemplate } from '@/lib/types';
 
 interface TemplatePageProps {
-  params: Promise<{
-    id: string;
-  }>;
+  params:
+    | {
+        id: string;
+      }
+    | Promise<{
+        id: string;
+      }>;
 }
 
 export default function TemplatePage({ params }: TemplatePageProps) {
@@ -25,7 +29,23 @@ export default function TemplatePage({ params }: TemplatePageProps) {
   const [templateId, setTemplateId] = useState<number | null>(null);
 
   useEffect(() => {
-    params.then((p) => setTemplateId(parseInt(p.id)));
+    let isActive = true;
+
+    Promise.resolve(params)
+      .then((resolved) => {
+        if (!isActive) return;
+        const parsedId = Number.parseInt(resolved.id, 10);
+        setTemplateId(Number.isNaN(parsedId) ? null : parsedId);
+      })
+      .catch(() => {
+        if (isActive) {
+          setTemplateId(null);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
   }, [params]);
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { Post, PostDetail, TaskResponse, GenerateImageRequest, GenerateVideoRequest, QuickPublishRequest } from '../types';
+import type { Post, PostDetail, TaskResponse, GenerateVideoRequest, QuickPublishRequest } from '../types';
 
 export const postsApi = {
   /**

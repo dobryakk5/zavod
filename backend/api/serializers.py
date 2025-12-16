@@ -30,7 +30,7 @@ class PostSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Post
-        fields = ["id", "title", "status", "created_at", "platforms", "template_name"]
+        fields = ["id", "title", "hook_title", "status", "created_at", "platforms", "template_name"]
 
     def get_platforms(self, obj: Post) -> list[str]:
         schedules = obj.schedules.all()
@@ -132,6 +132,7 @@ class PostDetailSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "title",
+            "hook_title",
             "text",
             "status",
             "tags",

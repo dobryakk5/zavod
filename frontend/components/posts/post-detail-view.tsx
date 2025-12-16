@@ -420,6 +420,7 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
   const postTypeLabel = formatPostTypeLabel(post.template_type);
   const images = post.images ?? [];
   const videos = post.videos ?? [];
+  const hookTitle = (post.hook_title || '').trim();
   const isImageOnCooldown = Boolean(imageCooldownUntil && imageCooldownUntil.getTime() > nowMs);
   const isVideoOnCooldown = Boolean(videoCooldownUntil && videoCooldownUntil.getTime() > nowMs);
   const imageCooldownRemainingMs = isImageOnCooldown && imageCooldownUntil ? imageCooldownUntil.getTime() - nowMs : 0;
@@ -447,6 +448,10 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
               </Badge>
             ))}
           </div>
+          <p className="mt-3 text-base text-muted-foreground">
+            <span className="font-semibold">Цепляющий заголовок:</span>{' '}
+            {hookTitle || 'не сгенерирован'}
+          </p>
         </div>
       </div>
 
