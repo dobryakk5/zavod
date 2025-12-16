@@ -5,6 +5,7 @@ from django.conf.urls.static import static
 from wagtail.admin import urls as wagtailadmin_urls
 from wagtail.documents import urls as wagtaildocs_urls
 from wagtail import urls as wagtail_urls
+from api.views import VkConnectView, VkCallbackView, VkPublishView
 
 urlpatterns = [
     path('django-admin/', admin.site.urls),
@@ -12,6 +13,10 @@ urlpatterns = [
     path('documents/', include(wagtaildocs_urls)),
     path('api/', include('api.urls')),
     path('core/', include('core.urls')),  # Core app URLs
+    # Direct VK routes (used by frontend popup redirects)
+    path('vk/connect/', VkConnectView.as_view(), name='vk-connect'),
+    path('vk/callback/', VkCallbackView.as_view(), name='vk-callback'),
+    path('vk/post_with_photos/', VkPublishView.as_view(), name='vk-post-with-photos'),
     path('', include(wagtail_urls)),
 ]
 

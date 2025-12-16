@@ -8,9 +8,17 @@ import {ApiError} from '@/lib/api';
 import {schedulesApi} from '@/lib/api/schedules';
 import {useRouter} from 'next/navigation';
 import type {Schedule} from '@/lib/types';
+import {cn} from '@/lib/utils';
 
 // dnd-kit
-import {DndContext, closestCenter, type DragEndEvent} from '@dnd-kit/core';
+import {
+  DndContext,
+  closestCenter,
+  DragOverlay,
+  type DragEndEvent,
+  type DragStartEvent,
+  useDroppable,
+} from '@dnd-kit/core';
 import {SortableContext, rectSortingStrategy, useSortable} from '@dnd-kit/sortable';
 import {CSS} from '@dnd-kit/utilities';
 
@@ -28,15 +36,7 @@ type CalendarItem = {
 
 type ItemsByDate = Record<string, CalendarItem[]>;
 
-// --- Sortable Card ---
-function SortableCard({item}: {item: CalendarItem}){
-  const {attributes, listeners, setNodeRef, transform, transition} = useSortable({id: item.id});
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    touchAction: 'manipulation' as const
-  };
-
+function CalendarCard({item}: {item: CalendarItem}){
   const statusColors: Record<string, string> = {
     pending: 'bg-yellow-100 text-yellow-800',
     in_progress: 'bg-blue-100 text-blue-800',
@@ -45,19 +45,65 @@ function SortableCard({item}: {item: CalendarItem}){
   };
 
   return (
+    <Card className="mb-3 shadow-sm cursor-move hover:shadow-md transition-shadow">
+      <CardHeader className="flex flex-row items-center justify-between gap-2 p-3">
+        <CardTitle className="text-sm font-medium">{item.title}</CardTitle>
+        <div className="text-xs text-slate-500">{item.time}</div>
+      </CardHeader>
+      <CardContent className="p-3 pt-0">
+        <div className="flex items-center gap-2 text-xs">
+          <Badge variant="outline" className="text-xs">{item.platform}</Badge>
+          <Badge className={statusColors[item.status] || 'bg-gray-100 text-gray-800'}>{item.status}</Badge>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// --- Droppable container ---
+function DroppableContainer({
+  id,
+  className,
+  children,
+}: {
+  id: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const {setNodeRef, isOver} = useDroppable({id});
+
+  return (
+    <div
+      ref={setNodeRef}
+      id={id}
+      className={cn(className, isOver && 'ring-2 ring-blue-400 ring-offset-1')}
+    >
+      {children}
+    </div>
+  );
+}
+
+// --- Sortable Card ---
+function SortableCard({item}: {item: CalendarItem}){
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({id: item.id});
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    touchAction: 'manipulation' as const,
+    zIndex: isDragging ? 50 : undefined,
+    opacity: isDragging ? 0.2 : 1,
+  };
+
+  return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <Card className="mb-3 shadow-sm cursor-move hover:shadow-md transition-shadow">
-        <CardHeader className="flex flex-row items-center justify-between gap-2 p-3">
-          <CardTitle className="text-sm font-medium">{item.title}</CardTitle>
-          <div className="text-xs text-slate-500">{item.time}</div>
-        </CardHeader>
-        <CardContent className="p-3 pt-0">
-          <div className="flex items-center gap-2 text-xs">
-            <Badge variant="outline" className="text-xs">{item.platform}</Badge>
-            <Badge className={statusColors[item.status] || 'bg-gray-100 text-gray-800'}>{item.status}</Badge>
-          </div>
-        </CardContent>
-      </Card>
+      <CalendarCard item={item} />
     </div>
   );
 }
@@ -110,6 +156,7 @@ export default function ContentCalendarPage(){
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   const weekDates = useMemo(()=> generateWeekDates(cursor), [cursor]);
   const monthDates = useMemo(()=> generateMonthDates(cursor), [cursor]);
@@ -157,6 +204,15 @@ export default function ContentCalendarPage(){
     return map;
   }, [schedules, view, cursor, weekDates, monthDates]);
 
+  const activeItem = useMemo(() => {
+    if (!activeId) return null;
+    for (const key of Object.keys(itemsByDate)) {
+      const match = itemsByDate[key].find((item) => item.id === activeId);
+      if (match) return match;
+    }
+    return null;
+  }, [activeId, itemsByDate]);
+
   function prev(){
     const c = new Date(cursor);
     if(view==='month') c.setMonth(c.getMonth()-1);
@@ -195,43 +251,70 @@ export default function ContentCalendarPage(){
     }
   }
 
+  function onDragStart(event: DragStartEvent){
+    setActiveId(event.active.id as string);
+  }
+
+  function onDragCancel(){
+    setActiveId(null);
+  }
+
   function onDragEnd(event: DragEndEvent){
+    setActiveId(null);
     const {active, over} = event;
     if(!over) return;
-    const activeId = active.id as string;
+    const activeItemId = active.id as string;
     const overId = over.id as string;
 
-    const fromKey = findContainer(activeId);
+    const fromKey = findContainer(activeItemId);
     const toKey = itemsByDate[overId] ? overId : findContainer(overId);
     if(!fromKey || !toKey) return;
 
     if(fromKey === toKey) return; // Same day, no need to update
 
     // Find the item being moved
-    const item = itemsByDate[fromKey].find(i => i.id === activeId);
+    const item = itemsByDate[fromKey].find(i => i.id === activeItemId);
     if (!item) return;
 
     // Update the schedule with new date
     const newDate = new Date(toKey);
-    const originalTime = itemsByDate[fromKey].find(i => i.id === activeId)?.time || '12:00';
+    const originalTime = item.time || '12:00';
     const [hours, minutes] = originalTime.split(':');
     newDate.setHours(parseInt(hours), parseInt(minutes));
 
-    updateScheduleDate(item.scheduleId, newDate.toISOString());
+    const newDateIso = newDate.toISOString();
+
+    // Optimistically update UI so the post moves instantly
+    setSchedules(prev =>
+      prev.map(schedule =>
+        schedule.id === item.scheduleId ? {...schedule, scheduled_at: newDateIso} : schedule
+      )
+    );
+
+    updateScheduleDate(item.scheduleId, newDateIso);
   }
 
   // Renderers for views
   function WeekView(){
     return (
       <div className="min-w-[1000px] grid grid-cols-7 gap-4">
-        <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <DndContext
+          collisionDetection={closestCenter}
+          onDragEnd={onDragEnd}
+          onDragStart={onDragStart}
+          onDragCancel={onDragCancel}
+        >
           {weekDates.map(d=>{
             const k = formatKey(d);
             const items = itemsByDate[k] || [];
             const isToday = formatKey(new Date()) === k;
+            const containerClass = cn(
+              'rounded-lg p-2 min-h-[160px]',
+              isToday ? 'bg-blue-50' : 'bg-slate-50'
+            );
 
             return (
-              <div key={k} className={`rounded-lg p-2 ${isToday ? 'bg-blue-50' : 'bg-slate-50'}`} id={k}>
+              <DroppableContainer key={k} id={k} className={containerClass}>
                 <div className="flex items-center justify-between mb-2">
                   <div className={`text-sm font-medium ${isToday ? 'text-blue-600' : ''}`}>
                     {d.toLocaleDateString('ru-RU',{weekday:'short', day:'numeric'})}
@@ -242,9 +325,12 @@ export default function ContentCalendarPage(){
                 <SortableContext items={items.map(i=>i.id)} strategy={rectSortingStrategy}>
                   {items.map(item=> <SortableCard key={item.id} item={item} />)}
                 </SortableContext>
-              </div>
+              </DroppableContainer>
             );
           })}
+          <DragOverlay>
+            {activeItem ? <CalendarCard item={activeItem} /> : null}
+          </DragOverlay>
         </DndContext>
       </div>
     );
@@ -253,7 +339,12 @@ export default function ContentCalendarPage(){
   function MonthView(){
     return (
       <div className="min-w-[1000px]">
-        <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <DndContext
+          collisionDetection={closestCenter}
+          onDragEnd={onDragEnd}
+          onDragStart={onDragStart}
+          onDragCancel={onDragCancel}
+        >
           <div className="grid grid-cols-7 gap-2">
             {/* Header with day names */}
             {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => (
@@ -267,15 +358,20 @@ export default function ContentCalendarPage(){
               const items = itemsByDate[k] || [];
               const isCurrentMonth = d.getMonth() === cursor.getMonth();
               const isToday = formatKey(new Date()) === k;
+              const containerClass = cn(
+                'border rounded p-2 min-h-[120px]',
+                isToday
+                  ? 'bg-blue-50 border-blue-300'
+                  : isCurrentMonth
+                  ? 'bg-white'
+                  : 'bg-slate-50 text-slate-400'
+              );
 
               return (
-                <div
+                <DroppableContainer
                   key={k}
                   id={k}
-                  className={`border rounded p-2 min-h-[120px] ${
-                    isToday ? 'bg-blue-50 border-blue-300' :
-                    isCurrentMonth ? 'bg-white' : 'bg-slate-50 text-slate-400'
-                  }`}
+                  className={containerClass}
                 >
                   <div className="flex items-center justify-between mb-2">
                     <div className={`text-xs font-medium ${isToday ? 'text-blue-600' : ''}`}>
@@ -294,10 +390,13 @@ export default function ContentCalendarPage(){
                       </div>
                     )}
                   </SortableContext>
-                </div>
+                </DroppableContainer>
               );
             })}
           </div>
+          <DragOverlay>
+            {activeItem ? <CalendarCard item={activeItem} /> : null}
+          </DragOverlay>
         </DndContext>
       </div>
     );
@@ -308,8 +407,13 @@ export default function ContentCalendarPage(){
     const items = itemsByDate[k] || [];
     return (
       <div className="min-w-[600px]">
-        <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-          <div className="rounded-lg p-4 bg-white border">
+        <DndContext
+          collisionDetection={closestCenter}
+          onDragEnd={onDragEnd}
+          onDragStart={onDragStart}
+          onDragCancel={onDragCancel}
+        >
+          <DroppableContainer id={k} className="rounded-lg p-4 bg-white border min-h-[300px]">
             <div className="flex items-center justify-between mb-4">
               <div className="text-lg font-semibold">
                 {cursor.toLocaleDateString('ru-RU',{weekday:'long', day:'numeric', month:'long'})}
@@ -326,7 +430,10 @@ export default function ContentCalendarPage(){
                 </div>
               )}
             </SortableContext>
-          </div>
+          </DroppableContainer>
+          <DragOverlay>
+            {activeItem ? <CalendarCard item={activeItem} /> : null}
+          </DragOverlay>
         </DndContext>
       </div>
     );

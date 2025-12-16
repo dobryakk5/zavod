@@ -8,6 +8,7 @@ import { ApiError } from '@/lib/api';
 import { useClient } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { VisuallyHidden } from '@/components/ui/visually-hidden';
 import type { GenerateVideoRequest, PostDetail, Schedule } from '@/lib/types';
@@ -139,6 +140,8 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
   const [showImageCooldownMessage, setShowImageCooldownMessage] = useState(false);
   const [showVideoCooldownMessage, setShowVideoCooldownMessage] = useState(false);
   const [cooldownClock, setCooldownClock] = useState(() => Date.now());
+  const [hookTitleDraft, setHookTitleDraft] = useState('');
+  const [hookTitleSaving, setHookTitleSaving] = useState(false);
 
   const loadPost = useCallback(async () => {
     try {
@@ -197,6 +200,30 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     const interval = setInterval(() => setCooldownClock(Date.now()), 1000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    setHookTitleDraft(post?.hook_title || '');
+  }, [post?.hook_title]);
+
+  const handleHookTitleSave = async () => {
+    if (!post || !canEdit) {
+      return;
+    }
+    const originalValue = post.hook_title ?? '';
+    if (hookTitleDraft === originalValue) {
+      return;
+    }
+    setHookTitleSaving(true);
+    try {
+      const updatedPost = await postsApi.update(post.id, { hook_title: hookTitleDraft || '' });
+      setPost(updatedPost);
+      toast.success('Цепляющий заголовок обновлен');
+    } catch (err) {
+      toast.error('Не удалось обновить цепляющий заголовок');
+    } finally {
+      setHookTitleSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (!imageCooldownUntil) {
@@ -420,7 +447,9 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
   const postTypeLabel = formatPostTypeLabel(post.template_type);
   const images = post.images ?? [];
   const videos = post.videos ?? [];
-  const hookTitle = (post.hook_title || '').trim();
+  const hookTitleOriginal = post.hook_title ?? '';
+  const hookTitle = hookTitleOriginal.trim();
+  const hookTitleHasChanges = hookTitleDraft !== hookTitleOriginal;
   const isImageOnCooldown = Boolean(imageCooldownUntil && imageCooldownUntil.getTime() > nowMs);
   const isVideoOnCooldown = Boolean(videoCooldownUntil && videoCooldownUntil.getTime() > nowMs);
   const imageCooldownRemainingMs = isImageOnCooldown && imageCooldownUntil ? imageCooldownUntil.getTime() - nowMs : 0;
@@ -448,10 +477,39 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
               </Badge>
             ))}
           </div>
-          <p className="mt-3 text-base text-muted-foreground">
-            <span className="font-semibold">Цепляющий заголовок:</span>{' '}
-            {hookTitle || 'не сгенерирован'}
-          </p>
+          <div className="mt-3 text-base text-muted-foreground">
+            <span className="font-semibold block">Цепляющий заголовок:</span>
+            {canEdit ? (
+              <div className="mt-2 flex w-full flex-wrap items-center gap-2">
+                <Input
+                  value={hookTitleDraft}
+                  onChange={(event) => setHookTitleDraft(event.target.value)}
+                  placeholder="Например: Это работает!"
+                  maxLength={100}
+                  disabled={hookTitleSaving}
+                  className="w-full max-w-md bg-white text-black placeholder:text-gray-500 dark:bg-white dark:text-black"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleHookTitleSave}
+                  disabled={!hookTitleHasChanges || hookTitleSaving}
+                  variant="secondary"
+                >
+                  {hookTitleSaving ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Сохранение...
+                    </>
+                  ) : (
+                    'Сохранить'
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <span>{hookTitle || 'не сгенерирован'}</span>
+            )}
+          </div>
         </div>
       </div>
 
