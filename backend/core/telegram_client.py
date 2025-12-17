@@ -87,7 +87,6 @@ class TelegramContentCollector:
 
     async def connect(self):
         """Подключиться к Telegram."""
-        # Создаем директорию для сессий, если её нет
         sessions_dir = os.path.join(settings.BASE_DIR, 'telegram_sessions')
         os.makedirs(sessions_dir, exist_ok=True)
 
@@ -102,25 +101,36 @@ class TelegramContentCollector:
             )
 
         self.client = TelegramClient(session_path, self.api_id, self.api_hash)
-        await self.client.start()
 
-        me = await self.client.get_me()
-        if getattr(me, 'bot', False):
-            await self.client.disconnect()
-            self.client = None
-            raise RuntimeError(
-                "Эта Telegram сессия авторизована как бот. "
-                "Для сбора трендов необходима Telegram User API сессия. "
-                "Создайте её через python backend/scripts/authorize_telegram.py --session-type collector "
-                "или следуйте инструкции в docs/TELEGRAM_SETUP.md."
-            )
+        try:
+            await self.client.connect()
 
-        logger.info(f"Telegram клиент подключен (сессия: {self.session_name})")
+            if not await self.client.is_user_authorized():
+                raise RuntimeError(
+                    f"Telegram сессия '{session_file}' существует, но не авторизована. "
+                    "Запустите python backend/scripts/authorize_telegram.py или следуйте инструкции в docs/TELEGRAM_SETUP.md."
+                )
+
+            me = await self.client.get_me()
+            if getattr(me, 'bot', False):
+                raise RuntimeError(
+                    "Эта Telegram сессия авторизована как бот. "
+                    "Для сбора трендов необходима Telegram User API сессия. "
+                    "Создайте её через python backend/scripts/authorize_telegram.py --session-type collector "
+                    "или следуйте инструкции в docs/TELEGRAM_SETUP.md."
+                )
+
+            logger.info(f"Telegram клиент подключен (сессия: {self.session_name})")
+
+        except Exception:
+            await self.disconnect()
+            raise
 
     async def disconnect(self):
         """Отключиться от Telegram."""
         if self.client:
             await self.client.disconnect()
+            self.client = None
             logger.info("Telegram клиент отключен")
 
     async def search_in_channel(

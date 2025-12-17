@@ -191,7 +191,7 @@ def _build_template_config(template: ContentTemplate, client: Client, prompt_typ
         "pains": client.pains or "",
         "desires": client.desires or "",
         "objections": client.objections or "",
-        "brand": client.name or "",
+        "brand": client.get_brand_display_name(),
         "books": client.expert_books or "",
         "video_prompt": client.get_video_prompt_template(),
     }
@@ -349,7 +349,7 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
             "max_hashtags": template.max_hashtags,
             # Данные по типу поста и целевой аудитории клиента
             "type": getattr(template, "type", "selling"),
-            "brand": trend.client.name or "",
+            "brand": trend.client.get_brand_display_name() if trend.client else "",
             "avatar": trend.client.avatar or "",
             "pains": trend.client.pains or "",
             "desires": trend.client.desires or "",
@@ -534,7 +534,7 @@ def generate_posts_from_seo_keyword_set(
         "additional_instructions": template.additional_instructions,
         "include_hashtags": template.include_hashtags,
         "max_hashtags": template.max_hashtags,
-        "brand": client.name or "",
+        "brand": client.get_brand_display_name(),
         "avatar": client.avatar or "",
         "pains": client.pains or "",
         "desires": client.desires or "",
@@ -709,7 +709,7 @@ def generate_posts_with_videos_from_seo_keyword_set(
         "additional_instructions": template.additional_instructions,
         "include_hashtags": template.include_hashtags,
         "max_hashtags": template.max_hashtags,
-        "brand": client.name or "",
+        "brand": client.get_brand_display_name(),
         "avatar": client.avatar or "",
         "pains": client.pains or "",
         "desires": client.desires or "",
@@ -1014,12 +1014,13 @@ def generate_weekly_posts_from_template(
     for index, (local_dt, day_offset) in enumerate(slots, start=1):
         weekday_label = WEEKDAY_LABELS[day_offset]
         trend_title = f"{template.name}: пост на {weekday_label}"
+        brand_display = client.get_brand_display_name() or "бренда"
         trend_description = (
             "Подготовь {post_type} пост для {brand} на {weekday} следующей недели. "
             "Используй боли и желания аудитории, избегай ссылок и новостных поводов."
         ).format(
             post_type=template.type or "контентный",
-            brand=client.name or "бренда",
+            brand=brand_display,
             weekday=weekday_label,
         )
 
@@ -1905,7 +1906,7 @@ def generate_posts_from_story(story_id: int):
 
         # Информация о клиенте
         client_info = {
-            "brand": story.client.name or "",
+            "brand": story.client.get_brand_display_name() if story.client else "",
             "avatar": story.client.avatar or "",
             "pains": story.client.pains or "",
             "desires": story.client.desires or "",
@@ -2032,7 +2033,7 @@ def regenerate_post_text(post_id: int):
                 }
 
             client_info = {
-                "brand": post.client.name or "",
+                "brand": post.client.get_brand_display_name() if post.client else "",
                 "avatar": post.client.avatar or "",
                 "pains": post.client.pains or "",
                 "desires": post.client.desires or "",
@@ -2065,7 +2066,7 @@ def regenerate_post_text(post_id: int):
                     "include_hashtags": True,
                     "max_hashtags": 5,
                     "additional_instructions": "",
-                    "brand": post.client.name or "",
+                    "brand": post.client.get_brand_display_name() if post.client else "",
                     "avatar": post.client.avatar or "",
                     "pains": post.client.pains or "",
                     "desires": post.client.desires or "",

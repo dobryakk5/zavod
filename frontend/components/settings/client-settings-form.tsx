@@ -31,6 +31,7 @@ import { toast } from 'sonner';
 import type { ClientSettings } from '@/lib/types';
 
 const settingsFormSchema = z.object({
+  brand_name: z.string().optional(),
   timezone: z.string().optional(),
   avatar: z.string().optional(),
   pains: z.string().optional(),
@@ -56,6 +57,7 @@ export function ClientSettingsForm() {
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsFormSchema),
     defaultValues: {
+      brand_name: '',
       timezone: '',
       avatar: '',
       pains: '',
@@ -79,6 +81,7 @@ export function ClientSettingsForm() {
       const data = await clientApi.getSettings();
       setSettings(data);
       form.reset({
+        brand_name: data.brand_name || '',
         timezone: data.timezone || '',
         avatar: data.avatar || '',
         pains: data.pains || '',
@@ -168,6 +171,21 @@ export function ClientSettingsForm() {
     <Form {...form}>
       <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
         {/* Note: NO 'name' or 'id' field - they are read-only */}
+
+        <FormField
+          control={form.control}
+          name="brand_name"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Название бренда</FormLabel>
+              <FormControl>
+                <Input placeholder="Например: Zavod Media" {...field} />
+              </FormControl>
+              <FormDescription>Используется для упоминания в постах</FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
 
         <FormField
           control={form.control}

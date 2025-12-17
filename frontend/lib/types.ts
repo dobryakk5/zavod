@@ -199,6 +199,7 @@ export interface VkIntegration {
 
 export interface ClientSettings {
   slug?: string;
+  brand_name?: string;
   timezone?: string;
   avatar?: string;
   pains?: string;

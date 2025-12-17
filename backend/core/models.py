@@ -6,6 +6,12 @@ from typing import Dict, List
 class Client(models.Model):
     SYSTEM_SLUG = "system"
     name = models.CharField(max_length=255)
+    brand_name = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Название бренда",
+        help_text="Используется при упоминании бренда в постах",
+    )
     slug = models.SlugField(unique=True)
     timezone = models.CharField(max_length=64, default="Europe/Helsinki")
 
@@ -175,6 +181,10 @@ class Client(models.Model):
 
     def __str__(self):
         return self.name
+
+    def get_brand_display_name(self) -> str:
+        """Возвращает пользовательское название бренда с запасным вариантом."""
+        return (self.brand_name or self.name or "").strip()
 
     @property
     def is_system(self) -> bool:

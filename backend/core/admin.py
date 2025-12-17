@@ -99,7 +99,7 @@ class ClientAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Основная информация", {
-            "fields": ("name", "slug", "timezone"),
+            "fields": ("name", "brand_name", "slug", "timezone"),
         }),
         ("Описание целевой аудитории", {
             "fields": ("avatar", "pains", "desires", "objections"),
