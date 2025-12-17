@@ -212,7 +212,7 @@ export function PostsTable() {
                     {post.title || `Пост #${post.id}`}
                   </a>
                   <div className="text-sm text-muted-foreground mt-1">
-                    <span className="font-semibold">Цепляющий заголовок:</span>{' '}
+                    <span className="font-semibold">Цепляющий заголовок (для фото):</span>{' '}
                     {post.hook_title?.trim() || 'не сгенерирован'}
                   </div>
                 </TableCell>

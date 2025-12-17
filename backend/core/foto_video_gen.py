@@ -519,119 +519,154 @@ def generate_image_from_telegram_bot(
             try:
                 logger.info("[IMAGE BOT Thread %s] Начало разговора с ботом (timeout=%s)...", thread_id, timeout)
                 async with client.conversation(bot, timeout=timeout) as conv:
-                    # Шаг 1: Отправляем команду /design
-                    logger.info("[IMAGE BOT Thread %s] Отправка команды /design...", thread_id)
-                    await conv.send_message("/design")
-                    
-                    # Ждем ответа с кнопками
-                    try:
-                        response = await conv.get_response(timeout=5)
-                        logger.info("[IMAGE BOT Thread %s] Получен ответ на /design", thread_id)
-                    except asyncio.TimeoutError:
-                        logger.warning("[IMAGE BOT Thread %s] Таймаут ожидания ответа на /design", thread_id)
-                        return None
+                    async def _select_image_mode(target_mode: str) -> bool:
+                        """Открыть меню /design и выбрать нужный режим."""
+                        mode_label = "SORA" if target_mode == "sora" else "Runway"
+                        logger.info("[IMAGE BOT Thread %s] Отправка команды /design для режима %s...", thread_id, mode_label)
+                        await conv.send_message("/design")
+                        try:
+                            response = await conv.get_response(timeout=5)
+                            logger.info("[IMAGE BOT Thread %s] Получен ответ на /design", thread_id)
+                        except asyncio.TimeoutError:
+                            logger.warning("[IMAGE BOT Thread %s] Таймаут ожидания ответа на /design", thread_id)
+                            return False
 
-                    # Шаг 2: Ищем и нажимаем кнопку "🌙 SORA Images"
-                    if response.reply_markup:
-                        sora_button = None
+                        if not response.reply_markup:
+                            logger.error("[IMAGE BOT Thread %s] Нет inline-кнопок в ответе на /design", thread_id)
+                            return False
+
+                        button_patterns = ["SORA", "🌙"] if target_mode == "sora" else ["Runway", "🎑"]
+                        target_button = None
                         for row in response.reply_markup.rows:
                             for button in row.buttons:
-                                if "SORA" in button.text or "🌙" in button.text:
-                                    sora_button = button
+                                button_text = (button.text or "").strip()
+                                if any(pattern in button_text for pattern in button_patterns):
+                                    target_button = button
                                     break
-                            if sora_button:
+                            if target_button:
                                 break
-                        
-                        if sora_button:
-                            logger.info("[IMAGE BOT Thread %s] Нажимаю кнопку: %s", thread_id, sora_button.text)
-                            button_data = getattr(sora_button, "data", None)
-                            if button_data:
-                                await client(GetBotCallbackAnswerRequest(
-                                    peer=bot_username,
-                                    msg_id=response.id,
-                                    data=button_data
-                                ))
-                            else:
-                                # Некоторые боты отправляют обычные клавиатурные кнопки.
-                                await conv.send_message(sora_button.text)
-                            logger.info("[IMAGE BOT Thread %s] Кнопка SORA Images нажата", thread_id)
+
+                        if not target_button:
+                            logger.error("[IMAGE BOT Thread %s] Кнопка %s не найдена", thread_id, mode_label)
+                            return False
+
+                        logger.info("[IMAGE BOT Thread %s] Нажимаю кнопку: %s", thread_id, target_button.text)
+                        button_data = getattr(target_button, "data", None)
+                        if button_data:
+                            await client(GetBotCallbackAnswerRequest(
+                                peer=bot_username,
+                                msg_id=response.id,
+                                data=button_data
+                            ))
                         else:
-                            logger.error("[IMAGE BOT Thread %s] Кнопка SORA Images не найдена", thread_id)
-                            return None
-                    else:
-                        logger.error("[IMAGE BOT Thread %s] Нет inline-кнопок в ответе на /design", thread_id)
-                        return None
+                            await conv.send_message(target_button.text)
+                        logger.info("[IMAGE BOT Thread %s] Кнопка %s нажата", thread_id, mode_label)
 
-                    # Шаг 3: Ждем подтверждение выбора режима и отправляем промпт
-                    try:
-                        mode_response = await conv.get_response(timeout=5)
-                        logger.info("[IMAGE BOT Thread %s] Получено подтверждение выбора режима", thread_id)
-                    except asyncio.TimeoutError:
-                        logger.warning("[IMAGE BOT Thread %s] Таймаут ожидания подтверждения режима", thread_id)
-                        return None
-
-                    # Шаг 4: Отправляем промпт
-                    logger.info("[IMAGE BOT Thread %s] Отправка промпта: %s", thread_id, prompt[:100])
-                    await conv.send_message(prompt)
-                    logger.info("[IMAGE BOT Thread %s] Промпт отправлен, ожидание изображения...", thread_id)
-
-                    # Шаг 5: Получаем ответы бота и ждём изображение или прямую ссылку
-                    followup_attempts = 6
-                    for attempt in range(followup_attempts):
                         try:
-                            image_response = await conv.get_response(timeout=timeout)
+                            await conv.get_response(timeout=5)
+                            logger.info("[IMAGE BOT Thread %s] Получено подтверждение выбора режима", thread_id)
                         except asyncio.TimeoutError:
-                            logger.error("Бот не ответил с изображением в течение %s секунд", timeout)
-                            return None
+                            logger.warning("[IMAGE BOT Thread %s] Таймаут ожидания подтверждения режима", thread_id)
+                            return False
 
-                        response_text = (image_response.raw_text or "").strip()
-                        if response_text:
-                            logger.info(
-                                "[IMAGE BOT Thread %s] Ответ бота (%s/%s): %s",
-                                thread_id,
-                                attempt + 1,
-                                followup_attempts,
-                                response_text[:120],
-                            )
+                        return True
 
-                        if image_response.media:
-                            fd, temp_path = tempfile.mkstemp(suffix=".png")
-                            os.close(fd)
-                            downloaded = await client.download_media(image_response.media, file=temp_path)
-                            logger.info("[IMAGE BOT Thread %s] Изображение успешно скачано: %s", thread_id, downloaded)
-                            return {
-                                "success": True,
-                                "image_path": downloaded,
-                                "model": "veo_photo",
-                                "cleanup_paths": [downloaded],
-                                "response_text": response_text,
-                            }
+                    async def _run_generation_attempt(mode_name: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+                        """Вернуть результат генерации или запрос на переключение режима."""
+                        mode_label = "SORA" if mode_name == "sora" else "Runway"
+                        if not await _select_image_mode(mode_name):
+                            return None, False
 
-                        direct_url = _extract_direct_image_url(response_text)
-                        if direct_url:
-                            logger.info("[IMAGE BOT Thread %s] Найдена прямая ссылка на изображение: %s", thread_id, direct_url)
-                            downloaded = _download_remote_image(direct_url)
-                            if not downloaded:
+                        logger.info("[IMAGE BOT Thread %s] Отправка промпта (%s): %s", thread_id, mode_label, prompt[:100])
+                        await conv.send_message(prompt)
+                        logger.info("[IMAGE BOT Thread %s] Промпт отправлен, ожидание изображения...", thread_id)
+
+                        followup_attempts = 6
+
+                        def _needs_runway_switch(resp_text: Optional[str], current_mode: str) -> bool:
+                            if current_mode != "sora" or not resp_text:
+                                return False
+                            normalized = resp_text.lower().replace("ё", "е")
+                            return "попробуйте еще раз" in normalized
+
+                        for attempt in range(followup_attempts):
+                            try:
+                                image_response = await conv.get_response(timeout=timeout)
+                            except asyncio.TimeoutError:
+                                logger.error("Бот не ответил с изображением в течение %s секунд", timeout)
+                                return None, False
+
+                            response_text = (image_response.raw_text or "").strip()
+                            if _needs_runway_switch(response_text, mode_name):
+                                logger.info(
+                                    "[IMAGE BOT Thread %s] Получено сообщение 'попробуйте еще раз', переключаемся на Runway",
+                                    thread_id
+                                )
+                                return None, True
+
+                            if response_text:
+                                logger.info(
+                                    "[IMAGE BOT Thread %s] Ответ бота (%s/%s): %s",
+                                    thread_id,
+                                    attempt + 1,
+                                    followup_attempts,
+                                    response_text[:120],
+                                )
+
+                            if image_response.media:
+                                fd, temp_path = tempfile.mkstemp(suffix=".png")
+                                os.close(fd)
+                                downloaded = await client.download_media(image_response.media, file=temp_path)
+                                logger.info("[IMAGE BOT Thread %s] Изображение успешно скачано: %s", thread_id, downloaded)
                                 return {
-                                    "success": False,
-                                    "error": f"Не удалось скачать изображение по ссылке: {direct_url}",
+                                    "success": True,
+                                    "image_path": downloaded,
+                                    "model": "veo_photo",
+                                    "cleanup_paths": [downloaded],
                                     "response_text": response_text,
-                                }
-                            return {
-                                "success": True,
-                                "image_path": downloaded,
-                                "model": "veo_photo",
-                                "cleanup_paths": [downloaded],
-                                "response_text": response_text,
-                            }
+                                }, False
 
-                        if response_text:
+                            direct_url = _extract_direct_image_url(response_text)
+                            if direct_url:
+                                logger.info("[IMAGE BOT Thread %s] Найдена прямая ссылка на изображение: %s", thread_id, direct_url)
+                                downloaded = _download_remote_image(direct_url)
+                                if not downloaded:
+                                    return {
+                                        "success": False,
+                                        "error": f"Не удалось скачать изображение по ссылке: {direct_url}",
+                                        "response_text": response_text,
+                                    }, False
+                                return {
+                                    "success": True,
+                                    "image_path": downloaded,
+                                    "model": "veo_photo",
+                                    "cleanup_paths": [downloaded],
+                                    "response_text": response_text,
+                                }, False
+
+                            if response_text:
+                                logger.info("[IMAGE BOT Thread %s] Ответ без изображения: %s", thread_id, response_text[:120])
+                            else:
+                                logger.info("[IMAGE BOT Thread %s] Получено пустое сообщение без медиа, ждем дальше", thread_id)
+
+                        logger.error("[IMAGE BOT Thread %s] Бот не прислал изображение после %s сообщений", thread_id, followup_attempts)
+                        return {"success": False, "error": "Bot did not send an image"}, False
+
+                    modes_queue: List[str] = ["sora"]
+                    runway_requested = False
+                    while modes_queue:
+                        current_mode = modes_queue.pop(0)
+                        result_payload, request_runway = await _run_generation_attempt(current_mode)
+                        if result_payload:
+                            return result_payload
+                        if request_runway and not runway_requested:
+                            runway_requested = True
+                            logger.info("[IMAGE BOT Thread %s] Переключаемся на режим Runway Frames", thread_id)
+                            modes_queue.append("runway")
                             continue
-
-                        logger.info("[IMAGE BOT Thread %s] Получено пустое сообщение без медиа, ждем дальше", thread_id)
-
-                    logger.error("[IMAGE BOT Thread %s] Бот не прислал изображение после %s сообщений", thread_id, followup_attempts)
-                    return {"success": False, "error": "Bot did not send an image"}
+                        if request_runway and runway_requested:
+                            logger.warning("[IMAGE BOT Thread %s] Повторный запрос Runway проигнорирован", thread_id)
+                    return None
 
             except asyncio.TimeoutError:
                 logger.error("Бот не ответил в течение %s секунд (conversation)", timeout)

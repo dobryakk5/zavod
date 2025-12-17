@@ -414,8 +414,8 @@ class Post(models.Model):
     hook_title = models.CharField(
         max_length=100,
         blank=True,
-        verbose_name="Цепляющий заголовок",
-        help_text="Короткий привлекательный заголовок для привлечения внимания"
+        verbose_name="Цепляющий заголовок (для фото)",
+        help_text="Короткий заголовок до 3 слов для нанесения на изображение"
     )
     text = models.TextField(blank=True)
     # пока без отдельной Media-модели – можно позже перейти на Wagtail Images/Documents

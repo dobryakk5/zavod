@@ -88,7 +88,7 @@ export function PostForm({ post, onSubmit, loading = false }: PostFormProps) {
           name="hook_title"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Цепляющий заголовок</FormLabel>
+              <FormLabel>Цепляющий заголовок (для фото)</FormLabel>
               <FormControl>
                 <Input
                   placeholder="Например: Это работает!"
@@ -96,7 +96,7 @@ export function PostForm({ post, onSubmit, loading = false }: PostFormProps) {
                   {...field}
                 />
               </FormControl>
-              <FormDescription>Короткий заголовок до 3 слов для привлечения внимания</FormDescription>
+              <FormDescription>Короткий заголовок до 3 слов, который наносится на изображение</FormDescription>
               <FormMessage />
             </FormItem>
           )}

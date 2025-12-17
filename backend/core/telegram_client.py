@@ -395,6 +395,54 @@ class TelegramPublisher:
             await self.client.disconnect()
             logger.info("Telegram publisher отключен")
 
+    def _extract_first_chunk(self, text: str, max_length: int) -> Tuple[str, str]:
+        """
+        Вернуть первую часть текста и остаток, стараясь завершить часть по границе предложения.
+
+        Args:
+            text: Исходный текст
+            max_length: Максимальная длина первой части
+
+        Returns:
+            Кортеж (первая часть, оставшийся текст)
+        """
+        normalized = (text or "").strip()
+        if not normalized:
+            return "", ""
+
+        if len(normalized) <= max_length:
+            return normalized, ""
+
+        search_window = normalized[:max_length + 1]
+        split_idx = -1
+
+        # Пытаемся найти границу предложения (., !, ?) с пробелом/переводом строки
+        sentence_breaks = list(re.finditer(r'(?<=[.!?])[\s\n]+', search_window))
+        if sentence_breaks:
+            split_idx = sentence_breaks[-1].start()
+
+        # Если не нашли, пробуем найти перевод строки или пробел
+        if split_idx <= 0:
+            for delimiter in ("\n\n", "\n", " "):
+                idx = search_window.rfind(delimiter)
+                if idx > 0:
+                    split_idx = idx
+                    break
+
+        # Фолбэк: отрезаем строго по лимиту
+        if split_idx <= 0:
+            split_idx = max_length
+
+        first_part = normalized[:split_idx].rstrip()
+        remainder = normalized[split_idx:].lstrip()
+
+        # Еще одна страховка от пустых сообщений
+        if not first_part:
+            first_part = normalized[:max_length].rstrip()
+            remainder = normalized[max_length:].lstrip()
+
+        return first_part, remainder
+
     def _split_text(self, text: str, max_length: int) -> List[str]:
         """
         Разделить длинный текст на части, не превышающие max_length.
@@ -516,9 +564,8 @@ class TelegramPublisher:
                 elif len(text) > MAX_CAPTION_LENGTH:
                     logger.info(f"Текст ({len(text)} символов) превышает лимит caption ({MAX_CAPTION_LENGTH}). Разделяем на два сообщения.")
 
-                    # 1. Отправляем медиа с коротким caption
-                    caption = text[:MAX_CAPTION_LENGTH]
-                    remaining_text = text[MAX_CAPTION_LENGTH:].strip()
+                    # 1. Отправляем медиа с caption, обрезанным по границе предложения
+                    caption, remaining_text = self._extract_first_chunk(text, MAX_CAPTION_LENGTH)
 
                     logger.info(f"Публикация поста с {media_type} в {channel} (caption: {len(caption)} символов)")
                     message = await self.client.send_file(
@@ -528,13 +575,13 @@ class TelegramPublisher:
                     )
                     message_ids.append(message.id)
 
-                    # 2. Отправляем остальной текст как отдельное сообщение
-                    # Разделяем на части, если нужно
-                    text_parts = self._split_text(remaining_text, MAX_MESSAGE_LENGTH)
-                    for part in text_parts:
-                        logger.info(f"Отправка продолжения текста ({len(part)} символов)")
-                        text_message = await self.client.send_message(channel, part)
-                        message_ids.append(text_message.id)
+                    # 2. Отправляем остальной текст как отдельные сообщения
+                    if remaining_text:
+                        text_parts = self._split_text(remaining_text, MAX_MESSAGE_LENGTH)
+                        for part in text_parts:
+                            logger.info(f"Отправка продолжения текста ({len(part)} символов)")
+                            text_message = await self.client.send_message(channel, part)
+                            message_ids.append(text_message.id)
                 else:
                     # Текст помещается в caption
                     logger.info(f"Публикация поста с {media_type} в {channel}")

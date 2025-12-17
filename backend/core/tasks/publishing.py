@@ -8,6 +8,24 @@ from ..telegram_client import TelegramPublisher, run_async_task
 logger = logging.getLogger(__name__)
 
 
+def _compose_post_text(post) -> str:
+    """Собрать текст для публикации, добавив заголовок перед основным текстом."""
+    if not getattr(post, "publish_text", False):
+        return ""
+
+    parts = []
+
+    title = (getattr(post, "title", "") or "").strip()
+    if title:
+        parts.append(title)
+
+    body = (getattr(post, "text", "") or "").strip()
+    if body:
+        parts.append(body)
+
+    return "\n\n".join(parts)
+
+
 def _update_post_status_after_publish(post):
     """
     Обновляет статус поста после успешной публикации.
@@ -116,7 +134,7 @@ def publish_schedule(schedule_id: int):
             )
 
             # Подготавливаем данные для публикации с учетом флагов
-            text = post.text if post.publish_text else ""
+            text = _compose_post_text(post)
             image_path = None
             video_path = None
 

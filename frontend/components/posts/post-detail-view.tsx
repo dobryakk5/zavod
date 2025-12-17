@@ -217,7 +217,7 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     try {
       const updatedPost = await postsApi.update(post.id, { hook_title: hookTitleDraft || '' });
       setPost(updatedPost);
-      toast.success('Цепляющий заголовок обновлен');
+      toast.success('Цепляющий заголовок (для фото) обновлен');
     } catch (err) {
       toast.error('Не удалось обновить цепляющий заголовок');
     } finally {
@@ -478,7 +478,7 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
             ))}
           </div>
           <div className="mt-3 text-base text-muted-foreground">
-            <span className="font-semibold block">Цепляющий заголовок:</span>
+            <span className="font-semibold block">Цепляющий заголовок (для фото):</span>
             {canEdit ? (
               <div className="mt-2 flex w-full flex-wrap items-center gap-2">
                 <Input
