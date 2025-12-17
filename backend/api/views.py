@@ -81,7 +81,7 @@ COOKIE_SAMESITE = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
 COOKIE_MAX_AGE = int(getattr(settings, "JWT_COOKIE_MAX_AGE", 60 * 60))  # 1 hour for access token
 REFRESH_COOKIE_MAX_AGE = int(getattr(settings, "JWT_REFRESH_COOKIE_MAX_AGE", 60 * 60 * 24 * 7))
 MAX_WEEKLY_POSTS = 21
-VK_SCOPE = "wall,photos,groups,offline"
+VK_SCOPE = "wall,photos,groups"
 VK_TIMEOUT = 15
 MEDIA_GENERATION_COOLDOWN = timedelta(hours=1)
 
