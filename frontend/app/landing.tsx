@@ -29,7 +29,7 @@ export default function SolarLabLanding() {
           <a href="#services" className="text-sm text-gray-700 hover:underline">Услуги</a>
           <a href="#process" className="text-sm text-gray-700 hover:underline">Как мы работаем</a>
           <a href="#demos" className="text-sm text-gray-700 hover:underline">Демонстрации</a>
-          <a href="#pricing" className="text-sm text-gray-700 hover:underline">Прайс</a>
+          <a href="#pricing" className="text-sm text-gray-700 hover:underline">Пакеты</a>
           <Link href="/login" className="ml-4 inline-flex items-center px-4 py-2 border border-gray-200 rounded-md text-sm font-medium hover:shadow focus:outline-none">
             Личный кабинет
           </Link>
@@ -217,9 +217,9 @@ export default function SolarLabLanding() {
           <p className="mt-2 text-gray-600">Простые пакеты для быстрого старта и масштабирования.</p>
 
           <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-            <PriceCard name="Start" price="900–1200€ / мес" bullets={["Генерация контента","Демо‑пакет","Минимал поддержка"]} />
-            <PriceCard name="Growth" price="1500–2500€ / мес" bullets={["Контент + ведение","A/B тесты","SEO базовый"]} important />
-            <PriceCard name="Pro Lab" price="3000–5000€ / мес" bullets={["Полный pipeline","Автоматизация","Полный SMM + анализ"]} />
+            <PriceCard name="Demo"  bullets={["Генерация контента","Демо‑пакет","Минимал поддержка"]} />
+            <PriceCard name="Growth"  bullets={["Контент + ведение","A/B тесты","SEO базовый"]} important />
+            <PriceCard name="Pro Lab" bullets={["Полный pipeline","Автоматизация","маркетинг+продажи"]} />
           </div>
         </section>
 
@@ -245,11 +245,11 @@ export default function SolarLabLanding() {
           <div className="flex gap-8 text-sm text-gray-600">
             <div>
               <div className="font-semibold">Услуги</div>
-              <div className="mt-2">AI-контент<br/>SMM<br/>Аналитика</div>
+              <div className="mt-2">AI-контент<br/>Маркетинг<br/>Аналитика</div>
             </div>
             <div>
               <div className="font-semibold">Контакты</div>
-              <div className="mt-2">hello@solarlab.media<br/>Telegram: @solarlab_bot</div>
+              <div className="mt-2">hello@solarlab.media<br/>Telegram: @sol_lab_bot</div>
             </div>
           </div>
         </div>
@@ -284,11 +284,10 @@ function ProcessStep({ num, title, desc }: { num: number; title: string; desc: s
   );
 }
 
-function PriceCard({ name, price, bullets, important }: { name: string; price: string; bullets: string[]; important?: boolean }) {
+function PriceCard({ name, bullets, important }: { name: string; bullets: string[]; important?: boolean }) {
   return (
     <div className={`p-6 rounded-lg border ${important ? "border-yellow-300 bg-yellow-50" : "border-gray-100"}`}>
       <div className="font-semibold text-lg">{name}</div>
-      <div className="mt-2 text-2xl font-bold">{price}</div>
       <ul className="mt-4 text-gray-600 space-y-2">
         {bullets.map((b) => (
           <li key={b} className="flex items-start gap-2">
@@ -298,7 +297,7 @@ function PriceCard({ name, price, bullets, important }: { name: string; price: s
         ))}
       </ul>
       <div className="mt-6">
-        <a href="#" className={`inline-block w-full text-center px-4 py-2 rounded-md ${important ? "bg-black text-white" : "border border-gray-200"}`}>Выбрать</a>
+        <a href="#" className={`inline-block w-full text-center px-4 py-2 rounded-md ${important ? "bg-black text-white" : "border border-gray-200"}`}>Попробовать</a>
       </div>
     </div>
   );
