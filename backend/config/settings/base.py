@@ -22,6 +22,8 @@ DEFAULT_ALLOWED_HOSTS = [
     "0.0.0.0",
     "solarlab.media",
     "adm.solarlab.media",
+    "fibonatty.ru",
+    "adm.fibonatty.ru",
 ]
 
 def _parse_hosts(hosts_value: str) -> list[str]:
@@ -142,7 +144,7 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-WAGTAIL_SITE_NAME = "Content Factory"
+WAGTAIL_SITE_NAME = "Content Marketing"
 
 # URL, по которому ты заходишь в админку
 WAGTAILADMIN_BASE_URL = "http://localhost:8000"
@@ -205,7 +207,7 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
 # VK integration defaults (override in env for production)
 VK_CLIENT_ID = os.getenv("VK_CLIENT_ID", "")
 VK_CLIENT_SECRET = os.getenv("VK_CLIENT_SECRET", "")
-VK_REDIRECT_URI = os.getenv("VK_REDIRECT_URI", "http://localhost:4000/api/vk/callback/")
+VK_REDIRECT_URI = os.getenv("VK_REDIRECT_URI", "http://localhost:8000/api/vk/callback/")
 VK_API_VERSION = os.getenv("VK_API_VERSION", "5.131")
 
 # Telegram API Settings (системные credentials для всех клиентов)

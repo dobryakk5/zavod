@@ -13,14 +13,14 @@ export default function SolarLabLanding() {
           <div className="flex items-center gap-3">
             <Image
               src="/solarlab-logo.png"
-              alt="SolarLab AI"
+              alt="Fibonatty"
               width={40}
               height={40}
               className="h-10 w-10 object-contain"
               priority
             />
             <div>
-              <div className="text-lg font-semibold">SolarLab</div>
+              <div className="text-lg font-semibold">Fibonatty</div>
             </div>
           </div>
         </div>
@@ -76,7 +76,7 @@ export default function SolarLabLanding() {
             <div className="relative w-full h-80 rounded-2xl overflow-hidden border border-gray-100 shadow-lg">
               <Image
                 src="/fist_screen.jpg"
-                alt="SolarLab контент для первого экрана"
+                alt="Fibonatty контент для первого экрана"
                 fill
                 priority
                 sizes="(min-width: 1024px) 480px, (min-width: 768px) 60vw, 90vw"
@@ -239,8 +239,8 @@ export default function SolarLabLanding() {
       <footer className="w-full mt-12 border-t">
         <div className="max-w-6xl mx-auto px-6 py-8 flex flex-col md:flex-row justify-between items-start gap-6">
           <div>
-            <div className="text-lg font-semibold">SolarLab</div>
-            <div className="text-sm text-gray-600 mt-1">Media · AI Lab</div>
+            <div className="text-lg font-semibold">Fibonatty</div>
+            <div className="text-sm text-gray-600 mt-1">Marketing · AI Lab</div>
           </div>
           <div className="flex gap-8 text-sm text-gray-600">
             <div>
@@ -249,7 +249,7 @@ export default function SolarLabLanding() {
             </div>
             <div>
               <div className="font-semibold">Контакты</div>
-              <div className="mt-2">hello@solarlab.media<br/>Telegram: @sol_lab_bot</div>
+              <div className="mt-2">hello@Fibonatty.ru<br/>Telegram: @Fibonatty_bot</div>
             </div>
           </div>
         </div>
