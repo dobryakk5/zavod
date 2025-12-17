@@ -29,6 +29,19 @@ DEFAULT_ALLOWED_HOSTS = [
 def _parse_hosts(hosts_value: str) -> list[str]:
     return [host.strip() for host in hosts_value.split(",") if host.strip()]
 
+def _hosts_to_origins(hosts: list[str]) -> list[str]:
+    origins: list[str] = []
+    for host in hosts:
+        value = host.strip()
+        if not value:
+            continue
+        if value.startswith(("http://", "https://")):
+            origins.append(value)
+        else:
+            scheme = "http" if value.startswith(("localhost", "127.", "0.0.0.0")) else "https"
+            origins.append(f"{scheme}://{value}")
+    return origins
+
 env_allowed_hosts_raw = os.getenv("ALLOWED_HOSTS")
 if env_allowed_hosts_raw:
     parsed_hosts = _parse_hosts(env_allowed_hosts_raw)
@@ -37,8 +50,10 @@ if env_allowed_hosts_raw:
     else:
         # Append defaults to ensure production domains (adm.solarlab.media, etc.) always whitelisted
         ALLOWED_HOSTS = list(dict.fromkeys(parsed_hosts + DEFAULT_ALLOWED_HOSTS))
+    _env_allowed_hosts_list = parsed_hosts
 else:
     ALLOWED_HOSTS = DEFAULT_ALLOWED_HOSTS
+    _env_allowed_hosts_list = []
 
 INSTALLED_APPS = [
     # Django
@@ -185,14 +200,16 @@ SIMPLE_JWT = {
 }
 
 # CORS / CSRF settings
-DEFAULT_CLIENT_ORIGINS = ",".join(
-    [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://solarlab.media",
-        "https://adm.solarlab.media",
-    ]
-)
+_DEFAULT_CLIENT_ORIGINS_BASE = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://solarlab.media",
+    "https://adm.solarlab.media",
+    "https://fibonatty.ru",
+    "https://adm.fibonatty.ru",
+]
+_DEFAULT_CLIENT_ORIGINS = _DEFAULT_CLIENT_ORIGINS_BASE + _hosts_to_origins(_env_allowed_hosts_list)
+DEFAULT_CLIENT_ORIGINS = ",".join(list(dict.fromkeys(_DEFAULT_CLIENT_ORIGINS)))
 
 CORS_ALLOWED_ORIGINS = os.getenv(
     "CORS_ALLOWED_ORIGINS",
