@@ -3,6 +3,16 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
   Table,
   TableBody,
   TableCell,
@@ -12,12 +22,10 @@ import {
 } from '@/components/ui/table';
 import { socialAccountsApi } from '@/lib/api/socialAccounts';
 import { clientApi } from '@/lib/api/client';
-import { vkApi } from '@/lib/api/vk';
-import { VkConnectButton } from '@/components/vk/vk-connect-button';
 import { useRole } from '@/lib/hooks';
 import { toast } from 'sonner';
 import { Edit, ExternalLink, Plus, Trash2 } from 'lucide-react';
-import type { Platform, SocialAccount, VkIntegration } from '@/lib/types';
+import type { Platform, SocialAccount } from '@/lib/types';
 
 type RowLink = {
   label: string;
@@ -30,9 +38,7 @@ type TableRowData = {
   platformLabel: string;
   name: string;
   link: RowLink | null;
-  source: 'social' | 'vk';
   socialAccount?: SocialAccount;
-  vkIntegration?: VkIntegration;
   isPlaceholder?: boolean;
 };
 
@@ -101,23 +107,6 @@ const getSocialAccountLink = (account: SocialAccount): RowLink | null => {
   return null;
 };
 
-const getVkIntegrationLink = (integration: VkIntegration): RowLink | null => {
-  const slug = integration.screen_name
-    ? integration.screen_name.replace(/^@/, '')
-    : integration.group_id
-    ? `club${integration.group_id}`
-    : null;
-
-  if (!slug) {
-    return null;
-  }
-
-  return {
-    label: `vk.com/${slug}`,
-    url: `https://vk.com/${slug}`,
-  };
-};
-
 const normalizeTelegramChannel = (rawValue: string): string => {
   let candidate = rawValue.trim();
   candidate = candidate.replace(/^https?:\/\//i, '');
@@ -132,18 +121,16 @@ const normalizeTelegramChannel = (rawValue: string): string => {
 export function SocialAccountsManager() {
   const { canEdit } = useRole();
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
-  const [vkIntegrations, setVkIntegrations] = useState<VkIntegration[]>([]);
   const [loading, setLoading] = useState(true);
+  const [channelDialogMode, setChannelDialogMode] = useState<'add' | 'edit' | null>(null);
+  const [channelDialogValue, setChannelDialogValue] = useState('');
+  const [channelDialogLoading, setChannelDialogLoading] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [accountsData, vkData] = await Promise.all([
-        socialAccountsApi.list(),
-        vkApi.listIntegrations(),
-      ]);
+      const accountsData = await socialAccountsApi.list();
       setAccounts(accountsData);
-      setVkIntegrations(vkData);
     } catch (error) {
       console.error(error);
       toast.error('Не удалось загрузить социальные аккаунты');
@@ -156,106 +143,122 @@ export function SocialAccountsManager() {
     loadData();
   }, [loadData]);
 
-  const handleAddAccount = async (platform?: Platform) => {
-    if (!canEdit) {
-      return;
-    }
+  const isChannelDialogOpen = channelDialogMode !== null;
+  const isChannelDialogEditMode = channelDialogMode === 'edit';
 
-    let targetPlatform = platform;
-    if (!targetPlatform) {
-      const choice = prompt('Укажите платформу (telegram, instagram, youtube)');
-      if (!choice) {
-        return;
-      }
-      const normalizedChoice = choice.trim().toLowerCase() as Platform;
-      if (!PLATFORM_LABELS[normalizedChoice]) {
-        toast.error('Неизвестная платформа');
-        return;
-      }
-      targetPlatform = normalizedChoice;
-    }
+  const closeChannelDialog = () => {
+    setChannelDialogMode(null);
+    setChannelDialogValue('');
+    setChannelDialogLoading(false);
+  };
 
-    if (targetPlatform === 'vkontakte') {
-      toast.info('Используйте кнопку VK для подключения группы.');
-      return;
-    }
-
-    const defaultName =
-      targetPlatform === 'telegram' ? '@example_channel' : `${PLATFORM_LABELS[targetPlatform]} аккаунт`;
-    const nameOrHandle = prompt('Введите название или ссылку на канал', defaultName);
-    if (!nameOrHandle) {
-      return;
-    }
-    const trimmedValue = nameOrHandle.trim();
-    if (!trimmedValue) {
-      toast.error('Пустое значение');
-      return;
-    }
-
-    let preparedName = trimmedValue;
-    const extra: Record<string, unknown> = { source: 'manual' };
-
-    if (targetPlatform === 'telegram') {
-      const channel = normalizeTelegramChannel(trimmedValue);
-      if (!channel) {
-        toast.error('Введите корректный Telegram канал');
-        return;
-      }
-      extra.channel = channel;
-      preparedName = channel;
-    } else {
-      extra.url = trimmedValue;
-    }
-
-    try {
-      await socialAccountsApi.create({
-        platform: targetPlatform,
-        name: preparedName,
-        access_token: '',
-        extra,
-      });
-      toast.success('Аккаунт добавлен');
-      await loadData();
-    } catch (error) {
-      console.error(error);
-      toast.error('Не удалось создать аккаунт');
+  const handleChannelDialogOpenChange = (open: boolean) => {
+    if (!open && !channelDialogLoading) {
+      closeChannelDialog();
     }
   };
 
-  const handleEditRow = async (row: TableRowData) => {
+  const handleAddTelegramAccount = () => {
+    if (!canEdit) {
+      return;
+    }
+    setChannelDialogMode('add');
+    setChannelDialogValue('');
+  };
+
+  const handleEditRow = (row: TableRowData) => {
     if (!canEdit || row.isPlaceholder) {
       return;
     }
 
-    if (row.source === 'social' && row.socialAccount?.platform === 'telegram') {
+    if (row.socialAccount?.platform === 'telegram') {
       const extra = row.socialAccount.extra as Record<string, unknown> | undefined;
       const currentChannel = getExtraString(extra, 'channel') ?? '';
-      const newChannel = prompt('Укажите Telegram канал для публикаций', currentChannel) ?? undefined;
-      if (newChannel === undefined) {
-        return;
-      }
-      try {
-        const payload = newChannel.trim();
-        await clientApi.updateSettings({ telegram_client_channel: payload });
-        toast.success(payload ? 'Telegram канал обновлен' : 'Канал очищен');
-        await loadData();
-      } catch (error) {
-        console.error(error);
-        toast.error('Не удалось сохранить Telegram канал');
-      }
+      setChannelDialogMode('edit');
+      setChannelDialogValue(currentChannel);
       return;
     }
 
     toast.info(`Редактирование настроек для ${row.platformLabel} появится позже`);
   };
 
-  const handleDeleteSocialAccount = async (accountId?: number) => {
-    if (!canEdit || !accountId || !confirm('Удалить этот социальный аккаунт?')) {
+  const handleChannelDialogSubmit = async (event?: React.FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
+    if (!channelDialogMode || !canEdit || channelDialogLoading) {
+      return;
+    }
+
+    const trimmedValue = channelDialogValue.trim();
+
+    if (channelDialogMode === 'add') {
+      if (!trimmedValue) {
+        toast.error('Введите Telegram канал');
+        return;
+      }
+
+      const channel = normalizeTelegramChannel(trimmedValue);
+      if (!channel) {
+        toast.error('Введите корректный Telegram канал');
+        return;
+      }
+
+      setChannelDialogLoading(true);
+      try {
+        await socialAccountsApi.create({
+          platform: 'telegram',
+          name: channel,
+          access_token: '',
+          extra: { source: 'manual', channel },
+        });
+        toast.success('Аккаунт добавлен');
+        await loadData();
+        closeChannelDialog();
+      } catch (error) {
+        console.error(error);
+        toast.error('Не удалось создать аккаунт');
+      } finally {
+        setChannelDialogLoading(false);
+      }
+      return;
+    }
+
+    setChannelDialogLoading(true);
+    try {
+      await clientApi.updateSettings({ telegram_client_channel: trimmedValue });
+      toast.success(trimmedValue ? 'Telegram канал обновлен' : 'Канал очищен');
+      await loadData();
+      closeChannelDialog();
+    } catch (error) {
+      console.error(error);
+      toast.error('Не удалось сохранить Telegram канал');
+    } finally {
+      setChannelDialogLoading(false);
+    }
+  };
+
+  const handleDeleteSocialAccount = async (account?: SocialAccount) => {
+    if (!canEdit || !account || !confirm('Удалить этот социальный аккаунт?')) {
+      return;
+    }
+
+    const extra = account.extra as Record<string, unknown> | undefined;
+    const source = typeof extra?.source === 'string' ? extra.source : undefined;
+    const isClientSettingsTelegram = account.platform === 'telegram' && source === 'client_settings';
+
+    if (isClientSettingsTelegram) {
+      try {
+        await clientApi.updateSettings({ telegram_client_channel: '' });
+        toast.success('Telegram канал отключен');
+        await loadData();
+      } catch (error) {
+        console.error(error);
+        toast.error('Не удалось отключить Telegram канал');
+      }
       return;
     }
 
     try {
-      await socialAccountsApi.delete(accountId);
+      await socialAccountsApi.delete(account.id);
       toast.success('Аккаунт удален');
       await loadData();
     } catch (error) {
@@ -264,25 +267,9 @@ export function SocialAccountsManager() {
     }
   };
 
-  const handleDeleteVkIntegration = async (integration?: VkIntegration) => {
-    if (!canEdit || !integration) {
-      return;
-    }
-    if (!confirm('Отключить эту группу VK?')) {
-      return;
-    }
-    try {
-      await vkApi.deleteIntegration(integration.id);
-      toast.success('Группа VK отключена');
-      await loadData();
-    } catch (error) {
-      console.error(error);
-      toast.error('Не удалось отключить группу VK');
-    }
-  };
-
   const rows: TableRowData[] = useMemo(() => {
-    const socialRows: TableRowData[] = accounts.map((account) => {
+    const filteredAccounts = accounts.filter((account) => account.platform !== 'vkontakte');
+    const socialRows: TableRowData[] = filteredAccounts.map((account) => {
       const extra = account.extra as Record<string, unknown> | undefined;
       const displayName =
         account.platform === 'telegram'
@@ -295,12 +282,11 @@ export function SocialAccountsManager() {
         platformLabel: PLATFORM_LABELS[account.platform] ?? account.platform,
         name: displayName,
         link: getSocialAccountLink(account),
-        source: 'social',
         socialAccount: account,
       };
     });
 
-    const platformsReferenced = new Set(socialRows.map((row) => row.platformKey));
+    const platformsReferenced = new Set(filteredAccounts.map((account) => account.platform));
 
     if (!platformsReferenced.has('telegram')) {
       socialRows.push({
@@ -309,38 +295,12 @@ export function SocialAccountsManager() {
         platformLabel: PLATFORM_LABELS.telegram,
         name: 'Не подключено',
         link: null,
-        source: 'social',
         isPlaceholder: true,
       });
     }
 
-    if (vkIntegrations.length === 0) {
-      return [
-        ...socialRows,
-        {
-          id: 'vk-placeholder',
-          platformKey: 'vkontakte',
-          platformLabel: PLATFORM_LABELS.vkontakte,
-          name: 'Не подключено',
-          link: null,
-          source: 'vk',
-          isPlaceholder: true,
-        },
-      ];
-    }
-
-    const vkRows: TableRowData[] = vkIntegrations.map((integration) => ({
-      id: `vk-${integration.id}`,
-      platformKey: 'vkontakte',
-      platformLabel: PLATFORM_LABELS.vkontakte,
-      name: integration.group_name || `Группа #${integration.group_id}`,
-      link: getVkIntegrationLink(integration),
-      source: 'vk',
-      vkIntegration: integration,
-    }));
-
-    return [...socialRows, ...vkRows];
-  }, [accounts, vkIntegrations]);
+    return socialRows;
+  }, [accounts]);
 
   return (
     <section className="space-y-4">
@@ -348,19 +308,14 @@ export function SocialAccountsManager() {
         <div>
           <h2 className="text-2xl font-bold">Социальные аккаунты</h2>
           <p className="text-sm text-muted-foreground">
-            Управляйте каналами для публикаций. Сейчас поддерживаются Telegram и VKontakte.
+            Управляйте каналами для публикаций. Сейчас поддерживается только Telegram.
           </p>
         </div>
         {canEdit && (
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={() => loadData()} disabled={loading}>
-              Обновить список
-            </Button>
-            <Button size="sm" onClick={() => handleAddAccount()}>
-              <Plus className="h-4 w-4 mr-2" />
-              Добавить аккаунт
-            </Button>
-          </div>
+          <Button size="sm" onClick={handleAddTelegramAccount}>
+            <Plus className="h-4 w-4 mr-2" />
+            Добавить аккаунт
+          </Button>
         )}
       </div>
 
@@ -405,21 +360,12 @@ export function SocialAccountsManager() {
                 <TableCell className="text-right">
                   {canEdit ? (
                     <div className="flex justify-end gap-2">
-                      {row.platformKey === 'vkontakte' ? (
-                        <VkConnectButton
-                          onConnected={loadData}
-                          variant="ghost"
-                          size="icon"
-                          className="border border-transparent hover:border-muted"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </VkConnectButton>
-                      ) : (
+                      {row.platformKey === 'telegram' && (
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          onClick={() => handleAddAccount(row.platformKey)}
+                          onClick={handleAddTelegramAccount}
                         >
                           <Plus className="h-4 w-4" />
                         </Button>
@@ -437,13 +383,7 @@ export function SocialAccountsManager() {
                         type="button"
                         variant="ghost"
                         size="icon"
-                        onClick={() => {
-                          if (row.source === 'vk') {
-                            handleDeleteVkIntegration(row.vkIntegration);
-                          } else {
-                            handleDeleteSocialAccount(row.socialAccount?.id);
-                          }
-                        }}
+                        onClick={() => handleDeleteSocialAccount(row.socialAccount)}
                         disabled={row.isPlaceholder}
                       >
                         <Trash2 className="h-4 w-4 text-red-500" />
@@ -458,6 +398,51 @@ export function SocialAccountsManager() {
           </TableBody>
         </Table>
       )}
+
+      <Dialog open={isChannelDialogOpen} onOpenChange={handleChannelDialogOpenChange}>
+        <DialogContent className="sm:max-w-md bg-white text-gray-900 dark:bg-white dark:text-gray-900 dark:border-gray-200">
+          <DialogHeader>
+            <DialogTitle>
+              {isChannelDialogEditMode ? 'Настроить Telegram канал' : 'Добавить Telegram канал'}
+            </DialogTitle>
+            <DialogDescription>
+              {isChannelDialogEditMode
+                ? 'Укажите основной Telegram канал, который будет использоваться для публикаций.'
+                : 'Введите @username или ссылку на Telegram канал для публикаций.'}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleChannelDialogSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="telegram-channel-input">Telegram канал</Label>
+              <Input
+                id="telegram-channel-input"
+                placeholder="@example_channel"
+                autoFocus
+                value={channelDialogValue}
+                onChange={(event) => setChannelDialogValue(event.target.value)}
+                disabled={channelDialogLoading}
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={closeChannelDialog}
+                disabled={channelDialogLoading}
+              >
+                Отмена
+              </Button>
+              <Button type="submit" disabled={channelDialogLoading}>
+                {channelDialogLoading
+                  ? 'Сохраняем...'
+                  : isChannelDialogEditMode
+                    ? 'Сохранить'
+                    : 'Добавить'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

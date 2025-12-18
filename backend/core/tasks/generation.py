@@ -772,7 +772,7 @@ def generate_posts_with_videos_from_seo_keyword_set(
     session_name = os.getenv("VEO_SESSION_NAME")
     if session_name:
         video_options["session_name"] = session_name
-    max_attempts_per_video = max(1, int(os.getenv("VEO_VIDEO_MAX_ATTEMPTS", "3")))
+    max_attempts_per_video = max(1, int(os.getenv("VEO_VIDEO_MAX_ATTEMPTS", "2")))
 
     def _video_worker():
         nonlocal video_saved, video_attempts
@@ -1138,7 +1138,7 @@ def _generate_videos_for_single_post(
         "errors": [],
     }
     videos_per_post = max(1, int(videos_per_post))
-    max_attempts = max(1, int(max_attempts))
+    max_attempts = max(1, min(2, int(max_attempts)))
 
     extra_instructions = ""
     base_instructions = None
@@ -1174,6 +1174,89 @@ def _generate_videos_for_single_post(
         for idx in prompts
     }
     pending = set(prompts.keys())
+    normalized_method = (video_method or "").strip().lower()
+    parallel_limit = 2 if normalized_method == "veo" else None
+
+    def _cleanup_temp_files(main_path: Optional[str], extra_paths: List[str]):
+        if main_path and os.path.exists(main_path):
+            try:
+                os.remove(main_path)
+            except OSError:
+                pass
+        for temp_path in extra_paths:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+    def _process_generation_result(idx: int, attempt_no: int, result: Dict[str, Any]):
+        stats["attempts"] += 1
+        cleanup_paths = result.get("cleanup_paths") or []
+        video_path = result.get("video_path")
+        try:
+            if result.get("success") and video_path and os.path.exists(video_path):
+                try:
+                    filename = f"post_{post.id}_{uuid.uuid4().hex[:8]}.mp4"
+                    with open(video_path, "rb") as video_file:
+                        post_video = PostVideo(
+                            post=post,
+                            order=post.videos.count(),
+                            caption=(prompts[idx] or post.title or "")[:255],
+                        )
+                        post_video.video.save(filename, File(video_file), save=True)
+                    stats["saved"] += 1
+                    video_state[idx]["success"] = True
+                    pending.discard(idx)
+                    logger.info(
+                        "[%s] Видео %s/%s для поста %s сохранено",
+                        log_prefix,
+                        idx,
+                        videos_per_post,
+                        post.id
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "[%s] Ошибка сохранения видео для поста %s: %s",
+                        log_prefix,
+                        post.id,
+                        exc,
+                        exc_info=True
+                    )
+                    stats["errors"].append({
+                        "post_id": post.id,
+                        "video_index": idx,
+                        "error": str(exc),
+                        "prompt_start": (prompts[idx] or "")[:120],
+                    })
+            else:
+                error_message = result.get("error") or "Видео не получено"
+                logger.warning(
+                    "[%s] Неудачная генерация видео %s/%s для поста %s: %s",
+                    log_prefix,
+                    idx,
+                    videos_per_post,
+                    post.id,
+                    error_message
+                )
+
+                if video_state[idx]["attempts"] >= max_attempts:
+                    stats["errors"].append({
+                        "post_id": post.id,
+                        "video_index": idx,
+                        "error": f"video_failed_after_{max_attempts}_attempts",
+                        "prompt_start": (prompts[idx] or "")[:120],
+                    })
+                    logger.error(
+                        "[%s] Не удалось получить видео %s/%s для поста %s",
+                        log_prefix,
+                        idx,
+                        videos_per_post,
+                        post.id
+                    )
+                    pending.discard(idx)
+        finally:
+            _cleanup_temp_files(video_path, cleanup_paths)
 
     def _run_video_generation(prompt_text: str) -> Dict[str, Any]:
         try:
@@ -1190,15 +1273,41 @@ def _generate_videos_for_single_post(
         batch = [idx for idx in pending if video_state[idx]["attempts"] < max_attempts]
         if not batch:
             break
-
         max_workers = len(batch)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {}
+        if parallel_limit is not None:
+            max_workers = min(max_workers, parallel_limit)
+        run_in_parallel = len(batch) > 1 and max_workers > 1
+        if run_in_parallel:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {}
+                for idx in batch:
+                    video_state[idx]["attempts"] += 1
+                    attempt_no = video_state[idx]["attempts"]
+                    logger.info(
+                        "[%s] Генерация видео %s/%s для поста %s (параллельная попытка %s/%s)",
+                        log_prefix,
+                        idx,
+                        videos_per_post,
+                        post.id,
+                        attempt_no,
+                        max_attempts
+                    )
+                    future = executor.submit(_run_video_generation, prompts[idx])
+                    future_map[future] = (idx, attempt_no)
+
+                for future in as_completed(future_map):
+                    idx, attempt_no = future_map[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        result = {"success": False, "error": str(exc), "cleanup_paths": []}
+                    _process_generation_result(idx, attempt_no, result)
+        else:
             for idx in batch:
                 video_state[idx]["attempts"] += 1
                 attempt_no = video_state[idx]["attempts"]
                 logger.info(
-                    "[%s] Генерация видео %s/%s для поста %s (параллельная попытка %s/%s)",
+                    "[%s] Генерация видео %s/%s для поста %s (последовательная попытка %s/%s)",
                     log_prefix,
                     idx,
                     videos_per_post,
@@ -1206,99 +1315,11 @@ def _generate_videos_for_single_post(
                     attempt_no,
                     max_attempts
                 )
-                future = executor.submit(_run_video_generation, prompts[idx])
-                future_map[future] = (idx, attempt_no)
-
-            for future in as_completed(future_map):
-                idx, attempt_no = future_map[future]
-                stats["attempts"] += 1
                 try:
-                    result = future.result()
+                    result = _run_video_generation(prompts[idx])
                 except Exception as exc:
                     result = {"success": False, "error": str(exc), "cleanup_paths": []}
-                cleanup_paths = result.get("cleanup_paths") or []
-                video_path = result.get("video_path")
-
-                if result.get("success") and video_path and os.path.exists(video_path):
-                    try:
-                        filename = f"post_{post.id}_{uuid.uuid4().hex[:8]}.mp4"
-                        with open(video_path, "rb") as video_file:
-                            post_video = PostVideo(
-                                post=post,
-                                order=post.videos.count(),
-                                caption=(prompts[idx] or post.title or "")[:255],
-                            )
-                            post_video.video.save(filename, File(video_file), save=True)
-                        stats["saved"] += 1
-                        video_state[idx]["success"] = True
-                        pending.discard(idx)
-                        logger.info(
-                            "[%s] Видео %s/%s для поста %s сохранено",
-                            log_prefix,
-                            idx,
-                            videos_per_post,
-                            post.id
-                        )
-                    except Exception as exc:
-                        logger.error(
-                            "[%s] Ошибка сохранения видео для поста %s: %s",
-                            log_prefix,
-                            post.id,
-                            exc,
-                            exc_info=True
-                        )
-                        stats["errors"].append({
-                            "post_id": post.id,
-                            "video_index": idx,
-                            "error": str(exc),
-                            "prompt_start": (prompts[idx] or "")[:120],
-                        })
-                    finally:
-                        if os.path.exists(video_path):
-                            try:
-                                os.remove(video_path)
-                            except OSError:
-                                pass
-                        for extra_path in cleanup_paths:
-                            if extra_path and os.path.exists(extra_path):
-                                try:
-                                    os.remove(extra_path)
-                                except OSError:
-                                    pass
-                else:
-                    error_message = result.get("error") or "Видео не получено"
-                    logger.warning(
-                        "[%s] Неудачная генерация видео %s/%s для поста %s: %s",
-                        log_prefix,
-                        idx,
-                        videos_per_post,
-                        post.id,
-                        error_message
-                    )
-                    for extra_path in cleanup_paths:
-                        if extra_path and os.path.exists(extra_path):
-                            try:
-                                os.remove(extra_path)
-                            except OSError:
-                                pass
-
-                    if video_state[idx]["attempts"] >= max_attempts:
-                        stats["errors"].append({
-                            "post_id": post.id,
-                            "video_index": idx,
-                            "error": f"video_failed_after_{max_attempts}_attempts",
-                            "prompt_start": (prompts[idx] or "")[:120],
-                        })
-                        logger.error(
-                            "[%s] Не удалось получить видео %s/%s для поста %s",
-                            log_prefix,
-                            idx,
-                            videos_per_post,
-                            post.id
-                        )
-                        pending.discard(idx)
-
-    return stats
+                _process_generation_result(idx, attempt_no, result)
 
     return stats
 
@@ -1521,33 +1542,56 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
         result: Dict[str, Any] = {}
         final_image_path: Optional[str] = None
 
+        def _run_image_generation() -> Dict[str, Any]:
+            attempts = 0
+            last_result: Dict[str, Any] = {}
+            while attempts < 2:
+                attempts += 1
+                if generation_method == "veo_photo":
+                    from ..foto_video_gen import generate_image_from_telegram_bot
+
+                    bot_username = "syntxaibot"
+                    session_name = "telegram_sessions/session_collector_client_3"
+
+                    result_local = generate_image_from_telegram_bot(
+                        prompt=image_prompt,
+                        bot_username=bot_username,
+                        session_name=session_name,
+                        timeout=os.getenv("IMAGE_BOT_TIMEOUT") or os.getenv("VEO_TIMEOUT") or 300,
+                        api_id=os.getenv("TELEGRAM_API_ID"),
+                        api_hash=os.getenv("TELEGRAM_API_HASH")
+                    )
+                else:
+                    model_for_generator_local = "openrouter" if generation_method == "openrouter" else generation_method
+                    result_local = generator.generate_image(
+                        prompt=image_prompt,
+                        output_path=temp_image_path,
+                        model=model_for_generator_local
+                    )
+                last_result = result_local
+                if result_local.get("success"):
+                    return result_local
+                logger.warning(
+                    "Попытка генерации изображения %s/%s завершилась ошибкой: %s",
+                    attempts,
+                    2,
+                    result_local.get("error")
+                )
+                if attempts >= 2:
+                    break
+                # Очистка перед повтором
+                for path in cleanup_paths:
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                cleanup_paths.clear()
+
+            return last_result
+
+        result = _run_image_generation()
         if generation_method == "veo_photo":
-            from ..foto_video_gen import generate_image_from_telegram_bot
-
-            # Используем бота syntxaibot для VEO фото (как и для видео)
-            bot_username = "syntxaibot"
-
-            # Используем общую сессию telegram_sessions/session_collector_client_3
-            session_name = "telegram_sessions/session_collector_client_3"
-
-            result = generate_image_from_telegram_bot(
-                prompt=image_prompt,
-                bot_username=bot_username,
-                session_name=session_name,
-                timeout=os.getenv("IMAGE_BOT_TIMEOUT") or os.getenv("VEO_TIMEOUT") or 300,
-                api_id=os.getenv("TELEGRAM_API_ID"),
-                api_hash=os.getenv("TELEGRAM_API_HASH")
-            )
             final_image_path = result.get("image_path")
             cleanup_paths.update(result.get("cleanup_paths") or [])
         else:
-            # Для openrouter и giga_photo используем generator.generate_image
-            model_for_generator = "openrouter" if generation_method == "openrouter" else generation_method
-            result = generator.generate_image(
-                prompt=image_prompt,
-                output_path=temp_image_path,
-                model=model_for_generator
-            )
             final_image_path = temp_image_path
             cleanup_paths.add(temp_image_path)
 

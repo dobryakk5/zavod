@@ -404,8 +404,16 @@ class SocialAccountSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at"]
         extra_kwargs = {
-            "access_token": {"write_only": True},
-            "refresh_token": {"write_only": True},
+            "access_token": {
+                "write_only": True,
+                "allow_blank": True,
+                "required": False,
+                "default": "",
+            },
+            "refresh_token": {
+                "write_only": True,
+                "allow_blank": True,
+            },
         }
 
     def _maybe_refresh_telegram(self, instance: SocialAccount, extra_payload):

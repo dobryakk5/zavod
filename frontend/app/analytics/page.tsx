@@ -7,14 +7,11 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
 import { Loader2 } from 'lucide-react';
 
-type ChannelType = 'telegram' | 'instagram' | 'youtube' | 'vkontakte';
-
-const channelTypeLabels: Record<ChannelType, string> = {
+const channelTypeLabels: Record<ChannelAnalysisRecord['channel_type'], string> = {
   telegram: 'Telegram',
   instagram: 'Instagram',
   youtube: 'YouTube',
@@ -23,11 +20,11 @@ const channelTypeLabels: Record<ChannelType, string> = {
 
 export default function AnalyticsPage() {
   const [channelUrl, setChannelUrl] = useState('');
-  const [channelType, setChannelType] = useState<ChannelType>('telegram');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [history, setHistory] = useState<ChannelAnalysisRecord[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const router = useRouter();
+  const channelType: ChannelAnalysisRecord['channel_type'] = 'telegram';
 
   useEffect(() => {
     let isMounted = true;
@@ -97,28 +94,14 @@ export default function AnalyticsPage() {
 
       <div className="space-y-4 max-w-md">
         <div className="space-y-2">
-          <Label htmlFor="channelType">Тип канала</Label>
-          <Select value={channelType} onValueChange={(value: ChannelType) => setChannelType(value)}>
-            <SelectTrigger>
-              <SelectValue placeholder="Выберите тип канала" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="telegram">Telegram</SelectItem>
-              <SelectItem value="instagram">Instagram</SelectItem>
-              <SelectItem value="youtube">YouTube</SelectItem>
-              <SelectItem value="vkontakte">VKontakte</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="channelUrl">URL канала</Label>
+          <Label htmlFor="channelUrl">Ссылка на Telegram канал</Label>
           <Input
             id="channelUrl"
             placeholder="Введите URL канала"
             value={channelUrl}
             onChange={(e) => setChannelUrl(e.target.value)}
           />
+          <p className="text-xs text-gray-500">Другие платформы появятся позже, поэтому сейчас доступен только анализ Telegram.</p>
         </div>
 
         <Button 

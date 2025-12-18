@@ -25,6 +25,7 @@ Yandex Direct API Client
 """
 
 import time
+import os
 import logging
 import requests
 from typing import Dict, List, Optional, Any
@@ -208,20 +209,36 @@ class YandexDirectAPIClient:
             self.rate_limiter.check_report_limit()
         self.rate_limiter.wait_if_needed()
         
+        try:
+            service_name, action_name = method.split('.', 1)
+        except ValueError:
+            raise ValueError("Название метода должно быть в формате 'Service.Method'")
+        
+        endpoint = f"{self.base_url}/{service_name.lower()}"
+        action_method = action_name[:1].lower() + action_name[1:]
         request_data = {
-            'method': method,
+            'method': action_method,
             'params': params
         }
         
-        logger.info(f"Выполнение запроса: {method} с параметрами: {params}")
+        logger.info(
+            f"Выполнение запроса: {service_name}.{action_name} с параметрами: {params}"
+        )
         
         try:
             response = self.session.post(
-                self.base_url,
+                endpoint,
                 json=request_data,
                 timeout=30
             )
             response.raise_for_status()
+            is_reports_service = service_name.lower() == 'reports'
+            
+            if is_reports_service:
+                content_type = response.headers.get('Content-Type', '').lower()
+                if 'application/json' not in content_type:
+                    logger.info(f"Успешный ответ от {service_name}.{action_name}")
+                    return {'Report': response.text}
             
             result = response.json()
             
@@ -603,6 +620,64 @@ class YandexDirectAPIClient:
         except APIError as e:
             logger.error(f"Ошибка при получении отчета: {e}")
             raise
+
+    def find_keywords(
+        self,
+        keyword_texts: List[str],
+        region_ids: Optional[List[int]] = None,
+        minus_keywords: Optional[List[str]] = None,
+        field_names: Optional[List[str]] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Получение частотности и рекомендуемых ставок по ключевым фразам.
+
+        Метод: KeywordsResearch.findKeywords
+        Частота вызова: по требованию (учитывается общий rate limit)
+
+        Args:
+            keyword_texts: Список ключевых фраз
+            region_ids: Идентификаторы регионов (GeoId)
+            minus_keywords: Список минус-слов
+            field_names: Поля ответа (по умолчанию базовый набор)
+            limit: Количество записей на странице
+            offset: Смещение для пагинации
+
+        Returns:
+            Ответ API с массивом Keywords
+        """
+        if not keyword_texts:
+            raise ValueError("Список keyword_texts не может быть пустым")
+
+        params: Dict[str, Any] = {
+            'SelectionCriteria': {
+                'KeywordTexts': keyword_texts
+            },
+            'FieldNames': field_names or ['Keyword', 'Shows', 'Bid', 'Competition'],
+            'Page': {
+                'Limit': limit,
+                'Offset': offset
+            }
+        }
+
+        if region_ids:
+            params['SelectionCriteria']['GeoId'] = region_ids
+
+        if minus_keywords:
+            params['SelectionCriteria']['MinusKeywords'] = minus_keywords
+
+        try:
+            result = self._make_request('KeywordsResearch.findKeywords', params)
+            logger.info(
+                "Получены данные KeywordResearch: %s записей",
+                len(result.get('Keywords', []))
+            )
+            return result
+
+        except APIError as e:
+            logger.error(f"Ошибка при вызове KeywordResearch: {e}")
+            raise
     
     def get_full_campaign_data(
         self,
@@ -706,10 +781,15 @@ if __name__ == "__main__":
     3. Настроить параметры rate limiting при необходимости
     """
     
-    # Настройки (замените на реальные значения)
-    ACCESS_TOKEN = "your_access_token_here"
-    LOGIN = "your_login_here"
-    USE_SANDBOX = True  # Использовать песочницу для тестирования
+    # Настройки (можно передать через переменные окружения)
+    ACCESS_TOKEN = os.environ.get("YD_TOKEN", "your_access_token_here")
+    LOGIN = os.environ.get("YD_LOGIN", "your_login_here")
+    USE_SANDBOX = os.environ.get("YD_USE_SANDBOX", "true").lower() in {"1", "true", "yes"}
+
+    if ACCESS_TOKEN == "your_access_token_here" or LOGIN == "your_login_here":
+        raise RuntimeError(
+            "Задайте переменные окружения YD_TOKEN и YD_LOGIN или отредактируйте значения в примере."
+        )
     
     try:
         # Инициализация клиента
@@ -748,4 +828,3 @@ if __name__ == "__main__":
     
     except Exception as e:
         print(f"Неожиданная ошибка: {e}")
-

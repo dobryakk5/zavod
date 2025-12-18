@@ -64,6 +64,7 @@ BASE64_BLOB_PATTERN = re.compile(r"([A-Za-z0-9+/=\r\n]{100,})")
 DATA_IMAGE_BASE64_RE = re.compile(r"base64[, ](.+)", re.S)
 VIDEO_RESPONSE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 VIDEO_RESPONSE_CACHE_LOCK = threading.Lock()
+VEO_PHOTO_GLOBAL_LOCK = threading.Lock()
 
 
 def is_probably_base64(value: str) -> bool:
@@ -338,7 +339,7 @@ def generate_video_from_text(
     )
 
 
-def generate_image_from_telegram_bot(
+def _generate_image_from_telegram_bot_impl(
     prompt: str,
     bot_username: str,
     **options: Any
@@ -535,7 +536,11 @@ def generate_image_from_telegram_bot(
                             logger.error("[IMAGE BOT Thread %s] Нет inline-кнопок в ответе на /design", thread_id)
                             return False
 
-                        button_patterns = ["SORA", "🌙"] if target_mode == "sora" else ["Runway", "🎑"]
+                        button_patterns = (
+                            ["Sora (GPT) Image", "Sora (GPT)", "🌙"]
+                            if target_mode == "sora"
+                            else ["Runway", "🎑"]
+                        )
                         target_button = None
                         for row in response.reply_markup.rows:
                             for button in row.buttons:
@@ -720,6 +725,28 @@ def generate_image_from_telegram_bot(
         "cleanup_paths": image_payload.get("cleanup_paths") or [image_path],
         "response_text": image_payload.get("response_text", ""),
     }
+
+
+def generate_image_from_telegram_bot(
+    prompt: str,
+    bot_username: str,
+    **options: Any
+) -> Dict[str, Any]:
+    """
+    Обертка, гарантирующая последовательные обращения к VEO-фото боту.
+    """
+    lock_acquired = False
+    try:
+        VEO_PHOTO_GLOBAL_LOCK.acquire()
+        lock_acquired = True
+        return _generate_image_from_telegram_bot_impl(
+            prompt=prompt,
+            bot_username=bot_username,
+            **options,
+        )
+    finally:
+        if lock_acquired:
+            VEO_PHOTO_GLOBAL_LOCK.release()
 
 
 def _generate_image_pollinations(prompt: str, output_path: str) -> Dict[str, Any]:
@@ -1332,6 +1359,21 @@ def _generate_video_veo(
         return {"success": False, "error": "TELEGRAM_API_ID должен быть числом"}
 
     caption = prompt or options.get("fallback_prompt") or "Please animate this image"
+    max_prompt_length = options.get("max_prompt_length")
+    if max_prompt_length is None:
+        env_limit = os.getenv("VEO_PROMPT_MAX_LENGTH", "1500")
+        try:
+            max_prompt_length = int(env_limit)
+        except ValueError:
+            logger.warning("Некорректное значение VEO_PROMPT_MAX_LENGTH: %s", env_limit)
+            max_prompt_length = 1500
+    if len(caption) > max_prompt_length:
+        logger.warning(
+            "Промпт для VEO превышает %s символов и будет обрезан (длина=%s)",
+            max_prompt_length,
+            len(caption),
+        )
+        caption = caption[:max_prompt_length]
     # Убрать markdown форматирование перед созданием сигнатуры
     caption_clean = re.sub(r'\*+', '', caption).strip()
     expected_prompt_signature = _normalize_prompt_signature(caption_clean)
