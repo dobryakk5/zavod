@@ -86,7 +86,25 @@ class BaseAIContentGenerator:
 
             if response.status_code == 200:
                 data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
+                choices = data.get("choices")
+                if isinstance(choices, list) and choices:
+                    message = choices[0].get("message") or {}
+                    content = message.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+                    logger.error(
+                        "OpenRouter API response for model %s is missing message content: %s",
+                        model,
+                        data,
+                    )
+                    return None
+
+                logger.error(
+                    "OpenRouter API response for model %s missing choices: %s",
+                    model,
+                    data,
+                )
+                return None
 
             logger.error(
                 "OpenRouter API Error (%s) for model %s - %s",

@@ -48,6 +48,7 @@ from core import tasks
 from core.telegram_client import normalize_telegram_channel_identifier
 from core.social_accounts import sync_client_default_telegram_account
 from core.system_settings import get_image_generation_model, get_image_generation_method
+from core.instagram_client import normalize_instagram_username
 
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
@@ -1586,7 +1587,7 @@ class TgChannelView(APIView):
     """
     permission_classes = [IsAuthenticated]
     CHANNEL_TYPES = {"telegram", "instagram", "youtube", "vkontakte"}
-    SUPPORTED_TYPES = {"telegram"}
+    SUPPORTED_TYPES = {"telegram", "instagram"}
 
     def post(self, request):
         """Handle POST requests for analyze and validate actions"""
@@ -1661,6 +1662,8 @@ class TgChannelView(APIView):
     def _normalize_identifier(self, channel_url: str, channel_type: str) -> str:
         if channel_type == "telegram":
             return normalize_telegram_channel_identifier(channel_url)
+        if channel_type == "instagram":
+            return normalize_instagram_username(channel_url)
         return (channel_url or "").strip()
 
     def _analyze_channel(self, request):
@@ -1689,9 +1692,10 @@ class TgChannelView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         if channel_type not in self.SUPPORTED_TYPES:
+            allowed = ", ".join(sorted(self.SUPPORTED_TYPES))
             return Response({
                 'success': False,
-                'error': 'Пока поддерживаются только Telegram каналы'
+                'error': f'Пока поддерживаются только: {allowed}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
         normalized_identifier = self._normalize_identifier(channel_url, channel_type)
@@ -1741,9 +1745,10 @@ class TgChannelView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         if channel_type not in self.SUPPORTED_TYPES:
+            allowed = ", ".join(sorted(self.SUPPORTED_TYPES))
             return Response({
                 'valid': False,
-                'error': 'Пока поддерживаются только Telegram каналы'
+                'error': f'Пока поддерживаются только: {allowed}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
         identifier = self._normalize_identifier(channel_url, channel_type)

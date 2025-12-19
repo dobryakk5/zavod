@@ -16,6 +16,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from ..ai_generator import AIContentGenerator
+from ..instagram_client import fetch_instagram_profile, normalize_instagram_username
 from ..models import ChannelAnalysis
 from ..telegram_client import (
     TelegramContentCollector,
@@ -25,7 +26,7 @@ from ..telegram_client import (
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_TYPES = {"telegram"}
+SUPPORTED_TYPES = {"telegram", "instagram"}
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 DEFAULT_ALERT_CHAT_ID = "7852511755"
 
@@ -201,7 +202,13 @@ def _extract_audience_profile(messages: List[Dict], analysis: Optional[ChannelAn
     if not posts_text:
         return {}
 
-    prompt = f"""Проанализируй последние 20 постов из Telegram канала и определи профиль целевой аудитории.
+    channel_label = "канала"
+    if analysis and analysis.channel_type == "telegram":
+        channel_label = "Telegram канала"
+    elif analysis and analysis.channel_type == "instagram":
+        channel_label = "Instagram аккаунта"
+
+    prompt = f"""Проанализируй последние 20 постов из {channel_label} и определи профиль целевой аудитории.
 
 Эти посты обращены к аудитории. Определи:
 1) avatar — собирательный образ целевой аудитории
@@ -270,7 +277,7 @@ def _build_schedule(messages: List[Dict]) -> List[Dict]:
     ]
 
 
-def _summarize_posts(messages: List[Dict]) -> Dict[str, float]:
+def _summarize_posts(messages: List[Dict], *, audience_size: Optional[int] = None) -> Dict[str, float]:
     """Рассчитать метрики просмотров и вовлеченности."""
     views = [int(msg.get("views") or 0) for msg in messages if msg.get("views") is not None]
     avg_views = int(mean(views)) if views else 0
@@ -284,7 +291,11 @@ def _summarize_posts(messages: List[Dict]) -> Dict[str, float]:
     for msg in messages:
         views_count = int(msg.get("views") or 0)
         forwards = int(msg.get("forwards") or 0)
-        if views_count > 0:
+        reactions_count = int(msg.get("reactions") or 0)
+        comments_count = int(msg.get("comments") or 0)
+        if audience_size and audience_size > 0:
+            engagement_rates.append(((reactions_count + comments_count) / audience_size) * 100)
+        elif views_count > 0:
             engagement_rates.append((forwards / views_count) * 100)
     avg_engagement = round(mean(engagement_rates), 2) if engagement_rates else 0.0
 
@@ -297,7 +308,12 @@ def _summarize_posts(messages: List[Dict]) -> Dict[str, float]:
         forwards = int(msg.get("forwards") or 0)
         reactions_count = int(msg.get("reactions") or 0)
         comments = int(msg.get("comments") or 0)
-        engagement = round((forwards / views_count) * 100, 2) if views_count else 0.0
+        if audience_size and audience_size > 0:
+            engagement = round(((reactions_count + comments) / audience_size) * 100, 2)
+        elif views_count:
+            engagement = round((forwards / views_count) * 100, 2)
+        else:
+            engagement = 0.0
         top_posts.append({
             "title": title if title else f"Пост #{msg.get('id')}",
             "views": views_count,
@@ -370,6 +386,49 @@ def _analyze_telegram_channel(analysis: ChannelAnalysis) -> Dict:
     }
 
 
+def _analyze_instagram_channel(analysis: ChannelAnalysis) -> Dict:
+    """Выполнить сбор и анализ Instagram аккаунта."""
+    username = normalize_instagram_username(analysis.channel_url)
+    if not username:
+        raise ValueError("Не удалось распознать Instagram аккаунт из ссылки")
+
+    profile, posts = fetch_instagram_profile(username, limit=50)
+    _update_analysis(analysis, progress=40)
+
+    if not posts:
+        raise RuntimeError("Не удалось получить посты из Instagram аккаунта.")
+
+    subscribers = int(profile.get("followers_count") or 0)
+    stats = _summarize_posts(posts, audience_size=subscribers or None)
+    _update_analysis(analysis, progress=70)
+
+    schedule = _build_schedule(posts)
+    insights = _extract_ai_topics(posts, analysis)
+    audience_profile = _extract_audience_profile(posts, analysis)
+    _update_analysis(analysis, progress=90)
+
+    channel_title = profile.get("full_name") or profile.get("username") or username
+    profile_url = f"https://www.instagram.com/{profile.get('username') or username}/"
+
+    return {
+        "channel_name": channel_title,
+        "channel_username": profile.get("username") or username,
+        "profile_url": profile_url,
+        "bio": profile.get("biography") or "",
+        "subscribers": subscribers,
+        "avg_views": stats["avg_views"],
+        "avg_engagement": stats["avg_engagement"],
+        "avg_reactions": stats["avg_reactions"],
+        "avg_comments": stats["avg_comments"],
+        "top_posts": stats["top_posts"],
+        "keywords": insights["keywords"],
+        "topics": insights["topics"],
+        "content_types": insights["content_types"],
+        "posting_schedule": schedule,
+        "audience_profile": audience_profile,
+    }
+
+
 @shared_task(bind=True, max_retries=0)
 def analyze_channel_task(self, analysis_id: int):
     """Celery задача для анализа канала."""
@@ -390,10 +449,12 @@ def analyze_channel_task(self, analysis_id: int):
     )
 
     try:
-        if analysis.channel_type not in SUPPORTED_TYPES:
+        if analysis.channel_type == "telegram":
+            result = _analyze_telegram_channel(analysis)
+        elif analysis.channel_type == "instagram":
+            result = _analyze_instagram_channel(analysis)
+        else:
             raise ValueError("Анализ для этого типа канала пока не поддерживается")
-
-        result = _analyze_telegram_channel(analysis)
 
         _update_analysis(
             analysis,

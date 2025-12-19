@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
 import { Loader2 } from 'lucide-react';
@@ -20,11 +21,11 @@ const channelTypeLabels: Record<ChannelAnalysisRecord['channel_type'], string> =
 
 export default function AnalyticsPage() {
   const [channelUrl, setChannelUrl] = useState('');
+  const [channelType, setChannelType] = useState<ChannelAnalysisRecord['channel_type']>('telegram');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [history, setHistory] = useState<ChannelAnalysisRecord[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const router = useRouter();
-  const channelType: ChannelAnalysisRecord['channel_type'] = 'telegram';
 
   useEffect(() => {
     let isMounted = true;
@@ -94,14 +95,32 @@ export default function AnalyticsPage() {
 
       <div className="space-y-4 max-w-md">
         <div className="space-y-2">
-          <Label htmlFor="channelUrl">Ссылка на Telegram канал</Label>
+          <Label htmlFor="channelType">Тип канала</Label>
+          <Select value={channelType} onValueChange={(value) => setChannelType(value as ChannelAnalysisRecord['channel_type'])}>
+            <SelectTrigger id="channelType">
+              <SelectValue placeholder="Выберите платформу" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="telegram">Telegram</SelectItem>
+              <SelectItem value="instagram">Instagram</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="channelUrl">
+            {channelType === 'instagram' ? 'Ссылка на Instagram аккаунт' : 'Ссылка на Telegram канал'}
+          </Label>
           <Input
             id="channelUrl"
-            placeholder="Введите URL канала"
+            placeholder={channelType === 'instagram' ? 'https://www.instagram.com/username/' : 'Введите URL канала'}
             value={channelUrl}
             onChange={(e) => setChannelUrl(e.target.value)}
           />
-          <p className="text-xs text-gray-500">Другие платформы появятся позже, поэтому сейчас доступен только анализ Telegram.</p>
+          <p className="text-xs text-gray-500">
+            {channelType === 'instagram'
+              ? 'Поддерживаются публичные Instagram-профили. Можно указывать ссылку, username или @username.'
+              : 'Можно указать ссылку на публичный канал или @username.'}
+          </p>
         </div>
 
         <Button 
