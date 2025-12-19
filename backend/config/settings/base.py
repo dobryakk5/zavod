@@ -15,6 +15,7 @@ load_dotenv(BASE_DIR / '.env')
 
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me")  # поменяешь потом на нормальный
 DEBUG = os.getenv("DEBUG", "True") == "True"
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
 DEFAULT_ALLOWED_HOSTS = [
     "localhost",

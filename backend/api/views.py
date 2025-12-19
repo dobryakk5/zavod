@@ -49,6 +49,7 @@ from core.telegram_client import normalize_telegram_channel_identifier
 from core.social_accounts import sync_client_default_telegram_account
 from core.system_settings import get_image_generation_model, get_image_generation_method
 from core.instagram_client import normalize_instagram_username
+from core.youtube_client import normalize_youtube_identifier
 
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
@@ -1587,7 +1588,7 @@ class TgChannelView(APIView):
     """
     permission_classes = [IsAuthenticated]
     CHANNEL_TYPES = {"telegram", "instagram", "youtube", "vkontakte"}
-    SUPPORTED_TYPES = {"telegram", "instagram"}
+    SUPPORTED_TYPES = {"telegram", "instagram", "youtube"}
 
     def post(self, request):
         """Handle POST requests for analyze and validate actions"""
@@ -1664,6 +1665,8 @@ class TgChannelView(APIView):
             return normalize_telegram_channel_identifier(channel_url)
         if channel_type == "instagram":
             return normalize_instagram_username(channel_url)
+        if channel_type == "youtube":
+            return normalize_youtube_identifier(channel_url)
         return (channel_url or "").strip()
 
     def _analyze_channel(self, request):

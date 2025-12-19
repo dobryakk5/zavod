@@ -19,6 +19,24 @@ const channelTypeLabels: Record<ChannelAnalysisRecord['channel_type'], string> =
   vkontakte: 'VKontakte',
 };
 
+const channelInputLabels: Record<'telegram' | 'instagram' | 'youtube', string> = {
+  telegram: 'Ссылка на Telegram канал',
+  instagram: 'Ссылка на Instagram аккаунт',
+  youtube: 'Ссылка на YouTube канал',
+};
+
+const channelPlaceholders: Record<'telegram' | 'instagram' | 'youtube', string> = {
+  telegram: 'https://t.me/example или @example',
+  instagram: 'https://www.instagram.com/username/',
+  youtube: 'https://www.youtube.com/@channel или UCxxxxxxxx',
+};
+
+const channelHints: Record<'telegram' | 'instagram' | 'youtube', string> = {
+  telegram: 'Можно указать ссылку на публичный канал или @username.',
+  instagram: 'Поддерживаются публичные профили: ссылка, username или @username.',
+  youtube: 'Подойдут ссылка на канал, @handle или ID вида UCxxxxxxxx.',
+};
+
 export default function AnalyticsPage() {
   const [channelUrl, setChannelUrl] = useState('');
   const [channelType, setChannelType] = useState<ChannelAnalysisRecord['channel_type']>('telegram');
@@ -103,23 +121,25 @@ export default function AnalyticsPage() {
             <SelectContent>
               <SelectItem value="telegram">Telegram</SelectItem>
               <SelectItem value="instagram">Instagram</SelectItem>
+              <SelectItem value="youtube">YouTube</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-2">
           <Label htmlFor="channelUrl">
-            {channelType === 'instagram' ? 'Ссылка на Instagram аккаунт' : 'Ссылка на Telegram канал'}
+            {channelInputLabels[channelType as 'telegram' | 'instagram' | 'youtube'] ?? 'Ссылка на канал'}
           </Label>
           <Input
             id="channelUrl"
-            placeholder={channelType === 'instagram' ? 'https://www.instagram.com/username/' : 'Введите URL канала'}
+            placeholder={
+              channelPlaceholders[channelType as 'telegram' | 'instagram' | 'youtube'] ?? 'Введите URL канала'
+            }
             value={channelUrl}
             onChange={(e) => setChannelUrl(e.target.value)}
           />
           <p className="text-xs text-gray-500">
-            {channelType === 'instagram'
-              ? 'Поддерживаются публичные Instagram-профили. Можно указывать ссылку, username или @username.'
-              : 'Можно указать ссылку на публичный канал или @username.'}
+            {channelHints[channelType as 'telegram' | 'instagram' | 'youtube'] ??
+              'Можно указать ссылку на публичный канал.'}
           </p>
         </div>
 
@@ -177,7 +197,10 @@ export default function AnalyticsPage() {
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
                       <div className="flex flex-col gap-1">
-                        <Progress value={item.progress} />
+                        <Progress
+                          value={item.progress}
+                          intent={item.status === 'failed' ? 'error' : 'default'}
+                        />
                         <span className="text-xs text-gray-500">{item.progress}%</span>
                       </div>
                     </TableCell>

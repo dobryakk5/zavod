@@ -240,7 +240,7 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
           <section>
             <Card>
               <CardHeader>
-                <CardTitle>Топ посты</CardTitle>
+                <CardTitle>Топ посты из последних 50</CardTitle>
               </CardHeader>
               <CardContent>
                 {result.top_posts.length === 0 ? (

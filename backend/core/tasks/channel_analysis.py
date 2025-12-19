@@ -23,10 +23,11 @@ from ..telegram_client import (
     normalize_telegram_channel_identifier,
     run_async_task,
 )
+from ..youtube_client import fetch_youtube_channel, normalize_youtube_identifier
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_TYPES = {"telegram", "instagram"}
+SUPPORTED_TYPES = {"telegram", "instagram", "youtube"}
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 DEFAULT_ALERT_CHAT_ID = "7852511755"
 
@@ -52,6 +53,11 @@ def _get_telegram_credentials(client) -> Tuple[str, str, str]:
         session_name = "session_collector_client_3"
 
     return api_id, api_hash, session_name
+
+
+def _get_youtube_api_key(client) -> Optional[str]:
+    """Вернуть YouTube API ключ, fallback на настройки приложения."""
+    return client.youtube_api_key or getattr(settings, "YOUTUBE_API_KEY", None)
 
 
 def _prepare_posts_text(messages: List[Dict], limit: int = 12) -> str:
@@ -207,6 +213,8 @@ def _extract_audience_profile(messages: List[Dict], analysis: Optional[ChannelAn
         channel_label = "Telegram канала"
     elif analysis and analysis.channel_type == "instagram":
         channel_label = "Instagram аккаунта"
+    elif analysis and analysis.channel_type == "youtube":
+        channel_label = "YouTube канала"
 
     prompt = f"""Проанализируй последние 20 постов из {channel_label} и определи профиль целевой аудитории.
 
@@ -429,6 +437,59 @@ def _analyze_instagram_channel(analysis: ChannelAnalysis) -> Dict:
     }
 
 
+def _analyze_youtube_channel(analysis: ChannelAnalysis) -> Dict:
+    """Выполнить сбор и анализ YouTube канала."""
+    client = analysis.client
+    api_key = _get_youtube_api_key(client)
+    if not api_key:
+        raise RuntimeError("Не настроен YouTube API ключ для анализа каналов")
+
+    identifier = normalize_youtube_identifier(analysis.channel_url)
+    if not identifier:
+        raise ValueError("Не удалось распознать YouTube канал из URL")
+
+    profile, videos = fetch_youtube_channel(api_key, identifier, max_videos=50)
+    _update_analysis(analysis, progress=40)
+
+    if not videos:
+        raise RuntimeError("Не удалось получить видео из YouTube канала.")
+
+    subscribers = int(profile.get("subscriber_count") or 0)
+    stats = _summarize_posts(videos, audience_size=subscribers or None)
+    _update_analysis(analysis, progress=70)
+
+    schedule = _build_schedule(videos)
+    insights = _extract_ai_topics(videos, analysis)
+    audience_profile = _extract_audience_profile(videos, analysis)
+    _update_analysis(analysis, progress=90)
+
+    channel_title = profile.get("title") or identifier
+    channel_username = profile.get("custom_url") or ""
+    profile_url = ""
+    if channel_username:
+        profile_url = f"https://www.youtube.com/{channel_username.lstrip('/')}"
+    elif profile.get("channel_id"):
+        profile_url = f"https://www.youtube.com/channel/{profile.get('channel_id')}"
+
+    return {
+        "channel_name": channel_title,
+        "channel_username": channel_username,
+        "profile_url": profile_url,
+        "bio": profile.get("description") or "",
+        "subscribers": subscribers,
+        "avg_views": stats["avg_views"],
+        "avg_engagement": stats["avg_engagement"],
+        "avg_reactions": stats["avg_reactions"],
+        "avg_comments": stats["avg_comments"],
+        "top_posts": stats["top_posts"],
+        "keywords": insights["keywords"],
+        "topics": insights["topics"],
+        "content_types": insights["content_types"],
+        "posting_schedule": schedule,
+        "audience_profile": audience_profile,
+    }
+
+
 @shared_task(bind=True, max_retries=0)
 def analyze_channel_task(self, analysis_id: int):
     """Celery задача для анализа канала."""
@@ -453,6 +514,8 @@ def analyze_channel_task(self, analysis_id: int):
             result = _analyze_telegram_channel(analysis)
         elif analysis.channel_type == "instagram":
             result = _analyze_instagram_channel(analysis)
+        elif analysis.channel_type == "youtube":
+            result = _analyze_youtube_channel(analysis)
         else:
             raise ValueError("Анализ для этого типа канала пока не поддерживается")
 
