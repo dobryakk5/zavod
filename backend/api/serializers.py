@@ -18,6 +18,8 @@ from core.models import (
     Topic,
     TrendItem,
     VkIntegration,
+    WordstatQuery,
+    WordstatResult,
 )
 from core.telegram_client import normalize_telegram_channel_identifier
 from core.social_accounts import ensure_telegram_account_metadata
@@ -100,11 +102,25 @@ class PostImageSerializer(serializers.ModelSerializer):
     width = serializers.SerializerMethodField()
     height = serializers.SerializerMethodField()
 
+    def _get_image_dimension(self, obj, attr: str):
+        """
+        Safely return image dimension without raising if the file is missing.
+        """
+        image = getattr(obj, "image", None)
+        if not image or not getattr(image, "name", None):
+            return None
+        try:
+            if not image.storage.exists(image.name):
+                return None
+            return getattr(image, attr)
+        except (OSError, ValueError):
+            return None
+
     def get_width(self, obj):
-        return obj.image.width if obj.image else None
+        return self._get_image_dimension(obj, "width")
 
     def get_height(self, obj):
-        return obj.image.height if obj.image else None
+        return self._get_image_dimension(obj, "height")
 
     class Meta:
         model = PostImage
@@ -385,6 +401,46 @@ class SEOKeywordSetSerializer(serializers.ModelSerializer):
             "prompt_used",
             "error_log",
             "created_at",
+        ]
+
+
+class WordstatResultSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WordstatResult
+        fields = ["id", "phrase", "count", "result_type"]
+        read_only_fields = ["id", "phrase", "count"]
+
+
+class WordstatQuerySerializer(serializers.ModelSerializer):
+    results = WordstatResultSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = WordstatQuery
+        fields = [
+            "id",
+            "client",
+            "request_phrase",
+            "total_count",
+            "include_parent",
+            "regions",
+            "devices",
+            "user_login",
+            "limit_per_second",
+            "daily_limit",
+            "daily_limit_remaining",
+            "created_at",
+            "results",
+        ]
+        read_only_fields = [
+            "id",
+            "client",
+            "total_count",
+            "user_login",
+            "limit_per_second",
+            "daily_limit",
+            "daily_limit_remaining",
+            "created_at",
+            "results",
         ]
 
 

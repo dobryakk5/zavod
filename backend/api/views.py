@@ -11,7 +11,7 @@ import requests
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db.models import Count, F, Q
+from django.db.models import Count, F, Q, Prefetch
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
@@ -43,6 +43,8 @@ from core.models import (
     ChannelAnalysis,
     SEOKeywordSet,
     VkIntegration,
+    WordstatQuery,
+    WordstatResult,
 )
 from core import tasks
 from core.telegram_client import normalize_telegram_channel_identifier
@@ -50,6 +52,7 @@ from core.social_accounts import sync_client_default_telegram_account
 from core.system_settings import get_image_generation_model, get_image_generation_method
 from core.instagram_client import normalize_instagram_username
 from core.youtube_client import normalize_youtube_identifier
+from core.wordstat import WordstatError, get_wordstat_client
 
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
@@ -73,6 +76,8 @@ from .serializers import (
     TrendItemSerializer,
     VkIntegrationSerializer,
     SEOKeywordSetSerializer,
+    WordstatQuerySerializer,
+    WordstatResultSerializer,
 )
 from .utils import get_active_client
 
@@ -1905,3 +1910,152 @@ class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):
             'message': f"Генерация SEO-фраз запущена для клиента: {client.name}",
             'task_id': task.id,
         })
+
+
+def _parse_int_list(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = value.split(",")
+    elif isinstance(value, list):
+        parts = value
+    else:
+        return []
+    result = []
+    for part in parts:
+        try:
+            number = int(str(part).strip())
+        except (ValueError, TypeError):
+            continue
+        result.append(number)
+    return result
+
+
+def _parse_str_list(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = value.split(",")
+    elif isinstance(value, list):
+        parts = value
+    else:
+        return []
+    result = []
+    for part in parts:
+        part_str = str(part).strip()
+        if part_str:
+            result.append(part_str)
+    return result
+
+
+class WordstatQueryViewSet(viewsets.ModelViewSet):
+    """Получение и сохранение Wordstat-результатов для клиента."""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = WordstatQuerySerializer
+    http_method_names = ["get", "post", "head", "options"]
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return (
+            WordstatQuery.objects.filter(client=client)
+            .prefetch_related(
+                Prefetch("results", queryset=WordstatResult.objects.order_by("-count", "phrase"))
+            )
+            .order_by("-created_at")
+        )
+
+    def create(self, request, *args, **kwargs):
+        client_obj = get_active_client(request.user)
+        phrase = (request.data.get("phrase") or "").strip()
+        if not phrase:
+            return Response({"error": "Введите фразу для запроса Wordstat"}, status=status.HTTP_400_BAD_REQUEST)
+
+        regions = _parse_int_list(request.data.get("regions"))
+        devices = _parse_str_list(request.data.get("devices"))
+        include_parent_raw = request.data.get("include_parent", False)
+        include_parent = str(include_parent_raw).lower() in {"1", "true", "yes", "on"}
+
+        try:
+            ws_client = get_wordstat_client()
+            user_info = ws_client.fetch_user_info()
+            api_response = ws_client.fetch_top_requests(
+                phrase=phrase,
+                regions=regions or None,
+                devices=devices or None,
+                include_parent=include_parent,
+            )
+        except WordstatError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logger.exception("Wordstat request failed")
+            return Response(
+                {"error": "Не удалось получить данные Wordstat"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        user_info_data = user_info.get("userInfo") if isinstance(user_info, dict) else {}
+        query = WordstatQuery.objects.create(
+            client=client_obj,
+            request_phrase=phrase,
+            total_count=int(api_response.get("totalCount") or 0),
+            include_parent=include_parent,
+            regions=regions,
+            devices=devices,
+            user_login=user_info_data.get("login", ""),
+            limit_per_second=user_info_data.get("limitPerSecond"),
+            daily_limit=user_info_data.get("dailyLimit"),
+            daily_limit_remaining=user_info_data.get("dailyLimitRemaining"),
+            raw_response=api_response,
+        )
+
+        results_to_create = []
+        for item in api_response.get("topRequests") or []:
+            phrase_text = str(item.get("phrase") or "").strip()
+            if not phrase_text:
+                continue
+            results_to_create.append(
+                WordstatResult(
+                    query=query,
+                    phrase=phrase_text,
+                    count=int(item.get("count") or 0),
+                    result_type="top_request",
+                )
+            )
+
+        for item in api_response.get("associations") or []:
+            phrase_text = str(item.get("phrase") or "").strip()
+            if not phrase_text:
+                continue
+            results_to_create.append(
+                WordstatResult(
+                    query=query,
+                    phrase=phrase_text,
+                    count=int(item.get("count") or 0),
+                    result_type="association",
+                )
+            )
+
+        if results_to_create:
+            WordstatResult.objects.bulk_create(results_to_create)
+
+        serializer = self.get_serializer(query)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class WordstatResultViewSet(mixins.UpdateModelMixin, viewsets.GenericViewSet):
+    """Обновление отдельных строк Wordstat (например, смена метки)."""
+
+    permission_classes = [IsTenantOwnerOrEditor]
+    serializer_class = WordstatResultSerializer
+    http_method_names = ["patch", "put", "head", "options"]
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return WordstatResult.objects.filter(query__client=client)

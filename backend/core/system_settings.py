@@ -10,6 +10,7 @@ DEFAULT_AI_MODEL_CACHE_KEY = "core:default_ai_model"
 POST_AI_MODEL_CACHE_KEY = "core:post_ai_model"
 FALLBACK_AI_MODEL_CACHE_KEY = "core:fallback_ai_model"
 VIDEO_PROMPT_INSTRUCTIONS_CACHE_KEY = "core:video_prompt_instructions"
+PHOTO_PROMPT_INSTRUCTIONS_CACHE_KEY = "core:photo_prompt_instructions"
 IMAGE_TIMEOUT_CACHE_KEY = "core:image_generation_timeout"
 VIDEO_TIMEOUT_CACHE_KEY = "core:video_generation_timeout"
 IMAGE_MODEL_CACHE_KEY = "core:image_generation_model"
@@ -52,6 +53,15 @@ def _fetch_video_prompt_instructions_from_db() -> str:
     try:
         setting = SystemSetting.get_solo()
         return (setting.video_prompt_instructions or "").strip()
+    except Exception as exc:
+        logger.warning("Failed to load SystemSetting: %s", exc)
+        return ""
+
+
+def _fetch_photo_prompt_instructions_from_db() -> str:
+    try:
+        setting = SystemSetting.get_solo()
+        return (setting.photo_prompt_instructions or "").strip()
     except Exception as exc:
         logger.warning("Failed to load SystemSetting: %s", exc)
         return ""
@@ -153,6 +163,19 @@ def get_video_prompt_instructions(use_cache: bool = True) -> str:
     return instructions
 
 
+def get_photo_prompt_instructions(use_cache: bool = True) -> str:
+    """Return additional instructions for photo prompts."""
+    if use_cache:
+        cached = cache.get(PHOTO_PROMPT_INSTRUCTIONS_CACHE_KEY)
+        if cached is not None:
+            return cached
+
+    instructions = _fetch_photo_prompt_instructions_from_db()
+    if use_cache:
+        cache.set(PHOTO_PROMPT_INSTRUCTIONS_CACHE_KEY, instructions, DEFAULT_AI_MODEL_CACHE_TIMEOUT)
+    return instructions
+
+
 def get_image_generation_method(use_cache: bool = True) -> str:
     """Return method for image generation ('openrouter', 'veo_photo', 'giga_photo')."""
     if use_cache:
@@ -206,6 +229,7 @@ def invalidate_system_settings_cache():
     cache.delete(POST_AI_MODEL_CACHE_KEY)
     cache.delete(FALLBACK_AI_MODEL_CACHE_KEY)
     cache.delete(VIDEO_PROMPT_INSTRUCTIONS_CACHE_KEY)
+    cache.delete(PHOTO_PROMPT_INSTRUCTIONS_CACHE_KEY)
     cache.delete(IMAGE_METHOD_CACHE_KEY)
     cache.delete(IMAGE_MODEL_CACHE_KEY)
     cache.delete(IMAGE_TIMEOUT_CACHE_KEY)

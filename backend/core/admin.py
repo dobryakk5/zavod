@@ -258,14 +258,15 @@ class SystemSettingAdmin(admin.ModelAdmin):
         (
             "AI настройки",
             {
-                "fields": (
-                    "default_ai_model",
-                    "post_ai_model",
-                    "fallback_ai_model",
-                    "image_generation_method",
-                    "image_openrouter_model",
-                    "video_prompt_instructions",
-                )
+            "fields": (
+                "default_ai_model",
+                "post_ai_model",
+                "fallback_ai_model",
+                "image_generation_method",
+                "image_openrouter_model",
+                "video_prompt_instructions",
+                "photo_prompt_instructions",
+            )
             },
         ),
         ("Таймауты генерации", {"fields": ("image_generation_timeout", "video_generation_timeout")}),

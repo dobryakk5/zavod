@@ -28,6 +28,8 @@ from .views import (
     VkConnectView,
     VkCallbackView,
     VkPublishView,
+    WordstatQueryViewSet,
+    WordstatResultViewSet,
 )
 
 app_name = 'api'
@@ -44,6 +46,8 @@ router.register(r'social-accounts', SocialAccountViewSet, basename='social-accou
 router.register(r'post-types', PostTypeViewSet, basename='post-type')
 router.register(r'post-tones', PostToneViewSet, basename='post-tone')
 router.register(r'seo-keywords', SEOKeywordSetViewSet, basename='seo-keyword')
+router.register(r'wordstat', WordstatQueryViewSet, basename='wordstat')
+router.register(r'wordstat-results', WordstatResultViewSet, basename='wordstat-result')
 router.register(r'channel-analyses', ChannelAnalysisViewSet, basename='channel-analysis')
 router.register(r'vk/integrations', VkIntegrationViewSet, basename='vk-integration')
 

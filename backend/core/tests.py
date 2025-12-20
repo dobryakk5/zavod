@@ -1,8 +1,9 @@
 from types import SimpleNamespace
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from .telegram_client import TelegramPublisher
+from .social_publishers import build_absolute_media_url
 from .tasks.publishing import _compose_post_text
 
 
@@ -48,3 +49,20 @@ class ComposePostTextTests(SimpleTestCase):
     def test_only_body_when_no_title(self):
         post = SimpleNamespace(title="", text="Body text", publish_text=True)
         self.assertEqual(_compose_post_text(post), "Body text")
+
+
+class BuildAbsoluteMediaUrlTests(SimpleTestCase):
+    @override_settings(WAGTAILADMIN_BASE_URL="https://example.com")
+    def test_relative_media_url(self):
+        self.assertEqual(
+            build_absolute_media_url("/media/post_images/photo.jpg"),
+            "https://example.com/media/post_images/photo.jpg",
+        )
+
+    def test_keeps_absolute_url(self):
+        url = "https://cdn.example.com/media/video.mp4"
+        self.assertEqual(build_absolute_media_url(url), url)
+
+    @override_settings(WAGTAILADMIN_BASE_URL=None, PUBLIC_MEDIA_BASE_URL=None)
+    def test_returns_none_without_base(self):
+        self.assertIsNone(build_absolute_media_url("/media/photo.jpg"))

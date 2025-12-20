@@ -2,6 +2,7 @@ import ast
 import asyncio
 import base64
 import json
+import html
 import logging
 import os
 import re
@@ -11,10 +12,10 @@ import threading
 import time
 import urllib.parse
 import uuid
-from collections import OrderedDict
+import subprocess
 from contextlib import contextmanager
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -55,6 +56,7 @@ SESSION_THREAD_LOCKS: Dict[str, threading.RLock] = {}
 SESSION_THREAD_LOCKS_GUARD = threading.Lock()
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 URL_PATTERN = re.compile(r'https?://[^\s<>"{}|\\^`[\]]+')
+MP4_URL_RE = re.compile(r"https?://[^\s\"']+\.mp4[^\s\"']*", re.I)
 BASE64_ALLOWED_CHARS_RE = re.compile(r"^[A-Za-z0-9+/=\s]+$")
 BASE64_FIELD_PATTERN = re.compile(
     r"(?:image_base64|b64_json|base64)[^A-Za-z0-9+/=]{0,10}([A-Za-z0-9+/=\r\n]+)",
@@ -62,8 +64,6 @@ BASE64_FIELD_PATTERN = re.compile(
 )
 BASE64_BLOB_PATTERN = re.compile(r"([A-Za-z0-9+/=\r\n]{100,})")
 DATA_IMAGE_BASE64_RE = re.compile(r"base64[, ](.+)", re.S)
-VIDEO_RESPONSE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-VIDEO_RESPONSE_CACHE_LOCK = threading.Lock()
 VEO_PHOTO_GLOBAL_LOCK = threading.Lock()
 
 
@@ -175,32 +175,6 @@ def _telethon_session_lock(session_file: Optional[str]):
             thread_lock.release()
 
 
-def _cache_video_response(signature: Optional[str], payload: Dict[str, Any]):
-    """Сохранить готовый ответ VEO по подписи промпта (макс 4 элемента)."""
-    if not signature or not payload:
-        return
-    with VIDEO_RESPONSE_CACHE_LOCK:
-        VIDEO_RESPONSE_CACHE[signature] = payload
-        VIDEO_RESPONSE_CACHE.move_to_end(signature)
-        while len(VIDEO_RESPONSE_CACHE) > 4:
-            old_signature, old_payload = VIDEO_RESPONSE_CACHE.popitem(last=False)
-            cleanup_paths = old_payload.get("cleanup_paths") or [old_payload.get("video_path")]
-            for path in cleanup_paths:
-                if path and isinstance(path, str) and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-
-
-def _pop_video_response(signature: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Получить и удалить ответ VEO из кеша."""
-    if not signature:
-        return None
-    with VIDEO_RESPONSE_CACHE_LOCK:
-        return VIDEO_RESPONSE_CACHE.pop(signature, None)
-
-
 def _take_first_sentences(text: str, limit: int = 3) -> str:
     """Вернуть первые limit предложений (по . ! ?) как строку."""
     cleaned = re.sub(r"\s+", " ", text or "").strip()
@@ -216,24 +190,6 @@ def _take_first_sentences(text: str, limit: int = 3) -> str:
     if not result_parts:
         return cleaned
     return " ".join(result_parts)
-
-
-def _normalize_prompt_signature(
-    value: Optional[str],
-    max_length: int = 500,
-    sentence_limit: int = 1,
-) -> str:
-    """
-    Нормализовать промпт для сравнения (без регистра и лишних пробелов).
-
-    Для сопоставления ответов читаем только первые sentence_limit предложений,
-    по умолчанию сверяем первое предложение, чтобы не требовать полного промпта.
-    """
-    if not value:
-        return ""
-    head = _take_first_sentences(value, limit=sentence_limit)
-    normalized = re.sub(r"\s+", " ", head).strip().lower()
-    return normalized[:max_length]
 
 
 def _extract_response_prompt_fragment(text: Optional[str]) -> Optional[str]:
@@ -261,6 +217,67 @@ def _extract_response_prompt_fragment(text: Optional[str]) -> Optional[str]:
             fragment = fragment[:idx]
             break
     return _take_first_sentences(fragment.strip().strip('"'))
+
+
+def _extract_urls_from_message(msg) -> List[str]:
+    """
+    Собрать URL из текста сообщения, его сущностей и inline-кнопок.
+    """
+    if not msg:
+        return []
+
+    candidates: List[str] = []
+    text = (getattr(msg, "raw_text", None) or getattr(msg, "message", None) or "") or ""
+    if text:
+        for raw_url in URL_PATTERN.findall(text):
+            candidates.append(raw_url.strip("()[]<>., "))
+
+    entities = getattr(msg, "entities", None) or []
+    for entity in entities:
+        direct_url = getattr(entity, "url", None)
+        if direct_url:
+            candidates.append(direct_url)
+            continue
+        if text:
+            try:
+                offset = int(getattr(entity, "offset", 0))
+                length = int(getattr(entity, "length", 0))
+                if length > 0:
+                    segment = text[offset: offset + length]
+                    if segment:
+                        candidates.append(segment)
+            except Exception:
+                continue
+
+    markup = getattr(msg, "reply_markup", None)
+    if markup:
+        for row in getattr(markup, "rows", []):
+            for button in getattr(row, "buttons", []):
+                button_url = getattr(button, "url", None)
+                if button_url:
+                    candidates.append(button_url)
+
+    unique: List[str] = []
+    seen: Set[str] = set()
+    for url in candidates:
+        cleaned = url.strip()
+        if not cleaned:
+            continue
+        normalized = _normalize_http_url(cleaned)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
+
+
+def _normalize_http_url(candidate: str) -> Optional[str]:
+    """Оставляем только валидные http(s) URL, остальные отбрасываем."""
+    parsed = urllib.parse.urlparse(candidate)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return None
+    # Убираем пробелы/контрольные символы
+    return urllib.parse.urlunparse(parsed)
 
 
 def generate_image(
@@ -439,7 +456,6 @@ def _generate_image_from_telegram_bot_impl(
     except ValueError:
         return {"success": False, "error": "TELEGRAM_API_ID должен быть числом"}
 
-    expected_prompt_signature = _normalize_prompt_signature(prompt)
     matched_prompt_fragment: Optional[str] = None
     cleanup_session_files: List[str] = []
 
@@ -1374,16 +1390,7 @@ def _generate_video_veo(
             len(caption),
         )
         caption = caption[:max_prompt_length]
-    # Убрать markdown форматирование перед созданием сигнатуры
-    caption_clean = re.sub(r'\*+', '', caption).strip()
-    expected_prompt_signature = _normalize_prompt_signature(caption_clean)
     matched_prompt_fragment: Optional[str] = None
-    cached_payload = _pop_video_response(expected_prompt_signature)
-    if cached_payload:
-        logger.info("[VEO] Используем кешированный ответ для промпта до обращения к боту")
-        cached_payload.pop("prompt_signature", None)
-        return cached_payload
-
     cleanup_session_files: List[str] = []
 
     async def _veo_coroutine() -> Optional[Dict[str, Any]]:
@@ -1409,12 +1416,6 @@ def _generate_video_veo(
         if thread_session_dir:
             os.makedirs(thread_session_dir, exist_ok=True)
 
-        def _take_cached_payload(stage: str) -> Optional[Dict[str, Any]]:
-            cached = _pop_video_response(expected_prompt_signature)
-            if cached:
-                logger.info("[VEO Thread %s] Найден кешированный ответ (%s) для текущего промпта", thread_id, stage)
-            return cached
-
         with _telethon_session_lock(source_session_file):
             if os.path.exists(source_session_file):
                 try:
@@ -1434,9 +1435,6 @@ def _generate_video_veo(
         client = TelegramClient(thread_session_name, api_id, api_hash)
 
         try:
-            cached_before_connect = _take_cached_payload("before connect")
-            if cached_before_connect:
-                return cached_before_connect
             logger.info("[VEO Thread %s] Попытка подключения к Telegram...", thread_id)
             await client.connect()
             logger.info("[VEO Thread %s] Успешно подключено к Telegram", thread_id)
@@ -1526,6 +1524,7 @@ def _generate_video_veo(
                         Вернуть payload, либо признак необходимости переключиться на SORA.
                         """
                         mode_label = "VEO" if mode_name == "veo" else "SORA"
+                        seen_message_ids: Set[int] = set()
                         if not await _select_video_mode(mode_name):
                             return None, False
 
@@ -1535,113 +1534,91 @@ def _generate_video_veo(
                             "текста" if text_only else "файла",
                             mode_label
                         )
+                        sent_at = time.time()
                         if text_only:
                             await conv.send_message(caption)
                         else:
                             await conv.send_file(bot, image_path, caption=caption)
                         logger.info("[VEO Thread %s] Сообщение отправлено, ожидание ответа...", thread_id)
 
+                        deadline = time.time() + timeout
+
+                        async def _poll_recent_messages(deadline_ts: float) -> Optional[Dict[str, Any]]:
+                            """
+                            Фолбэк: если conversation застрял (difference), проверяем историю бота напрямую.
+                            """
+                            while time.time() < deadline_ts:
+                                try:
+                                    history = await client.get_messages(bot, limit=8)
+                                except Exception as hist_exc:
+                                    logger.warning("[VEO Thread %s] Не удалось получить историю бота: %s", thread_id, hist_exc)
+                                    return None
+
+                                for msg in history:
+                                    msg_id = getattr(msg, "id", None)
+                                    if msg_id is None:
+                                        continue
+                                    if msg_id in seen_message_ids:
+                                        continue
+                                    msg_date = getattr(msg, "date", None)
+                                    if msg_date:
+                                        try:
+                                            if msg_date.timestamp() + 5 < sent_at:
+                                                continue
+                                        except Exception:
+                                            pass
+                                    seen_message_ids.add(msg_id)
+                                    payload = await _handle_response(msg)
+                                    if payload:
+                                        return payload
+                                await asyncio.sleep(1)
+                            return None
+
                         try:
                             response = await conv.get_response()
                             logger.info("[VEO Thread %s] Получен первый ответ от бота", thread_id)
+                            if getattr(response, "id", None) is not None:
+                                seen_message_ids.add(response.id)
                         except asyncio.TimeoutError:
                             logger.error("Бот VEO не ответил в течение %s секунд", timeout)
+                            fallback_payload = await _poll_recent_messages(deadline)
+                            if fallback_payload:
+                                return fallback_payload, False
                             return None, False
 
-                        deadline = time.time() + timeout
                         timed_out = False
 
                         async def _handle_response(resp) -> Optional[Dict[str, Any]]:
                             nonlocal matched_prompt_fragment
                             resp_text = resp.raw_text or ""
                             fragment_raw = _extract_response_prompt_fragment(resp_text)
-                            # Убрать markdown форматирование перед созданием сигнатуры
-                            fragment_raw_clean = re.sub(r'\*+', '', fragment_raw).strip() if fragment_raw else None
-                            fragment_signature = _normalize_prompt_signature(fragment_raw_clean)
-                            # Очищенная версия caption для логирования
-                            caption_clean_local = re.sub(r'\*+', '', caption).strip()
                             if fragment_raw:
                                 matched_prompt_fragment = fragment_raw
-                            if fragment_signature and expected_prompt_signature:
-                                matches_expected = (
-                                    fragment_signature in expected_prompt_signature
-                                    or expected_prompt_signature in fragment_signature
+                            for direct_url in _extract_urls_from_message(resp):
+                                logger.info("Получена прямая ссылка от VEO: %s", direct_url)
+                                downloaded_path = _download_url(direct_url)
+                                if downloaded_path:
+                                    return {
+                                        "success": True,
+                                        "video_path": downloaded_path,
+                                        "model": "veo",
+                                        "cleanup_paths": [downloaded_path],
+                                        "response_prompt_fragment": matched_prompt_fragment or fragment_raw or "",
+                                    }
+                                logger.warning(
+                                    "Не удалось скачать видео по ссылке %s, пробуем следующие ответы.", direct_url
                                 )
-                                if not matches_expected:
-                                    logger.warning(
-                                        "[VEO Thread %s] Ответ относится к другому промпту, ожидаем совпадение...",
-                                        thread_id
-                                    )
-                                    # Получить оригинальные промпты для отображения (уже очищенные от markdown)
-                                    original_expected = _take_first_sentences(caption_clean_local, 1)
-                                    original_received = _take_first_sentences(fragment_raw_clean, 1) if fragment_raw_clean else fragment_signature
-                                    logger.warning(
-                                        "[VEO Thread %s] Ожидаемое первое предложение: '%s'",
-                                        thread_id,
-                                        original_expected
-                                    )
-                                    logger.warning(
-                                        "[VEO Thread %s] Полученное первое предложение: '%s'",
-                                        thread_id,
-                                        original_received
-                                    )
-                                    return None
-                                if fragment_raw:
-                                    logger.info(
-                                        "[VEO Thread %s] Ответ подтвержден по промпту: %s",
-                                        thread_id,
-                                        fragment_raw[:120]
-                                    )
-                            if resp_text:
-                                url_match = re.search(r'https?://\S+', resp_text)
-                                if url_match:
-                                    direct_url = url_match.group(0)
-                                    logger.info("Получена прямая ссылка от VEO: %s", direct_url)
-                                    downloaded_path = _download_url(direct_url)
-                                    if downloaded_path:
-                                        target_signature = fragment_signature or expected_prompt_signature
-                                        payload = {
-                                            "success": True,
-                                            "video_path": downloaded_path,
-                                            "model": "veo",
-                                            "cleanup_paths": [downloaded_path],
-                                            "response_prompt_fragment": matched_prompt_fragment or fragment_raw or "",
-                                            "prompt_signature": target_signature,
-                                        }
-                                        if target_signature and target_signature != expected_prompt_signature:
-                                            _cache_video_response(target_signature, payload)
-                                            logger.info(
-                                                "[VEO Thread %s] Видео сохранено в кеш для другого промпта (%s)",
-                                                thread_id,
-                                                target_signature
-                                            )
-                                            return None
-                                        return payload
-                                    logger.warning(
-                                        "Не удалось скачать видео по ссылке %s, пробуем следующие ответы.", direct_url
-                                    )
                             if resp.media:
                                 fd, temp_path = tempfile.mkstemp(suffix=".mp4")
                                 os.close(fd)
                                 downloaded = await client.download_media(resp.media, file=temp_path)
-                                target_signature = fragment_signature or expected_prompt_signature
-                                payload = {
+                                return {
                                     "success": True,
                                     "video_path": downloaded,
                                     "model": "veo",
                                     "cleanup_paths": [downloaded],
                                     "response_prompt_fragment": matched_prompt_fragment or fragment_raw or "",
-                                    "prompt_signature": target_signature,
                                 }
-                                if target_signature and target_signature != expected_prompt_signature:
-                                    _cache_video_response(target_signature, payload)
-                                    logger.info(
-                                        "[VEO Thread %s] Видео сохранено в кеш для другого промпта (%s)",
-                                        thread_id,
-                                        target_signature
-                                    )
-                                    return None
-                                return payload
                             return None
 
                         def _needs_sora_switch(resp_text: str, current_mode: str) -> bool:
@@ -1663,25 +1640,25 @@ def _generate_video_veo(
                             if result_payload:
                                 return result_payload, False
 
-                            cached_after_response = _take_cached_payload("after foreign response")
-                            if cached_after_response:
-                                return cached_after_response, False
-
                             remaining = deadline - time.time()
                             if remaining <= 0:
                                 timed_out = True
                                 break
                             try:
                                 response = await conv.get_response(timeout=remaining)
+                                if getattr(response, "id", None) is not None:
+                                    seen_message_ids.add(response.id)
                             except asyncio.TimeoutError:
                                 timed_out = True
                                 break
 
                         if timed_out:
                             logger.error("Бот VEO не прислал видео в течение %s секунд (conversation)", timeout)
-                            cached_timeout_payload = _take_cached_payload("conversation timeout")
-                            if cached_timeout_payload:
-                                return cached_timeout_payload, False
+                            fallback_deadline = max(deadline, time.time() + 5)
+                            logger.info("[VEO Thread %s] Пробуем забрать ответы из истории бота...", thread_id)
+                            fallback_payload = await _poll_recent_messages(fallback_deadline)
+                            if fallback_payload:
+                                return fallback_payload, False
                             return None, False
 
                     modes_queue: List[str] = ["veo"]
@@ -1702,9 +1679,6 @@ def _generate_video_veo(
 
             except asyncio.TimeoutError:
                 logger.error("Бот VEO не ответил в течение %s секунд (conversation)", timeout)
-                cached_on_timeout = _take_cached_payload("timeout")
-                if cached_on_timeout:
-                    return cached_on_timeout
                 return None
 
         finally:
@@ -1741,14 +1715,6 @@ def _generate_video_veo(
                 except OSError:
                     pass
 
-    if not video_payload:
-        cached_fallback = _pop_video_response(expected_prompt_signature)
-        if cached_fallback:
-            video_payload = cached_fallback
-
-    if video_payload:
-        video_payload.pop("prompt_signature", None)
-
     video_path = (video_payload or {}).get("video_path") if video_payload else None
     prompt_fragment = (video_payload or {}).get("response_prompt_fragment")
     if not video_path or not os.path.exists(video_path):
@@ -1763,18 +1729,111 @@ def _generate_video_veo(
     }
 
 
-def _download_url(url: str) -> Optional[str]:
+def _download_url(url: str, _depth: int = 0) -> Optional[str]:
     try:
         video_timeout = get_video_generation_timeout()
         response = requests.get(url, timeout=video_timeout)
         response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "").lower()
+        if "video" not in content_type and "octet-stream" not in content_type:
+            # Попробуем извлечь прямую mp4 ссылку из HTML-обертки (страница-плеер)
+            if _depth < 2:
+                text_body = ""
+                try:
+                    text_body = response.text or ""
+                except Exception:
+                    text_body = ""
+                mp4_url, _ = _extract_mp4_from_html(text_body)
+                if mp4_url:
+                    return _download_url(mp4_url, _depth=_depth + 1)
+            logger.warning("Невидеоконтент (%s) у файла %s", content_type or "unknown", url)
+            return None
+
         fd, temp_path = tempfile.mkstemp(suffix=".mp4")
         with os.fdopen(fd, "wb") as tmp_file:
             tmp_file.write(response.content)
+        if not _is_valid_video(temp_path, content_type):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            return None
         return temp_path
     except Exception as exc:
         logger.error("Не удалось скачать файл %s: %s", url, exc)
         return None
+
+
+def _is_valid_video(file_path: str, content_type: Optional[str] = None) -> bool:
+    """
+    Простая валидация скачанного файла: проверяем размер и пробуем ffprobe.
+    """
+    if not os.path.exists(file_path):
+        return False
+
+    min_size_bytes = 1024 * 10  # 10KB
+    try:
+        size = os.path.getsize(file_path)
+        if size < min_size_bytes:
+            logger.warning("Файл слишком мал для видео (%s байт): %s", size, file_path)
+            return False
+    except OSError:
+        return False
+
+    if content_type and not any(
+        content_type.lower().startswith(prefix) for prefix in ("video/", "application/octet-stream")
+    ):
+        logger.warning("Невидеоконтент (%s) у файла %s", content_type, file_path)
+        return False
+
+    try:
+        probe_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+            file_path,
+        ]
+        result = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        has_video = (result.stdout or b"").strip() != b""
+        if not has_video:
+            logger.warning("ffprobe не нашел видео-поток в файле: %s", file_path)
+        return has_video
+    except FileNotFoundError:
+        # ffprobe недоступен — считаем валидным по размеру
+        return True
+    except subprocess.CalledProcessError as exc:
+        logger.warning(
+            "ffprobe не смог прочитать файл %s: %s\nSTDERR: %s",
+            file_path,
+            exc,
+            (exc.stderr or b"").decode(errors="ignore"),
+        )
+        return False
+
+
+def _extract_mp4_from_html(body: str) -> Tuple[Optional[str], str]:
+    """
+    Попробовать достать прямую mp4 ссылку из HTML/JS (source src=... или videoUrl = "...mp4").
+    Обрабатываем экранированные слэши.
+    """
+    if not body:
+        return None, "HTML body is empty"
+    normalized = html.unescape(body)
+    normalized = normalized.replace("\\/", "/")
+    match = MP4_URL_RE.search(normalized)
+    if match:
+        return match.group(0), f"MP4 matched: {match.group(0)}"
+    # Дополнительно смотрим на <source id="videoSource" src="...">
+    src_match = re.search(r'id=["\\\']videoSource["\\\']\\s+src=["\\\']([^"\\\']+\.mp4[^"\\\']*)', normalized, flags=re.I)
+    if src_match:
+        return src_match.group(1), f"videoSource src matched: {src_match.group(1)}"
+    return None, "MP4 not found in HTML"
 
 
 def _extract_video_path(value: Any, download_func) -> Optional[str]:

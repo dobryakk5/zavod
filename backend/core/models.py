@@ -1106,6 +1106,64 @@ class SEOKeywordSet(models.Model):
         return flat_keywords
 
 
+class WordstatQuery(models.Model):
+    """Сохранённый запрос Wordstat и его результаты для конкретного клиента."""
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="wordstat_queries")
+    request_phrase = models.CharField(max_length=255)
+    total_count = models.PositiveIntegerField(default=0)
+    include_parent = models.BooleanField(default=False)
+    regions = models.JSONField(default=list, blank=True)
+    devices = models.JSONField(default=list, blank=True)
+
+    user_login = models.CharField(max_length=255, blank=True)
+    limit_per_second = models.PositiveIntegerField(null=True, blank=True)
+    daily_limit = models.PositiveIntegerField(null=True, blank=True)
+    daily_limit_remaining = models.PositiveIntegerField(null=True, blank=True)
+
+    raw_response = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["client", "created_at"]),
+            models.Index(fields=["client", "request_phrase"]),
+        ]
+        verbose_name = "Wordstat Query"
+        verbose_name_plural = "Wordstat Queries"
+
+    def __str__(self):
+        return f"[{self.client.slug}] Wordstat '{self.request_phrase}' ({self.total_count})"
+
+
+class WordstatResult(models.Model):
+    """Отдельная фраза из выдачи Wordstat с частотностью."""
+
+    RESULT_TYPE_CHOICES = (
+        ("top_request", "Top request"),
+        ("association", "Association"),
+        ("favorite", "Favorite"),
+        ("skip", "Skip"),
+    )
+
+    query = models.ForeignKey(WordstatQuery, on_delete=models.CASCADE, related_name="results")
+    phrase = models.TextField()
+    count = models.PositiveIntegerField(default=0)
+    result_type = models.CharField(max_length=20, choices=RESULT_TYPE_CHOICES, default="top_request")
+
+    class Meta:
+        ordering = ("-count", "phrase")
+        indexes = [
+            models.Index(fields=["query", "result_type", "count"]),
+        ]
+        verbose_name = "Wordstat Result"
+        verbose_name_plural = "Wordstat Results"
+
+    def __str__(self):
+        return f"{self.phrase} ({self.count})"
+
+
 class SystemSetting(models.Model):
     """Глобальные настройки системы (singleton)."""
 
@@ -1114,6 +1172,9 @@ class SystemSetting(models.Model):
     DEFAULT_IMAGE_AI_MODEL = "google/gemini-2.5-flash-image"
     DEFAULT_IMAGE_TIMEOUT = 120
     DEFAULT_VIDEO_TIMEOUT = 600
+    DEFAULT_PHOTO_PROMPT_INSTRUCTIONS = (
+        "Use people with Slavic appearance, fair skin, any age, any gender"
+    )
     DEFAULT_FALLBACK_AI_MODEL = "tngtech/deepseek-r1t2-chimera:free"
 
     IMAGE_GENERATION_METHODS = [
@@ -1158,6 +1219,14 @@ class SystemSetting(models.Model):
             "Этот текст добавляется к базовым инструкциям при генерации видео."
         ),
     )
+    photo_prompt_instructions = models.TextField(
+        blank=True,
+        default=DEFAULT_PHOTO_PROMPT_INSTRUCTIONS,
+        help_text=(
+            "Дополнительные пожелания к промптам для генерации изображений. "
+            "Этот текст добавляется к базовым инструкциям при генерации фото."
+        ),
+    )
     image_generation_timeout = models.PositiveIntegerField(
         default=DEFAULT_IMAGE_TIMEOUT,
         help_text=(
@@ -1199,6 +1268,7 @@ class SystemSetting(models.Model):
                 "fallback_ai_model": cls.DEFAULT_FALLBACK_AI_MODEL,
                 "image_generation_timeout": cls.DEFAULT_IMAGE_TIMEOUT,
                 "video_generation_timeout": cls.DEFAULT_VIDEO_TIMEOUT,
+                "photo_prompt_instructions": cls.DEFAULT_PHOTO_PROMPT_INSTRUCTIONS,
             },
         )
         return obj

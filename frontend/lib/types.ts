@@ -264,6 +264,31 @@ export interface TaskResponse {
 
 export type SEOGroupType = 'seo_pains' | 'seo_desires' | 'seo_objections' | 'seo_avatar' | 'seo_keywords' | '';
 
+export type WordstatResultType = 'top_request' | 'association' | 'favorite' | 'skip';
+
+export interface WordstatResult {
+  id: number;
+  phrase: string;
+  count: number;
+  result_type: WordstatResultType;
+}
+
+export interface WordstatQuery {
+  id: number;
+  client: number;
+  request_phrase: string;
+  total_count: number;
+  include_parent: boolean;
+  regions?: number[];
+  devices?: string[];
+  user_login?: string;
+  limit_per_second?: number | null;
+  daily_limit?: number | null;
+  daily_limit_remaining?: number | null;
+  created_at: string;
+  results: WordstatResult[];
+}
+
 export interface SEOKeywordSet {
   id: number;
   client: number;

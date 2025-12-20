@@ -2,17 +2,42 @@
 
 from __future__ import annotations
 
+import os
 import random
 from typing import Any, Callable, Dict, List, Optional
 
 from . import foto_video_gen
 from .ai_generator_base import logger
-from .system_settings import get_video_prompt_instructions
+from .system_settings import get_photo_prompt_instructions, get_video_prompt_instructions
+
+
+def _get_video_prompt_max_length(default: int = 1900) -> int:
+    env_value = os.getenv("VEO_PROMPT_MAX_LENGTH") or os.getenv("VIDEO_PROMPT_MAX_LENGTH")
+    if not env_value:
+        return default
+    try:
+        value = int(env_value)
+        return value if value > 0 else default
+    except ValueError:
+        logger.warning("Некорректное значение VEO_PROMPT_MAX_LENGTH/VIDEO_PROMPT_MAX_LENGTH: %s", env_value)
+        return default
+
+
+def _limit_video_prompt_length(prompt: str, max_length: Optional[int] = None) -> str:
+    """Trim video prompts to avoid downstream truncation."""
+    if not prompt:
+        return ""
+    limit = max_length if max_length and max_length > 0 else _get_video_prompt_max_length()
+    if limit and len(prompt) > limit:
+        logger.info("Промпт для видео превышает лимит %s символов (длина=%s) — обрезаем", limit, len(prompt))
+        return prompt[:limit]
+    return prompt
 
 
 def merge_video_prompt_with_additional(
     base_prompt: Optional[str],
     additional_prompt: Optional[str],
+    max_length: Optional[int] = None,
 ) -> str:
     """
     Append client-specific technical instructions to the base video prompt.
@@ -24,9 +49,12 @@ def merge_video_prompt_with_additional(
     additional = (additional_prompt or "").strip()
     if additional:
         if base:
-            return f"{base}\n\n{additional}"
-        return additional
-    return base
+            combined = f"{base}\n\n{additional}"
+        else:
+            combined = additional
+    else:
+        combined = base
+    return _limit_video_prompt_length(combined, max_length=max_length)
 
 
 class MediaGenerationMixin:
@@ -35,6 +63,14 @@ class MediaGenerationMixin:
     def generate_image_prompt(self, post_title: str, post_text: str) -> Optional[str]:
         """Generate an optimized image prompt from post content using AI."""
         try:
+            extra_photo_instructions = get_photo_prompt_instructions().strip()
+            admin_instructions_block = ""
+            if extra_photo_instructions:
+                admin_instructions_block = (
+                    "\nДополнительные пожелания от администратора (учти их в ответе):\n"
+                    f"{extra_photo_instructions}\n"
+                )
+
             prompt = f"""
 Ты - эксперт по созданию промптов для генерации изображений.
 
@@ -52,7 +88,7 @@ class MediaGenerationMixin:
 5. Промпт должен быть 1-2 предложения, очень конкретный и визуальный
 6. Избегай текста на изображении
 7. Фокусируйся на визуальной метафоре или прямом представлении темы
-
+{admin_instructions_block}
 ФОРМАТ ОТВЕТА: Только промпт на английском языке, без дополнительных комментариев.
 
 Пример хорошего промпта:
@@ -123,7 +159,7 @@ class MediaGenerationMixin:
 
             video_prompt = ai_response.strip()
             logger.info("Сгенерирован промпт для видео: %s", video_prompt[:120])
-            return video_prompt
+            return _limit_video_prompt_length(video_prompt)
 
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Error generating video prompt: %s", exc, exc_info=True)

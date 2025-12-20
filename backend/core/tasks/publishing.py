@@ -3,6 +3,11 @@ from django.utils import timezone
 import logging
 
 from ..models import Schedule
+from ..social_publishers import (
+    InstagramPublisher,
+    YouTubePublisher,
+    build_absolute_media_url,
+)
 from ..telegram_client import TelegramPublisher, run_async_task
 
 logger = logging.getLogger(__name__)
@@ -24,6 +29,34 @@ def _compose_post_text(post) -> str:
         parts.append(body)
 
     return "\n\n".join(parts)
+
+
+def _prepare_media_assets(post):
+    """
+    Собирает пути и публичные URL для медиа, учитывая флаги публикации.
+    """
+    text = _compose_post_text(post)
+    image_path = image_url = video_path = video_url = None
+
+    if getattr(post, "publish_image", False):
+        primary_image = post.get_primary_image()
+        if primary_image and primary_image.image:
+            image_path = getattr(primary_image.image, "path", None)
+            image_url = build_absolute_media_url(getattr(primary_image.image, "url", ""))
+
+    if getattr(post, "publish_video", False):
+        primary_video = post.get_primary_video()
+        if primary_video and primary_video.video:
+            video_path = getattr(primary_video.video, "path", None)
+            video_url = build_absolute_media_url(getattr(primary_video.video, "url", ""))
+
+    return {
+        "text": text,
+        "image_path": image_path,
+        "image_url": image_url,
+        "video_path": video_path,
+        "video_url": video_url,
+    }
 
 
 def _update_post_status_after_publish(post):
@@ -94,6 +127,8 @@ def publish_schedule(schedule_id: int):
         post = schedule.post
         social_account = schedule.social_account
         client = schedule.client
+        assets = _prepare_media_assets(post)
+        text = assets["text"]
 
         logger.info(f"Публикация поста '{post.title}' в {social_account.platform}")
 
@@ -133,19 +168,8 @@ def publish_schedule(schedule_id: int):
                 bot_token=bot_token
             )
 
-            # Подготавливаем данные для публикации с учетом флагов
-            text = _compose_post_text(post)
-            image_path = None
-            video_path = None
-
-            if post.publish_image:
-                primary_image = post.get_primary_image()
-                if primary_image and primary_image.image:
-                    image_path = primary_image.image.path
-            if post.publish_video:
-                primary_video = post.get_primary_video()
-                if primary_video and primary_video.video:
-                    video_path = primary_video.video.path
+            image_path = assets["image_path"]
+            video_path = assets["video_path"]
 
             # Проверяем, что есть хоть что-то для публикации
             if not text and not image_path and not video_path:
@@ -192,17 +216,141 @@ def publish_schedule(schedule_id: int):
                 schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
                 logger.error(f"Ошибка публикации в Telegram: {error_msg}")
 
-        # Instagram публикация (TODO)
+        # Instagram публикация
         elif social_account.platform == "instagram":
-            logger.warning("Instagram публикация пока не реализована")
-            schedule.status = "failed"
-            schedule.log = (schedule.log or "") + "\n[ERROR] Instagram публикация не реализована"
+            access_token = (social_account.access_token or "").strip()
+            extra = social_account.extra or {}
+            ig_account_id = None
+            if isinstance(extra, dict):
+                ig_account_id = (
+                    extra.get("instagram_business_account_id")
+                    or extra.get("instagram_account_id")
+                    or extra.get("ig_user_id")
+                )
 
-        # YouTube публикация (TODO)
+            if not access_token:
+                error_msg = "Instagram access_token не указан в SocialAccount"
+                logger.error(error_msg)
+                schedule.status = "failed"
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                schedule.save()
+                return
+
+            if not ig_account_id:
+                error_msg = "В extra SocialAccount не указан instagram_business_account_id"
+                logger.error(error_msg)
+                schedule.status = "failed"
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                schedule.save()
+                return
+
+            # Instagram требует медиа: используем видео приоритетно, иначе изображение
+            media_url = None
+            use_video = False
+            if assets["video_url"]:
+                media_url = assets["video_url"]
+                use_video = True
+            elif assets["image_url"]:
+                media_url = assets["image_url"]
+
+            if not media_url:
+                error_msg = (
+                    "Для Instagram нужен публичный URL изображения или видео. "
+                    "Убедитесь, что MEDIA_URL доступен извне или настройте PUBLIC_MEDIA_BASE_URL/WAGTAILADMIN_BASE_URL."
+                )
+                logger.error(error_msg)
+                schedule.status = "failed"
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                schedule.save()
+                return
+
+            publisher = InstagramPublisher(
+                access_token=access_token,
+                business_account_id=str(ig_account_id),
+            )
+
+            result = publisher.publish_post(
+                caption=text,
+                image_url=None if use_video else media_url,
+                video_url=media_url if use_video else None,
+            )
+
+            if result.get("success"):
+                schedule.status = "published"
+                schedule.external_id = str(result.get("media_id", ""))
+                log_msg = f"\n[SUCCESS] Опубликовано в Instagram: {result.get('url', '')}"
+                schedule.log = (schedule.log or "") + log_msg
+                logger.info(f"Пост успешно опубликован в Instagram: {result.get('url', '')}")
+                _update_post_status_after_publish(post)
+            else:
+                schedule.status = "failed"
+                error_msg = result.get("error", "Instagram публикация завершилась с ошибкой")
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                logger.error(f"Ошибка публикации в Instagram: {error_msg}")
+
+        # YouTube публикация
         elif social_account.platform == "youtube":
-            logger.warning("YouTube публикация пока не реализована")
-            schedule.status = "failed"
-            schedule.log = (schedule.log or "") + "\n[ERROR] YouTube публикация не реализована"
+            video_path = assets["video_path"]
+            if not video_path:
+                error_msg = "Для публикации на YouTube требуется видеофайл"
+                logger.error(error_msg)
+                schedule.status = "failed"
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                schedule.save()
+                return
+
+            access_token = (social_account.access_token or "").strip()
+            refresh_token = (social_account.refresh_token or "").strip() or None
+            extra = social_account.extra or {}
+            client_id = extra.get("client_id") if isinstance(extra, dict) else None
+            client_secret = extra.get("client_secret") if isinstance(extra, dict) else None
+            token_uri = extra.get("token_uri") if isinstance(extra, dict) else None
+            privacy_status = extra.get("privacy_status") if isinstance(extra, dict) else None
+
+            if not access_token:
+                error_msg = "YouTube access_token не указан в SocialAccount"
+                logger.error(error_msg)
+                schedule.status = "failed"
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                schedule.save()
+                return
+
+            publisher = YouTubePublisher(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                client_id=client_id,
+                client_secret=client_secret,
+                token_uri=token_uri or "https://oauth2.googleapis.com/token",
+            )
+
+            description = (text or "").strip()[:5000]
+            title = (getattr(post, "title", "") or "Видео").strip() or "Видео"
+
+            result = publisher.publish_video(
+                video_path=video_path,
+                title=title,
+                description=description,
+                privacy_status=privacy_status or "public",
+            )
+
+            if result.get("success"):
+                schedule.status = "published"
+                schedule.external_id = str(result.get("video_id", ""))
+                log_msg = f"\n[SUCCESS] Опубликовано на YouTube: {result.get('url', '')}"
+                schedule.log = (schedule.log or "") + log_msg
+                logger.info(f"Пост успешно опубликован на YouTube: {result.get('url', '')}")
+
+                new_token = result.get("access_token")
+                if new_token and new_token != social_account.access_token:
+                    social_account.access_token = new_token
+                    social_account.save(update_fields=["access_token"])
+
+                _update_post_status_after_publish(post)
+            else:
+                schedule.status = "failed"
+                error_msg = result.get("error", "YouTube публикация завершилась с ошибкой")
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                logger.error(f"Ошибка публикации на YouTube: {error_msg}")
 
         else:
             logger.error(f"Неизвестная платформа: {social_account.platform}")
