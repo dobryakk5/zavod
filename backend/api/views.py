@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import html
+import json
 import logging
 import mimetypes
 import secrets
-from datetime import timedelta
+import string
+from datetime import datetime, timedelta
 from email.utils import format_datetime
 from urllib.parse import parse_qsl, urlencode
 
@@ -98,8 +101,10 @@ COOKIE_SAMESITE = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
 COOKIE_MAX_AGE = int(getattr(settings, "JWT_COOKIE_MAX_AGE", 60 * 60))  # 1 hour for access token
 REFRESH_COOKIE_MAX_AGE = int(getattr(settings, "JWT_REFRESH_COOKIE_MAX_AGE", 60 * 60 * 24 * 7))
 MAX_WEEKLY_POSTS = 21
-VK_SCOPE = "wall,photos,groups"
+VK_SCOPE = "wall photos groups"
 VK_TIMEOUT = 15
+VK_ID_AUTHORIZE_URL = "https://id.vk.ru/authorize"
+VK_ID_TOKEN_URL = "https://id.vk.ru/oauth2/auth"
 MEDIA_GENERATION_COOLDOWN = timedelta(hours=1)
 
 logger = logging.getLogger(__name__)
@@ -297,8 +302,6 @@ def _missing_vk_settings() -> list[str]:
     missing: list[str] = []
     if not getattr(settings, "VK_CLIENT_ID", ""):
         missing.append("VK_CLIENT_ID")
-    if not getattr(settings, "VK_CLIENT_SECRET", ""):
-        missing.append("VK_CLIENT_SECRET")
     if not getattr(settings, "VK_REDIRECT_URI", ""):
         missing.append("VK_REDIRECT_URI")
     return missing
@@ -306,31 +309,40 @@ def _missing_vk_settings() -> list[str]:
 
 def _popup_response(message: str, *, success: bool = True, title: str = "VK интеграция"):
     """
-    Returns a tiny HTML page that notifies the user and attempts to close the popup.
+    Returns a minimal plain-text page (no scripts) per VK ID redirect_uri requirements.
     """
-    status_value = "success" if success else "error"
-    html = f"""
-<!DOCTYPE html>
-<html lang="ru">
-  <head>
-    <meta charset="utf-8" />
-    <title>{title}</title>
-    <style>
-      body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; padding: 24px; }}
-    </style>
-  </head>
-  <body>
-    <p>{message}</p>
-    <script>
-      try {{
-        window.opener && window.opener.postMessage({{ type: 'vk-connect', status: '{status_value}' }}, '*');
-      }} catch (err) {{}}
-      setTimeout(function () {{ window.close(); }}, 1200);
-    </script>
-  </body>
-</html>
-    """.strip()
-    return HttpResponse(html)
+    status_value = "Успех" if success else "Ошибка"
+    content = f"{title}: {status_value}\n\n{message}\n\nОкно можно закрыть."
+    response = HttpResponse(content, content_type="text/plain; charset=utf-8")
+    response["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+def _generate_vk_state(length: int = 36) -> str:
+    alphabet = string.ascii_letters + string.digits + "_-"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _generate_pkce_pair() -> tuple[str, str]:
+    code_verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return code_verifier, code_challenge
+
+
+def _vk_id_token_request(payload: dict) -> dict:
+    try:
+        response = requests.post(VK_ID_TOKEN_URL, data=payload, timeout=VK_TIMEOUT)
+        data = response.json()
+    except requests.RequestException as exc:
+        raise VkApiError("Не удалось связаться с VK ID") from exc
+    except ValueError as exc:
+        raise VkApiError("VK ID вернул некорректный ответ") from exc
+
+    if "error" in data:
+        message = data.get("error_description") or data.get("error") or "Ошибка VK ID"
+        raise VkApiError(message, data)
+    return data
 
 
 def _vk_api_request(method: str, *, access_token: str, params: dict | None = None,
@@ -394,25 +406,122 @@ def _fetch_single_group(access_token: str, identifier: str) -> dict:
     return group
 
 
-def _save_vk_integration(client: Client, owner, group_data: dict, access_token: str, user_id: int | None):
+def _save_vk_integration(
+    client: Client,
+    owner,
+    group_data: dict,
+    access_token: str,
+    user_id: int | None,
+    token_meta: dict | None = None,
+):
     group_id = int(group_data.get("id"))
-    defaults = {
-        "owner": owner,
-        "group_name": group_data.get("name", ""),
-        "screen_name": group_data.get("screen_name", ""),
-        "access_token": access_token,
-        "user_id": user_id,
-        "status": VkIntegration.STATUS_ACTIVE,
-        "extra": {
-            "type": group_data.get("type"),
-            "members_count": group_data.get("members_count"),
-        },
-    }
-    VkIntegration.objects.update_or_create(
+    integration, _created = VkIntegration.objects.get_or_create(
         client=client,
         group_id=group_id,
-        defaults=defaults,
+        defaults={
+            "owner": owner,
+            "group_name": group_data.get("name", ""),
+            "screen_name": group_data.get("screen_name", ""),
+        },
     )
+
+    extra = integration.extra or {}
+    extra.update({
+        "type": group_data.get("type"),
+        "members_count": group_data.get("members_count"),
+    })
+
+    token_meta = token_meta or {}
+    if token_meta.get("refresh_token"):
+        extra["refresh_token"] = token_meta["refresh_token"]
+    if token_meta.get("device_id"):
+        extra["device_id"] = token_meta["device_id"]
+    if token_meta.get("id_token"):
+        extra["id_token"] = token_meta["id_token"]
+    if token_meta.get("scope"):
+        extra["scope"] = token_meta["scope"]
+
+    expires_in = token_meta.get("expires_in")
+    if expires_in:
+        try:
+            expires_seconds = int(expires_in)
+            if expires_seconds > 0:
+                expires_at = timezone.now() + timedelta(seconds=expires_seconds)
+                extra["access_token_expires_at"] = expires_at.isoformat()
+        except (TypeError, ValueError):
+            pass
+
+    integration.owner = owner
+    integration.group_name = group_data.get("name", "")
+    integration.screen_name = group_data.get("screen_name", "")
+    integration.access_token = access_token
+    integration.user_id = user_id
+    integration.status = VkIntegration.STATUS_ACTIVE
+    integration.extra = extra
+    integration.save(
+        update_fields=[
+            "owner",
+            "group_name",
+            "screen_name",
+            "access_token",
+            "user_id",
+            "status",
+            "extra",
+            "updated_at",
+        ]
+    )
+
+
+def _refresh_vk_access_token_if_needed(integration: VkIntegration) -> None:
+    extra = integration.extra or {}
+    refresh_token = extra.get("refresh_token")
+    device_id = extra.get("device_id")
+    expires_at_raw = extra.get("access_token_expires_at")
+
+    if not refresh_token or not device_id:
+        return
+
+    expires_at = None
+    if expires_at_raw:
+        try:
+            expires_at = datetime.fromisoformat(expires_at_raw)
+            if timezone.is_naive(expires_at):
+                expires_at = timezone.make_aware(expires_at)
+        except (TypeError, ValueError):
+            expires_at = None
+
+    if expires_at and (expires_at - timezone.now()) > timedelta(seconds=60):
+        return
+
+    refresh_payload = {
+        "client_id": settings.VK_CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "device_id": device_id,
+        "state": _generate_vk_state(32),
+    }
+    token_data = _vk_id_token_request(refresh_payload)
+
+    new_expires_in = token_data.get("expires_in")
+    if new_expires_in:
+        try:
+            expires_seconds = int(new_expires_in)
+            if expires_seconds > 0:
+                expires_at = timezone.now() + timedelta(seconds=expires_seconds)
+                extra["access_token_expires_at"] = expires_at.isoformat()
+        except (TypeError, ValueError):
+            pass
+
+    extra["refresh_token"] = token_data.get("refresh_token") or refresh_token
+    extra["device_id"] = device_id
+    if token_data.get("scope"):
+        extra["scope"] = token_data["scope"]
+    if token_data.get("id_token"):
+        extra["id_token"] = token_data["id_token"]
+
+    integration.access_token = token_data.get("access_token") or integration.access_token
+    integration.extra = extra
+    integration.save(update_fields=["access_token", "extra", "updated_at"])
 
 
 def set_token_cookie(response: Response, key: str, value: str, max_age: int):
@@ -1427,7 +1536,7 @@ class VkIntegrationViewSet(mixins.ListModelMixin,
 
 
 class VkConnectView(APIView):
-    """Starts VK OAuth flow and redirects user to VK."""
+    """Starts VK ID OAuth PKCE flow and redirects user to VK."""
 
     permission_classes = [IsTenantOwnerOrEditor]
 
@@ -1438,13 +1547,15 @@ class VkConnectView(APIView):
         missing = _missing_vk_settings()
         if missing:
             msg = (
-                "VK OAuth не настроен. Укажите переменные "
+                "VK ID OAuth не настроен. Укажите переменные "
                 f"{', '.join(missing)} на сервере."
             )
             return _popup_response(msg, success=False)
 
-        state = secrets.token_urlsafe(16)
+        state = _generate_vk_state()
+        code_verifier, code_challenge = _generate_pkce_pair()
         request.session["vk_oauth_state"] = state
+        request.session["vk_code_verifier"] = code_verifier
         target_group = request.query_params.get("group_id")
         if target_group:
             request.session["vk_target_group"] = target_group
@@ -1452,19 +1563,19 @@ class VkConnectView(APIView):
 
         params = {
             "client_id": settings.VK_CLIENT_ID,
-            "display": "page",
             "redirect_uri": settings.VK_REDIRECT_URI,
             "scope": VK_SCOPE,
             "response_type": "code",
             "state": state,
-            "v": getattr(settings, "VK_API_VERSION", "5.131"),
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
         }
-        auth_url = "https://oauth.vk.com/authorize?" + urlencode(params)
+        auth_url = f"{VK_ID_AUTHORIZE_URL}?" + urlencode(params)
         return redirect(auth_url)
 
 
 class VkCallbackView(APIView):
-    """Handles VK OAuth callback, saves integrations and closes the popup."""
+    """Handles VK ID callback, exchanges code for tokens and saves integrations."""
 
     permission_classes = [IsAuthenticated]
 
@@ -1472,48 +1583,60 @@ class VkCallbackView(APIView):
         missing = _missing_vk_settings()
         if missing:
             msg = (
-                "VK OAuth не настроен. Обратитесь к администратору: "
+                "VK ID OAuth не настроен. Обратитесь к администратору: "
                 f"{', '.join(missing)}"
             )
             return _popup_response(msg, success=False)
 
-        provided_state = request.GET.get("state")
+        payload_raw = request.GET.get("payload")
+        payload_data: dict = {}
+        if payload_raw:
+            try:
+                payload_data = json.loads(payload_raw)
+            except ValueError:
+                return _popup_response("Некорректный payload авторизации VK ID", success=False)
+
+        provided_state = payload_data.get("state") or request.GET.get("state")
         saved_state = request.session.pop("vk_oauth_state", None)
         if not provided_state or provided_state != saved_state:
-            return _popup_response("Некорректный ответ авторизации VK", success=False)
+            return _popup_response("Некорректный ответ авторизации VK ID (state mismatch)", success=False)
 
-        code = request.GET.get("code")
+        code_verifier = request.session.pop("vk_code_verifier", None)
+        if not code_verifier:
+            return _popup_response("Не удалось подтвердить PKCE для VK ID", success=False)
+
+        code = payload_data.get("code") or request.GET.get("code")
+        device_id = payload_data.get("device_id") or request.GET.get("device_id")
         if not code:
             error_description = request.GET.get("error_description") or "VK не вернул код авторизации"
             return _popup_response(error_description, success=False)
+        if not device_id:
+            return _popup_response("VK ID не вернул device_id", success=False)
 
         try:
             client = get_active_client(request.user)
         except PermissionDenied:
             return _popup_response("Пользователь не привязан к клиенту", success=False)
 
-        token_url = "https://oauth.vk.com/access_token"
-        params = {
+        token_params = {
             "client_id": settings.VK_CLIENT_ID,
-            "client_secret": settings.VK_CLIENT_SECRET,
-            "redirect_uri": settings.VK_REDIRECT_URI,
+            "grant_type": "authorization_code",
+            "code_verifier": code_verifier,
+            "device_id": device_id,
             "code": code,
+            "redirect_uri": settings.VK_REDIRECT_URI,
+            "state": provided_state,
         }
         try:
-            token_response = requests.get(token_url, params=params, timeout=VK_TIMEOUT)
-            token_data = token_response.json()
-        except requests.RequestException as exc:
-            logger.exception("VK token exchange failed: %s", exc)
-            return _popup_response("Не удалось связаться с VK. Попробуйте позже.", success=False)
-
-        if "error" in token_data:
-            message = token_data.get("error_description") or token_data.get("error") or "Ошибка VK OAuth"
-            return _popup_response(f"Ошибка VK OAuth: {message}", success=False)
+            token_data = _vk_id_token_request(token_params)
+        except VkApiError as exc:
+            logger.warning("VK ID token exchange failed: %s", exc)
+            return _popup_response(f"Ошибка VK ID OAuth: {exc}", success=False)
 
         access_token = token_data.get("access_token")
         user_id = token_data.get("user_id")
         if not access_token:
-            return _popup_response("VK не вернул токен доступа", success=False)
+            return _popup_response("VK ID не вернул access_token", success=False)
 
         target_group = request.GET.get("group_id") or request.session.pop("vk_target_group", None)
         groups: list[dict]
@@ -1533,8 +1656,15 @@ class VkCallbackView(APIView):
         if not groups:
             return _popup_response("VK не нашёл групп, где вы администратор.", success=False)
 
+        token_meta = {
+            "refresh_token": token_data.get("refresh_token"),
+            "id_token": token_data.get("id_token"),
+            "expires_in": token_data.get("expires_in"),
+            "scope": token_data.get("scope"),
+            "device_id": device_id,
+        }
         for group in groups:
-            _save_vk_integration(client, request.user, group, access_token, user_id)
+            _save_vk_integration(client, request.user, group, access_token, user_id, token_meta)
 
         message = "Группа успешно подключена." if len(groups) == 1 else f"Подключено групп: {len(groups)}."
         return _popup_response(f"{message} Это окно можно закрыть.")
@@ -1561,6 +1691,16 @@ class VkPublishView(APIView):
             return Response(
                 {"success": False, "error": "Добавьте текст или изображение для публикации"},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            _refresh_vk_access_token_if_needed(integration)
+        except VkApiError as exc:
+            integration.status = VkIntegration.STATUS_ERROR
+            integration.save(update_fields=["status"])
+            return Response(
+                {"success": False, "error": f"Не удалось обновить токен VK ID: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
             )
 
         try:
