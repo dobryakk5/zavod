@@ -361,6 +361,7 @@ class SocialAccount(models.Model):
         ("instagram", "Instagram"),
         ("telegram", "Telegram"),
         ("youtube", "YouTube"),
+        ("vkontakte", "VKontakte"),
         ("rss_zen", "RSS Zen"),
     )
 

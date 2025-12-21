@@ -276,8 +276,7 @@ export function SocialAccountsManager() {
   };
 
   const rows: TableRowData[] = useMemo(() => {
-    const filteredAccounts = accounts.filter((account) => account.platform !== 'vkontakte');
-    const socialRows: TableRowData[] = filteredAccounts.map((account) => {
+    const socialRows: TableRowData[] = accounts.map((account) => {
       const extra = account.extra as Record<string, unknown> | undefined;
       const displayName =
         account.platform === 'telegram'
@@ -296,7 +295,7 @@ export function SocialAccountsManager() {
       };
     });
 
-    const platformsReferenced = new Set(filteredAccounts.map((account) => account.platform));
+    const platformsReferenced = new Set(accounts.map((account) => account.platform));
 
     if (!platformsReferenced.has('telegram')) {
       socialRows.push({
