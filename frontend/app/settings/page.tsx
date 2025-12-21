@@ -2,6 +2,7 @@
 
 import { ClientSettingsForm } from '@/components/settings/client-settings-form';
 import { SocialAccountsManager } from '@/components/settings/social-accounts-manager';
+import { VkIntegrationsPanel } from '@/components/settings/vk-integrations-panel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function SettingsPage() {
@@ -18,6 +19,7 @@ export default function SettingsPage() {
         <TabsList>
           <TabsTrigger value="client">Настройки клиента</TabsTrigger>
           <TabsTrigger value="social">Социальные аккаунты</TabsTrigger>
+          <TabsTrigger value="vk">Группы VK</TabsTrigger>
         </TabsList>
 
         <TabsContent value="client" className="space-y-6">
@@ -28,6 +30,10 @@ export default function SettingsPage() {
 
         <TabsContent value="social" className="space-y-6">
           <SocialAccountsManager />
+        </TabsContent>
+
+        <TabsContent value="vk" className="space-y-6">
+          <VkIntegrationsPanel />
         </TabsContent>
       </Tabs>
     </div>
