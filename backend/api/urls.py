@@ -14,6 +14,7 @@ from .views import (
     PostToneViewSet,
     PostTypeViewSet,
     PostViewSet,
+    DzenRSSFeedView,
     RefreshTokenView,
     ScheduleListView,
     ScheduleViewSet,
@@ -70,6 +71,9 @@ urlpatterns = [
     # Legacy list views (kept for backward compatibility)
     path('posts-list/', PostsListView.as_view(), name='posts-list'),
     path('schedules/', ScheduleListView.as_view(), name='schedules'),
+
+    # Public RSS feed for Yandex Zen
+    path('rss/<slug:client_slug>.xml', DzenRSSFeedView.as_view(), name='api-rss-feed'),
 
     # VK integration endpoints
     path('vk/connect/', VkConnectView.as_view(), name='vk-connect'),

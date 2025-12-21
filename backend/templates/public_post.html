@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ post.title }} — {{ client_name }}</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7fb;
+      color: #0f172a;
+      line-height: 1.65;
+    }
+    .wrapper {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      color: #475569;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    h1 {
+      margin: 0 0 16px;
+      font-size: 28px;
+      letter-spacing: -0.02em;
+    }
+    .cover {
+      margin: 16px 0 24px;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+      background: #fff;
+    }
+    .cover img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    .content p {
+      margin: 0 0 16px;
+      font-size: 17px;
+    }
+    @media (max-width: 640px) {
+      .wrapper { padding: 24px 16px 36px; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrapper">
+    <header>
+      <div>{{ client_name }}</div>
+      <div>{{ published_at|date:"d E Y H:i" }}</div>
+    </header>
+
+    <h1>{{ post.title }}</h1>
+
+    {% if image_url %}
+      <div class="cover">
+        <img src="{{ image_url }}" alt="{{ image_alt|default:post.title }}">
+      </div>
+    {% endif %}
+
+    <div class="content">
+      {{ body_html|safe }}
+    </div>
+  </main>
+</body>
+</html>

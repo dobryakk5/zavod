@@ -174,3 +174,43 @@ def sync_client_default_telegram_account(
     )
     ensure_telegram_account_metadata(account, channel_value=normalized_channel, force_refresh=True)
     return account
+
+
+def ensure_rss_zen_account(client: Client, feed_url: Optional[str]) -> Optional[SocialAccount]:
+    """
+    Ensure the client has a SocialAccount for RSS Yandex Zen with the given feed URL.
+
+    The feed_url should already be absolute; if missing, the account is not created.
+    """
+    if not feed_url:
+        return None
+
+    account, _created = SocialAccount.objects.get_or_create(
+        client=client,
+        platform="rss_zen",
+        defaults={
+            "name": "RSS Дзен",
+            "access_token": feed_url,
+            "extra": {"url": feed_url, "source": "rss_zen"},
+        },
+    )
+
+    desired_extra = {"url": feed_url, "source": "rss_zen"}
+    updated_fields: list[str] = []
+
+    if account.name != "RSS Дзен":
+        account.name = "RSS Дзен"
+        updated_fields.append("name")
+
+    if account.access_token != feed_url:
+        account.access_token = feed_url
+        updated_fields.append("access_token")
+
+    if account.extra != desired_extra:
+        account.extra = desired_extra
+        updated_fields.append("extra")
+
+    if updated_fields:
+        account.save(update_fields=updated_fields)
+
+    return account

@@ -5,7 +5,8 @@ from django.conf.urls.static import static
 from wagtail.admin import urls as wagtailadmin_urls
 from wagtail.documents import urls as wagtaildocs_urls
 from wagtail import urls as wagtail_urls
-from api.views import VkConnectView, VkCallbackView, VkPublishView
+from api.views import VkConnectView, VkCallbackView, VkPublishView, DzenRSSFeedView
+from core import views as core_views
 
 urlpatterns = [
     path('django-admin/', admin.site.urls),
@@ -13,6 +14,8 @@ urlpatterns = [
     path('documents/', include(wagtaildocs_urls)),
     path('api/', include('api.urls')),
     path('core/', include('core.urls')),  # Core app URLs
+    path('rss/<slug:client_slug>.xml', DzenRSSFeedView.as_view(), name='rss-feed'),
+    path('posts/<slug:client_slug>/<int:post_id>/', core_views.public_post_detail, name='public-post'),
     # Direct VK routes (used by frontend popup redirects)
     path('vk/connect/', VkConnectView.as_view(), name='vk-connect'),
     path('vk/callback/', VkCallbackView.as_view(), name='vk-callback'),

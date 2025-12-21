@@ -47,6 +47,7 @@ const PLATFORM_LABELS: Record<Platform, string> = {
   instagram: 'Instagram',
   youtube: 'YouTube',
   vkontakte: 'VKontakte',
+  rss_zen: 'RSS Дзен',
 };
 
 const formatLinkLabel = (value: string) => value.replace(/^https?:\/\//i, '').replace(/\/$/, '');
@@ -93,6 +94,13 @@ const getSocialAccountLink = (account: SocialAccount): RowLink | null => {
     return {
       label: formatLinkLabel(url),
       url,
+    };
+  }
+
+  if (account.access_token && /^https?:\/\//i.test(account.access_token)) {
+    return {
+      label: formatLinkLabel(account.access_token),
+      url: account.access_token,
     };
   }
 
@@ -275,6 +283,7 @@ export function SocialAccountsManager() {
         account.platform === 'telegram'
           ? getExtraString(extra, 'channel') ?? account.name
           : account.name;
+      const isRssZen = account.platform === 'rss_zen';
 
       return {
         id: `social-${account.id}`,
@@ -283,6 +292,7 @@ export function SocialAccountsManager() {
         name: displayName,
         link: getSocialAccountLink(account),
         socialAccount: account,
+        isPlaceholder: isRssZen,
       };
     });
 
@@ -308,7 +318,7 @@ export function SocialAccountsManager() {
         <div>
           <h2 className="text-2xl font-bold">Социальные аккаунты</h2>
           <p className="text-sm text-muted-foreground">
-            Управляйте каналами для публикаций. Сейчас поддерживается только Telegram.
+            Управляйте каналами для публикаций. Telegram добавляется вручную, RSS Дзен создаётся автоматически.
           </p>
         </div>
         {canEdit && (

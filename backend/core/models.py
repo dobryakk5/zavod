@@ -361,6 +361,7 @@ class SocialAccount(models.Model):
         ("instagram", "Instagram"),
         ("telegram", "Telegram"),
         ("youtube", "YouTube"),
+        ("rss_zen", "RSS Zen"),
     )
 
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="social_accounts")
@@ -508,7 +509,13 @@ class Schedule(models.Model):
 
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="schedules")
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="schedules")
-    social_account = models.ForeignKey(SocialAccount, on_delete=models.CASCADE, related_name="schedules")
+    social_account = models.ForeignKey(
+        SocialAccount,
+        on_delete=models.CASCADE,
+        related_name="schedules",
+        null=True,
+        blank=True,
+    )
 
     scheduled_at = models.DateTimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")

@@ -122,11 +122,35 @@ def publish_schedule(schedule_id: int):
         schedule = Schedule.objects.select_related("post", "social_account", "client").get(id=schedule_id)
 
         schedule.status = "in_progress"
-        schedule.save()
+        schedule.save(update_fields=["status"])
 
         post = schedule.post
-        social_account = schedule.social_account
+        social_account = getattr(schedule, "social_account", None)
         client = schedule.client
+        if social_account is None:
+            desired_url = (schedule.external_id or "").strip()
+            account_qs = SocialAccount.objects.filter(client=client, platform="rss_zen")
+            if desired_url:
+                account_qs = account_qs.filter(access_token=desired_url)
+            social_account = account_qs.first()
+            if not social_account and desired_url:
+                social_account = SocialAccount.objects.create(
+                    client=client,
+                    platform="rss_zen",
+                    name="RSS Дзен",
+                    access_token=desired_url,
+                    extra={"url": desired_url, "source": "rss_zen"},
+                )
+            if social_account:
+                schedule.social_account = social_account
+                schedule.save(update_fields=["social_account"])
+            else:
+                error_msg = "У расписания не указан социальный аккаунт"
+                logger.error(error_msg)
+                schedule.status = "failed"
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                schedule.save(update_fields=["status", "log"])
+                return
         assets = _prepare_media_assets(post)
         text = assets["text"]
 
@@ -351,6 +375,17 @@ def publish_schedule(schedule_id: int):
                 error_msg = result.get("error", "YouTube публикация завершилась с ошибкой")
                 schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
                 logger.error(f"Ошибка публикации на YouTube: {error_msg}")
+
+        # RSS Дзен — посты забираются из ленты автоматически, сразу считаем опубликованным
+        elif social_account.platform == "rss_zen":
+            feed_url = (social_account.access_token or "").strip()
+            schedule.status = "published"
+            schedule.external_id = feed_url
+            log_msg = "\n[SUCCESS] Отмечено для RSS Дзена (берётся из RSS ленты)"
+            if feed_url:
+                log_msg += f"\nFeed: {feed_url}"
+            schedule.log = (schedule.log or "") + log_msg
+            _update_post_status_after_publish(post)
 
         else:
             logger.error(f"Неизвестная платформа: {social_account.platform}")

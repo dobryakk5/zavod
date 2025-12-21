@@ -5,7 +5,7 @@ export type ScheduleStatus = 'pending' | 'in_progress' | 'published' | 'failed';
 export type StoryStatus = 'draft' | 'ready' | 'approved' | 'generating_posts' | 'completed';
 export type SEOStatus = 'pending' | 'generating' | 'completed' | 'failed';
 
-export type Platform = 'instagram' | 'telegram' | 'youtube' | 'vkontakte';
+export type Platform = 'instagram' | 'telegram' | 'youtube' | 'vkontakte' | 'rss_zen';
 export type ContentType = string; // Now supports custom types
 export type Tone = string; // Now supports custom tones
 export type Length = 'short' | 'medium' | 'long';
@@ -177,6 +177,7 @@ export interface SocialAccount {
   id: number;
   platform: Platform;
   name: string;
+  access_token?: string;
   username?: string;
   is_active: boolean;
   extra?: Record<string, unknown>;
@@ -260,6 +261,7 @@ export interface TaskResponse {
   message: string;
   task_id?: string;
   error?: string;
+  status?: string;
 }
 
 export type SEOGroupType = 'seo_pains' | 'seo_desires' | 'seo_objections' | 'seo_avatar' | 'seo_keywords' | '';

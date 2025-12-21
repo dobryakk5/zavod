@@ -354,8 +354,9 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
 
   const handlePublishScheduleNow = async (scheduleId: number) => {
     try {
-      await schedulesApi.publishNow(scheduleId);
-      toast.success('Публикация запущена');
+      const response = await schedulesApi.publishNow(scheduleId);
+      const isPublished = response.status === 'published';
+      toast.success(isPublished ? 'Опубликовано' : response.message || 'Публикация запущена');
       await refreshSchedulesAndPost();
     } catch (err) {
       toast.error('Не удалось запустить публикацию');

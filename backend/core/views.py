@@ -1,12 +1,32 @@
 from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
 from django.contrib.admin.views.decorators import staff_member_required
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_GET
 from django.utils import timezone
+from django.utils.html import linebreaks
+from django.utils.safestring import mark_safe
 from .models import Post, Schedule, SocialAccount, Client
 from .tasks import generate_image_for_post, generate_video_from_image, publish_schedule, regenerate_post_text, analyze_telegram_channel_task
+from .tasks.publishing import _update_post_status_after_publish
 from .system_settings import get_image_generation_model
+from .social_accounts import ensure_rss_zen_account
+from .social_publishers import build_absolute_media_url
 import json
+
+
+def _publish_rss_schedule_now(schedule: Schedule):
+    """
+    Для платформы RSS Дзен сразу отмечаем расписание как опубликованное.
+    """
+    feed_url = (schedule.social_account.access_token or "").strip()
+    schedule.status = "published"
+    schedule.external_id = feed_url
+    log_msg = "\n[SUCCESS] Отмечено для RSS Дзена (берётся из RSS ленты)"
+    if feed_url:
+        log_msg += f"\nFeed: {feed_url}"
+    schedule.log = (schedule.log or "") + log_msg
+    schedule.save(update_fields=["status", "external_id", "log", "scheduled_at"])
+    _update_post_status_after_publish(schedule.post)
 
 
 @staff_member_required
@@ -156,9 +176,33 @@ def publish_schedule_now(request, schedule_id):
             'error': f'Невозможно опубликовать: статус "{schedule.get_status_display()}"'
         }, status=400)
 
+    social_account = getattr(schedule, "social_account", None)
+    if social_account is None:
+        feed_url = request.build_absolute_uri(
+            f"/rss/{schedule.client.slug}.xml"
+        )
+        social_account = ensure_rss_zen_account(schedule.client, feed_url)
+        if social_account:
+            schedule.social_account = social_account
+            schedule.save(update_fields=["social_account"])
+        else:
+            return JsonResponse({
+                'success': False,
+                'error': 'У расписания не указан социальный аккаунт'
+            }, status=400)
+
     # Обновить время на "сейчас"
     schedule.scheduled_at = timezone.now()
-    schedule.save()
+    schedule.save(update_fields=["scheduled_at"])
+
+    # RSS Дзен — отмечаем как опубликовано сразу
+    if social_account.platform == "rss_zen":
+        _publish_rss_schedule_now(schedule)
+        return JsonResponse({
+            'success': True,
+            'message': 'Помечено как опубликованное в RSS Дзене',
+            'status': schedule.status,
+        })
 
     # Запустить публикацию
     publish_schedule.delay(schedule_id)
@@ -219,8 +263,12 @@ def quick_publish_post(request, post_id):
         status='pending'
     )
 
-    # Запускаем публикацию немедленно
-    publish_schedule.delay(schedule.id)
+    # RSS Дзен — отмечаем как опубликовано сразу
+    if social_account.platform == "rss_zen":
+        _publish_rss_schedule_now(schedule)
+    else:
+        # Запускаем публикацию немедленно
+        publish_schedule.delay(schedule.id)
 
     return JsonResponse({
         'success': True,
@@ -300,3 +348,40 @@ def analyze_telegram_channel(request, client_id):
         'success': True,
         'message': 'Анализ канала запущен. Это может занять 1-2 минуты. Страница будет перезагружена...'
     })
+
+
+@require_GET
+def public_post_detail(request, client_slug, post_id):
+    """
+    Простая публичная HTML-страница поста для ссылок из RSS.
+    """
+    post = get_object_or_404(
+        Post.objects.select_related("client").prefetch_related("images"),
+        id=post_id,
+        client__slug=client_slug,
+        status__in=("approved", "scheduled", "published"),
+    )
+
+    primary_image = post.get_primary_image()
+    image_url = image_alt = None
+    if primary_image and getattr(primary_image, "image", None):
+        try:
+            raw_url = primary_image.image.url
+        except ValueError:
+            raw_url = ""
+        if raw_url:
+            image_url = build_absolute_media_url(raw_url) or request.build_absolute_uri(raw_url)
+            image_alt = primary_image.alt_text or post.title
+
+    body_text = (post.text or "").strip()
+    body_html = mark_safe(linebreaks(body_text)) if body_text else ""
+
+    context = {
+        "post": post,
+        "client_name": post.client.get_brand_display_name() or post.client.name,
+        "image_url": image_url,
+        "image_alt": image_alt,
+        "body_html": body_html,
+        "published_at": timezone.localtime(post.created_at),
+    }
+    return render(request, "public_post.html", context)

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import logging
+import mimetypes
 import secrets
 from datetime import timedelta
+from email.utils import format_datetime
 from urllib.parse import parse_qsl, urlencode
 
 import requests
@@ -14,7 +17,9 @@ from django.contrib.auth import get_user_model
 from django.db.models import Count, F, Q, Prefetch
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
+from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import linebreaks
 from rest_framework import generics, status, viewsets, mixins
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -47,12 +52,17 @@ from core.models import (
     WordstatResult,
 )
 from core import tasks
+from core.social_publishers import build_absolute_media_url
 from core.telegram_client import normalize_telegram_channel_identifier
-from core.social_accounts import sync_client_default_telegram_account
+from core.social_accounts import (
+    ensure_rss_zen_account,
+    sync_client_default_telegram_account,
+)
 from core.system_settings import get_image_generation_model, get_image_generation_method
 from core.instagram_client import normalize_instagram_username
 from core.youtube_client import normalize_youtube_identifier
 from core.wordstat import WordstatError, get_wordstat_client
+from core.tasks.publishing import _update_post_status_after_publish
 
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
@@ -121,6 +131,166 @@ class VkApiError(Exception):
     def __init__(self, message: str, payload: dict | None = None):
         super().__init__(message)
         self.payload = payload or {}
+
+
+def _absolute_media_url(raw_url: str, request) -> str | None:
+    """
+    Resolve a media URL to an absolute URL, falling back to the current request host.
+    """
+    if not raw_url:
+        return None
+
+    url = build_absolute_media_url(raw_url)
+    if url:
+        return url
+
+    try:
+        return request.build_absolute_uri(raw_url)
+    except Exception:
+        return None
+
+
+def _get_primary_image_info(post: Post, request):
+    """
+    Return dict with absolute URL, mime type and length for the first image, or None.
+    """
+    primary = post.get_primary_image()
+    if not primary or not getattr(primary, "image", None):
+        return None
+
+    try:
+        raw_url = primary.image.url
+    except ValueError:
+        return None
+
+    image_url = _absolute_media_url(raw_url, request)
+    if not image_url:
+        return None
+
+    mime_type, _ = mimetypes.guess_type(raw_url)
+    try:
+        length = primary.image.size
+    except (OSError, ValueError):
+        length = None
+
+    return {
+        "url": image_url,
+        "type": mime_type or "image/jpeg",
+        "length": length,
+        "alt": primary.alt_text or post.title or "",
+    }
+
+
+def _format_pub_date(dt):
+    if not dt:
+        return ""
+    try:
+        return format_datetime(timezone.localtime(dt))
+    except Exception:
+        return timezone.localtime(dt).strftime("%a, %d %b %Y %H:%M:%S %z")
+
+
+def _ensure_rss_account_for_client(client: Client, request) -> Client.social_accounts.rel.related_model | None:  # type: ignore
+    try:
+        feed_url = request.build_absolute_uri(reverse("rss-feed", args=[client.slug]))
+    except Exception:
+        feed_url = None
+    return ensure_rss_zen_account(client, feed_url)
+
+
+def _build_post_description(post: Post, request):
+    image_info = _get_primary_image_info(post, request)
+    parts: list[str] = []
+
+    if image_info:
+        parts.append(
+            f'<p><img src="{image_info["url"]}" alt="{html.escape(image_info["alt"])}" /></p>'
+        )
+
+    body = (post.text or "").strip()
+    if body:
+        parts.append(str(linebreaks(body)))
+
+    description_html = "\n".join(parts)
+    # Ensure CDATA is not prematurely closed
+    safe_description = description_html.replace("]]>", "]]]]><![CDATA[>")
+    return safe_description, image_info
+
+
+class DzenRSSFeedView(APIView):
+    """
+    Public RSS feed for Yandex Zen consumption.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+    allowed_statuses = ("approved", "scheduled", "published")
+
+    def get(self, request, client_slug: str, *args, **kwargs):
+        client = get_object_or_404(Client, slug=client_slug)
+
+        try:
+            limit = int(request.GET.get("limit", 20))
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(limit, 100))
+
+        posts_qs = (
+            Post.objects.filter(client=client, status__in=self.allowed_statuses)
+            .filter(schedules__social_account__platform="rss_zen")
+            .exclude(schedules__status="failed")
+            .exclude(text__isnull=True)
+            .exclude(text__exact="")
+            .prefetch_related("images")
+            .order_by("-created_at")
+            .distinct()
+        )
+        posts = list(posts_qs[:limit])
+
+        channel_title = client.get_brand_display_name() or client.name or client.slug
+        channel_link = request.build_absolute_uri("/")
+        channel_description = f"RSS лента постов {channel_title} для Яндекс Дзена"
+        last_build_date = _format_pub_date(posts[0].created_at if posts else timezone.now())
+
+        items_xml: list[str] = []
+        for post in posts:
+            description_html, image_info = _build_post_description(post, request)
+            post_link = request.build_absolute_uri(reverse("public-post", args=[client.slug, post.id]))
+
+            enclosure_xml = ""
+            if image_info:
+                length_attr = (
+                    f' length="{image_info["length"]}"' if image_info.get("length") else ""
+                )
+                enclosure_xml = (
+                    f'\n    <enclosure url="{html.escape(image_info["url"])}"'
+                    f'{length_attr} type="{html.escape(image_info["type"])}" />'
+                )
+
+            items_xml.append(
+                f"""    <item>
+      <title>{html.escape(post.title)}</title>
+      <link>{post_link}</link>
+      <guid isPermaLink="false">post-{client.slug}-{post.id}</guid>
+      <description><![CDATA[{description_html}]]></description>
+      <pubDate>{_format_pub_date(post.created_at)}</pubDate>{enclosure_xml}
+    </item>"""
+            )
+
+        items_block = "\n".join(items_xml)
+        rss = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>{html.escape(channel_title)}</title>
+    <link>{channel_link}</link>
+    <description>{html.escape(channel_description)}</description>
+    <language>ru-RU</language>
+    <lastBuildDate>{last_build_date}</lastBuildDate>
+{items_block}
+  </channel>
+</rss>"""
+
+        return HttpResponse(rss, content_type="application/rss+xml; charset=utf-8")
 
 
 def _missing_vk_settings() -> list[str]:
@@ -1181,6 +1351,37 @@ class ScheduleViewSet(viewsets.ModelViewSet):
         """Publish this schedule immediately"""
         schedule = self.get_object()
 
+        social_account = getattr(schedule, "social_account", None)
+        if social_account is None:
+            client = schedule.client
+            social_account = _ensure_rss_account_for_client(client, request)
+            if social_account:
+                schedule.social_account = social_account
+                schedule.save(update_fields=["social_account"])
+            else:
+                return Response(
+                    {"success": False, "error": "У расписания не указан социальный аккаунт"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # RSS Дзен — помечаем опубликованным сразу
+        if social_account.platform == "rss_zen":
+            feed_url = (social_account.access_token or "").strip()
+            schedule.scheduled_at = timezone.now()
+            schedule.status = "published"
+            schedule.external_id = feed_url
+            log_msg = "\n[SUCCESS] Отмечено для RSS Дзена (берётся из RSS ленты)"
+            if feed_url:
+                log_msg += f"\nFeed: {feed_url}"
+            schedule.log = (schedule.log or "") + log_msg
+            schedule.save(update_fields=["scheduled_at", "status", "external_id", "log"])
+            _update_post_status_after_publish(schedule.post)
+            return Response({
+                'success': True,
+                'message': 'Опубликовано в RSS Дзене',
+                'status': schedule.status,
+            })
+
         # Call existing Celery task
         task = tasks.publish_schedule.delay(schedule.id)
 
@@ -1200,6 +1401,7 @@ class SocialAccountViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         client = get_active_client(self.request.user)
         sync_client_default_telegram_account(client)
+        _ensure_rss_account_for_client(client, self.request)
         return SocialAccount.objects.filter(client=client).order_by('platform', 'name')
 
     def perform_create(self, serializer):
