@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -130,9 +131,11 @@ export function SocialAccountsManager() {
   const { canEdit } = useRole();
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [loading, setLoading] = useState(true);
-  const [channelDialogMode, setChannelDialogMode] = useState<'add' | 'edit' | null>(null);
-  const [channelDialogValue, setChannelDialogValue] = useState('');
-  const [channelDialogLoading, setChannelDialogLoading] = useState(false);
+  const [accountDialogMode, setAccountDialogMode] = useState<'add' | 'edit' | null>(null);
+  const [accountDialogPlatform, setAccountDialogPlatform] = useState<Platform>('telegram');
+  const [accountDialogName, setAccountDialogName] = useState('');
+  const [accountDialogLink, setAccountDialogLink] = useState('');
+  const [accountDialogLoading, setAccountDialogLoading] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -151,27 +154,33 @@ export function SocialAccountsManager() {
     loadData();
   }, [loadData]);
 
-  const isChannelDialogOpen = channelDialogMode !== null;
-  const isChannelDialogEditMode = channelDialogMode === 'edit';
+  const isAccountDialogOpen = accountDialogMode !== null;
+  const isAccountDialogEditMode = accountDialogMode === 'edit';
 
-  const closeChannelDialog = () => {
-    setChannelDialogMode(null);
-    setChannelDialogValue('');
-    setChannelDialogLoading(false);
+  const resetDialogState = () => {
+    setAccountDialogPlatform('telegram');
+    setAccountDialogName('');
+    setAccountDialogLink('');
   };
 
-  const handleChannelDialogOpenChange = (open: boolean) => {
-    if (!open && !channelDialogLoading) {
-      closeChannelDialog();
+  const closeAccountDialog = () => {
+    setAccountDialogMode(null);
+    resetDialogState();
+    setAccountDialogLoading(false);
+  };
+
+  const handleAccountDialogOpenChange = (open: boolean) => {
+    if (!open && !accountDialogLoading) {
+      closeAccountDialog();
     }
   };
 
-  const handleAddTelegramAccount = () => {
+  const handleAddAccount = () => {
     if (!canEdit) {
       return;
     }
-    setChannelDialogMode('add');
-    setChannelDialogValue('');
+    setAccountDialogMode('add');
+    resetDialogState();
   };
 
   const handleEditRow = (row: TableRowData) => {
@@ -182,65 +191,95 @@ export function SocialAccountsManager() {
     if (row.socialAccount?.platform === 'telegram') {
       const extra = row.socialAccount.extra as Record<string, unknown> | undefined;
       const currentChannel = getExtraString(extra, 'channel') ?? '';
-      setChannelDialogMode('edit');
-      setChannelDialogValue(currentChannel);
+      setAccountDialogMode('edit');
+      setAccountDialogPlatform('telegram');
+      setAccountDialogName(currentChannel);
+      setAccountDialogLink('');
       return;
     }
 
     toast.info(`Редактирование настроек для ${row.platformLabel} появится позже`);
   };
 
-  const handleChannelDialogSubmit = async (event?: React.FormEvent<HTMLFormElement>) => {
+  const handleAccountDialogSubmit = async (event?: React.FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
-    if (!channelDialogMode || !canEdit || channelDialogLoading) {
+    if (!accountDialogMode || !canEdit || accountDialogLoading) {
       return;
     }
 
-    const trimmedValue = channelDialogValue.trim();
+    const trimmedName = accountDialogName.trim();
+    const trimmedLink = accountDialogLink.trim();
+    const platform = accountDialogPlatform;
 
-    if (channelDialogMode === 'add') {
-      if (!trimmedValue) {
+    if (platform === 'telegram') {
+      if (!trimmedName) {
         toast.error('Введите Telegram канал');
         return;
       }
 
-      const channel = normalizeTelegramChannel(trimmedValue);
+      const channel = normalizeTelegramChannel(trimmedName);
       if (!channel) {
         toast.error('Введите корректный Telegram канал');
         return;
       }
 
-      setChannelDialogLoading(true);
+      if (accountDialogMode === 'add') {
+        setAccountDialogLoading(true);
+        try {
+          await socialAccountsApi.create({
+            platform: 'telegram',
+            name: channel,
+            access_token: '',
+            extra: { source: 'manual', channel },
+          });
+          toast.success('Аккаунт добавлен');
+          await loadData();
+          closeAccountDialog();
+        } catch (error) {
+          console.error(error);
+          toast.error('Не удалось создать аккаунт');
+        } finally {
+          setAccountDialogLoading(false);
+        }
+        return;
+      }
+
+      setAccountDialogLoading(true);
       try {
-        await socialAccountsApi.create({
-          platform: 'telegram',
-          name: channel,
-          access_token: '',
-          extra: { source: 'manual', channel },
-        });
-        toast.success('Аккаунт добавлен');
+        await clientApi.updateSettings({ telegram_client_channel: trimmedName });
+        toast.success(trimmedName ? 'Telegram канал обновлен' : 'Канал очищен');
         await loadData();
-        closeChannelDialog();
+        closeAccountDialog();
       } catch (error) {
         console.error(error);
-        toast.error('Не удалось создать аккаунт');
+        toast.error('Не удалось сохранить Telegram канал');
       } finally {
-        setChannelDialogLoading(false);
+        setAccountDialogLoading(false);
       }
       return;
     }
 
-    setChannelDialogLoading(true);
+    if (!trimmedName) {
+      toast.error('Введите название аккаунта');
+      return;
+    }
+
+    setAccountDialogLoading(true);
     try {
-      await clientApi.updateSettings({ telegram_client_channel: trimmedValue });
-      toast.success(trimmedValue ? 'Telegram канал обновлен' : 'Канал очищен');
+      await socialAccountsApi.create({
+        platform,
+        name: trimmedName,
+        access_token: '',
+        extra: trimmedLink ? { url: trimmedLink } : undefined,
+      });
+      toast.success('Аккаунт добавлен');
       await loadData();
-      closeChannelDialog();
+      closeAccountDialog();
     } catch (error) {
       console.error(error);
-      toast.error('Не удалось сохранить Telegram канал');
+      toast.error('Не удалось создать аккаунт');
     } finally {
-      setChannelDialogLoading(false);
+      setAccountDialogLoading(false);
     }
   };
 
@@ -321,7 +360,7 @@ export function SocialAccountsManager() {
           </p>
         </div>
         {canEdit && (
-          <Button size="sm" onClick={handleAddTelegramAccount}>
+          <Button size="sm" onClick={handleAddAccount}>
             <Plus className="h-4 w-4 mr-2" />
             Добавить аккаунт
           </Button>
@@ -369,16 +408,14 @@ export function SocialAccountsManager() {
                 <TableCell className="text-right">
                   {canEdit ? (
                     <div className="flex justify-end gap-2">
-                      {row.platformKey === 'telegram' && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={handleAddTelegramAccount}
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={handleAddAccount}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
                       <Button
                         type="button"
                         variant="ghost"
@@ -408,43 +445,75 @@ export function SocialAccountsManager() {
         </Table>
       )}
 
-      <Dialog open={isChannelDialogOpen} onOpenChange={handleChannelDialogOpenChange}>
+      <Dialog open={isAccountDialogOpen} onOpenChange={handleAccountDialogOpenChange}>
         <DialogContent className="sm:max-w-md bg-white text-gray-900 dark:bg-white dark:text-gray-900 dark:border-gray-200">
           <DialogHeader>
             <DialogTitle>
-              {isChannelDialogEditMode ? 'Настроить Telegram канал' : 'Добавить Telegram канал'}
+              {isAccountDialogEditMode ? 'Настроить аккаунт' : 'Добавить аккаунт'}
             </DialogTitle>
             <DialogDescription>
-              {isChannelDialogEditMode
-                ? 'Укажите основной Telegram канал, который будет использоваться для публикаций.'
-                : 'Введите @username или ссылку на Telegram канал для публикаций.'}
+              {accountDialogPlatform === 'telegram'
+                ? 'Введите @username или ссылку на Telegram канал для публикаций.'
+                : 'Укажите название и (опционально) ссылку на аккаунт.'}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleChannelDialogSubmit} className="space-y-4">
+          <form onSubmit={handleAccountDialogSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="telegram-channel-input">Telegram канал</Label>
+              <Label htmlFor="platform-select">Платформа</Label>
+              <Select
+                value={accountDialogPlatform}
+                onValueChange={(value: Platform) => setAccountDialogPlatform(value)}
+                disabled={isAccountDialogEditMode || accountDialogLoading}
+              >
+                <SelectTrigger id="platform-select">
+                  <SelectValue placeholder="Выберите платформу" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="telegram">Telegram</SelectItem>
+                  <SelectItem value="instagram">Instagram</SelectItem>
+                  <SelectItem value="youtube">YouTube</SelectItem>
+                  <SelectItem value="vkontakte">VKontakte</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="account-name-input">
+                {accountDialogPlatform === 'telegram' ? 'Telegram канал' : 'Название аккаунта'}
+              </Label>
               <Input
-                id="telegram-channel-input"
-                placeholder="@example_channel"
+                id="account-name-input"
+                placeholder={accountDialogPlatform === 'telegram' ? '@example_channel' : 'Название'}
                 autoFocus
-                value={channelDialogValue}
-                onChange={(event) => setChannelDialogValue(event.target.value)}
-                disabled={channelDialogLoading}
+                value={accountDialogName}
+                onChange={(event) => setAccountDialogName(event.target.value)}
+                disabled={accountDialogLoading}
               />
             </div>
+            {accountDialogPlatform !== 'telegram' && (
+              <div className="space-y-2">
+                <Label htmlFor="account-link-input">Ссылка (опционально)</Label>
+                <Input
+                  id="account-link-input"
+                  placeholder="https://vk.com/your_group"
+                  value={accountDialogLink}
+                  onChange={(event) => setAccountDialogLink(event.target.value)}
+                  disabled={accountDialogLoading}
+                />
+              </div>
+            )}
             <DialogFooter>
               <Button
                 type="button"
                 variant="outline"
-                onClick={closeChannelDialog}
-                disabled={channelDialogLoading}
+                onClick={closeAccountDialog}
+                disabled={accountDialogLoading}
               >
                 Отмена
               </Button>
-              <Button type="submit" disabled={channelDialogLoading}>
-                {channelDialogLoading
+              <Button type="submit" disabled={accountDialogLoading}>
+                {accountDialogLoading
                   ? 'Сохраняем...'
-                  : isChannelDialogEditMode
+                  : isAccountDialogEditMode
                     ? 'Сохранить'
                     : 'Добавить'}
               </Button>
