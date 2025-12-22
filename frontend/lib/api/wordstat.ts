@@ -40,6 +40,12 @@ export const wordstatApi = {
     });
   },
 
+  remove: async (id: number): Promise<void> => {
+    await apiFetch<void>(`/wordstat/${id}/`, {
+      method: 'DELETE',
+    });
+  },
+
   updateResultType: async (resultId: number, result_type: WordstatResultType): Promise<void> => {
     await apiFetch<void>(`/wordstat-results/${resultId}/`, {
       method: 'PATCH',

@@ -26,17 +26,17 @@ export default function WordstatFavoritesPage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
 
-  const getQueryLabel = (query: WordstatQuery) => {
+  const getQueryLabel = (query: WordstatQuery): string => {
     if ((query.group_name || '').trim()) {
-      return query.group_name;
+      return query.group_name || '';
     }
     if (Array.isArray(query.phrases) && query.phrases.length) {
       if (query.phrases.length > 1) {
         return `${query.phrases[0]} (+${query.phrases.length - 1})`;
       }
-      return query.phrases[0];
+      return query.phrases[0] || '';
     }
-    return query.request_phrase;
+    return query.request_phrase || '';
   };
 
   const load = async () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, RefreshCw, Search } from 'lucide-react';
+import { Loader2, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { seoApi } from '@/lib/api/seo';
 import { wordstatApi } from '@/lib/api/wordstat';
@@ -100,6 +100,7 @@ export default function SEOPage() {
   const [phraseCounts, setPhraseCounts] = useState<Record<string, number>>({});
   const [historyEdits, setHistoryEdits] = useState<Record<number, string>>({});
   const [groupNameEdits, setGroupNameEdits] = useState<Record<number, string>>({});
+  const [deletingQueries, setDeletingQueries] = useState<Record<number, boolean>>({});
   const { canEdit } = useRole();
 
   const loadSeoSets = async (opts?: { silent?: boolean }) => {
@@ -346,6 +347,36 @@ export default function SEOPage() {
       toast.error(message);
     } finally {
       setWordstatSubmitting(false);
+    }
+  };
+
+  const handleDeleteQuery = async (query: WordstatQuery) => {
+    if (!query?.id) return;
+    setDeletingQueries((prev) => ({ ...prev, [query.id]: true }));
+    try {
+      await wordstatApi.remove(Number(query.id));
+      setWordstatQueries((prev) => prev.filter((item) => item.id !== query.id));
+      setSelectedQueryId((prev) => (prev === query.id ? null : prev));
+      setHistoryEdits((prev) => {
+        const next = { ...prev };
+        delete next[query.id];
+        return next;
+      });
+      setGroupNameEdits((prev) => {
+        const next = { ...prev };
+        delete next[query.id];
+        return next;
+      });
+    } catch (error) {
+      console.error('Failed to delete Wordstat query', error);
+      const message = error instanceof Error ? error.message : 'Не удалось удалить запрос Wordstat';
+      toast.error(message);
+    } finally {
+      setDeletingQueries((prev) => {
+        const next = { ...prev };
+        delete next[query.id];
+        return next;
+      });
     }
   };
 
@@ -737,6 +768,15 @@ export default function SEOPage() {
                                   disabled={wordstatSubmitting}
                                 >
                                   Повторить
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleDeleteQuery(query)}
+                                  disabled={deletingQueries[query.id]}
+                                  className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
+                                >
+                                  <Trash2 className="h-4 w-4" />
                                 </Button>
                               </div>
                             </div>

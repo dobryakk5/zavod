@@ -2360,10 +2360,10 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
 
     permission_classes = [IsTenantMember]
     serializer_class = WordstatQuerySerializer
-    http_method_names = ["get", "post", "patch", "head", "options"]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_permissions(self):
-        if self.action in {"create", "append_phrases", "partial_update"}:
+        if self.action in {"create", "append_phrases", "partial_update", "destroy"}:
             return [IsTenantOwnerOrEditor()]
         return super().get_permissions()
 
