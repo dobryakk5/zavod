@@ -33,14 +33,15 @@ const templateFormSchema = z.object({
   name: z.string().min(1, 'Название обязательно'),
   type: z.string().min(1, 'Тип обязателен'),
   tone: z.string().min(1, 'Тон обязателен'),
-  length: z.coerce.number().int().positive().max(10000, 'Слишком много символов для одного поста'),
+  length: z.number().int().positive().max(10000, 'Слишком много символов для одного поста'),
   language: z.string().min(2).max(10),
   seo_prompt_template: z.string().min(1, 'SEO-промпт обязателен'),
   trend_prompt_template: z.string().min(1, 'Trend-промпт обязателен'),
-  additional_instructions: z.string().optional(),
+  additional_instructions: z.string().default(''),
 });
 
 type TemplateFormValues = z.infer<typeof templateFormSchema>;
+type TemplateFormInput = z.input<typeof templateFormSchema>;
 
 interface TemplateFormProps {
   template?: ContentTemplate;
@@ -62,7 +63,7 @@ export function TemplateForm({ template, onSubmit, loading = false }: TemplateFo
   const [newTypeValue, setNewTypeValue] = useState('');
   const [newToneValue, setNewToneValue] = useState('');
 
-  const form = useForm<TemplateFormValues>({
+  const form = useForm<TemplateFormInput, any, TemplateFormValues>({
     resolver: zodResolver(templateFormSchema),
     defaultValues: {
       name: template?.name || '',
