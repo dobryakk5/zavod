@@ -67,6 +67,33 @@ def _parse_ai_json_response(
     return None, last_text, last_error
 
 
+def _format_length_value(length: Any, default_length: int = 1200) -> str:
+    """
+    Convert numeric or legacy length values to a human-friendly string for prompts.
+    Accepts old enum values (short/medium/long) and raw numbers.
+    """
+    legacy_map = {"short": 800, "medium": 1200, "long": 1800}
+
+    if isinstance(length, str):
+        normalized = length.strip().lower()
+        if normalized in legacy_map:
+            length = legacy_map[normalized]
+        else:
+            try:
+                length = int(float(normalized))
+            except (TypeError, ValueError):
+                length = default_length
+
+    try:
+        length_int = int(length)
+        if length_int <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        length_int = default_length
+
+    return f"{length_int} символов"
+
+
 class ContentGenerationMixin:
     """Methods for hooks, posts, SEO artifacts and related helpers."""
 
@@ -245,7 +272,7 @@ Create only the title, without quotes or additional text:"""
         """Generate post text from trend using AI."""
         try:
             tone = template_config.get("tone", "professional")
-            length = template_config.get("length", "medium")
+            length = template_config.get("length", 1200)
             language = template_config.get("language", "ru")
             prompt_type = template_config.get("prompt_type", "trend")
             trend_prompt_template = template_config.get("trend_prompt_template", "")
@@ -304,14 +331,8 @@ Create only the title, without quotes or additional text:"""
                 "enthusiastic": "восторженный",
             }
 
-            length_map = {
-                "short": "короткий (500-1000 символов)",
-                "medium": "средний (1000-1500 символов)",
-                "long": "длинный (1500-2000 символов)",
-            }
-
             tone_ru = tone_map.get(tone, tone)
-            length_ru = length_map.get(length, length)
+            length_ru = _format_length_value(length)
             lang_name = "русском" if language == "ru" else "английском"
 
             format_kwargs = {
@@ -354,7 +375,7 @@ Create only the title, without quotes or additional text:"""
 Хотелки: {desires}
 Возражения: {objections}
 
-ЗАДАЧА: Создай {length_ru} пост для социальных сетей в {tone_ru} стиле на {lang_name} языке,
+ЗАДАЧА: Создай пост (≈{length_ru}) для социальных сетей в {tone_ru} стиле на {lang_name} языке,
 используя SEO-ключевые фразы: {seo_keywords_for_prompt or "ключи отсутствуют"}.
 
 ТЕМА БИЗНЕСА: {topic_name}
@@ -377,7 +398,7 @@ Create only the title, without quotes or additional text:"""
 Хотелки: {desires}
 Возражения: {objections}
 
-ЗАДАЧА: Создай {length_ru} пост для социальных сетей в {tone_ru} стиле на {lang_name} языке.
+ЗАДАЧА: Создай пост (≈{length_ru}) для социальных сетей в {tone_ru} стиле на {lang_name} языке.
 
 ТЕМА БИЗНЕСА: {topic_name}
 
@@ -1039,7 +1060,7 @@ class StoryGenerationMixin:
         """Generate a full post from a story episode."""
         try:
             tone = template_config.get("tone", "professional")
-            length = template_config.get("length", "medium")
+            length = template_config.get("length", 1200)
             language = template_config.get("language", "ru")
             include_hashtags = template_config.get("include_hashtags", True)
             max_hashtags = template_config.get("max_hashtags", 5)
@@ -1059,20 +1080,14 @@ class StoryGenerationMixin:
                 "enthusiastic": "восторженный",
             }
 
-            length_map = {
-                "short": "короткий (500-1000 символов)",
-                "medium": "средний (1000-1500 символов)",
-                "long": "длинный (1500-2000 символов)",
-            }
-
             tone_ru = tone_map.get(tone, tone)
-            length_ru = length_map.get(length, length)
+            length_ru = _format_length_value(length)
             lang_name = "русском" if language == "ru" else "английском"
 
             prompt = f"""
 Ты - профессиональный копирайтер для социальных сетей.
 
-ЗАДАЧА: Создай {length_ru} пост для социальных сетей в {tone_ru} стиле на {lang_name} языке.
+ЗАДАЧА: Создай пост (≈{length_ru}) для социальных сетей в {tone_ru} стиле на {lang_name} языке.
 
 КОНТЕКСТ ИСТОРИИ:
 - Общий заголовок истории: {story_title}

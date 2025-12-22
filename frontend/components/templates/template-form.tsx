@@ -33,7 +33,7 @@ const templateFormSchema = z.object({
   name: z.string().min(1, 'Название обязательно'),
   type: z.string().min(1, 'Тип обязателен'),
   tone: z.string().min(1, 'Тон обязателен'),
-  length: z.enum(['short', 'medium', 'long']),
+  length: z.coerce.number().int().positive().max(10000, 'Слишком много символов для одного поста'),
   language: z.string().min(2).max(10),
   seo_prompt_template: z.string().min(1, 'SEO-промпт обязателен'),
   trend_prompt_template: z.string().min(1, 'Trend-промпт обязателен'),
@@ -68,7 +68,7 @@ export function TemplateForm({ template, onSubmit, loading = false }: TemplateFo
       name: template?.name || '',
       type: template?.type || '',
       tone: template?.tone || '',
-      length: template?.length || 'medium',
+      length: template?.length ?? 1200,
       language: template?.language || 'ru',
       seo_prompt_template: template?.seo_prompt_template || '',
       trend_prompt_template: template?.trend_prompt_template || '',
@@ -351,29 +351,22 @@ export function TemplateForm({ template, onSubmit, loading = false }: TemplateFo
             name="length"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Длина</FormLabel>
-                {isEditing ? (
-                  <div className="mt-2">
-                    <Badge variant="secondary" className="text-base py-1 px-3">
-                      {field.value === 'short' && 'Короткий'}
-                      {field.value === 'medium' && 'Средний'}
-                      {field.value === 'long' && 'Длинный'}
-                    </Badge>
-                  </div>
-                ) : (
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Выберите длину" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="short">Короткий (до 280 символов)</SelectItem>
-                      <SelectItem value="medium">Средний (280-500 символов)</SelectItem>
-                      <SelectItem value="long">Длинный (500-1000 символов)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                )}
+                <FormLabel>Длина (в символах)</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    min={100}
+                    step={50}
+                    value={field.value ?? ''}
+                    onChange={(e) =>
+                      field.onChange(e.target.value === '' ? '' : Number(e.target.value))
+                    }
+                    placeholder="Например, 1200"
+                  />
+                </FormControl>
+                <FormDescription>
+                  Укажите желаемую длину текста для AI (в символах)
+                </FormDescription>
                 <FormMessage />
               </FormItem>
             )}

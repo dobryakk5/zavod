@@ -124,7 +124,7 @@ export default function TemplatePage({ params }: TemplatePageProps) {
       <div className="mb-8">
         <h1 className="text-3xl font-bold">Редактировать шаблон</h1>
         <p className="text-gray-500 mt-2">
-          Редактирование шаблона контента. Тип и тон можно изменять, длина и язык остаются неизменными после создания.
+          Редактирование шаблона контента. Тип, тон и длину можно изменять, язык остается неизменным после создания.
         </p>
       </div>
 

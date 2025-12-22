@@ -73,17 +73,11 @@ export default function TemplatesPage() {
     }
   };
 
-  const getLengthName = (length: string) => {
-    switch (length) {
-      case 'short':
-        return 'Короткий';
-      case 'medium':
-        return 'Средний';
-      case 'long':
-        return 'Длинный';
-      default:
-        return length;
+  const formatLength = (length?: number) => {
+    if (typeof length !== 'number' || Number.isNaN(length)) {
+      return '—';
     }
+    return `${length} символов`;
   };
 
   return (
@@ -135,7 +129,7 @@ export default function TemplatesPage() {
                   </Badge>
                 </TableCell>
                 <TableCell>{getToneName(template.tone)}</TableCell>
-                <TableCell>{getLengthName(template.length)}</TableCell>
+                <TableCell>{formatLength(template.length)}</TableCell>
                 <TableCell>
                   <Badge variant="outline">{template.language}</Badge>
                 </TableCell>

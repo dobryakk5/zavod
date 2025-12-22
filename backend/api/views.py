@@ -1401,7 +1401,7 @@ class StoryViewSet(viewsets.ModelViewSet):
 class ContentTemplateViewSet(viewsets.ModelViewSet):
     """
     ViewSet for ContentTemplate CRUD operations.
-    Basic fields (type, tone, length, language) are read-only in serializer.
+    Language stays read-only; other fields (type, tone, length) are editable.
     """
 
     permission_classes = [IsTenantMember]
@@ -2290,15 +2290,80 @@ def _parse_str_list(value):
     return result
 
 
+def _parse_phrases(value):
+    """Вернуть уникальный список фраз из списка или многострочной строки."""
+    if value is None:
+        return []
+    phrases: list[str] = []
+    seen: set[str] = set()
+
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = str(value).replace("\r", "\n").split("\n")
+
+    for raw in raw_items:
+        if raw is None:
+            continue
+        for part in str(raw).replace("\r", "\n").split("\n"):
+            phrase = part.strip()
+            if phrase and phrase not in seen:
+                seen.add(phrase)
+                phrases.append(phrase)
+    return phrases
+
+
+def _collect_wordstat_data(
+    ws_client,
+    phrases: list[str],
+    regions: list[int],
+    devices: list[str],
+    include_parent: bool,
+):
+    aggregated: dict[tuple[str, str], int] = {}
+    total_count = 0
+    responses: list[dict[str, object]] = []
+
+    for phrase_value in phrases:
+        try:
+            api_response = ws_client.fetch_top_requests(
+                phrase=phrase_value,
+                regions=regions or None,
+                devices=devices or None,
+                include_parent=include_parent,
+            )
+        except WordstatError as exc:
+            raise WordstatError(f"{phrase_value}: {exc}") from exc
+
+        responses.append({"phrase": phrase_value, "response": api_response})
+        total_count += int(api_response.get("totalCount") or 0)
+
+        for item in api_response.get("topRequests") or []:
+            phrase_text = str(item.get("phrase") or "").strip()
+            if not phrase_text:
+                continue
+            key = (phrase_text, "top_request")
+            aggregated[key] = aggregated.get(key, 0) + int(item.get("count") or 0)
+
+        for item in api_response.get("associations") or []:
+            phrase_text = str(item.get("phrase") or "").strip()
+            if not phrase_text:
+                continue
+            key = (phrase_text, "association")
+            aggregated[key] = aggregated.get(key, 0) + int(item.get("count") or 0)
+
+    return aggregated, total_count, responses
+
+
 class WordstatQueryViewSet(viewsets.ModelViewSet):
     """Получение и сохранение Wordstat-результатов для клиента."""
 
     permission_classes = [IsTenantMember]
     serializer_class = WordstatQuerySerializer
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_permissions(self):
-        if self.action == "create":
+        if self.action in {"create", "append_phrases", "partial_update"}:
             return [IsTenantOwnerOrEditor()]
         return super().get_permissions()
 
@@ -2315,8 +2380,17 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         client_obj = get_active_client(request.user)
         phrase = (request.data.get("phrase") or "").strip()
-        if not phrase:
-            return Response({"error": "Введите фразу для запроса Wordstat"}, status=status.HTTP_400_BAD_REQUEST)
+        group_raw = request.data.get("group") or request.data.get("phrases")
+        phrases = _parse_phrases(group_raw)
+
+        if phrase:
+            if phrase not in phrases:
+                phrases.insert(0, phrase)
+        if not phrases:
+            return Response(
+                {"error": "Введите фразу или группу фраз для запроса Wordstat"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         regions = _parse_int_list(request.data.get("regions"))
         devices = _parse_str_list(request.data.get("devices"))
@@ -2326,10 +2400,11 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
         try:
             ws_client = get_wordstat_client()
             user_info = ws_client.fetch_user_info()
-            api_response = ws_client.fetch_top_requests(
-                phrase=phrase,
-                regions=regions or None,
-                devices=devices or None,
+            aggregated, total_count, responses = _collect_wordstat_data(
+                ws_client=ws_client,
+                phrases=phrases,
+                regions=regions,
+                devices=devices,
                 include_parent=include_parent,
             )
         except WordstatError as exc:
@@ -2342,10 +2417,21 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
             )
 
         user_info_data = user_info.get("userInfo") if isinstance(user_info, dict) else {}
+        request_phrase_value = phrase or phrases[0]
+        if len(phrases) > 1:
+            request_phrase_value = f"{phrases[0]} (+{len(phrases) - 1})"
+        request_phrase_value = request_phrase_value[:255]
+        group_name = (request.data.get("group_name") or "").strip() or request_phrase_value
+        group_name = group_name[:255]
+        raw_response_data = (
+            responses[0]["response"] if len(responses) == 1 else {"group_phrases": phrases, "responses": responses}
+        )
         query = WordstatQuery.objects.create(
             client=client_obj,
-            request_phrase=phrase,
-            total_count=int(api_response.get("totalCount") or 0),
+            group_name=group_name,
+            phrases=phrases,
+            request_phrase=request_phrase_value,
+            total_count=total_count,
             include_parent=include_parent,
             regions=regions,
             devices=devices,
@@ -2353,33 +2439,19 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
             limit_per_second=user_info_data.get("limitPerSecond"),
             daily_limit=user_info_data.get("dailyLimit"),
             daily_limit_remaining=user_info_data.get("dailyLimitRemaining"),
-            raw_response=api_response,
+            raw_response=raw_response_data,
         )
 
         results_to_create = []
-        for item in api_response.get("topRequests") or []:
-            phrase_text = str(item.get("phrase") or "").strip()
-            if not phrase_text:
-                continue
+        for (phrase_text, result_type), count in sorted(
+            aggregated.items(), key=lambda item: (-item[1], item[0][0])
+        ):
             results_to_create.append(
                 WordstatResult(
                     query=query,
                     phrase=phrase_text,
-                    count=int(item.get("count") or 0),
-                    result_type="top_request",
-                )
-            )
-
-        for item in api_response.get("associations") or []:
-            phrase_text = str(item.get("phrase") or "").strip()
-            if not phrase_text:
-                continue
-            results_to_create.append(
-                WordstatResult(
-                    query=query,
-                    phrase=phrase_text,
-                    count=int(item.get("count") or 0),
-                    result_type="association",
+                    count=int(count or 0),
+                    result_type=result_type,
                 )
             )
 
@@ -2389,6 +2461,121 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(query)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def partial_update(self, request, *args, **kwargs):
+        query: WordstatQuery = self.get_object()
+        group_name = (request.data.get("group_name") or "").strip()[:255]
+        query.group_name = group_name
+        query.save(update_fields=["group_name"])
+        serializer = self.get_serializer(query)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="append")
+    def append_phrases(self, request, pk=None):
+        """Добавить новые фразы в существующую группу Wordstat и объединить результаты."""
+        query: WordstatQuery = self.get_object()
+        new_phrases_raw = request.data.get("phrases") or request.data.get("group")
+        new_phrases = _parse_phrases(new_phrases_raw)
+
+        if not new_phrases:
+            return Response({"error": "Введите фразы для запроса Wordstat"}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing_phrases = query.phrases or []
+        existing_set = {p.strip() for p in existing_phrases if p}
+        to_fetch = [p for p in new_phrases if p not in existing_set]
+
+        if not to_fetch:
+            return Response({"error": "Новых фраз не найдено"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ws_client = get_wordstat_client()
+            user_info = ws_client.fetch_user_info()
+            aggregated, total_count, responses = _collect_wordstat_data(
+                ws_client=ws_client,
+                phrases=to_fetch,
+                regions=query.regions or [],
+                devices=query.devices or [],
+                include_parent=query.include_parent,
+            )
+        except WordstatError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logger.exception("Wordstat append request failed")
+            return Response(
+                {"error": "Не удалось получить данные Wordstat"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        # Обновляем агрегированные результаты: либо увеличиваем счетчик, либо создаем новые строки.
+        existing_results = WordstatResult.objects.filter(query=query)
+        result_map = {(r.phrase, r.result_type): r for r in existing_results}
+        to_update: list[WordstatResult] = []
+        to_create: list[WordstatResult] = []
+
+        for (phrase_text, result_type), count in aggregated.items():
+            found = result_map.get((phrase_text, result_type))
+            if found:
+                found.count = int(found.count) + int(count or 0)
+                to_update.append(found)
+            else:
+                to_create.append(
+                    WordstatResult(
+                        query=query,
+                        phrase=phrase_text,
+                        count=int(count or 0),
+                        result_type=result_type,
+                    )
+                )
+
+        if to_create:
+            WordstatResult.objects.bulk_create(to_create)
+        if to_update:
+            WordstatResult.objects.bulk_update(to_update, ["count"])
+
+        # Обновляем метаданные запроса
+        updated_phrases = existing_phrases + to_fetch
+        label = updated_phrases[0]
+        if len(updated_phrases) > 1:
+            label = f"{label} (+{len(updated_phrases) - 1})"
+        label = label[:255]
+
+        existing_raw = query.raw_response or {}
+        if isinstance(existing_raw, dict) and "responses" in existing_raw:
+            combined_responses = list(existing_raw.get("responses") or [])
+        else:
+            base_response = existing_raw if isinstance(existing_raw, dict) else {}
+            base_phrase = query.request_phrase or (existing_phrases[0] if existing_phrases else "")
+            combined_responses = []
+            if base_response:
+                combined_responses.append({"phrase": base_phrase, "response": base_response})
+
+        combined_responses.extend(responses)
+        raw_response_data = {"group_phrases": updated_phrases, "responses": combined_responses}
+
+        query.phrases = updated_phrases
+        query.request_phrase = label
+        query.total_count = int(query.total_count) + total_count
+        query.user_login = (user_info.get("userInfo") or {}).get("login", query.user_login)
+        query.limit_per_second = (user_info.get("userInfo") or {}).get("limitPerSecond", query.limit_per_second)
+        query.daily_limit = (user_info.get("userInfo") or {}).get("dailyLimit", query.daily_limit)
+        query.daily_limit_remaining = (user_info.get("userInfo") or {}).get("dailyLimitRemaining", query.daily_limit_remaining)
+        query.raw_response = raw_response_data
+        query.save(
+            update_fields=[
+                "phrases",
+                "request_phrase",
+                "total_count",
+                "user_login",
+                "limit_per_second",
+                "daily_limit",
+                "daily_limit_remaining",
+                "raw_response",
+            ]
+        )
+
+        query = self.get_queryset().get(pk=query.pk)
+        serializer = self.get_serializer(query)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class WordstatResultViewSet(mixins.UpdateModelMixin, viewsets.GenericViewSet):

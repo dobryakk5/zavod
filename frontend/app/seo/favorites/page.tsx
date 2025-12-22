@@ -26,6 +26,19 @@ export default function WordstatFavoritesPage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
 
+  const getQueryLabel = (query: WordstatQuery) => {
+    if ((query.group_name || '').trim()) {
+      return query.group_name;
+    }
+    if (Array.isArray(query.phrases) && query.phrases.length) {
+      if (query.phrases.length > 1) {
+        return `${query.phrases[0]} (+${query.phrases.length - 1})`;
+      }
+      return query.phrases[0];
+    }
+    return query.request_phrase;
+  };
+
   const load = async () => {
     setLoading(true);
     try {
@@ -48,7 +61,7 @@ export default function WordstatFavoritesPage() {
     queries.forEach((q) => {
       q.results
         .filter((r) => r.result_type === 'favorite')
-        .forEach((r) => rows.push({ id: r.id, phrase: r.phrase, count: r.count, queryId: q.id, queryPhrase: q.request_phrase, result_type: r.result_type }));
+        .forEach((r) => rows.push({ id: r.id, phrase: r.phrase, count: r.count, queryId: q.id, queryPhrase: getQueryLabel(q), result_type: r.result_type }));
     });
     return rows.sort((a, b) => b.count - a.count || a.phrase.localeCompare(b.phrase));
   }, [queries]);

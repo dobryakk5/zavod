@@ -168,6 +168,31 @@ class Command(BaseCommand):
 
         return created, updated
 
+    def _parse_template_length(self, raw_value):
+        mapping = {"short": 800, "medium": 1200, "long": 1800}
+        default_length = 1200
+
+        if raw_value is None:
+            return default_length
+
+        if isinstance(raw_value, str):
+            normalized = raw_value.strip().lower()
+            if not normalized:
+                return default_length
+            if normalized in mapping:
+                return mapping[normalized]
+            try:
+                parsed = int(float(normalized))
+                return parsed if parsed > 0 else default_length
+            except (TypeError, ValueError):
+                return default_length
+
+        try:
+            parsed = int(raw_value)
+            return parsed if parsed > 0 else default_length
+        except (TypeError, ValueError):
+            return default_length
+
     def _import_templates(self, rows):
         created = 0
         updated = 0
@@ -182,11 +207,13 @@ class Command(BaseCommand):
                 skipped += 1
                 continue
 
+            length_value = self._parse_template_length(row["length"])
+
             defaults = {
                 "client_id": row["client_id"],
                 "name": row["name"],
                 "tone": row["tone"] or "professional",
-                "length": row["length"] or "medium",
+                "length": length_value,
                 "language": row["language"] or "ru",
                 "prompt_template": row["prompt_template"] or "",
                 "additional_instructions": row["additional_instructions"] or "",

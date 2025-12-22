@@ -8,7 +8,7 @@ export type SEOStatus = 'pending' | 'generating' | 'completed' | 'failed';
 export type Platform = 'instagram' | 'telegram' | 'youtube' | 'vkontakte' | 'rss_zen';
 export type ContentType = string; // Now supports custom types
 export type Tone = string; // Now supports custom tones
-export type Length = 'short' | 'medium' | 'long';
+export type Length = number;
 export type Language = string;
 
 export type TrendSource =
@@ -278,6 +278,8 @@ export interface WordstatResult {
 export interface WordstatQuery {
   id: number;
   client: number;
+  group_name?: string;
+  phrases: string[];
   request_phrase: string;
   total_count: number;
   include_parent: boolean;

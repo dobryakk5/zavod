@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 
 export default function WordstatDetailPage() {
   const params = useParams<{ id: string }>();
@@ -20,6 +21,30 @@ export default function WordstatDetailPage() {
   const [updating, setUpdating] = useState(false);
   const [filterType, setFilterType] = useState<WordstatResultType | 'all'>('all');
   const [phraseDraft, setPhraseDraft] = useState<string>('');
+  const [groupNameDraft, setGroupNameDraft] = useState<string>('');
+
+  const getQueryText = (data: WordstatQuery | null) => {
+    if (!data) return '';
+    const list =
+      Array.isArray(data.phrases) && data.phrases.length
+        ? data.phrases
+        : data.request_phrase
+          ? [data.request_phrase]
+          : [];
+    return list.join('\n');
+  };
+
+  const extractPhrases = (value: string) => {
+    const seen = new Set<string>();
+    return value
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter((item) => {
+        if (!item || seen.has(item)) return false;
+        seen.add(item);
+        return true;
+      });
+  };
 
   const loadQuery = async () => {
     if (!params?.id) return;
@@ -27,7 +52,8 @@ export default function WordstatDetailPage() {
     try {
       const data = await wordstatApi.get(params.id);
       setQuery(data);
-      setPhraseDraft(data.request_phrase || '');
+      setPhraseDraft(getQueryText(data));
+      setGroupNameDraft(data.group_name || data.request_phrase || '');
     } catch (error) {
       console.error('Failed to load Wordstat query', error);
       toast.error('Не удалось загрузить данные Wordstat');
@@ -58,6 +84,8 @@ export default function WordstatDetailPage() {
     return query.results.filter((r) => r.result_type === filterType);
   }, [filterType, query]);
 
+  const isGroupDraft = useMemo(() => extractPhrases(phraseDraft).length > 1, [phraseDraft]);
+
   const resultTypeLabel = (type: WordstatResultType) => {
     switch (type) {
       case 'association':
@@ -72,22 +100,46 @@ export default function WordstatDetailPage() {
   };
 
   const handleRepeat = async () => {
-    const phrase = phraseDraft.trim();
-    if (!phrase) {
-      toast.error('Введите фразу для запроса Wordstat');
+    if (!query) return;
+    const phrases = extractPhrases(phraseDraft);
+    if (phrases.length === 0) {
+      toast.error('Введите фразу или группу фраз для запроса Wordstat');
       return;
     }
+    const existingSet = new Set<string>((query.phrases || []).map((item) => item.trim()));
+    const newPhrases = phrases.filter((p) => !existingSet.has(p));
+
+    if (newPhrases.length === 0) {
+      toast.error('Новых фраз нет — добавьте строки, которых еще не было в группе');
+      return;
+    }
+
     setUpdating(true);
     try {
-      const data = await wordstatApi.fetch({ phrase });
+      const data = await wordstatApi.append(Number(query.id), { phrases: newPhrases });
       setQuery(data);
-      setPhraseDraft(data.request_phrase || phrase);
+      setPhraseDraft(getQueryText(data));
       if (data.id) {
         router.push(`/seo/${data.id}`);
       }
     } catch (error) {
       console.error('Failed to repeat Wordstat query', error);
       toast.error('Не удалось выполнить запрос Wordstat');
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const handleSaveGroupName = async () => {
+    if (!query?.id) return;
+    setUpdating(true);
+    try {
+      const data = await wordstatApi.updateGroupName(Number(query.id), groupNameDraft.trim());
+      setQuery(data);
+      setGroupNameDraft(data.group_name || '');
+    } catch (error) {
+      console.error('Failed to update Wordstat group name', error);
+      toast.error('Не удалось сохранить название группы');
     } finally {
       setUpdating(false);
     }
@@ -145,16 +197,54 @@ export default function WordstatDetailPage() {
           ) : (
             <>
               <div className="flex flex-col gap-2">
-                <Input
-                  value={phraseDraft}
-                  onChange={(e) => setPhraseDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleRepeat();
-                    }
-                  }}
-                />
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Input
+                    value={groupNameDraft}
+                    onChange={(e) => setGroupNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveGroupName();
+                      }
+                    }}
+                    placeholder="Название группы"
+                    className="flex-1"
+                  />
+                  <Button variant="outline" onClick={handleSaveGroupName} disabled={updating} className="sm:w-auto">
+                    {updating ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Сохраняем...
+                      </>
+                    ) : (
+                      'Сохранить название'
+                    )}
+                  </Button>
+                </div>
+                {isGroupDraft ? (
+                  <Textarea
+                    value={phraseDraft}
+                    onChange={(e) => setPhraseDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                        e.preventDefault();
+                        handleRepeat();
+                      }
+                    }}
+                    className="min-h-[120px]"
+                  />
+                ) : (
+                  <Input
+                    value={phraseDraft}
+                    onChange={(e) => setPhraseDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleRepeat();
+                      }
+                    }}
+                  />
+                )}
                 <Button variant="outline" onClick={handleRepeat} disabled={updating} className="w-fit">
                   {updating ? (
                     <>
@@ -162,7 +252,7 @@ export default function WordstatDetailPage() {
                       Запрос...
                     </>
                   ) : (
-                    'Повторить Wordstat'
+                    'Добавить фразы'
                   )}
                 </Button>
               </div>

@@ -48,6 +48,7 @@ WEEKDAY_LABELS = [
 
 MAX_WEEKLY_POSTS = 21
 TIE_BREAKER_DAY_ORDER = [0, 2, 4, 1, 3, 5, 6]
+DEFAULT_TEMPLATE_LENGTH = 1200
 
 
 def _get_client_timezone(client: Client):
@@ -1940,7 +1941,7 @@ def generate_posts_from_story(story_id: int):
             # Дефолтная конфигурация
             template_config = {
                 "tone": "friendly",
-                "length": "medium",
+                "length": DEFAULT_TEMPLATE_LENGTH,
                 "language": "ru",
                 "type": "story",
                 "include_hashtags": True,
@@ -2068,7 +2069,7 @@ def regenerate_post_text(post_id: int):
             else:
                 template_config = {
                     "tone": "friendly",
-                    "length": "medium",
+                    "length": DEFAULT_TEMPLATE_LENGTH,
                     "language": "ru",
                     "type": "story",
                     "include_hashtags": True,
@@ -2104,7 +2105,7 @@ def regenerate_post_text(post_id: int):
                     return _build_template_config(template_for_post, post.client, prompt_type=prompt_type)
                 return {
                     "tone": "friendly",
-                    "length": "medium",
+                    "length": DEFAULT_TEMPLATE_LENGTH,
                     "language": "ru",
                     "type": "selling",
                     "include_hashtags": True,

@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 
 const GROUP_LABELS: Record<string, string> = {
   seo_keywords: 'SEO ключевые фразы',
@@ -94,9 +95,11 @@ export default function SEOPage() {
   const [wordstatRefreshing, setWordstatRefreshing] = useState(false);
   const [wordstatSubmitting, setWordstatSubmitting] = useState(false);
   const [wordstatPhrase, setWordstatPhrase] = useState('');
+  const [wordstatGroup, setWordstatGroup] = useState('');
   const [selectedQueryId, setSelectedQueryId] = useState<number | null>(null);
   const [phraseCounts, setPhraseCounts] = useState<Record<string, number>>({});
   const [historyEdits, setHistoryEdits] = useState<Record<number, string>>({});
+  const [groupNameEdits, setGroupNameEdits] = useState<Record<number, string>>({});
   const { canEdit } = useRole();
 
   const loadSeoSets = async (opts?: { silent?: boolean }) => {
@@ -190,6 +193,45 @@ export default function SEOPage() {
     return result;
   }, [wordstatQueries]);
 
+  const extractPhrases = (value: string) => {
+    const seen = new Set<string>();
+    return value
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter((item) => {
+        if (!item || seen.has(item)) return false;
+        seen.add(item);
+        return true;
+      });
+  };
+
+  const normalizePhraseList = (values: string[] = []) => {
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    values.forEach((value) => {
+      const text = (value || '').trim();
+      if (text && !seen.has(text)) {
+        seen.add(text);
+        normalized.push(text);
+      }
+    });
+    return normalized;
+  };
+
+  const getQueryText = (query: WordstatQuery) => {
+    const list =
+      Array.isArray(query.phrases) && query.phrases.length
+        ? query.phrases
+        : query.request_phrase
+          ? [query.request_phrase]
+          : [];
+    return list.join('\n');
+  };
+
+  const getQueryTitle = (query: WordstatQuery) => {
+    return (query.group_name || '').trim() || query.request_phrase || '';
+  };
+
   const handleGenerateSEO = async () => {
     setGenerating(true);
     try {
@@ -206,17 +248,33 @@ export default function SEOPage() {
 
   const handleRefresh = () => loadSeoSets({ silent: true });
 
-  const fetchWordstatAndRedirect = async (phraseRaw: string) => {
-    const phrase = phraseRaw.trim();
-    if (!phrase) {
-      toast.error('Введите фразу для запроса Wordstat');
+  const fetchWordstatAndRedirect = async (payload: { phrase?: string; phrases?: string[]; group_name?: string }) => {
+    const phrase = (payload.phrase || '').trim();
+    const normalizedGroup = normalizePhraseList(payload.phrases);
+    if (!phrase && normalizedGroup.length === 0) {
+      toast.error('Введите фразу или группу фраз для запроса Wordstat');
       return;
     }
+
+    const requestBody: Parameters<typeof wordstatApi.fetch>[0] = {};
+    if (phrase) {
+      requestBody.phrase = phrase;
+    }
+    if (normalizedGroup.length) {
+      requestBody.phrases = normalizedGroup;
+    }
+    if (payload.group_name) {
+      requestBody.group_name = payload.group_name.trim();
+    }
+
     setWordstatSubmitting(true);
     try {
-      const data = await wordstatApi.fetch({ phrase });
+      const data = await wordstatApi.fetch(requestBody);
       const resultsCount = data.results?.length ?? 0;
-      setPhraseCounts((prev) => ({ ...prev, [phrase]: resultsCount }));
+      if (phrase || normalizedGroup.length === 1) {
+        const key = phrase || normalizedGroup[0];
+        setPhraseCounts((prev) => ({ ...prev, [key]: resultsCount }));
+      }
       setWordstatQueries((prev) => [data, ...prev.filter((item) => item.id !== data.id)]);
       setSelectedQueryId(data.id);
       if (resultsCount > 0 && data.id) {
@@ -231,7 +289,65 @@ export default function SEOPage() {
     }
   };
 
-  const handleWordstatFetch = () => fetchWordstatAndRedirect(wordstatPhrase);
+  const handleWordstatFetch = () => fetchWordstatAndRedirect({ phrase: wordstatPhrase });
+
+  const handleWordstatGroupFetch = () => {
+    const phrases = extractPhrases(wordstatGroup);
+    fetchWordstatAndRedirect({ phrases });
+  };
+
+  const rerunWordstatFromText = async (value: string, query?: WordstatQuery) => {
+    const phrases = extractPhrases(value);
+    const normalizedGroup = normalizePhraseList(phrases);
+
+    if (query && query.id) {
+      const existingSet = new Set<string>((query.phrases || []).map((item) => item.trim()));
+      const newPhrases = normalizedGroup.filter((p) => !existingSet.has(p));
+      if (newPhrases.length === 0) {
+        toast.error('Новых фраз нет — добавьте строки, которых еще не было в группе');
+        return;
+      }
+      setWordstatSubmitting(true);
+      try {
+        const data = await wordstatApi.append(Number(query.id), { phrases: newPhrases });
+        setWordstatQueries((prev) => [data, ...prev.filter((item) => item.id !== data.id)]);
+        setHistoryEdits((prev) => ({ ...prev, [query.id]: getQueryText(data) }));
+        setGroupNameEdits((prev) => ({ ...prev, [query.id]: getQueryTitle(data) }));
+        setSelectedQueryId(data.id);
+        window.location.href = `/seo/${data.id}`;
+        return;
+      } catch (error) {
+        console.error('Failed to append Wordstat phrases', error);
+        const message = error instanceof Error ? error.message : 'Не удалось обновить Wordstat';
+        toast.error(message);
+      } finally {
+        setWordstatSubmitting(false);
+      }
+    }
+
+    if (normalizedGroup.length > 1) {
+      fetchWordstatAndRedirect({ phrases: normalizedGroup });
+    } else {
+      fetchWordstatAndRedirect({ phrase: normalizedGroup[0] || value });
+    }
+  };
+
+  const handleSaveGroupName = async (query: WordstatQuery, value: string) => {
+    const name = value.trim().slice(0, 255);
+    if (!query?.id) return;
+    setWordstatSubmitting(true);
+    try {
+      const data = await wordstatApi.updateGroupName(Number(query.id), name);
+      setWordstatQueries((prev) => [data, ...prev.filter((item) => item.id !== data.id)]);
+      setGroupNameEdits((prev) => ({ ...prev, [query.id]: getQueryTitle(data) }));
+    } catch (error) {
+      console.error('Failed to update Wordstat group name', error);
+      const message = error instanceof Error ? error.message : 'Не удалось обновить название группы';
+      toast.error(message);
+    } finally {
+      setWordstatSubmitting(false);
+    }
+  };
 
   const handleWordstatRefresh = () => loadWordstatQueries({ silent: true });
 
@@ -333,7 +449,7 @@ export default function SEOPage() {
                             <li key={`${keyword}-${idx}`}>
                               <button
                                 type="button"
-                                onClick={() => fetchWordstatAndRedirect(keyword)}
+                                onClick={() => fetchWordstatAndRedirect({ phrase: keyword })}
                                 className="text-left text-slate-800 underline-offset-2 hover:underline"
                               >
                                 {keyword}
@@ -424,50 +540,86 @@ export default function SEOPage() {
         </TabsContent>
 
         <TabsContent value="wordstat" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Wordstat</CardTitle>
-              <CardDescription>
-                Введите поисковую фразу, чтобы запросить Wordstat, сохранить результаты в базу и увидеть частотности в таблице.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <form
-                className="flex flex-col gap-3 md:flex-row md:items-center"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleWordstatFetch();
-                }}
-              >
-                <Input
-                  placeholder="Например: купить велосипед"
-                  value={wordstatPhrase}
-                  onChange={(e) => setWordstatPhrase(e.target.value)}
-                  className="flex-1"
-                />
-                <div className="flex w-full gap-2 md:w-auto">
-                  <Button type="submit" disabled={!canEdit || wordstatSubmitting}>
-                    {wordstatSubmitting ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Запрос...
-                      </>
-                    ) : (
-                      <>
-                        <Search className="mr-2 h-4 w-4" />
-                        Получить Wordstat
-                      </>
-                    )}
-                  </Button>
+            <Card>
+              <CardHeader>
+                <CardTitle>Wordstat</CardTitle>
+                <CardDescription>
+                  Введите одну фразу или группу строк: запросы отправятся в Wordstat и сохранятся в единую таблицу.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold">Фраза</p>
+                    <form
+                      className="flex flex-col gap-3"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        handleWordstatFetch();
+                      }}
+                    >
+                      <div className="flex w-full gap-2">
+                        <Input
+                          placeholder="Например: купить велосипед"
+                          value={wordstatPhrase}
+                          onChange={(e) => setWordstatPhrase(e.target.value)}
+                          className="flex-1"
+                        />
+                        <Button type="submit" disabled={!canEdit || wordstatSubmitting} className="whitespace-nowrap">
+                          {wordstatSubmitting ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Запрос...
+                            </>
+                          ) : (
+                            <>
+                              <Search className="mr-2 h-4 w-4" />
+                              Ищи фразу
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </form>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold">Группа</p>
+                    <div className="flex flex-col gap-3">
+                      <Textarea
+                        placeholder="Каждая строка — отдельный запрос Wordstat"
+                        value={wordstatGroup}
+                        onChange={(e) => setWordstatGroup(e.target.value)}
+                        className="min-h-[120px]"
+                      />
+                      <div className="flex w-full gap-2">
+                        <Button type="button" disabled={!canEdit || wordstatSubmitting} onClick={handleWordstatGroupFetch} className="w-full">
+                          {wordstatSubmitting ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Запрос...
+                            </>
+                          ) : (
+                            <>
+                              <Search className="mr-2 h-4 w-4" />
+                              Ищи группу
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Строки опрашиваются по очереди, результаты объединяются в общий список для этой группы.
+                    </p>
+                  </div>
                 </div>
-              </form>
-              {!canEdit && (
-                <p className="text-sm text-muted-foreground">
-                  У вас нет прав на отправку запросов Wordstat. Попросите владельца или редактора аккаунта.
-                </p>
-              )}
-            </CardContent>
-          </Card>
+
+                {!canEdit && (
+                  <p className="text-sm text-muted-foreground">
+                    У вас нет прав на отправку запросов Wordstat. Попросите владельца или редактора аккаунта.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
 
           <div className="grid gap-4 lg:grid-cols-3">
             <Card className="lg:col-span-1">
@@ -501,28 +653,68 @@ export default function SEOPage() {
                       </button>
                     )}
                     {wordstatQueries.map((query) => {
-                      const editedPhrase = historyEdits[query.id] ?? query.request_phrase;
+                      const editedPhrase = historyEdits[query.id] ?? getQueryText(query);
+                      const editedGroupName = groupNameEdits[query.id] ?? getQueryTitle(query);
+                      const isGroupQuery = editedPhrase.includes('\n') || (query.phrases?.length ?? 0) > 1;
                       return (
                         <div
                           key={query.id}
                           className="w-full rounded-md border border-slate-200 bg-white p-3 transition hover:border-slate-400"
                         >
                           <div className="flex flex-col gap-2">
-                            <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
                               <Input
-                                value={editedPhrase}
-                                onChange={(e) =>
-                                  setHistoryEdits((prev) => ({ ...prev, [query.id]: e.target.value }))
-                                }
+                                value={editedGroupName}
+                                onChange={(e) => setGroupNameEdits((prev) => ({ ...prev, [query.id]: e.target.value }))}
+                                placeholder="Название группы"
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') {
                                     e.preventDefault();
-                                    fetchWordstatAndRedirect(editedPhrase);
+                                    handleSaveGroupName(query, editedGroupName);
                                   }
                                 }}
                                 className="flex-1"
                               />
-                              <Badge variant="outline" className="text-xs font-medium">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleSaveGroupName(query, editedGroupName)}
+                                disabled={wordstatSubmitting}
+                              >
+                                Сохранить
+                              </Button>
+                            </div>
+                            <div className="flex items-start justify-between gap-2">
+                              {isGroupQuery ? (
+                                <Textarea
+                                  value={editedPhrase}
+                                  onChange={(e) =>
+                                    setHistoryEdits((prev) => ({ ...prev, [query.id]: e.target.value }))
+                                  }
+                                  onKeyDown={(e) => {
+                                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                                      e.preventDefault();
+                                      rerunWordstatFromText(editedPhrase, query);
+                                    }
+                                  }}
+                                  className="min-h-[96px] flex-1"
+                                />
+                              ) : (
+                                <Input
+                                  value={editedPhrase}
+                                  onChange={(e) =>
+                                    setHistoryEdits((prev) => ({ ...prev, [query.id]: e.target.value }))
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      rerunWordstatFromText(editedPhrase, query);
+                                    }
+                                  }}
+                                  className="flex-1"
+                                />
+                              )}
+                              <Badge variant="outline" className="text-xs font-medium whitespace-nowrap">
                                 {query.results?.length ?? 0} фраз
                               </Badge>
                             </div>
@@ -541,7 +733,7 @@ export default function SEOPage() {
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  onClick={() => fetchWordstatAndRedirect(editedPhrase)}
+                                  onClick={() => rerunWordstatFromText(editedPhrase, query)}
                                   disabled={wordstatSubmitting}
                                 >
                                   Повторить

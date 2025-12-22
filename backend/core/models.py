@@ -858,12 +858,6 @@ class ContentTemplate(models.Model):
         "enthusiastic", # Восторженный
     ]
 
-    LENGTH_CHOICES = (
-        ("short", "Короткий (500-1000 символов)"),
-        ("medium", "Средний (1000-1500 символов)"),
-        ("long", "Длинный (1500-2000 символов)"),
-    )
-
     LANGUAGE_CHOICES = (
         ("ru", "Русский"),
         ("en", "English"),
@@ -883,11 +877,9 @@ class ContentTemplate(models.Model):
         default="professional",
         help_text="Тон контента или свой кастомный тон"
     )
-    length = models.CharField(
-        max_length=20,
-        choices=LENGTH_CHOICES,
-        default="medium",
-        help_text="Длина поста"
+    length = models.PositiveIntegerField(
+        default=1200,
+        help_text="Целевая длина поста в символах"
     )
     language = models.CharField(
         max_length=5,
@@ -1118,6 +1110,8 @@ class WordstatQuery(models.Model):
     """Сохранённый запрос Wordstat и его результаты для конкретного клиента."""
 
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="wordstat_queries")
+    group_name = models.CharField(max_length=255, blank=True, default="")
+    phrases = models.JSONField(default=list, blank=True)
     request_phrase = models.CharField(max_length=255)
     total_count = models.PositiveIntegerField(default=0)
     include_parent = models.BooleanField(default=False)

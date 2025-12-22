@@ -329,8 +329,8 @@ class StoryDetailSerializer(serializers.ModelSerializer):
 class ContentTemplateSerializer(serializers.ModelSerializer):
     """
     Content template serializer.
-    Type and tone are now editable to allow custom values.
-    Length and language remain read-only after creation.
+    Type and tone are editable to allow custom values.
+    Length is stored as a numeric target in symbols; language remains read-only for now.
     """
 
     is_system = serializers.SerializerMethodField()
@@ -356,7 +356,6 @@ class ContentTemplateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
-            "length",  # Keep readonly for now
             "language",  # Keep readonly for now
             "created_at",
             "updated_at",
@@ -419,6 +418,8 @@ class WordstatQuerySerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "client",
+            "group_name",
+            "phrases",
             "request_phrase",
             "total_count",
             "include_parent",
