@@ -344,6 +344,8 @@ CELERY_HTTPS_PROXY=http://user:password@proxy-host:3128
 CELERY_NO_PROXY=localhost,127.0.0.1
 ```
 
+Эти же переменные (а также `DJANGO_HTTP_PROXY`/`DJANGO_HTTPS_PROXY`/`DJANGO_NO_PROXY`, если нужны разные настройки) применяются и к Django (`runserver`, gunicorn) — они выставляются в `config/settings/base.py`.
+
 ```python
 # config/__init__.py
 from .celery import app as celery_app

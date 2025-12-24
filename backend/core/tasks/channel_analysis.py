@@ -363,20 +363,22 @@ def _analyze_telegram_channel(analysis: ChannelAnalysis) -> Dict:
             await collector.disconnect()
 
     channel_info, messages = run_async_task(fetch_data())
-    _update_analysis(analysis, progress=40)
+    _update_analysis(analysis, progress=25)
 
     if not messages:
         raise RuntimeError("Не удалось получить посты из канала. Проверьте доступность канала и Telegram сессию.")
 
     stats = _summarize_posts(messages)
-    _update_analysis(analysis, progress=70)
+    _update_analysis(analysis, progress=50)
     schedule = _build_schedule(messages)
     insights = _extract_ai_topics(messages, analysis)
     audience_profile = _extract_audience_profile(messages, analysis)
-    _update_analysis(analysis, progress=90)
+    _update_analysis(analysis, progress=75)
 
     channel_title = (channel_info or {}).get("title") or channel_identifier
     subscribers = int((channel_info or {}).get("subscribers") or 0)
+
+    _update_analysis(analysis, progress=90)
 
     return {
         "channel_name": channel_title,
@@ -401,22 +403,24 @@ def _analyze_instagram_channel(analysis: ChannelAnalysis) -> Dict:
         raise ValueError("Не удалось распознать Instagram аккаунт из ссылки")
 
     profile, posts = fetch_instagram_profile(username, limit=50)
-    _update_analysis(analysis, progress=40)
+    _update_analysis(analysis, progress=25)
 
     if not posts:
         raise RuntimeError("Не удалось получить посты из Instagram аккаунта.")
 
     subscribers = int(profile.get("followers_count") or 0)
     stats = _summarize_posts(posts, audience_size=subscribers or None)
-    _update_analysis(analysis, progress=70)
+    _update_analysis(analysis, progress=50)
 
     schedule = _build_schedule(posts)
     insights = _extract_ai_topics(posts, analysis)
     audience_profile = _extract_audience_profile(posts, analysis)
-    _update_analysis(analysis, progress=90)
+    _update_analysis(analysis, progress=75)
 
     channel_title = profile.get("full_name") or profile.get("username") or username
     profile_url = f"https://www.instagram.com/{profile.get('username') or username}/"
+
+    _update_analysis(analysis, progress=90)
 
     return {
         "channel_name": channel_title,
@@ -449,19 +453,19 @@ def _analyze_youtube_channel(analysis: ChannelAnalysis) -> Dict:
         raise ValueError("Не удалось распознать YouTube канал из URL")
 
     profile, videos = fetch_youtube_channel(api_key, identifier, max_videos=50)
-    _update_analysis(analysis, progress=40)
+    _update_analysis(analysis, progress=25)
 
     if not videos:
         raise RuntimeError("Не удалось получить видео из YouTube канала.")
 
     subscribers = int(profile.get("subscriber_count") or 0)
     stats = _summarize_posts(videos, audience_size=subscribers or None)
-    _update_analysis(analysis, progress=70)
+    _update_analysis(analysis, progress=50)
 
     schedule = _build_schedule(videos)
     insights = _extract_ai_topics(videos, analysis)
     audience_profile = _extract_audience_profile(videos, analysis)
-    _update_analysis(analysis, progress=90)
+    _update_analysis(analysis, progress=75)
 
     channel_title = profile.get("title") or identifier
     channel_username = profile.get("custom_url") or ""
@@ -470,6 +474,8 @@ def _analyze_youtube_channel(analysis: ChannelAnalysis) -> Dict:
         profile_url = f"https://www.youtube.com/{channel_username.lstrip('/')}"
     elif profile.get("channel_id"):
         profile_url = f"https://www.youtube.com/channel/{profile.get('channel_id')}"
+
+    _update_analysis(analysis, progress=90)
 
     return {
         "channel_name": channel_title,
@@ -533,7 +539,7 @@ def analyze_channel_task(self, analysis_id: int):
         _update_analysis(
             analysis,
             status=ChannelAnalysis.STATUS_FAILED,
-            progress=100,
+            progress=analysis.progress or 0,
             error=str(exc),
         )
         raise

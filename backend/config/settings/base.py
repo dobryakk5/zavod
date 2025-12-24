@@ -13,6 +13,18 @@ CELERY_LOG_FILE = LOG_DIR / "celery.log"
 # Load environment variables from .env file
 load_dotenv(BASE_DIR / '.env')
 
+# Optional outbound proxy for Django processes (runserver/gunicorn)
+_proxy_env = {
+    "HTTP_PROXY": os.getenv("DJANGO_HTTP_PROXY") or os.getenv("CELERY_HTTP_PROXY") or os.getenv("HTTP_PROXY"),
+    "HTTPS_PROXY": os.getenv("DJANGO_HTTPS_PROXY") or os.getenv("CELERY_HTTPS_PROXY") or os.getenv("HTTPS_PROXY"),
+    "NO_PROXY": os.getenv("DJANGO_NO_PROXY") or os.getenv("CELERY_NO_PROXY") or os.getenv("NO_PROXY"),
+}
+for _proxy_key, _proxy_value in _proxy_env.items():
+    if _proxy_value:
+        # Ensure both upper- and lower-case variables are exported for requests/urllib
+        os.environ[_proxy_key] = _proxy_value
+        os.environ[_proxy_key.lower()] = _proxy_value
+
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me")  # поменяешь потом на нормальный
 DEBUG = os.getenv("DEBUG", "True") == "True"
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")

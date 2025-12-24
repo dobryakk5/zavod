@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { analyticsApi, type ChannelAnalysisRecord } from '@/lib/api/analytics';
 import { toast } from 'sonner';
@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Trash2 } from 'lucide-react';
 
 const channelTypeLabels: Record<ChannelAnalysisRecord['channel_type'], string> = {
   telegram: 'Telegram',
@@ -43,6 +43,7 @@ export default function AnalyticsPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [history, setHistory] = useState<ChannelAnalysisRecord[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -102,12 +103,34 @@ export default function AnalyticsPage() {
     router.push(`/analytics/${analysisId}`);
   };
 
+  const handleDeleteAnalysis = async (analysisId: number, event?: MouseEvent) => {
+    event?.stopPropagation();
+    if (deletingId === analysisId) {
+      return;
+    }
+    const confirmed = typeof window !== 'undefined' ? window.confirm('Удалить запись из истории аналитики?') : true;
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingId(analysisId);
+    try {
+      await analyticsApi.deleteAnalysis(analysisId);
+      setHistory((prev) => prev.filter((item) => item.id !== analysisId));
+      toast.success('Запись удалена из истории');
+    } catch (error) {
+      toast.error('Не удалось удалить анализ');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <div className="container mx-auto py-8">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold">Аналитика канала</h1>
+        <h1 className="text-3xl font-bold">Аналитика каналов</h1>
         <p className="text-gray-500 mt-2">
-          Проанализируйте канал и получите рекомендации по контенту
+          Проанализируйте свой канал и каналы конкурентов
         </p>
       </div>
 
@@ -183,6 +206,7 @@ export default function AnalyticsPage() {
                   <TableHead>Тип</TableHead>
                   <TableHead className="hidden md:table-cell">Прогресс</TableHead>
                   <TableHead>Создан</TableHead>
+                  <TableHead className="w-24 text-right">Действия</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -196,16 +220,37 @@ export default function AnalyticsPage() {
                       {channelTypeLabels[item.channel_type] || item.channel_type}
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
-                      <div className="flex flex-col gap-1">
-                        <Progress
-                          value={item.progress}
-                          intent={item.status === 'failed' ? 'error' : 'default'}
-                        />
-                        <span className="text-xs text-gray-500">{item.progress}%</span>
-                      </div>
+                      {item.status === 'failed' ? (
+                        <div className="flex flex-col gap-1">
+                          <Progress value={0} intent="error" />
+                          <span className="text-xs text-gray-500">&nbsp;</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          <Progress
+                            value={item.progress}
+                            intent={item.status === 'failed' ? 'error' : 'default'}
+                          />
+                          <span className="text-xs text-gray-500">{item.progress}%</span>
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-sm text-gray-600">
                       {new Date(item.created_at).toLocaleString('ru-RU')}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(event) => handleDeleteAnalysis(item.id, event)}
+                        disabled={deletingId === item.id}
+                      >
+                        {deletingId === item.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        )}
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}

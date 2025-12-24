@@ -2151,11 +2151,16 @@ class TgChannelView(APIView):
         return Response(payload)
 
 
-class ChannelAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
+class ChannelAnalysisViewSet(mixins.DestroyModelMixin, viewsets.ReadOnlyModelViewSet):
     """Expose stored channel analysis records."""
 
     permission_classes = [IsTenantMember]
     pagination_class = None
+
+    def get_permissions(self):
+        if self.action == "destroy":
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
 
     def get_queryset(self):
         client = get_active_client(self.request.user)

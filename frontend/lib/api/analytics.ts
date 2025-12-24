@@ -132,4 +132,13 @@ export const analyticsApi = {
       method: 'POST',
     });
   },
+
+  /**
+   * Delete a stored analysis record
+   */
+  deleteAnalysis: async (id: string | number): Promise<void> => {
+    return apiFetch<void>(`/channel-analyses/${id}/`, {
+      method: 'DELETE',
+    });
+  },
 };
