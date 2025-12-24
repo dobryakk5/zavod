@@ -32,6 +32,8 @@ export interface Post {
   created_at: string;
   platforms?: string[];
   template_name?: string | null;
+  has_images?: boolean;
+  has_videos?: boolean;
 }
 
 export interface PostMediaImage {
@@ -66,6 +68,7 @@ export interface PostDetail {
   topic?: number;
   tags?: string[];
   source_links?: string[];
+  wordstat_phrases_used?: string[];
   platforms?: string[];
   publish_text?: boolean;
   publish_image?: boolean;
@@ -273,6 +276,7 @@ export interface WordstatResult {
   phrase: string;
   count: number;
   result_type: WordstatResultType;
+  used_in_post: number;
 }
 
 export interface WordstatQuery {

@@ -62,9 +62,22 @@ class BaseAIContentGenerator:
         prompt: str,
         max_tokens: int,
         temperature: float,
+        response_format: Optional[dict] = None,
     ) -> Optional[str]:
         """Call OpenRouter chat completions API and return text."""
         try:
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+
+            if response_format:
+                payload["response_format"] = response_format
+
             response = requests.post(
                 self.api_url,
                 headers={
@@ -73,14 +86,7 @@ class BaseAIContentGenerator:
                     "HTTP-Referer": "https://zavod-content-factory.com",
                     "X-Title": "Content Factory AI Generator",
                 },
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                },
+                json=payload,
                 timeout=60,
             )
 
@@ -133,6 +139,8 @@ class BaseAIContentGenerator:
         temperature: float,
         primary_model: Optional[str] = None,
         fallback_models: Optional[List[str]] = None,
+        response_format: Optional[dict] = None,
+        retry_without_format: bool = True,
     ) -> Optional[str]:
         """Try a primary model and optional fallback models sequentially."""
 
@@ -154,16 +162,32 @@ class BaseAIContentGenerator:
             logger.error("No models configured for AI request")
             return None
 
-        for index, model_name in enumerate(models_to_try):
-            response = self._call_openrouter(model_name, prompt, max_tokens, temperature)
-            if response:
-                return response
-            if index + 1 < len(models_to_try):
-                logger.info(
-                    "Model %s failed, trying fallback %s",
+        def _try_models(with_response_format: Optional[dict]) -> Optional[str]:
+            for index, model_name in enumerate(models_to_try):
+                response = self._call_openrouter(
                     model_name,
-                    models_to_try[index + 1],
+                    prompt,
+                    max_tokens,
+                    temperature,
+                    response_format=with_response_format,
                 )
+                if response:
+                    return response
+                if index + 1 < len(models_to_try):
+                    logger.info(
+                        "Model %s failed, trying fallback %s",
+                        model_name,
+                        models_to_try[index + 1],
+                    )
+            return None
+
+        response = _try_models(response_format)
+        if response:
+            return response
+
+        if response_format and retry_without_format:
+            logger.info("Retrying AI call without response_format enforcement")
+            return _try_models(None)
 
         return None
 
@@ -174,6 +198,8 @@ class BaseAIContentGenerator:
         temperature: float = 0.7,
         model: Optional[str] = None,
         allow_fallback: bool = True,
+        response_format: Optional[dict] = None,
+        retry_without_format: bool = True,
     ) -> Optional[str]:
         """Send request to OpenRouter API with automatic fallback model."""
 
@@ -189,6 +215,8 @@ class BaseAIContentGenerator:
             temperature=temperature,
             primary_model=selected_model,
             fallback_models=fallback_models,
+            response_format=response_format,
+            retry_without_format=retry_without_format,
         )
 
     def test_connection(self) -> bool:

@@ -29,14 +29,38 @@ from core.social_accounts import sync_client_default_telegram_account
 class PostSerializer(serializers.ModelSerializer):
     platforms = serializers.SerializerMethodField()
     template_name = serializers.CharField(source="template.name", read_only=True)
+    has_images = serializers.SerializerMethodField()
+    has_videos = serializers.SerializerMethodField()
 
     class Meta:
         model = Post
-        fields = ["id", "title", "hook_title", "status", "created_at", "platforms", "template_name"]
+        fields = [
+            "id",
+            "title",
+            "hook_title",
+            "status",
+            "created_at",
+            "platforms",
+            "template_name",
+            "has_images",
+            "has_videos",
+        ]
 
     def get_platforms(self, obj: Post) -> list[str]:
         schedules = obj.schedules.all()
         return sorted({schedule.social_account.platform for schedule in schedules})
+
+    def get_has_images(self, obj: Post) -> bool:
+        annotated_count = getattr(obj, "images_count", None)
+        if annotated_count is not None:
+            return annotated_count > 0
+        return obj.images.exists()
+
+    def get_has_videos(self, obj: Post) -> bool:
+        annotated_count = getattr(obj, "videos_count", None)
+        if annotated_count is not None:
+            return annotated_count > 0
+        return obj.videos.exists()
 
 
 class ScheduleSerializer(serializers.ModelSerializer):
@@ -153,6 +177,7 @@ class PostDetailSerializer(serializers.ModelSerializer):
             "status",
             "tags",
             "source_links",
+            "wordstat_phrases_used",
             "publish_text",
             "publish_image",
             "publish_video",
@@ -178,6 +203,7 @@ class PostDetailSerializer(serializers.ModelSerializer):
             "videos",
             "template_name",
             "template_type",
+            "wordstat_phrases_used",
         ]
 
 
@@ -406,8 +432,8 @@ class SEOKeywordSetSerializer(serializers.ModelSerializer):
 class WordstatResultSerializer(serializers.ModelSerializer):
     class Meta:
         model = WordstatResult
-        fields = ["id", "phrase", "count", "result_type"]
-        read_only_fields = ["id", "phrase", "count"]
+        fields = ["id", "phrase", "count", "result_type", "used_in_post"]
+        read_only_fields = ["id", "phrase", "count", "used_in_post"]
 
 
 class WordstatQuerySerializer(serializers.ModelSerializer):

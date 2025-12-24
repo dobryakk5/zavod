@@ -521,6 +521,15 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
           <p className="whitespace-pre-wrap">{post.text || 'Текст не добавлен'}</p>
         </div>
 
+        {post.wordstat_phrases_used && post.wordstat_phrases_used.length > 0 && (
+          <div className="rounded-lg border bg-white/60 p-4">
+            <p className="text-sm font-semibold">Фразы Wordstat, использованные в тексте</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {post.wordstat_phrases_used.join(' • ')}
+            </p>
+          </div>
+        )}
+
         {/* Action Buttons */}
         <div>
           <div className="flex flex-wrap gap-3">

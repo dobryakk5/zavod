@@ -538,15 +538,52 @@ def _generate_image_from_telegram_bot_impl(
                 async with client.conversation(bot, timeout=timeout) as conv:
                     async def _select_image_mode(target_mode: str) -> bool:
                         """Открыть меню /design и выбрать нужный режим."""
+                        design_reply_timeout = min(25, max(8, timeout // 3))
+                        last_response: Optional[Any] = None
+
+                        async def _wait_response_with_markup(label: str, wait_seconds: int) -> Tuple[Optional[Any], Optional[Any]]:
+                            """Ждать ответ бота до wait_seconds, вернуть ответ с inline-кнопками (если есть)."""
+                            nonlocal last_response
+                            deadline = asyncio.get_event_loop().time() + wait_seconds
+                            while True:
+                                remaining = deadline - asyncio.get_event_loop().time()
+                                if remaining <= 0:
+                                    break
+                                try:
+                                    resp = await conv.get_response(timeout=remaining)
+                                except asyncio.TimeoutError:
+                                    break
+                                last_response = resp
+                                markup = getattr(resp, "reply_markup", None)
+                                if markup and getattr(markup, "rows", None):
+                                    return resp, resp
+                            return None, last_response
+
                         mode_label = "SORA" if target_mode == "sora" else "Runway"
                         logger.info("[IMAGE BOT Thread %s] Отправка команды /design для режима %s...", thread_id, mode_label)
                         await conv.send_message("/design")
-                        try:
-                            response = await conv.get_response(timeout=5)
-                            logger.info("[IMAGE BOT Thread %s] Получен ответ на /design", thread_id)
-                        except asyncio.TimeoutError:
-                            logger.warning("[IMAGE BOT Thread %s] Таймаут ожидания ответа на /design", thread_id)
-                            return False
+                        response, last_response = await _wait_response_with_markup("/design", design_reply_timeout)
+                        if not response:
+                            last_text = (getattr(last_response, "raw_text", None) or "").strip()
+                            logger.warning(
+                                "[IMAGE BOT Thread %s] Не дождались inline-кнопок после /design (последний ответ: %s)",
+                                thread_id,
+                                (last_text[:120] if last_text else "нет ответа")
+                            )
+                            logger.info("[IMAGE BOT Thread %s] Пробуем сбросить диалог через /start и повторить /design", thread_id)
+                            await conv.send_message("/start")
+                            await _wait_response_with_markup("/start", min(10, design_reply_timeout))
+                            logger.info("[IMAGE BOT Thread %s] Повторная отправка /design после /start...", thread_id)
+                            await conv.send_message("/design")
+                            response, last_response = await _wait_response_with_markup("/design (retry)", design_reply_timeout)
+                            if not response:
+                                last_text = (getattr(last_response, "raw_text", None) or "").strip()
+                                logger.error(
+                                    "[IMAGE BOT Thread %s] Таймаут ожидания ответа на /design даже после /start (последний ответ: %s)",
+                                    thread_id,
+                                    (last_text[:120] if last_text else "нет ответа")
+                                )
+                                return False
 
                         if not response.reply_markup:
                             logger.error("[IMAGE BOT Thread %s] Нет inline-кнопок в ответе на /design", thread_id)
@@ -568,7 +605,17 @@ def _generate_image_from_telegram_bot_impl(
                                 break
 
                         if not target_button:
-                            logger.error("[IMAGE BOT Thread %s] Кнопка %s не найдена", thread_id, mode_label)
+                            available_buttons: List[str] = []
+                            for row in response.reply_markup.rows:
+                                for button in row.buttons:
+                                    if button and getattr(button, "text", None):
+                                        available_buttons.append(button.text.strip())
+                            logger.error(
+                                "[IMAGE BOT Thread %s] Кнопка %s не найдена. Доступные кнопки: %s",
+                                thread_id,
+                                mode_label,
+                                ", ".join(available_buttons) if available_buttons else "пусто"
+                            )
                             return False
 
                         logger.info("[IMAGE BOT Thread %s] Нажимаю кнопку: %s", thread_id, target_button.text)

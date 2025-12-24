@@ -6,7 +6,7 @@ import { ApiError, apiFetch } from '@/lib/api';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatTemplateDisplayName } from '@/lib/utils';
-import { Loader2 } from 'lucide-react';
+import { Clapperboard, Image as ImageIcon, Loader2 } from 'lucide-react';
 import { subscribeToPostGenerationStart } from '@/lib/post-generation-events';
 
 export type Post = {
@@ -17,6 +17,8 @@ export type Post = {
   created_at: string;
   platforms: string[];
   template_name?: string | null;
+  has_images?: boolean;
+  has_videos?: boolean;
 };
 
 type PostPlaceholder = {
@@ -185,6 +187,7 @@ export function PostsTable() {
           <TableHeader>
             <TableRow>
               <TableHead>Заголовок</TableHead>
+              <TableHead className="w-36">Медиа</TableHead>
               <TableHead>Тип поста</TableHead>
             </TableRow>
           </TableHeader>
@@ -197,6 +200,7 @@ export function PostsTable() {
                     Новый пост создается
                   </div>
                 </TableCell>
+                <TableCell />
                 <TableCell className="text-sm text-muted-foreground">
                   {placeholder.templateName || 'Тип уточняется'}
                 </TableCell>
@@ -214,6 +218,28 @@ export function PostsTable() {
                   <div className="text-sm text-muted-foreground mt-1">
                     <span className="font-semibold">Цепляющий заголовок (для фото):</span>{' '}
                     {post.hook_title?.trim() || 'не сгенерирован'}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    {post.has_images ? (
+                      <div
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-amber-50 text-amber-700 ring-1 ring-amber-100"
+                        title="Есть фото"
+                      >
+                        <ImageIcon className="h-4 w-4" aria-hidden="true" />
+                        <span className="sr-only">Есть фото</span>
+                      </div>
+                    ) : null}
+                    {post.has_videos ? (
+                      <div
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-sky-50 text-sky-700 ring-1 ring-sky-100"
+                        title="Есть видео"
+                      >
+                        <Clapperboard className="h-4 w-4" aria-hidden="true" />
+                        <span className="sr-only">Есть видео</span>
+                      </div>
+                    ) : null}
                   </div>
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">

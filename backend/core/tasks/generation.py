@@ -5,6 +5,7 @@ import queue
 import random
 import threading
 import uuid
+import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone as dt_timezone
@@ -12,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from zoneinfo import ZoneInfo
 
 from django.core.files import File
+from django.db.models import F
+from django.db.utils import ProgrammingError
 from django.utils import timezone
 
 from ..models import (
@@ -25,6 +28,7 @@ from ..models import (
     SEOKeywordSet,
     Schedule,
     SocialAccount,
+    WordstatResult,
 )
 from ..ai_generator import AIContentGenerator, merge_video_prompt_with_additional
 from ..system_settings import get_image_generation_method
@@ -174,6 +178,215 @@ def _build_weekly_slots(
         counts[day_offset] += 1
 
     return slots
+
+
+def _apply_wordstat_refinement(
+    generator: AIContentGenerator,
+    base_result: Dict[str, Any],
+    phrases: List[str],
+    language: str,
+    log_prefix: str,
+) -> Dict[str, Any]:
+    def _transliterate_ru_to_lat(src: str) -> str:
+        mapping = {
+            "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+            "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+            "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+            "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+            "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+        }
+        return "".join(mapping.get(ch, mapping.get(ch.lower(), ch)) for ch in src)
+
+    def _replace_insensitive(text: str, needle: str, replacement: str) -> Tuple[str, bool]:
+        if not needle:
+            return text, False
+        match = re.search(re.escape(needle), text, re.IGNORECASE)
+        if not match:
+            return text, False
+        start, end = match.span()
+        return text[:start] + replacement + text[end:], True
+
+    def _ensure_exact_phrases(text: str, phrases_list: List[str]) -> str:
+        """Гарантировать, что точные фразы присутствуют в тексте (с заменой регистровых вариантов)."""
+        updated = text or ""
+        for phrase in phrases_list:
+            if not phrase:
+                continue
+            if phrase in updated:
+                continue
+            # 1) Пробуем заменить совпадение по регистру
+            updated, replaced = _replace_insensitive(updated, phrase, phrase)
+            if replaced:
+                continue
+            # 2) Пробуем по транслитерации (ru->lat), чтобы заменить SMM -> смм
+            translit = _transliterate_ru_to_lat(phrase.lower())
+            if translit and translit != phrase.lower():
+                updated, replaced = _replace_insensitive(updated, translit, phrase)
+                if replaced:
+                    continue
+            # если ничего похожего не нашли, добавляем компактно в конец
+            if updated and not updated.endswith("\n"):
+                updated += "\n"
+            updated += f"{phrase}"
+        return updated
+
+    cleaned_phrases: List[str] = []
+    for phrase in phrases or []:
+        if not isinstance(phrase, str):
+            continue
+        normalized = phrase.strip()
+        if normalized and normalized not in cleaned_phrases:
+            cleaned_phrases.append(normalized)
+
+    if not cleaned_phrases or not base_result or not base_result.get("text"):
+        if cleaned_phrases:
+            base_result["wordstat_phrases_used"] = cleaned_phrases
+            if not base_result.get("text"):
+                base_result["text"] = f"Черновик: добавьте в текст фразы Wordstat: {', '.join(cleaned_phrases)}."
+                logger.warning("[%s] Пустой текст после генерации; добавлен черновик с Wordstat-фразами", log_prefix)
+        return base_result
+
+    text_lower = (base_result.get("text") or "").lower()
+    missing = [phrase for phrase in cleaned_phrases if phrase.lower() not in text_lower]
+    if not missing:
+        base_result["wordstat_phrases_used"] = cleaned_phrases
+        return base_result
+
+    try:
+        refined = generator.refine_text_with_wordstat(
+            title=base_result.get("title") or "",
+            text=base_result.get("text") or "",
+            phrases=cleaned_phrases,
+            language=language or "ru",
+        )
+    except Exception as exc:
+        logger.warning("[%s] Ошибка доработки текста под Wordstat: %s", log_prefix, exc)
+        return base_result
+
+    if refined and refined.get("success") and refined.get("text"):
+        if refined.get("title"):
+            base_result["title"] = refined.get("title") or base_result.get("title", "")
+        base_result["text"] = refined.get("text") or base_result.get("text", "")
+        base_result["wordstat_phrases_used"] = refined.get("wordstat_phrases_used") or cleaned_phrases
+        logger.info("[%s] Текст дополнен Wordstat-фразами", log_prefix)
+    else:
+        base_result["wordstat_phrases_used"] = cleaned_phrases
+        if missing:
+            suffix = f"\n\nКлючевые фразы: {', '.join(cleaned_phrases)}."
+            base_result["text"] = (base_result.get("text") or "").strip() + suffix
+
+    # Финальная проверка: точные фразы должны быть в тексте (без замены на латиницу/регистр).
+    if cleaned_phrases:
+        base_result["text"] = _ensure_exact_phrases(base_result.get("text") or "", cleaned_phrases)
+        base_result["wordstat_phrases_used"] = cleaned_phrases
+
+    return base_result
+
+
+def _select_wordstat_phrases(client: Client, limit: int = 2) -> List[str]:
+    """Выбрать избранные фразы Wordstat для клиента по приоритету.
+
+    Приоритет рассчитывается как count / (10 * used), где used=0.01 если ещё не
+    использовали фразу. Берём top-N по приоритету без дубликатов.
+    """
+    if not client or limit <= 0:
+        return []
+
+    def _calculate_priority(entries: List[Tuple[float, str]]) -> List[str]:
+        ordered: List[str] = []
+        for _, phrase in sorted(entries, key=lambda x: x[0], reverse=True):
+            if phrase not in ordered:
+                ordered.append(phrase)
+            if len(ordered) >= limit:
+                break
+        return ordered
+
+    phrases: List[str] = []
+    priorities: List[tuple[float, str]] = []
+
+    try:
+        qs = (
+            WordstatResult.objects.filter(query__client=client, result_type="favorite")
+            .values_list("phrase", "count", "used_in_post")
+            .order_by("-query__created_at", "-count", "phrase")
+        )
+        for phrase, count, used in qs.iterator():
+            phrase_clean = (phrase or "").strip()
+            if not phrase_clean or phrase_clean in phrases:
+                continue
+            used_value = 0.01 if not used else float(used)
+            count_value = float(count or 0)
+            priority = count_value / (10 * used_value) if count_value > 0 else 0.0
+            priorities.append((priority, phrase_clean))
+
+        phrases = _calculate_priority(priorities)
+    except ProgrammingError as exc:
+        logger.warning(
+            "Не удалось использовать used_in_post для Wordstat (возможно, не применена миграция): %s",
+            exc,
+        )
+        try:
+            fallback_qs = (
+                WordstatResult.objects.filter(query__client=client, result_type="favorite")
+                .values_list("phrase", "count")
+                .order_by("-query__created_at", "-count", "phrase")
+            )
+            for phrase, count in fallback_qs.iterator():
+                phrase_clean = (phrase or "").strip()
+                if not phrase_clean or phrase_clean in phrases:
+                    continue
+                count_value = float(count or 0)
+                priority = count_value / 0.1 if count_value > 0 else 0.0  # assume used=0.01
+                priorities.append((priority, phrase_clean))
+            phrases = _calculate_priority(priorities)
+        except Exception as inner_exc:
+            logger.warning(
+                "Резервный расчёт Wordstat-фраз также не удался для клиента %s: %s",
+                getattr(client, "id", None),
+                inner_exc,
+            )
+            return []
+    except Exception as exc:
+        logger.warning("Не удалось получить избранные Wordstat-фразы для клиента %s: %s", getattr(client, "id", None), exc)
+        return []
+
+    return phrases
+
+
+def _increment_wordstat_usage(
+    client: Client,
+    phrases: Optional[List[str]],
+    previous_phrases: Optional[List[str]] = None,
+    had_existing_text: bool = False,
+) -> None:
+    """
+    Увеличить счётчик использования Wordstat-фраз при создании/обновлении поста.
+
+    had_existing_text=True – инкрементируем только новые фразы, чтобы не считать
+    повторное сохранение одного и того же поста.
+    """
+    if not client or not phrases:
+        return
+
+    new_set = {p.strip() for p in phrases if isinstance(p, str) and p.strip()}
+    if not new_set:
+        return
+
+    prev_set = {p.strip() for p in previous_phrases or [] if isinstance(p, str) and p.strip()}
+    increment_set = new_set - prev_set if had_existing_text else new_set
+    if not increment_set:
+        return
+
+    try:
+        WordstatResult.objects.filter(query__client=client, phrase__in=increment_set).update(
+            used_in_post=F("used_in_post") + 1
+        )
+    except Exception as exc:
+        logger.warning(
+            "Не удалось увеличить счётчик использования Wordstat для клиента %s: %s",
+            getattr(client, "id", None),
+            exc,
+        )
 
 
 def _build_template_config(template: ContentTemplate, client: Client, prompt_type: str = "trend") -> Dict[str, Any]:
@@ -375,6 +588,7 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
             )
         else:
             logger.info("SEO-ключи не найдены для клиента, генерация без SEO-оптимизации")
+        wordstat_phrases = _select_wordstat_phrases(trend.client)
 
         # Сгенерировать контент
         result = generator.generate_post_text(
@@ -383,18 +597,28 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
             trend_url=trend.url or "",
             topic_name=trend.topic.name,
             template_config=template_config,
-            seo_keywords=seo_keywords
+            seo_keywords=seo_keywords,
+            wordstat_phrases=wordstat_phrases,
         )
 
         if not result.get('success'):
             logger.error(f"Ошибка генерации контента: {result.get('error')}")
             return None
 
+        result = _apply_wordstat_refinement(
+            generator=generator,
+            base_result=result,
+            phrases=wordstat_phrases,
+            language=getattr(template, "language", "ru"),
+            log_prefix="trend",
+        )
+
         # Создать Post
         post_title = result['title']
         post_text = result['text']
         hook_title = result.get('hook_title', '')
         hashtags = result.get('hashtags', [])
+        wordstat_phrases_used = result.get("wordstat_phrases_used") or wordstat_phrases or []
 
         # Собрать теги (только хэштеги от AI, без мета-информации)
         tags = hashtags.copy()
@@ -410,8 +634,10 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
             tags=tags,
             source_links=[trend.url] if trend.url else [],
             generated_by="openrouter-deepseek",
+            wordstat_phrases_used=wordstat_phrases_used,
             # created_by будет None - автоматическая генерация
         )
+        _increment_wordstat_usage(trend.client, wordstat_phrases_used)
 
         # Связать тренд с постом
         trend.used_for_post = post
@@ -548,6 +774,7 @@ def generate_posts_from_seo_keyword_set(
         topic_name = seo_set.topic.name
     elif client.name:
         topic_name = client.name
+    wordstat_phrases = _select_wordstat_phrases(client)
 
     try:
         generator = AIContentGenerator()
@@ -577,7 +804,8 @@ def generate_posts_from_seo_keyword_set(
             trend_url="",
             topic_name=topic_name or client.slug,
             template_config=template_config,
-            seo_keywords=per_post_keywords
+            seo_keywords=per_post_keywords,
+            wordstat_phrases=wordstat_phrases,
         )
 
         if not result or not result.get("success"):
@@ -591,6 +819,14 @@ def generate_posts_from_seo_keyword_set(
             errors.append({"index": index, "keyword": keyword, "error": error_message})
             continue
 
+        result = _apply_wordstat_refinement(
+            generator=generator,
+            base_result=result,
+            phrases=wordstat_phrases,
+            language=getattr(template, "language", "ru"),
+            log_prefix="seo-text",
+        )
+
         hashtags = result.get("hashtags", [])
         tags = []
         if isinstance(hashtags, list):
@@ -598,6 +834,7 @@ def generate_posts_from_seo_keyword_set(
         if keyword:
             tags.append(keyword)
         tags.append("seo")
+        wordstat_phrases_used = result.get("wordstat_phrases_used") or wordstat_phrases or []
 
         # Удаляем дубликаты, сохраняя порядок
         seen = set()
@@ -610,7 +847,7 @@ def generate_posts_from_seo_keyword_set(
                     deduped_tags.append(normalized)
 
         hook_title = result.get("hook_title", "")
-        Post.objects.create(
+        post = Post.objects.create(
             client=client,
             template=template,
             title=result["title"],
@@ -620,8 +857,10 @@ def generate_posts_from_seo_keyword_set(
             tags=deduped_tags,
             source_links=[],
             generated_by="seo-keywords",
-            created_by_id=created_by_id
+            created_by_id=created_by_id,
+            wordstat_phrases_used=wordstat_phrases_used,
         )
+        _increment_wordstat_usage(client, wordstat_phrases_used)
         created_posts += 1
 
     logger.info(
@@ -723,6 +962,7 @@ def generate_posts_with_videos_from_seo_keyword_set(
         topic_name = seo_set.topic.name
     elif client.name:
         topic_name = client.name
+    wordstat_phrases = _select_wordstat_phrases(client)
 
     try:
         generator = AIContentGenerator()
@@ -860,7 +1100,8 @@ def generate_posts_with_videos_from_seo_keyword_set(
                 trend_url="",
                 topic_name=topic_name or client.slug,
                 template_config=template_config,
-                seo_keywords=per_post_keywords
+                seo_keywords=per_post_keywords,
+                wordstat_phrases=wordstat_phrases,
             )
 
             if not post_result or not post_result.get("success"):
@@ -874,6 +1115,14 @@ def generate_posts_with_videos_from_seo_keyword_set(
                 post_errors.append({"keyword": keyword, "error": error_message})
                 continue
 
+            post_result = _apply_wordstat_refinement(
+                generator=generator,
+                base_result=post_result,
+                phrases=wordstat_phrases,
+                language=getattr(template, "language", "ru"),
+                log_prefix="seo-video",
+            )
+
             hashtags = post_result.get("hashtags", [])
             tags = []
             if isinstance(hashtags, list):
@@ -882,6 +1131,7 @@ def generate_posts_with_videos_from_seo_keyword_set(
                 tags.append(keyword)
             tags.extend(["seo", "video"])
             tags = _dedupe_tags(tags)
+            wordstat_phrases_used = post_result.get("wordstat_phrases_used") or wordstat_phrases or []
 
             try:
                 hook_title = post_result.get("hook_title", "")
@@ -895,8 +1145,10 @@ def generate_posts_with_videos_from_seo_keyword_set(
                     tags=tags,
                     source_links=[],
                     generated_by="seo-keywords-video",
-                    created_by_id=created_by_id
+                    created_by_id=created_by_id,
+                    wordstat_phrases_used=wordstat_phrases_used,
                 )
+                _increment_wordstat_usage(client, wordstat_phrases_used)
                 created_posts_list.append(post)
                 logger.info(
                     "[SEO %s] Пост %s создан (ID=%s): %s",
@@ -1001,6 +1253,8 @@ def generate_weekly_posts_from_template(
     created_posts: List[int] = []
     scheduled_times: List[str] = []
     errors: List[Dict[str, Any]] = []
+    reservations: List[Dict[str, Any]] = []
+    wordstat_phrases = _select_wordstat_phrases(client)
 
     logger.info(
         "Weekly plan: client=%s template=%s posts=%s social_account=%s",
@@ -1025,6 +1279,57 @@ def generate_weekly_posts_from_template(
             weekday=weekday_label,
         )
 
+        planned_at_tag = f"planned-at:{local_dt.isoformat()}"
+        base_tags = [
+            "auto-week",
+            f"template:{template.id}",
+            f"weekday:{weekday_label}",
+            week_tag,
+            planned_at_tag,
+        ]
+        try:
+            placeholder_post = Post.objects.create(
+                client=client,
+                template=template,
+                title=trend_title,
+                hook_title="",
+                text="",
+                status="draft",
+                tags=base_tags,
+                source_links=[],
+                generated_by="weekly-plan",
+                created_by_id=created_by_id,
+                wordstat_phrases_used=wordstat_phrases,
+            )
+        except Exception as exc:
+            logger.error(
+                "Не удалось зарезервировать слот %s для weekly-plan (template=%s): %s",
+                index,
+                template.id,
+                exc,
+                exc_info=True,
+            )
+            errors.append({"index": index, "error": "reservation_failed"})
+            continue
+
+        reservations.append({
+            "index": index,
+            "local_dt": local_dt,
+            "day_offset": day_offset,
+            "weekday_label": weekday_label,
+            "trend_title": trend_title,
+            "trend_description": trend_description,
+            "post": placeholder_post,
+        })
+
+    for reservation in reservations:
+        index = reservation["index"]
+        local_dt = reservation["local_dt"]
+        weekday_label = reservation["weekday_label"]
+        trend_title = reservation["trend_title"]
+        trend_description = reservation["trend_description"]
+        post = reservation["post"]
+
         try:
             result = generator.generate_post_text(
                 trend_title=trend_title,
@@ -1033,10 +1338,15 @@ def generate_weekly_posts_from_template(
                 topic_name=client.name or template.name,
                 template_config=template_config,
                 seo_keywords=None,
+                wordstat_phrases=wordstat_phrases,
             )
         except Exception as exc:
             logger.error("Weekly generator crashed: %s", exc, exc_info=True)
             errors.append({"index": index, "error": "generator_error"})
+            try:
+                post.delete()
+            except Exception:
+                pass
             continue
 
         if not result or not result.get("success"):
@@ -1048,20 +1358,26 @@ def generate_weekly_posts_from_template(
                 error_message,
             )
             errors.append({"index": index, "error": error_message})
+            try:
+                post.delete()
+            except Exception:
+                pass
             continue
+
+        result = _apply_wordstat_refinement(
+            generator=generator,
+            base_result=result,
+            phrases=wordstat_phrases,
+            language=getattr(template, "language", "ru"),
+            log_prefix="weekly",
+        )
 
         hashtags = result.get("hashtags", [])
         tags: List[str] = []
+        if isinstance(post.tags, list):
+            tags.extend([tag for tag in post.tags if isinstance(tag, str)])
         if isinstance(hashtags, list):
             tags.extend([tag for tag in hashtags if isinstance(tag, str)])
-        planned_at_tag = f"planned-at:{local_dt.isoformat()}"
-        tags.extend([
-            "auto-week",
-            f"template:{template.id}",
-            f"weekday:{weekday_label}",
-            week_tag,
-            planned_at_tag,
-        ])
 
         seen = set()
         deduped: List[str] = []
@@ -1074,18 +1390,49 @@ def generate_weekly_posts_from_template(
                 deduped.append(normalized)
 
         hook_title = result.get("hook_title", "")
-        post = Post.objects.create(
-            client=client,
-            template=template,
-            title=result["title"],
-            hook_title=hook_title,
-            text=result["text"],
-            status="draft",
-            tags=deduped,
-            source_links=[],
-            generated_by="weekly-plan",
-            created_by_id=created_by_id,
-        )
+        previous_wordstat_phrases = list(post.wordstat_phrases_used or [])
+        had_text_before = bool(post.text and str(post.text).strip())
+        post.title = result["title"]
+        post.hook_title = hook_title
+        post.text = result["text"]
+        post.tags = deduped
+        post.source_links = []
+        post.generated_by = "weekly-plan"
+        post.created_by_id = created_by_id
+        post.wordstat_phrases_used = result.get("wordstat_phrases_used") or wordstat_phrases or []
+        try:
+            post.save(
+                update_fields=[
+                    "title",
+                    "hook_title",
+                    "text",
+                    "tags",
+                    "source_links",
+                    "generated_by",
+                    "created_by",
+                    "wordstat_phrases_used",
+                    "updated_at",
+                ]
+            )
+            _increment_wordstat_usage(
+                client,
+                post.wordstat_phrases_used,
+                previous_phrases=previous_wordstat_phrases,
+                had_existing_text=had_text_before,
+            )
+        except Exception as exc:
+            logger.error(
+                "Не удалось обновить пост %s после генерации weekly-plan: %s",
+                getattr(post, "id", None),
+                exc,
+                exc_info=True,
+            )
+            errors.append({"index": index, "error": "post_save_failed"})
+            try:
+                post.delete()
+            except Exception:
+                pass
+            continue
 
         scheduled_at = local_dt.astimezone(dt_timezone.utc)
         if social_account:
@@ -2046,6 +2393,9 @@ def regenerate_post_text(post_id: int):
         is_seo_post = bool(not post.story and (has_seo_tag or generated_by in {"seo-keywords", "seo_keywords"}))
         seo_keyword_used: Optional[str] = None
         use_seo_generation = False
+        wordstat_phrases = _select_wordstat_phrases(post.client)
+        previous_wordstat_phrases = list(post.wordstat_phrases_used or [])
+        had_text_before = bool(post.text and str(post.text).strip())
 
         # Если пост из истории
         if post.story:
@@ -2143,30 +2493,50 @@ def regenerate_post_text(post_id: int):
                                 keywords_pool.extend(group_keywords)
                 cleaned_keywords = [kw.strip() for kw in keywords_pool if isinstance(kw, str) and kw.strip()]
 
-                if not cleaned_keywords:
-                    logger.error(
-                        "Не найдены SEO ключевые фразы для клиента %s при регенерации поста %s",
+                if cleaned_keywords:
+                    seo_keyword_used = random.choice(cleaned_keywords)
+                    logger.info(
+                        "Регенерация SEO поста %s по ключу '%s'",
+                        post.id,
+                        seo_keyword_used,
+                    )
+                    template_config = _template_config_with_fallback("seo")
+                    topic_name = post.client.name or post.client.slug or "business"
+                    result = generator.generate_post_text(
+                        trend_title=f"SEO keyword: {seo_keyword_used}",
+                        trend_description=f"Regenerated from SEO keywords for post {post.id}",
+                        trend_url="",
+                        topic_name=topic_name,
+                        template_config=template_config,
+                        seo_keywords={"seo_keywords": [seo_keyword_used]},
+                        wordstat_phrases=wordstat_phrases,
+                    )
+                else:
+                    logger.warning(
+                        "SEO ключевые фразы не найдены для клиента %s при регенерации поста %s, fallback на обычную генерацию",
                         post.client_id,
                         post.id,
                     )
-                    return False
-
-                seo_keyword_used = random.choice(cleaned_keywords)
-                logger.info(
-                    "Регенерация SEO поста %s по ключу '%s'",
-                    post.id,
-                    seo_keyword_used,
-                )
-                template_config = _template_config_with_fallback("seo")
-                topic_name = post.client.name or post.client.slug or "business"
-                result = generator.generate_post_text(
-                    trend_title=f"SEO keyword: {seo_keyword_used}",
-                    trend_description=f"Regenerated from SEO keywords for post {post.id}",
-                    trend_url="",
-                    topic_name=topic_name,
-                    template_config=template_config,
-                    seo_keywords={"seo_keywords": [seo_keyword_used]},
-                )
+                    use_seo_generation = False
+                    template_config = _template_config_with_fallback("trend")
+                    topic_name = (
+                        (trend.topic.name if trend and trend.topic else None)
+                        or post.client.name
+                        or post.client.slug
+                        or "business"
+                    )
+                    trend_title = trend.title if trend else (post.title or "Контент-план")
+                    trend_description = trend.description if trend else (post.text or "")
+                    seo_keywords = _get_latest_seo_keywords_for_client(post.client)
+                    result = generator.generate_post_text(
+                        trend_title=trend_title,
+                        trend_description=trend_description,
+                        trend_url=trend.url if trend else "",
+                        topic_name=topic_name,
+                        template_config=template_config,
+                        seo_keywords=seo_keywords or None,
+                        wordstat_phrases=wordstat_phrases,
+                    )
             else:
                 template_config = _template_config_with_fallback("trend")
                 topic_name = trend.topic.name if trend.topic else (post.client.name or post.client.slug or "business")
@@ -2178,11 +2548,20 @@ def regenerate_post_text(post_id: int):
                     topic_name=topic_name,
                     template_config=template_config,
                     seo_keywords=seo_keywords or None,
+                    wordstat_phrases=wordstat_phrases,
                 )
 
         if not result.get("success"):
             logger.error(f"Ошибка регенерации поста: {result.get('error')}")
             return False
+
+        result = _apply_wordstat_refinement(
+            generator=generator,
+            base_result=result,
+            phrases=wordstat_phrases,
+            language=template_config.get("language") if isinstance(template_config, dict) else "ru",
+            log_prefix="regenerate",
+        )
 
         # Обновляем пост
         post.title = result["title"]
@@ -2209,7 +2588,14 @@ def regenerate_post_text(post_id: int):
 
         post.tags = cleaned_tags
         post.regeneration_count += 1
-        post.save()
+        post.wordstat_phrases_used = result.get("wordstat_phrases_used") or wordstat_phrases or []
+        post.save(update_fields=["title", "hook_title", "text", "tags", "regeneration_count", "wordstat_phrases_used", "updated_at"])
+        _increment_wordstat_usage(
+            post.client,
+            post.wordstat_phrases_used,
+            previous_phrases=previous_wordstat_phrases,
+            had_existing_text=had_text_before,
+        )
 
         logger.info(f"Пост успешно регенерирован: {post.title} (регенераций: {post.regeneration_count})")
         return True

@@ -424,6 +424,11 @@ class Post(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
     tags = models.JSONField(default=list, blank=True)          # ["ai", "instagram", ...]
     source_links = models.JSONField(default=list, blank=True)  # ["https://...", ...]
+    wordstat_phrases_used = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Какие избранные фразы Wordstat были использованы при генерации",
+    )
 
     # Флаги для публикации контента
     publish_text = models.BooleanField(default=True, verbose_name="Публиковать текст", help_text="Включать текст в публикацию")
@@ -1153,6 +1158,7 @@ class WordstatResult(models.Model):
     phrase = models.TextField()
     count = models.PositiveIntegerField(default=0)
     result_type = models.CharField(max_length=20, choices=RESULT_TYPE_CHOICES, default="top_request")
+    used_in_post = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ("-count", "phrase")

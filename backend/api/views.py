@@ -830,6 +830,10 @@ class PostsListView(generics.ListAPIView):
         client = get_active_client(self.request.user)
         queryset = (
             Post.objects.filter(client=client)
+            .annotate(
+                images_count=Count("images", distinct=True),
+                videos_count=Count("videos", distinct=True),
+            )
             .prefetch_related("schedules__social_account")
             .order_by("-created_at")
         )
@@ -888,7 +892,15 @@ class PostViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
-        return Post.objects.filter(client=client).order_by('-created_at')
+        return (
+            Post.objects.filter(client=client)
+            .annotate(
+                images_count=Count("images", distinct=True),
+                videos_count=Count("videos", distinct=True),
+            )
+            .prefetch_related("schedules__social_account")
+            .order_by("-created_at")
+        )
 
     def perform_create(self, serializer):
         """Automatically set client when creating post"""

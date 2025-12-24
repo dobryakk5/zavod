@@ -577,14 +577,15 @@ class PostAdmin(admin.ModelAdmin):
         "image_generate_button",
         "video_generate_button",
         "quick_publish_buttons",
-        "regenerate_text_button"
+        "regenerate_text_button",
+        "wordstat_phrases_used",
     )
 
     actions = ["generate_image_action", "regenerate_text_action", "generate_videos_action"]
 
     fieldsets = (
         ("Базовая информация", {
-            "fields": ("client", "title", "hook_title", "status", "tags"),
+            "fields": ("client", "title", "hook_title", "status", "tags", "wordstat_phrases_used"),
         }),
         ("Связь с историей", {
             "fields": ("story", "episode_number"),

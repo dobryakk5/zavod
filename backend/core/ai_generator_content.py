@@ -124,6 +124,7 @@ class ContentGenerationMixin:
             repair_prompt,
             max_tokens=max_tokens,
             temperature=0.1,
+            response_format={"type": "json_object"},
         )
         if not repaired_response:
             return None
@@ -258,7 +259,7 @@ Create only the title, without quotes or additional text:"""
 
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Error generating hook title: %s", exc, exc_info=True)
-            return None
+        return None
 
     def generate_post_text(
         self,
@@ -268,6 +269,7 @@ Create only the title, without quotes or additional text:"""
         template_config: Dict[str, Any],
         seo_keywords: Dict[str, list] = None,
         trend_url: str = "",
+        wordstat_phrases: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Generate post text from trend using AI."""
         try:
@@ -291,6 +293,16 @@ Create only the title, without quotes or additional text:"""
             desires = template_config.get("desires", "")
             objections = template_config.get("objections", "")
             books = template_config.get("books", "")
+            wordstat_phrases_clean: List[str] = []
+            if wordstat_phrases:
+                for phrase in wordstat_phrases:
+                    if not isinstance(phrase, str):
+                        continue
+                    cleaned = phrase.strip()
+                    if cleaned and cleaned not in wordstat_phrases_clean:
+                        wordstat_phrases_clean.append(cleaned)
+                        if len(wordstat_phrases_clean) >= 2:
+                            break
 
             import random
 
@@ -352,6 +364,7 @@ Create only the title, without quotes or additional text:"""
                 "books": books,
                 "seo_keywords": seo_keywords_for_prompt or "",
                 "keyword": first_keyword or "",
+                "wordstat_phrases": ", ".join(wordstat_phrases_clean),
             }
 
             if prompt_template:
@@ -430,6 +443,12 @@ Create only the title, without quotes or additional text:"""
 
 Фразы должны выглядеть органично и не выделяться из контекста.
 """
+                if wordstat_phrases_clean:
+                    prompt += f"""
+WORDSTAT-ФРАЗЫ:
+Естественно включи 1-2 из фраз: {", ".join(wordstat_phrases_clean)}.
+Не превращай текст в список ключей и не повторяй одну фразу много раз.
+"""
 
                 if additional_instructions:
                     prompt += f"""
@@ -460,6 +479,7 @@ Create only the title, without quotes or additional text:"""
                 max_tokens=2000,
                 temperature=0.7,
                 model=post_model,
+                response_format={"type": "json_object"},
             )
 
             if not ai_response:
@@ -490,11 +510,23 @@ Create only the title, without quotes or additional text:"""
             result = (parsed_result or {}).copy()
 
             if "title" not in result or "text" not in result:
-                logger.error("Invalid AI response structure: %s", normalized_text)
-                return {
-                    "success": False,
-                    "error": "Invalid response structure from AI",
-                }
+                schema_hint = """
+{
+  "title": "string, заголовок поста",
+  "text": "string, основной текст поста",
+  "hashtags": ["string", ...]
+}
+"""
+                repaired_result = self._repair_json_structure(normalized_text, schema_hint)
+                if repaired_result and "title" in repaired_result and "text" in repaired_result:
+                    result = repaired_result
+                else:
+                    logger.error("Invalid AI response structure: %s", normalized_text)
+                    return {
+                        "success": False,
+                        "error": "Invalid response structure from AI",
+                        "raw_response": normalized_text,
+                    }
 
             if "hashtags" not in result:
                 result["hashtags"] = []
@@ -507,6 +539,7 @@ Create only the title, without quotes or additional text:"""
                 seo_keywords=seo_keywords,
             )
             result["hook_title"] = hook_title or ""
+            result["wordstat_phrases_used"] = wordstat_phrases_clean
             result["success"] = True
 
             logger.info("Успешно сгенерирован пост: %s", result["title"][:50])
@@ -518,6 +551,112 @@ Create only the title, without quotes or additional text:"""
                 "success": False,
                 "error": str(exc),
             }
+
+    def refine_text_with_wordstat(
+        self,
+        title: str,
+        text: str,
+        phrases: List[str],
+        language: str = "ru",
+    ) -> Dict[str, Any]:
+        """
+        Уточнить готовый текст поста, естественно добавив точные Wordstat-фразы.
+        """
+        def _extract_jsonish_fields(raw: str) -> Optional[Dict[str, Any]]:
+            """Try to pull title/text from almost-JSON with multiline strings."""
+            if not raw:
+                return None
+            match = re.search(
+                r'"title"\s*:\s*"(?P<title>.*?)"\s*,\s*"text"\s*:\s*"(?P<text>.*?)"\s*}',
+                raw,
+                re.DOTALL,
+            )
+            if not match:
+                return None
+            return {
+                "title": match.group("title"),
+                "text": match.group("text"),
+            }
+
+        cleaned_phrases: List[str] = []
+        for phrase in phrases or []:
+            if not isinstance(phrase, str):
+                continue
+            normalized = phrase.strip()
+            if normalized and normalized not in cleaned_phrases:
+                cleaned_phrases.append(normalized)
+            if len(cleaned_phrases) >= 2:
+                break
+
+        base_text = (text or "").strip()
+        if not cleaned_phrases or not base_text:
+            return {"success": False, "error": "no_phrases_or_text"}
+
+        max_text_len = 4000
+        text_for_prompt = base_text
+        if len(base_text) > max_text_len:
+            text_for_prompt = base_text[:max_text_len] + "..."
+
+        prompt = f"""
+Ты редактор SMM-контента. Нужно оставить смысл поста и аккуратно вписать точные фразы из списка.
+
+ЯЗЫК: {language}
+ФРАЗЫ: {", ".join(cleaned_phrases)}
+
+ТЕКУЩИЙ ЗАГОЛОВОК:
+{title}
+
+ТЕКУЩИЙ ТЕКСТ:
+{text_for_prompt}
+
+ТРЕБОВАНИЯ:
+- Сохрани длину текста ±15% и общий стиль.
+- Добавь все указанные фразы один раз в естественных предложениях.
+- Не превращай текст в набор ключей и не меняй тональность.
+
+Формат ответа строго JSON:
+{{
+  "title": "Обновленный заголовок (можно оставить без изменений)",
+  "text": "Текст с встроенными фразами"
+}}
+"""
+
+        try:
+            post_model = (self.post_model or self.model).strip() or None
+        except Exception:
+            post_model = None
+
+        ai_response = self.get_ai_response(
+            prompt,
+            max_tokens=1200,
+            temperature=0.35,
+            model=post_model,
+            response_format={"type": "json_object"},
+        )
+        if not ai_response:
+            return {"success": False, "error": "no_response"}
+
+        parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+        if parse_error:
+            logger.warning("Failed to parse refine response as JSON: %s", normalized_text)
+            parsed_result = _extract_jsonish_fields(normalized_text)
+            schema_hint = """
+{
+  "title": "string, заголовок поста",
+  "text": "string, текст поста"
+}
+"""
+            if not parsed_result:
+                repaired_result = self._repair_json_structure(normalized_text, schema_hint)
+                parsed_result = repaired_result
+
+        result = (parsed_result or {}).copy()
+        if "title" not in result or "text" not in result:
+            return {"success": False, "error": "invalid_refine_structure", "raw_response": normalized_text}
+
+        result["success"] = True
+        result["wordstat_phrases_used"] = cleaned_phrases
+        return result
 
     def generate_seo_keywords(
         self,
@@ -851,7 +990,12 @@ seo_keywords = [ ... ]
 Верни ровно 10 элементов. Никаких пояснений вне JSON.
 """
 
-            ai_response = self.get_ai_response(prompt, max_tokens=1800, temperature=0.4)
+            ai_response = self.get_ai_response(
+                prompt,
+                max_tokens=1800,
+                temperature=0.4,
+                response_format={"type": "json_object"},
+            )
             if not ai_response:
                 return {"success": False, "error": "Не удалось получить ответ от AI"}
 
@@ -995,7 +1139,12 @@ class StoryGenerationMixin:
             self.model = "tngtech/tng-r1t-chimera:free"
 
             try:
-                ai_response = self.get_ai_response(prompt, max_tokens=2000, temperature=0.8)
+                ai_response = self.get_ai_response(
+                    prompt,
+                    max_tokens=2000,
+                    temperature=0.8,
+                    response_format={"type": "json_object"},
+                )
 
                 if not ai_response:
                     return {
@@ -1015,11 +1164,29 @@ class StoryGenerationMixin:
                 result = parsed_result or {}
 
                 if "title" not in result or "episodes" not in result:
-                    logger.error("Invalid AI response structure: %s", normalized_text)
-                    return {
-                        "success": False,
-                        "error": "Invalid response structure from AI",
-                    }
+                    schema_hint = """
+{
+  "title": "string, общий заголовок истории",
+  "episodes": [
+    {"order": 1, "title": "Заголовок эпизода 1"},
+    {"order": 2, "title": "Заголовок эпизода 2"}
+  ]
+}
+"""
+                    repaired_result = self._repair_json_structure(normalized_text, schema_hint)
+                    if (
+                        repaired_result
+                        and "title" in repaired_result
+                        and "episodes" in repaired_result
+                    ):
+                        result = repaired_result
+                    else:
+                        logger.error("Invalid AI response structure: %s", normalized_text)
+                        return {
+                            "success": False,
+                            "error": "Invalid response structure from AI",
+                            "raw_response": normalized_text,
+                        }
 
                 if not isinstance(result["episodes"], list) or len(result["episodes"]) != episode_count:
                     logger.warning(
@@ -1157,6 +1324,7 @@ class StoryGenerationMixin:
                 max_tokens=2000,
                 temperature=0.7,
                 model=post_model,
+                response_format={"type": "json_object"},
             )
 
             if not ai_response:
@@ -1177,11 +1345,23 @@ class StoryGenerationMixin:
             result = parsed_result or {}
 
             if "title" not in result or "text" not in result:
-                logger.error("Invalid AI response structure: %s", normalized_text)
-                return {
-                    "success": False,
-                    "error": "Invalid response structure from AI",
-                }
+                schema_hint = """
+{
+  "title": "string, заголовок поста",
+  "text": "string, основной текст поста",
+  "hashtags": ["string", ...]
+}
+"""
+                repaired_result = self._repair_json_structure(normalized_text, schema_hint)
+                if repaired_result and "title" in repaired_result and "text" in repaired_result:
+                    result = repaired_result
+                else:
+                    logger.error("Invalid AI response structure: %s", normalized_text)
+                    return {
+                        "success": False,
+                        "error": "Invalid response structure from AI",
+                        "raw_response": normalized_text,
+                    }
 
             if "hashtags" not in result:
                 result["hashtags"] = []
