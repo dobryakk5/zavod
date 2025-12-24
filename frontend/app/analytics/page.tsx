@@ -227,10 +227,7 @@ export default function AnalyticsPage() {
                         </div>
                       ) : (
                         <div className="flex flex-col gap-1">
-                          <Progress
-                            value={item.progress}
-                            intent={item.status === 'failed' ? 'error' : 'default'}
-                          />
+                          <Progress value={item.progress} intent="default" />
                           <span className="text-xs text-gray-500">{item.progress}%</span>
                         </div>
                       )}
