@@ -335,6 +335,15 @@ def debug_task(self):
     print(f'Request: {self.request!r}')
 ```
 
+Если воркеры выходят в интернет через корпоративный proxy, пробросьте его через переменные окружения (они подхватятся при старте `celery`):
+
+```bash
+# .env
+CELERY_HTTP_PROXY=http://user:password@proxy-host:3128
+CELERY_HTTPS_PROXY=http://user:password@proxy-host:3128
+CELERY_NO_PROXY=localhost,127.0.0.1
+```
+
 ```python
 # config/__init__.py
 from .celery import app as celery_app
