@@ -23,6 +23,8 @@ from core.models import (
     VkIntegration,
     WordstatQuery,
     WordstatResult,
+    WeeklySourceReport,
+    WeeklySourceBatch,
 )
 from core.telegram_client import normalize_telegram_channel_identifier
 from core.social_accounts import ensure_telegram_account_metadata
@@ -759,3 +761,53 @@ class ChannelAnalysisDetailSerializer(ChannelAnalysisListSerializer):
         normalized["audience_profile"] = normalized_profile
 
         return normalized
+
+
+class WeeklySourceReportSerializer(serializers.ModelSerializer):
+    """Serializer for weekly source reports."""
+
+    class Meta:
+        model = WeeklySourceReport
+        fields = [
+            "id",
+            "batch_id",
+            "source_type",
+            "source_value",
+            "week_start",
+            "status",
+            "summary",
+            "links",
+            "error",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class WeeklySourceBatchSerializer(serializers.ModelSerializer):
+    reports = WeeklySourceReportSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = WeeklySourceBatch
+        fields = [
+            "id",
+            "week_start",
+            "status",
+            "created_at",
+            "updated_at",
+            "reports",
+        ]
+        read_only_fields = fields
+
+
+class WeeklySourceBatchListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WeeklySourceBatch
+        fields = [
+            "id",
+            "week_start",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields

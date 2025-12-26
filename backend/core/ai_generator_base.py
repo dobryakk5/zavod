@@ -48,7 +48,7 @@ class BaseAIContentGenerator:
                         provider="nebius",
                         api_key=hf_token,  # type: ignore[arg-type]
                     )
-                    logger.info("HuggingFace Nebius client initialized successfully")
+                    logger.debug("HuggingFace Nebius client initialized successfully")
                 except Exception as exc:  # pragma: no cover - log only
                     logger.warning("Failed to initialize HuggingFace client: %s", exc)
             else:

@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+import re
 from typing import Dict, List
 
 
@@ -148,37 +149,36 @@ class Client(models.Model):
         """Парсит telegram_source_channels в список каналов."""
         if not self.telegram_source_channels:
             return []
-        # Разделяем по запятой, убираем пробелы, фильтруем пустые
-        channels = [ch.strip() for ch in self.telegram_source_channels.split(',')]
-        return [ch for ch in channels if ch]
+        channels = re.split(r"[,\s]+", self.telegram_source_channels)
+        return [ch.strip() for ch in channels if ch and ch.strip()]
 
     def get_rss_source_feeds_list(self):
         """Парсит rss_source_feeds в список URL фидов."""
         if not self.rss_source_feeds:
             return []
-        feeds = [feed.strip() for feed in self.rss_source_feeds.split(',')]
-        return [feed for feed in feeds if feed]
+        feeds = re.split(r"[,\s]+", self.rss_source_feeds)
+        return [feed.strip() for feed in feeds if feed and feed.strip()]
 
     def get_youtube_source_channels_list(self):
         """Парсит youtube_source_channels в список ID каналов."""
         if not self.youtube_source_channels:
             return []
-        channels = [ch.strip() for ch in self.youtube_source_channels.split(',')]
-        return [ch for ch in channels if ch]
+        channels = re.split(r"[,\s]+", self.youtube_source_channels)
+        return [ch.strip() for ch in channels if ch and ch.strip()]
 
     def get_instagram_source_accounts_list(self):
         """Парсит instagram_source_accounts в список аккаунтов."""
         if not self.instagram_source_accounts:
             return []
-        accounts = [acc.strip() for acc in self.instagram_source_accounts.split(',')]
-        return [acc for acc in accounts if acc]
+        accounts = re.split(r"[,\s]+", self.instagram_source_accounts)
+        return [acc.strip() for acc in accounts if acc and acc.strip()]
 
     def get_vkontakte_source_groups_list(self):
         """Парсит vkontakte_source_groups в список групп."""
         if not self.vkontakte_source_groups:
             return []
-        groups = [grp.strip() for grp in self.vkontakte_source_groups.split(',')]
-        return [grp for grp in groups if grp]
+        groups = re.split(r"[,\s]+", self.vkontakte_source_groups)
+        return [grp.strip() for grp in groups if grp and grp.strip()]
 
     def __str__(self):
         return self.name
@@ -297,6 +297,83 @@ class ChannelAnalysis(models.Model):
 
     def __str__(self):
         return f"{self.client.name} – {self.channel_type} analysis ({self.status})"
+
+
+class WeeklySourceReport(models.Model):
+    """Еженедельный отчёт по источнику контента."""
+
+    SOURCE_CHOICES = (
+        ("telegram", "Telegram"),
+        ("instagram", "Instagram"),
+        ("youtube", "YouTube"),
+        ("rss", "RSS"),
+        ("vkontakte", "VKontakte"),
+    )
+
+    STATUS_PENDING = "pending"
+    STATUS_IN_PROGRESS = "in_progress"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "Pending"),
+        (STATUS_IN_PROGRESS, "In progress"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="weekly_source_reports")
+    batch = models.ForeignKey(
+        "WeeklySourceBatch",
+        on_delete=models.CASCADE,
+        related_name="reports",
+        null=True,
+        blank=True,
+        help_text="Подборка, к которой относится отчёт",
+    )
+    source_type = models.CharField(max_length=20, choices=SOURCE_CHOICES)
+    source_value = models.CharField(max_length=255, help_text="URL или идентификатор канала/фида")
+    week_start = models.DateField(help_text="Дата начала недели (понедельник)")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    summary = models.TextField(blank=True, help_text="Короткий отчёт от AI по источнику за неделю")
+    links = models.JSONField(default=list, blank=True, help_text="Ссылки на посты/материалы за неделю")
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        verbose_name = "Weekly Source Report"
+        verbose_name_plural = "Weekly Source Reports"
+        indexes = [
+            models.Index(
+                fields=["client", "source_type", "week_start"],
+                name="core_weekly_client__84fb5e_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"[{self.client.slug}] {self.source_type}: {self.source_value} ({self.week_start})"
+
+
+class WeeklySourceBatch(models.Model):
+    """Подборка недельных отчётов (запуск)."""
+
+    STATUS_CHOICES = WeeklySourceReport.STATUS_CHOICES
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="weekly_source_batches")
+    week_start = models.DateField(help_text="Дата начала недели (понедельник)")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=WeeklySourceReport.STATUS_PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        verbose_name = "Weekly Source Batch"
+        verbose_name_plural = "Weekly Source Batches"
+
+    def __str__(self):
+        return f"[{self.client.slug}] Подборка {self.week_start}"
 
 
 class UserTenantRole(models.Model):

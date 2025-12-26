@@ -79,6 +79,36 @@ export interface MergeAudienceResponse {
   };
 }
 
+export interface WeeklySourceReport {
+  id: number;
+  source_type: 'telegram' | 'instagram' | 'youtube' | 'rss' | 'vkontakte';
+  source_value: string;
+  week_start: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  summary: string;
+  links: Array<{
+    title?: string;
+    url?: string;
+    date?: string | null;
+    text_length?: number;
+    duration_seconds?: number;
+    idea?: string;
+    action?: string;
+  }>;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WeeklySourceBatch {
+  id: number;
+  week_start: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  created_at: string;
+  updated_at: string;
+  reports?: WeeklySourceReport[];
+}
+
 export const analyticsApi = {
   /**
    * Analyze a channel to extract insights
@@ -140,5 +170,35 @@ export const analyticsApi = {
     return apiFetch<void>(`/channel-analyses/${id}/`, {
       method: 'DELETE',
     });
+  },
+
+  /**
+   * Запуск еженедельной аналитики по всем источникам
+   */
+  runWeeklySources: async (): Promise<{ success: boolean; task_id?: string; week_start?: string }> => {
+    return apiFetch<{ success: boolean; task_id?: string; week_start?: string }>('/weekly-sources/run/', {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * Список отчётов по источникам
+   */
+  listWeeklySources: async (): Promise<WeeklySourceReport[]> => {
+    return apiFetch<WeeklySourceReport[]>('/weekly-sources/');
+  },
+
+  /**
+   * Список подборок
+   */
+  listWeeklyBatches: async (): Promise<WeeklySourceBatch[]> => {
+    return apiFetch<WeeklySourceBatch[]>('/weekly-batches/');
+  },
+
+  /**
+   * Детали подборки
+   */
+  getWeeklyBatch: async (id: string | number): Promise<WeeklySourceBatch> => {
+    return apiFetch<WeeklySourceBatch>(`/weekly-batches/${id}/`);
   },
 };

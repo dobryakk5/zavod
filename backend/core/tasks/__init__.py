@@ -36,6 +36,10 @@ from .aggregation import (
 from .channel_analysis import (
     analyze_channel_task,
 )
+from .weekly_sources import (
+    run_weekly_sources_for_client,
+    process_weekly_source,
+)
 # Generation tasks (10)
 from .generation import (
     generate_post_from_trend,
@@ -81,6 +85,8 @@ __all__ = [
     'discover_trends_for_topic_with_telegram',
     'analyze_telegram_channel_task',
     'analyze_channel_task',
+    'run_weekly_sources_for_client',
+    'process_weekly_source',
 
     # Generation (10)
     'generate_post_from_trend',

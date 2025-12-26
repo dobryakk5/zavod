@@ -29,6 +29,9 @@ from .views import (
     VkConnectView,
     VkCallbackView,
     VkPublishView,
+    WeeklySourceReportViewSet,
+    WeeklySourceRunView,
+    WeeklySourceBatchViewSet,
     WordstatQueryViewSet,
     WordstatResultViewSet,
 )
@@ -51,6 +54,8 @@ router.register(r'wordstat', WordstatQueryViewSet, basename='wordstat')
 router.register(r'wordstat-results', WordstatResultViewSet, basename='wordstat-result')
 router.register(r'channel-analyses', ChannelAnalysisViewSet, basename='channel-analysis')
 router.register(r'vk/integrations', VkIntegrationViewSet, basename='vk-integration')
+router.register(r'weekly-sources', WeeklySourceReportViewSet, basename='weekly-sources')
+router.register(r'weekly-batches', WeeklySourceBatchViewSet, basename='weekly-batches')
 
 urlpatterns = [
     # Analytics endpoint (must be before router to avoid conflicts)
@@ -67,6 +72,7 @@ urlpatterns = [
     path('client/summary/', ClientSummaryView.as_view(), name='client-summary'),
     path('client/settings/', ClientSettingsView.as_view(), name='client-settings'),
     path('client/expert-books/', ClientExpertBooksView.as_view(), name='client-expert-books'),
+    path('weekly-sources/run/', WeeklySourceRunView.as_view(), name='weekly-sources-run'),
 
     # Legacy list views (kept for backward compatibility)
     path('posts-list/', PostsListView.as_view(), name='posts-list'),

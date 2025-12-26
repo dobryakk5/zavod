@@ -19,6 +19,27 @@ CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
 VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 
 
+def _parse_duration_iso8601(duration: str | None) -> int:
+    """Преобразовать ISO8601 длительность в секунды. Возвращает 0 при ошибке."""
+    if not duration:
+        return 0
+
+    pattern = re.compile(
+        r"PT"
+        r"(?:(?P<hours>\d+)H)?"
+        r"(?:(?P<minutes>\d+)M)?"
+        r"(?:(?P<seconds>\d+)S)?",
+    )
+    match = pattern.fullmatch(duration)
+    if not match:
+        return 0
+
+    hours = int(match.group("hours") or 0)
+    minutes = int(match.group("minutes") or 0)
+    seconds = int(match.group("seconds") or 0)
+    return hours * 3600 + minutes * 60 + seconds
+
+
 def normalize_youtube_identifier(value: str) -> str:
     """
     Привести URL или handle YouTube канала к унифицированному идентификатору.
@@ -165,7 +186,7 @@ def _fetch_channel_videos(api_key: str, channel_id: str, *, max_videos: int) -> 
     stats_params = {
         "key": api_key,
         "id": ",".join(video_ids),
-        "part": "snippet,statistics",
+        "part": "snippet,statistics,contentDetails",
     }
     stats_response = requests.get(VIDEOS_URL, params=stats_params, timeout=20)
     stats_response.raise_for_status()
@@ -179,6 +200,7 @@ def _fetch_channel_videos(api_key: str, channel_id: str, *, max_videos: int) -> 
         if not item:
             continue
         snippet = item.get("snippet", {})
+        content_details = item.get("contentDetails", {})
         statistics = item.get("statistics", {})
         published_at = _parse_timestamp(snippet.get("publishedAt"))
         description = snippet.get("description") or ""
@@ -186,6 +208,7 @@ def _fetch_channel_videos(api_key: str, channel_id: str, *, max_videos: int) -> 
         views = int(statistics.get("viewCount") or 0)
         likes = int(statistics.get("likeCount") or 0)
         comments = int(statistics.get("commentCount") or 0)
+        duration_seconds = _parse_duration_iso8601(content_details.get("duration"))
 
         videos.append(
             {
@@ -198,6 +221,7 @@ def _fetch_channel_videos(api_key: str, channel_id: str, *, max_videos: int) -> 
                 "forwards": likes + comments,
                 "date": published_at,
                 "url": f"https://www.youtube.com/watch?v={video_id}",
+                "duration_seconds": duration_seconds,
                 "preview": ((snippet.get("thumbnails") or {}).get("high") or {}).get("url")
                 or ((snippet.get("thumbnails") or {}).get("default") or {}).get("url")
                 or "",

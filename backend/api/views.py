@@ -51,6 +51,8 @@ from core.models import (
     Topic,
     TrendItem,
     ChannelAnalysis,
+    WeeklySourceReport,
+    WeeklySourceBatch,
     SEOKeywordSet,
     VkIntegration,
     WordstatQuery,
@@ -91,6 +93,9 @@ from .serializers import (
     TrendItemSerializer,
     VkIntegrationSerializer,
     SEOKeywordSetSerializer,
+    WeeklySourceReportSerializer,
+    WeeklySourceBatchSerializer,
+    WeeklySourceBatchListSerializer,
     WordstatQuerySerializer,
     WordstatResultSerializer,
 )
@@ -2288,6 +2293,61 @@ class ChannelAnalysisViewSet(mixins.DestroyModelMixin, viewsets.ReadOnlyModelVie
                 "client_profile": merged_profile,
             }
         )
+
+
+class WeeklySourceReportViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only доступ к еженедельным отчетам по источникам."""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = WeeklySourceReportSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return (
+            WeeklySourceReport.objects.filter(client=client)
+            .order_by("-week_start", "source_type", "-created_at")
+        )
+
+
+class WeeklySourceRunView(APIView):
+    """Запуск еженедельной аналитики по всем источникам клиента."""
+
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        week_start = timezone.now().date() - timedelta(days=timezone.now().weekday())
+        batch = WeeklySourceBatch.objects.create(
+            client=client,
+            week_start=week_start,
+            status=WeeklySourceReport.STATUS_PENDING,
+        )
+        task = tasks.run_weekly_sources_for_client.delay(client.id, batch.id)
+        return Response(
+            {
+                "success": True,
+                "task_id": task.id,
+                "week_start": str(week_start),
+                "batch_id": batch.id,
+            }
+        )
+
+
+class WeeklySourceBatchViewSet(viewsets.ReadOnlyModelViewSet):
+    """Подборки по неделям."""
+
+    permission_classes = [IsTenantMember]
+    pagination_class = None
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return WeeklySourceBatch.objects.filter(client=client).order_by("-created_at")
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return WeeklySourceBatchListSerializer
+        return WeeklySourceBatchSerializer
 
 
 class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):
