@@ -8,21 +8,16 @@ export default function SolarLabLanding() {
   return (
     <div className="min-h-screen font-sans text-gray-900 bg-white">
       {/* Header */}
-      <header className="w-full max-w-6xl mx-auto px-6 py-6 flex items-center justify-between">
+      <header className="w-full max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3">
-            <Image
-              src="/solarlab-logo.png"
-              alt="Fibonatty"
-              width={40}
-              height={40}
-              className="h-10 w-10 object-contain"
-              priority
-            />
-            <div>
-              <div className="text-lg font-semibold">Fibonatty</div>
-            </div>
-          </div>
+          <Image
+            src="/fibonatty.jpeg"
+            alt="Fibonatty"
+            width={240}
+            height={240}
+            className="h-[240px] w-[240px] object-contain"
+            priority
+          />
         </div>
 
         <nav className="flex items-center gap-4">

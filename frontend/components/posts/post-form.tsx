@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { RichTextEditor } from '@/components/ui/rich-text-editor';
 import type { PostDetail } from '@/lib/types';
 
 const postFormSchema = z.object({
@@ -109,12 +110,14 @@ export function PostForm({ post, onSubmit, loading = false }: PostFormProps) {
             <FormItem>
               <FormLabel>Текст</FormLabel>
               <FormControl>
-                <Textarea
-                  placeholder="Введите текст поста"
-                  className="min-h-[200px] bg-white text-black placeholder:text-gray-500 dark:bg-white dark:text-black"
-                  {...field}
+                <RichTextEditor
+                  value={field.value || ''}
+                  onChange={field.onChange}
+                  placeholder="Введите текст поста и выделяйте как в Word"
+                  disabled={loading}
                 />
               </FormControl>
+              <FormDescription>Доступны жирный, курсив и заголовки через панель инструментов.</FormDescription>
               <FormMessage />
             </FormItem>
           )}

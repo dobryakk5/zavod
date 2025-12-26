@@ -34,6 +34,7 @@ export interface Post {
   template_name?: string | null;
   has_images?: boolean;
   has_videos?: boolean;
+  next_scheduled_at?: string | null;
 }
 
 export interface PostMediaImage {

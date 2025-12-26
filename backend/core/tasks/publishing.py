@@ -2,12 +2,9 @@ from celery import shared_task
 from django.utils import timezone
 import logging
 
-from ..models import Schedule
-from ..social_publishers import (
-    InstagramPublisher,
-    YouTubePublisher,
-    build_absolute_media_url,
-)
+from ..models import Schedule, SocialAccount
+from ..social_publishers import build_absolute_media_url
+from ..services.posting_service import PostingService, update_post_status_after_publish
 from ..telegram_client import TelegramPublisher, run_async_task
 
 logger = logging.getLogger(__name__)
@@ -59,39 +56,6 @@ def _prepare_media_assets(post):
     }
 
 
-def _update_post_status_after_publish(post):
-    """
-    Обновляет статус поста после успешной публикации.
-
-    Логика:
-    - Если все Schedule поста опубликованы (status='published'), то пост становится 'published'
-    - Если есть хотя бы один опубликованный Schedule, но есть и другие, статус остается 'scheduled'
-    """
-    # Получаем все Schedule для этого поста
-    all_schedules = Schedule.objects.filter(post=post)
-
-    if not all_schedules.exists():
-        logger.warning(f"Нет Schedule для поста {post.id}, не обновляем статус")
-        return
-
-    # Проверяем статусы всех Schedule
-    published_count = all_schedules.filter(status='published').count()
-    total_count = all_schedules.count()
-
-    if published_count == total_count:
-        # Все Schedule опубликованы
-        if post.status != 'published':
-            post.status = 'published'
-            post.save()
-            logger.info(f"Пост {post.id} обновлен на статус 'published' - все Schedule опубликованы ({published_count}/{total_count})")
-    elif published_count > 0:
-        # Есть опубликованные, но не все
-        if post.status not in ['published', 'scheduled']:
-            post.status = 'scheduled'
-            post.save()
-            logger.info(f"Пост {post.id} обновлен на статус 'scheduled' - частично опубликован ({published_count}/{total_count})")
-
-
 @shared_task
 def process_due_schedules():
     """
@@ -101,7 +65,7 @@ def process_due_schedules():
     now = timezone.now()
     qs = (
         Schedule.objects
-        .select_related("post", "social_account", "client")
+        .select_related("post", "social_account", "connection", "client")
         .filter(status="pending", scheduled_at__lte=now)
     )
 
@@ -113,13 +77,15 @@ def process_due_schedules():
 def publish_schedule(schedule_id: int):
     """
     Публикация поста в соцсеть согласно Schedule.
-    Поддерживаемые платформы: Telegram, Instagram (TODO), YouTube (TODO).
+    Поддерживаемые платформы: Telegram, Instagram, YouTube, RSS Дзен.
     """
-    from ..models import Schedule
     from django.conf import settings
 
     try:
-        schedule = Schedule.objects.select_related("post", "social_account", "client").get(id=schedule_id)
+        schedule = (
+            Schedule.objects.select_related("post", "social_account", "connection", "client")
+            .get(id=schedule_id)
+        )
 
         schedule.status = "in_progress"
         schedule.save(update_fields=["status"])
@@ -127,7 +93,7 @@ def publish_schedule(schedule_id: int):
         post = schedule.post
         social_account = getattr(schedule, "social_account", None)
         client = schedule.client
-        if social_account is None:
+        if social_account is None and not schedule.connection_id:
             desired_url = (schedule.external_id or "").strip()
             account_qs = SocialAccount.objects.filter(client=client, platform="rss_zen")
             if desired_url:
@@ -154,10 +120,20 @@ def publish_schedule(schedule_id: int):
         assets = _prepare_media_assets(post)
         text = assets["text"]
 
-        logger.info(f"Публикация поста '{post.title}' в {social_account.platform}")
+        posting_service = PostingService()
+        provider = schedule.connection.provider if schedule.connection_id else social_account.platform
+        logger.info(f"Публикация поста '{post.title}' в {provider}")
 
         # Telegram публикация
-        if social_account.platform == "telegram":
+        if provider == "telegram":
+            if social_account is None:
+                error_msg = "Telegram social_account не указан для расписания"
+                logger.error(error_msg)
+                schedule.status = "failed"
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                schedule.save(update_fields=["status", "log"])
+                return
+
             # Проверяем настройки Telegram
             if not client.telegram_api_id or not client.telegram_api_hash:
                 error_msg = f"Telegram API credentials не настроены для клиента {client.name}"
@@ -233,7 +209,7 @@ def publish_schedule(schedule_id: int):
                 logger.info(f"Пост успешно опубликован в Telegram: {result.get('url', '')}")
 
                 # Обновляем статус поста на published
-                _update_post_status_after_publish(post)
+                update_post_status_after_publish(post)
             else:
                 schedule.status = "failed"
                 error_msg = result.get('error', 'Unknown error')
@@ -241,143 +217,22 @@ def publish_schedule(schedule_id: int):
                 logger.error(f"Ошибка публикации в Telegram: {error_msg}")
 
         # Instagram публикация
-        elif social_account.platform == "instagram":
-            access_token = (social_account.access_token or "").strip()
-            extra = social_account.extra or {}
-            ig_account_id = None
-            if isinstance(extra, dict):
-                ig_account_id = (
-                    extra.get("instagram_business_account_id")
-                    or extra.get("instagram_account_id")
-                    or extra.get("ig_user_id")
-                )
-
-            if not access_token:
-                error_msg = "Instagram access_token не указан в SocialAccount"
-                logger.error(error_msg)
-                schedule.status = "failed"
-                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
-                schedule.save()
-                return
-
-            if not ig_account_id:
-                error_msg = "В extra SocialAccount не указан instagram_business_account_id"
-                logger.error(error_msg)
-                schedule.status = "failed"
-                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
-                schedule.save()
-                return
-
-            # Instagram требует медиа: используем видео приоритетно, иначе изображение
-            media_url = None
-            use_video = False
-            if assets["video_url"]:
-                media_url = assets["video_url"]
-                use_video = True
-            elif assets["image_url"]:
-                media_url = assets["image_url"]
-
-            if not media_url:
-                error_msg = (
-                    "Для Instagram нужен публичный URL изображения или видео. "
-                    "Убедитесь, что MEDIA_URL доступен извне или настройте PUBLIC_MEDIA_BASE_URL/WAGTAILADMIN_BASE_URL."
-                )
-                logger.error(error_msg)
-                schedule.status = "failed"
-                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
-                schedule.save()
-                return
-
-            publisher = InstagramPublisher(
-                access_token=access_token,
-                business_account_id=str(ig_account_id),
-            )
-
-            result = publisher.publish_post(
-                caption=text,
-                image_url=None if use_video else media_url,
-                video_url=media_url if use_video else None,
-            )
-
-            if result.get("success"):
-                schedule.status = "published"
-                schedule.external_id = str(result.get("media_id", ""))
-                log_msg = f"\n[SUCCESS] Опубликовано в Instagram: {result.get('url', '')}"
-                schedule.log = (schedule.log or "") + log_msg
-                logger.info(f"Пост успешно опубликован в Instagram: {result.get('url', '')}")
-                _update_post_status_after_publish(post)
-            else:
-                schedule.status = "failed"
-                error_msg = result.get("error", "Instagram публикация завершилась с ошибкой")
-                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
-                logger.error(f"Ошибка публикации в Instagram: {error_msg}")
+        elif provider == "instagram":
+            posting_service.publish_instagram(schedule, assets)
 
         # YouTube публикация
-        elif social_account.platform == "youtube":
-            video_path = assets["video_path"]
-            if not video_path:
-                error_msg = "Для публикации на YouTube требуется видеофайл"
-                logger.error(error_msg)
-                schedule.status = "failed"
-                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
-                schedule.save()
-                return
-
-            access_token = (social_account.access_token or "").strip()
-            refresh_token = (social_account.refresh_token or "").strip() or None
-            extra = social_account.extra or {}
-            client_id = extra.get("client_id") if isinstance(extra, dict) else None
-            client_secret = extra.get("client_secret") if isinstance(extra, dict) else None
-            token_uri = extra.get("token_uri") if isinstance(extra, dict) else None
-            privacy_status = extra.get("privacy_status") if isinstance(extra, dict) else None
-
-            if not access_token:
-                error_msg = "YouTube access_token не указан в SocialAccount"
-                logger.error(error_msg)
-                schedule.status = "failed"
-                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
-                schedule.save()
-                return
-
-            publisher = YouTubePublisher(
-                access_token=access_token,
-                refresh_token=refresh_token,
-                client_id=client_id,
-                client_secret=client_secret,
-                token_uri=token_uri or "https://oauth2.googleapis.com/token",
-            )
-
-            description = (text or "").strip()[:5000]
-            title = (getattr(post, "title", "") or "Видео").strip() or "Видео"
-
-            result = publisher.publish_video(
-                video_path=video_path,
-                title=title,
-                description=description,
-                privacy_status=privacy_status or "public",
-            )
-
-            if result.get("success"):
-                schedule.status = "published"
-                schedule.external_id = str(result.get("video_id", ""))
-                log_msg = f"\n[SUCCESS] Опубликовано на YouTube: {result.get('url', '')}"
-                schedule.log = (schedule.log or "") + log_msg
-                logger.info(f"Пост успешно опубликован на YouTube: {result.get('url', '')}")
-
-                new_token = result.get("access_token")
-                if new_token and new_token != social_account.access_token:
-                    social_account.access_token = new_token
-                    social_account.save(update_fields=["access_token"])
-
-                _update_post_status_after_publish(post)
-            else:
-                schedule.status = "failed"
-                error_msg = result.get("error", "YouTube публикация завершилась с ошибкой")
-                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
-                logger.error(f"Ошибка публикации на YouTube: {error_msg}")
+        elif provider == "youtube":
+            posting_service.publish_youtube(schedule, assets)
 
         # RSS Дзен — посты забираются из ленты автоматически, сразу считаем опубликованным
-        elif social_account.platform == "rss_zen":
+        elif provider == "rss_zen":
+            if social_account is None:
+                error_msg = "SocialAccount для RSS Дзена не найден"
+                logger.error(error_msg)
+                schedule.status = "failed"
+                schedule.log = (schedule.log or "") + f"\n[ERROR] {error_msg}"
+                schedule.save(update_fields=["status", "log"])
+                return
             feed_url = (social_account.access_token or "").strip()
             schedule.status = "published"
             schedule.external_id = feed_url
@@ -385,12 +240,12 @@ def publish_schedule(schedule_id: int):
             if feed_url:
                 log_msg += f"\nFeed: {feed_url}"
             schedule.log = (schedule.log or "") + log_msg
-            _update_post_status_after_publish(post)
+            update_post_status_after_publish(post)
 
         else:
-            logger.error(f"Неизвестная платформа: {social_account.platform}")
+            logger.error(f"Неизвестная платформа: {provider}")
             schedule.status = "failed"
-            schedule.log = (schedule.log or "") + f"\n[ERROR] Неизвестная платформа: {social_account.platform}"
+            schedule.log = (schedule.log or "") + f"\n[ERROR] Неизвестная платформа: {provider}"
 
         schedule.save()
 

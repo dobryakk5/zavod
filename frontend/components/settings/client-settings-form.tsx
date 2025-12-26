@@ -344,10 +344,9 @@ export function ClientSettingsForm() {
 
         <div className="space-y-4 rounded-lg border border-slate-200 p-4">
           <div>
-            <p className="text-base font-semibold">Источники контента</p>
+            <p className="text-base font-semibold">Источники контента </p>
             <p className="text-sm text-muted-foreground">
-              Добавьте ссылки или идентификаторы через запятую (можно переносить на новую строку). Здесь
-              хранится только список источников — токены не требуются.
+              Тут каналы новостей и конкурентов. Добавьте ссылки или идентификаторы через запятую (можно переносить на новую строку).
             </p>
           </div>
           <div className="grid gap-4 md:grid-cols-2">

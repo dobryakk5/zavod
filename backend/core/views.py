@@ -7,7 +7,7 @@ from django.utils.html import linebreaks
 from django.utils.safestring import mark_safe
 from .models import Post, Schedule, SocialAccount, Client
 from .tasks import generate_image_for_post, generate_video_from_image, publish_schedule, regenerate_post_text, analyze_telegram_channel_task
-from .tasks.publishing import _update_post_status_after_publish
+from .services.posting_service import update_post_status_after_publish
 from .system_settings import get_image_generation_model
 from .social_accounts import ensure_rss_zen_account
 from .social_publishers import build_absolute_media_url
@@ -26,7 +26,7 @@ def _publish_rss_schedule_now(schedule: Schedule):
         log_msg += f"\nFeed: {feed_url}"
     schedule.log = (schedule.log or "") + log_msg
     schedule.save(update_fields=["status", "external_id", "log", "scheduled_at"])
-    _update_post_status_after_publish(schedule.post)
+    update_post_status_after_publish(schedule.post)
 
 
 @staff_member_required

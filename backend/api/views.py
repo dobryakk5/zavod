@@ -33,6 +33,8 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 
+from config.celery import app as celery_app
+
 from core.audience_profiles import merge_audience_profiles
 from core.ai_generator import AIContentGenerator
 from core.models import (
@@ -65,7 +67,7 @@ from core.system_settings import get_image_generation_model, get_image_generatio
 from core.instagram_client import normalize_instagram_username
 from core.youtube_client import normalize_youtube_identifier
 from core.wordstat import WordstatError, get_wordstat_client
-from core.tasks.publishing import _update_post_status_after_publish
+from core.services.posting_service import update_post_status_after_publish
 
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
@@ -1154,6 +1156,45 @@ class PostViewSet(viewsets.ModelViewSet):
             'task_id': task.id
         })
 
+    @action(
+        detail=False,
+        methods=['get'],
+        url_path='generation-status',
+        permission_classes=[IsTenantMember],
+    )
+    def generation_status(self, request):
+        """Вернуть состояние задачи генерации постов по task_id."""
+        task_id = request.query_params.get('task_id')
+        if not task_id:
+            return Response(
+                {'success': False, 'error': 'task_id is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            async_result = celery_app.AsyncResult(task_id)
+        except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок окружения
+            logger.warning("Failed to fetch generation status for %s: %s", task_id, exc, exc_info=True)
+            return Response(
+                {'success': False, 'error': 'Не удалось получить статус задачи'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        state = (async_result.state or "").lower()
+        payload = {
+            'success': state == 'success',
+            'status': state,
+            'task_id': task_id,
+        }
+
+        if state == 'success' and isinstance(async_result.result, dict):
+            payload['result'] = async_result.result
+        elif state in ('failure', 'revoked'):
+            error_info = getattr(async_result, 'info', None)
+            payload['error'] = str(error_info) if error_info else 'Задача завершилась с ошибкой'
+
+        return Response(payload)
+
     @action(detail=True, methods=['delete'], permission_classes=[IsTenantOwnerOrEditor])
     def delete_image(self, request, pk=None):
         """
@@ -1451,7 +1492,7 @@ class ScheduleViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         client = get_active_client(self.request.user)
         queryset = Schedule.objects.filter(client=client).select_related(
-            'post', 'social_account'
+            "post", "social_account", "connection"
         ).order_by('scheduled_at')
         post_id = self.request.query_params.get("post")
         if post_id:
@@ -1472,18 +1513,24 @@ class ScheduleViewSet(viewsets.ModelViewSet):
         """Publish this schedule immediately"""
         schedule = self.get_object()
 
+        connection = getattr(schedule, "connection", None)
+        provider = connection.provider if connection else None
         social_account = getattr(schedule, "social_account", None)
         if social_account is None:
             client = schedule.client
-            social_account = _ensure_rss_account_for_client(client, request)
-            if social_account:
-                schedule.social_account = social_account
-                schedule.save(update_fields=["social_account"])
+            if provider and provider != "rss_zen":
+                # Используем connection-only расписание
+                pass
             else:
-                return Response(
-                    {"success": False, "error": "У расписания не указан социальный аккаунт"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                social_account = _ensure_rss_account_for_client(client, request)
+                if social_account:
+                    schedule.social_account = social_account
+                    schedule.save(update_fields=["social_account"])
+                else:
+                    return Response(
+                        {"success": False, "error": "У расписания не указан социальный аккаунт"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
         # RSS Дзен — помечаем опубликованным сразу
         if social_account.platform == "rss_zen":
@@ -1496,7 +1543,7 @@ class ScheduleViewSet(viewsets.ModelViewSet):
                 log_msg += f"\nFeed: {feed_url}"
             schedule.log = (schedule.log or "") + log_msg
             schedule.save(update_fields=["scheduled_at", "status", "external_id", "log"])
-            _update_post_status_after_publish(schedule.post)
+            update_post_status_after_publish(schedule.post)
             return Response({
                 'success': True,
                 'message': 'Опубликовано в RSS Дзене',

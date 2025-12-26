@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 from typing import Dict, List
 
 
@@ -378,6 +379,102 @@ class SocialAccount(models.Model):
         return f"{self.client} – {self.platform} ({self.name})"
 
 
+class Connection(models.Model):
+    """OAuth подключение соцсети к клиенту."""
+
+    PROVIDER_CHOICES = (
+        ("instagram", "Instagram"),
+        ("youtube", "YouTube"),
+        ("telegram", "Telegram"),
+        ("vkontakte", "VKontakte"),
+    )
+
+    STATUS_CHOICES = (
+        ("active", "Active"),
+        ("revoked", "Revoked"),
+        ("error", "Error"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="connections")
+    provider = models.CharField(max_length=30, choices=PROVIDER_CHOICES)
+    name = models.CharField(max_length=255, help_text="Человекочитаемое имя подключения", blank=True)
+    provider_user_id = models.CharField(max_length=255, blank=True, help_text="ID пользователя у провайдера")
+    account_id = models.CharField(max_length=255, blank=True, help_text="ID аккаунта/канала для публикации")
+    access_token = models.TextField(blank=True)
+    refresh_token = models.TextField(blank=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    scopes = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_connections",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_error = models.TextField(blank=True)
+
+    class Meta:
+        unique_together = (("client", "provider", "account_id"),)
+        ordering = ("-updated_at",)
+
+    def __str__(self):
+        suffix = f" @ {self.client.slug}" if self.client_id else ""
+        name = self.name or self.account_id or self.provider_user_id or "Connection"
+        return f"{self.provider}: {name}{suffix}"
+
+    @property
+    def is_expired(self) -> bool:
+        return bool(self.expires_at and self.expires_at <= timezone.now())
+
+
+class PostJob(models.Model):
+    """Задача публикации для очереди."""
+
+    STATUS_CHOICES = (
+        ("pending", "Pending"),
+        ("processing", "Processing"),
+        ("succeeded", "Succeeded"),
+        ("failed", "Failed"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="post_jobs")
+    provider = models.CharField(max_length=30, choices=Connection.PROVIDER_CHOICES)
+    connection = models.ForeignKey(
+        Connection,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="post_jobs",
+    )
+    schedule = models.ForeignKey(
+        "Schedule",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="post_jobs",
+    )
+    payload = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+    remote_id = models.CharField(max_length=255, blank=True)
+    remote_url = models.TextField(blank=True)
+    started_at = models.DateTimeField(blank=True, null=True)
+    finished_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"{self.provider} job #{self.id} ({self.status})"
+
+
 class Post(models.Model):
     STATUS_CHOICES = (
         ("draft", "Draft"),          # черновик, только что создан
@@ -522,6 +619,14 @@ class Schedule(models.Model):
         null=True,
         blank=True,
     )
+    connection = models.ForeignKey(
+        Connection,
+        on_delete=models.SET_NULL,
+        related_name="schedules",
+        null=True,
+        blank=True,
+        help_text="Предпочтительное подключение для публикации",
+    )
 
     scheduled_at = models.DateTimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
@@ -539,7 +644,8 @@ class Schedule(models.Model):
         ordering = ("scheduled_at",)
 
     def __str__(self):
-        return f"{self.post} -> {self.social_account} @ {self.scheduled_at} ({self.status})"
+        target = self.connection or self.social_account
+        return f"{self.post} -> {target} @ {self.scheduled_at} ({self.status})"
 
 
 class Topic(models.Model):

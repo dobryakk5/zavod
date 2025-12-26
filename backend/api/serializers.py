@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from rest_framework import serializers
 
 from core.models import (
     ChannelAnalysis,
     Client,
     ContentTemplate,
+    Connection,
     Post,
     PostImage,
     PostTone,
@@ -31,6 +34,7 @@ class PostSerializer(serializers.ModelSerializer):
     template_name = serializers.CharField(source="template.name", read_only=True)
     has_images = serializers.SerializerMethodField()
     has_videos = serializers.SerializerMethodField()
+    next_scheduled_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Post
@@ -44,11 +48,18 @@ class PostSerializer(serializers.ModelSerializer):
             "template_name",
             "has_images",
             "has_videos",
+            "next_scheduled_at",
         ]
 
     def get_platforms(self, obj: Post) -> list[str]:
         schedules = obj.schedules.all()
-        return sorted({schedule.social_account.platform for schedule in schedules})
+        platforms = set()
+        for schedule in schedules:
+            if schedule.connection_id:
+                platforms.add(schedule.connection.provider)
+            elif schedule.social_account_id:
+                platforms.add(schedule.social_account.platform)
+        return sorted(platforms)
 
     def get_has_images(self, obj: Post) -> bool:
         annotated_count = getattr(obj, "images_count", None)
@@ -62,13 +73,23 @@ class PostSerializer(serializers.ModelSerializer):
             return annotated_count > 0
         return obj.videos.exists()
 
+    def get_next_scheduled_at(self, obj: Post):
+        prefetched = getattr(obj, "_prefetched_objects_cache", {}).get("schedules")
+        schedules = prefetched if prefetched is not None else obj.schedules.all()
+        scheduled_dates = [item.scheduled_at for item in schedules if getattr(item, "scheduled_at", None)]
+        if not scheduled_dates:
+            return None
+        return min(scheduled_dates)
+
 
 class ScheduleSerializer(serializers.ModelSerializer):
     post = serializers.PrimaryKeyRelatedField(queryset=Post.objects.all())
-    social_account = serializers.PrimaryKeyRelatedField(queryset=SocialAccount.objects.all())
-    platform = serializers.CharField(source="social_account.platform", read_only=True)
+    social_account = serializers.PrimaryKeyRelatedField(queryset=SocialAccount.objects.all(), required=False, allow_null=True)
+    connection = serializers.PrimaryKeyRelatedField(queryset=Connection.objects.all(), required=False, allow_null=True)
+    platform = serializers.SerializerMethodField()
     post_title = serializers.CharField(source="post.title", read_only=True)
     social_account_name = serializers.CharField(source="social_account.name", read_only=True)
+    connection_name = serializers.CharField(source="connection.name", read_only=True)
 
     class Meta:
         model = Schedule
@@ -78,11 +99,13 @@ class ScheduleSerializer(serializers.ModelSerializer):
             "post_title",
             "social_account",
             "social_account_name",
+            "connection",
+            "connection_name",
             "platform",
             "scheduled_at",
             "status",
         ]
-        read_only_fields = ["platform", "post_title", "social_account_name", "status"]
+        read_only_fields = ["platform", "post_title", "social_account_name", "connection_name", "status"]
 
     def validate(self, attrs):
         """
@@ -92,17 +115,33 @@ class ScheduleSerializer(serializers.ModelSerializer):
 
         post = attrs.get("post") or getattr(self.instance, "post", None)
         social_account = attrs.get("social_account") or getattr(self.instance, "social_account", None)
+        connection = attrs.get("connection") or getattr(self.instance, "connection", None)
 
         if client:
             if post and post.client_id != client.id:
                 raise serializers.ValidationError("Пост не принадлежит текущему клиенту")
             if social_account and social_account.client_id != client.id:
                 raise serializers.ValidationError("Аккаунт не принадлежит текущему клиенту")
+            if connection and connection.client_id != client.id:
+                raise serializers.ValidationError("Подключение не принадлежит текущему клиенту")
 
         if post and social_account and post.client_id != social_account.client_id:
             raise serializers.ValidationError("Пост и аккаунт должны принадлежать одному клиенту")
+        if connection and post and connection.client_id != post.client_id:
+            raise serializers.ValidationError("Пост и подключение должны принадлежать одному клиенту")
+        if connection and social_account and connection.provider != social_account.platform:
+            raise serializers.ValidationError("Платформа SocialAccount и Connection должны совпадать")
+        if not social_account and not connection:
+            raise serializers.ValidationError("Нужно указать social_account или connection для публикации")
 
         return attrs
+
+    def get_platform(self, obj: Schedule) -> Optional[str]:
+        if obj.connection_id:
+            return obj.connection.provider
+        if obj.social_account_id:
+            return obj.social_account.platform
+        return None
 
 
 class PlatformCountSerializer(serializers.Serializer):

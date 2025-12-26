@@ -249,12 +249,14 @@ class YouTubePublisher:
             video_id = response.get("id")
             url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
             refreshed_token = getattr(creds, "token", None)
+            expires_at = getattr(creds, "expiry", None)
 
             return {
                 "success": True,
                 "video_id": video_id,
                 "url": url,
                 "access_token": refreshed_token,
+                "access_token_expires_at": expires_at,
             }
         except Exception as exc:  # noqa: BLE001
             logger.error("Ошибка публикации на YouTube: %s", exc, exc_info=True)

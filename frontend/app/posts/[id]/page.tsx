@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { postsApi } from '@/lib/api/posts';
 import { PostDetailView } from '@/components/posts/post-detail-view';
 import { PostForm } from '@/components/posts/post-form';
-import { QuickPublishDialog } from '@/components/posts/quick-publish-dialog';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Edit, Eye, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -117,7 +116,6 @@ export default function PostPage({ params }: PostPageProps) {
           <div className="flex gap-2">
             {!isEditing && (
               <>
-                <QuickPublishDialog postId={postId} />
                 <Button
                   variant="outline"
                   size="sm"

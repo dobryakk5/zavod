@@ -19,6 +19,7 @@ export type Post = {
   template_name?: string | null;
   has_images?: boolean;
   has_videos?: boolean;
+  next_scheduled_at?: string | null;
 };
 
 type PostPlaceholder = {
@@ -206,47 +207,60 @@ export function PostsTable() {
                 </TableCell>
               </TableRow>
             ))}
-            {posts.map((post) => (
-              <TableRow key={post.id}>
-                <TableCell className="font-medium">
-                  <a
-                    href={`/posts/${post.id}`}
-                    className="text-primary hover:underline"
-                  >
-                    {post.title || `Пост #${post.id}`}
-                  </a>
-                  <div className="text-sm text-muted-foreground mt-1">
-                    <span className="font-semibold">Цепляющий заголовок (для фото):</span>{' '}
-                    {post.hook_title?.trim() || 'не сгенерирован'}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-2">
-                    {post.has_images ? (
-                      <div
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-amber-50 text-amber-700 ring-1 ring-amber-100"
-                        title="Есть фото"
-                      >
-                        <ImageIcon className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Есть фото</span>
-                      </div>
-                    ) : null}
-                    {post.has_videos ? (
-                      <div
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-sky-50 text-sky-700 ring-1 ring-sky-100"
-                        title="Есть видео"
-                      >
-                        <Clapperboard className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Есть видео</span>
-                      </div>
-                    ) : null}
-                  </div>
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground">
-                  {formatTemplateDisplayName(post.template_name) || 'Без шаблона'}
-                </TableCell>
-              </TableRow>
-            ))}
+            {posts.map((post) => {
+              const scheduledAt = post.next_scheduled_at ? new Date(post.next_scheduled_at) : null;
+              const scheduledLabel = scheduledAt
+                ? scheduledAt.toLocaleString('ru-RU', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+                : 'не запланировано';
+
+              return (
+                <TableRow key={post.id}>
+                  <TableCell className="font-medium">
+                    <a
+                      href={`/posts/${post.id}`}
+                      className="text-primary hover:underline"
+                    >
+                      {post.title || `Пост #${post.id}`}
+                    </a>
+                    <div className="text-sm text-muted-foreground mt-1">
+                      <span className="font-semibold">Запланировано на:</span>{' '}
+                      {scheduledLabel}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      {post.has_images ? (
+                        <div
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-amber-50 text-amber-700 ring-1 ring-amber-100"
+                          title="Есть фото"
+                        >
+                          <ImageIcon className="h-4 w-4" aria-hidden="true" />
+                          <span className="sr-only">Есть фото</span>
+                        </div>
+                      ) : null}
+                      {post.has_videos ? (
+                        <div
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-sky-50 text-sky-700 ring-1 ring-sky-100"
+                          title="Есть видео"
+                        >
+                          <Clapperboard className="h-4 w-4" aria-hidden="true" />
+                          <span className="sr-only">Есть видео</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {formatTemplateDisplayName(post.template_name) || 'Без шаблона'}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}

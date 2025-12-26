@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { SyntheticEvent } from 'react';
 import { postsApi } from '@/lib/api/posts';
 import { schedulesApi } from '@/lib/api/schedules';
@@ -14,7 +14,9 @@ import { VisuallyHidden } from '@/components/ui/visually-hidden';
 import type { GenerateVideoRequest, PostDetail, Schedule } from '@/lib/types';
 import { toast } from 'sonner';
 import { SchedulePostDialog } from './schedule-post-dialog';
-import { Trash2, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Trash2, Loader2 } from 'lucide-react';
+import { sanitizeRichText } from '@/lib/sanitize-html';
+import Link from 'next/link';
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Черновик',
@@ -142,6 +144,14 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
   const [cooldownClock, setCooldownClock] = useState(() => Date.now());
   const [hookTitleDraft, setHookTitleDraft] = useState('');
   const [hookTitleSaving, setHookTitleSaving] = useState(false);
+  const [adjacentPostIds, setAdjacentPostIds] = useState<{ prev: number | null; next: number | null }>({
+    prev: null,
+    next: null,
+  });
+  const sanitizedText = useMemo(
+    () => sanitizeRichText(post?.text || ''),
+    [post?.text]
+  );
 
   const loadPost = useCallback(async () => {
     try {
@@ -162,6 +172,27 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
       toast.error('Не удалось загрузить расписание поста');
     } finally {
       setSchedulesLoading(false);
+    }
+  }, [postId]);
+
+  const loadAdjacentPosts = useCallback(async () => {
+    try {
+      const posts = await postsApi.list();
+      if (!Array.isArray(posts)) {
+        return;
+      }
+      const sorted = [...posts].sort((a, b) => a.id - b.id);
+      const index = sorted.findIndex((item) => item.id === postId);
+      if (index === -1) {
+        setAdjacentPostIds({ prev: null, next: null });
+        return;
+      }
+      setAdjacentPostIds({
+        prev: sorted[index - 1]?.id ?? null,
+        next: sorted[index + 1]?.id ?? null,
+      });
+    } catch {
+      setAdjacentPostIds({ prev: null, next: null });
     }
   }, [postId]);
 
@@ -190,6 +221,10 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
   useEffect(() => {
     loadSchedules();
   }, [loadSchedules]);
+
+  useEffect(() => {
+    loadAdjacentPosts();
+  }, [loadAdjacentPosts]);
 
   useEffect(() => {
     setImageCooldownUntil(computeCooldownUntil(clientInfo?.client?.last_image_generation_at));
@@ -518,7 +553,14 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
       <div className="space-y-4">
         <div>
           <h2 className="text-lg font-semibold mb-2">Текст</h2>
-          <p className="whitespace-pre-wrap">{post.text || 'Текст не добавлен'}</p>
+          {sanitizedText ? (
+            <div
+              className="prose max-w-none whitespace-pre-wrap break-words text-gray-900"
+              dangerouslySetInnerHTML={{ __html: sanitizedText }}
+            />
+          ) : (
+            <p className="text-gray-500">Текст не добавлен</p>
+          )}
         </div>
 
         {post.wordstat_phrases_used && post.wordstat_phrases_used.length > 0 && (
@@ -843,9 +885,6 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
                         </Button>
                       </div>
                     )}
-                    {video.caption && (
-                      <p className="mt-2 text-sm text-muted-foreground">{video.caption}</p>
-                    )}
                   </div>
                 );
               })}
@@ -854,6 +893,36 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
         )}
 
         {/* Metadata */}
+        <div className="mt-6 flex flex-col gap-3 rounded-lg border bg-background p-4 sm:flex-row sm:items-center sm:justify-between">
+          {adjacentPostIds.prev ? (
+            <Button variant="outline" className="w-full sm:w-auto" asChild>
+              <Link href={`/posts/${adjacentPostIds.prev}`} className="flex items-center gap-2">
+                <ChevronLeft className="h-4 w-4" />
+                Предыдущий пост
+              </Link>
+            </Button>
+          ) : (
+            <Button variant="outline" className="w-full sm:w-auto" disabled>
+              <ChevronLeft className="h-4 w-4" />
+              Предыдущий пост
+            </Button>
+          )}
+
+          {adjacentPostIds.next ? (
+            <Button variant="outline" className="w-full sm:w-auto justify-end" asChild>
+              <Link href={`/posts/${adjacentPostIds.next}`} className="flex items-center gap-2">
+                Следующий пост
+                <ChevronRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          ) : (
+            <Button variant="outline" className="w-full sm:w-auto justify-end" disabled>
+              Следующий пост
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+
         <div className="text-sm text-gray-500 space-y-1">
           {post.created_at && (
             <p>Создан: {new Date(post.created_at).toLocaleString('ru-RU')}</p>

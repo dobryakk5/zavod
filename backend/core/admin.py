@@ -16,6 +16,8 @@ from .models import (
     Client,
     UserTenantRole,
     SocialAccount,
+    Connection,
+    PostJob,
     Post,
     PostImage,
     PostVideo,
@@ -301,7 +303,7 @@ class ScheduleInline(admin.StackedInline):
     model = Schedule
     extra = 1
     form = None  # Будет установлена позже, после объявления ScheduleAdminForm
-    fields = ("client_display", "telegram_channels", "social_account", "scheduled_at", "status", "publish_now_button")
+    fields = ("client_display", "telegram_channels", "social_account", "connection", "scheduled_at", "status", "publish_now_button")
     readonly_fields = ("client_display", "publish_now_button")
 
     classes = ('collapse',)  # Сворачивать по умолчанию для компактности
@@ -522,6 +524,36 @@ class SocialAccountAdmin(admin.ModelAdmin):
                 return channel
         return '-'
     telegram_channel_display.short_description = "TG канал"
+
+
+@admin.register(Connection)
+class ConnectionAdmin(admin.ModelAdmin):
+    list_display = ("client", "provider", "name", "account_id", "status", "expires_at", "updated_at")
+    list_filter = ("provider", "status", "client")
+    search_fields = ("name", "account_id", "provider_user_id", "client__name")
+    readonly_fields = ("created_at", "updated_at", "last_error")
+    autocomplete_fields = ("client", "created_by")
+    fieldsets = (
+        ("Основное", {"fields": ("client", "provider", "name", "status")}),
+        ("Аккаунт", {"fields": ("provider_user_id", "account_id")}),
+        ("Токены", {"fields": ("access_token", "refresh_token", "expires_at", "scopes")}),
+        ("Метаданные", {"fields": ("metadata", "last_error", "created_by")}),
+        ("Служебное", {"fields": ("created_at", "updated_at")}),
+    )
+
+
+@admin.register(PostJob)
+class PostJobAdmin(admin.ModelAdmin):
+    list_display = ("id", "provider", "client", "connection", "status", "attempts", "created_at")
+    list_filter = ("provider", "status", "client")
+    search_fields = ("remote_id", "remote_url", "connection__name", "client__name")
+    readonly_fields = ("created_at", "updated_at", "started_at", "finished_at")
+    autocomplete_fields = ("client", "connection", "schedule")
+    fieldsets = (
+        ("Основное", {"fields": ("client", "provider", "connection", "schedule", "status", "attempts")}),
+        ("Данные", {"fields": ("payload", "remote_id", "remote_url", "last_error")}),
+        ("Время", {"fields": ("started_at", "finished_at", "created_at", "updated_at")}),
+    )
 
 
 class PostImageInline(admin.TabularInline):
@@ -1188,6 +1220,8 @@ class ScheduleAdminForm(forms.ModelForm):
                     client=client,
                     platform='telegram'
                 )
+            if "connection" in self.fields:
+                self.fields["connection"].queryset = Connection.objects.filter(client=client)
 
         # Если это существующий Schedule, скрываем telegram_channels
         if self.instance.pk and 'telegram_channels' in self.fields:
@@ -1202,9 +1236,9 @@ ScheduleInline.form = ScheduleAdminForm
 @admin.register(Schedule)
 class ScheduleAdmin(admin.ModelAdmin):
     form = ScheduleAdminForm
-    list_display = ("post", "client", "social_account", "scheduled_at", "status", "quick_actions")
-    list_filter = ("client", "social_account__platform", "status", "scheduled_at")
-    search_fields = ("post__title", "client__name", "social_account__name")
+    list_display = ("post", "client", "social_account", "connection", "scheduled_at", "status", "quick_actions")
+    list_filter = ("client", "social_account__platform", "connection__provider", "status", "scheduled_at")
+    search_fields = ("post__title", "client__name", "social_account__name", "connection__name")
     autocomplete_fields = ("post",)
     readonly_fields = ("created_at", "log_display")
 
@@ -1212,7 +1246,7 @@ class ScheduleAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Публикация", {
-            "fields": ("post", "client", "telegram_channels", "social_account", "scheduled_at", "status"),
+            "fields": ("post", "client", "telegram_channels", "social_account", "connection", "scheduled_at", "status"),
             "description": "Для публикации в несколько Telegram каналов выберите их в чекбоксах ниже"
         }),
         ("Результат публикации", {
