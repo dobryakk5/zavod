@@ -202,6 +202,66 @@ export interface VkIntegration {
   extra?: Record<string, unknown>;
 }
 
+// Mind map domain
+export interface MindMap {
+  id: number;
+  title: string;
+  description?: string | null;
+  is_public: boolean;
+  owner_id?: number;
+  created_at?: string;
+  updated_at?: string;
+  nodes_count?: number;
+  edges_count?: number;
+}
+
+export interface MindNodePosition {
+  layout_name?: string;
+  x: number;
+  y: number;
+}
+
+export interface MindNode {
+  id: string;
+  map_id: number;
+  text: string;
+  color?: string | null;
+  shape?: string | null;
+  meta?: Record<string, unknown>;
+  position?: MindNodePosition;
+  created_at?: string;
+  updated_at?: string;
+  properties?: MindNodeProperty[];
+}
+
+export interface MindEdge {
+  id?: number | string;
+  map_id: number;
+  from_node_id: string;
+  to_node_id: string;
+  type?: string;
+  label?: string | null;
+  meta?: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface MindMapDetail extends MindMap {
+  nodes: MindNode[];
+  edges: MindEdge[];
+}
+
+export interface MindNodeProperty {
+  id: number;
+  node_id: string;
+  title: string;
+  value: string;
+  delta?: string | null;
+  order_index?: number;
+  meta?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ClientSettings {
   slug?: string;
   brand_name?: string;

@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 import re
+import uuid
 from typing import Dict, List
 
 
@@ -1463,3 +1464,97 @@ class SystemSetting(models.Model):
             },
         )
         return obj
+
+
+# ============================================================================
+# Mind map schema (map.* tables)
+# ============================================================================
+
+
+class MindMap(models.Model):
+    owner = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="owner_id", related_name="mind_maps")
+    title = models.TextField()
+    description = models.TextField(blank=True, null=True)
+    is_public = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."mind_maps'
+
+    def __str__(self):
+        return self.title
+
+
+class MindMapMember(models.Model):
+    map = models.ForeignKey(MindMap, on_delete=models.CASCADE, db_column="map_id", related_name="members")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, db_column="user_id")
+    role = models.TextField()
+
+    class Meta:
+        managed = False
+        db_table = 'map"."mind_map_members'
+        unique_together = ("map", "user")
+
+
+class MindNode(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    map = models.ForeignKey(MindMap, on_delete=models.CASCADE, db_column="map_id", related_name="nodes")
+    text = models.TextField()
+    color = models.TextField(blank=True, null=True)
+    shape = models.TextField(blank=True, null=True)
+    meta = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."mind_nodes'
+
+    def __str__(self):
+        return self.text
+
+
+class MindEdge(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    map = models.ForeignKey(MindMap, on_delete=models.CASCADE, db_column="map_id", related_name="edges")
+    from_node = models.ForeignKey(MindNode, on_delete=models.CASCADE, db_column="from_node_id", related_name="edges_from")
+    to_node = models.ForeignKey(MindNode, on_delete=models.CASCADE, db_column="to_node_id", related_name="edges_to")
+    type = models.TextField(default="default")
+    label = models.TextField(blank=True, null=True)
+    meta = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."mind_edges'
+
+
+class MindNodeProperty(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    node = models.ForeignKey(MindNode, on_delete=models.CASCADE, db_column="node_id", related_name="properties")
+    title = models.TextField()
+    value = models.TextField()
+    delta = models.TextField(blank=True, null=True)
+    order_index = models.IntegerField(default=0)
+    meta = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."mind_node_properties'
+
+
+class MindNodePosition(models.Model):
+    node = models.OneToOneField(MindNode, on_delete=models.CASCADE, db_column="node_id", primary_key=True, related_name="position")
+    layout_name = models.TextField(default="default")
+    x = models.FloatField()
+    y = models.FloatField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."mind_node_positions'

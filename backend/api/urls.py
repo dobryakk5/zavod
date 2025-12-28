@@ -29,6 +29,9 @@ from .views import (
     VkConnectView,
     VkCallbackView,
     VkPublishView,
+    MindMapViewSet,
+    MindNodePositionView,
+    MindNodePropertyViewSet,
     WeeklySourceReportViewSet,
     WeeklySourceRunView,
     WeeklySourceBatchViewSet,
@@ -56,6 +59,8 @@ router.register(r'channel-analyses', ChannelAnalysisViewSet, basename='channel-a
 router.register(r'vk/integrations', VkIntegrationViewSet, basename='vk-integration')
 router.register(r'weekly-sources', WeeklySourceReportViewSet, basename='weekly-sources')
 router.register(r'weekly-batches', WeeklySourceBatchViewSet, basename='weekly-batches')
+router.register(r'map/node-properties', MindNodePropertyViewSet, basename='mind-node-property')
+router.register(r'map/mind-maps', MindMapViewSet, basename='mind-map')
 
 urlpatterns = [
     # Analytics endpoint (must be before router to avoid conflicts)
@@ -85,6 +90,9 @@ urlpatterns = [
     path('vk/connect/', VkConnectView.as_view(), name='vk-connect'),
     path('vk/callback/', VkCallbackView.as_view(), name='vk-callback'),
     path('vk/post_with_photos/', VkPublishView.as_view(), name='vk-post-with-photos'),
+
+    # Mind map endpoints
+    path('map/nodes/<uuid:node_id>/position/', MindNodePositionView.as_view(), name='mind-node-position'),
 
     # Include router URLs
     path('', include(router.urls)),

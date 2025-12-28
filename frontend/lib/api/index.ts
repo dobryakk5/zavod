@@ -12,3 +12,4 @@ export * from './analytics';
 export * from './seo';
 export * from './wordstat';
 export * from './vk';
+export * from './mindmaps';

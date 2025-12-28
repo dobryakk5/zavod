@@ -9,6 +9,11 @@ from core.models import (
     Client,
     ContentTemplate,
     Connection,
+    MindEdge,
+    MindMap,
+    MindNode,
+    MindNodePosition,
+    MindNodeProperty,
     Post,
     PostImage,
     PostTone,
@@ -811,3 +816,125 @@ class WeeklySourceBatchListSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+
+# ============================================================================
+# Mind maps
+# ============================================================================
+
+
+class MindNodePositionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MindNodePosition
+        fields = ["layout_name", "x", "y"]
+        extra_kwargs = {"layout_name": {"required": False, "default": "default"}}
+
+
+class MindNodePropertySerializer(serializers.ModelSerializer):
+    node = serializers.PrimaryKeyRelatedField(queryset=MindNode.objects.all(), write_only=True, required=False)
+    node_id = serializers.UUIDField(read_only=True)
+    value = serializers.CharField(allow_blank=True)
+
+    class Meta:
+        model = MindNodeProperty
+        fields = [
+            "id",
+            "node",
+            "node_id",
+            "title",
+            "value",
+            "delta",
+            "order_index",
+            "meta",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "node_id", "created_at", "updated_at"]
+        extra_kwargs = {"node": {"write_only": True}}
+
+
+class MindNodeSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
+    map_id = serializers.IntegerField(read_only=True)
+    position = MindNodePositionSerializer(read_only=True)
+    properties = MindNodePropertySerializer(many=True, read_only=True)
+
+    class Meta:
+        model = MindNode
+        fields = [
+            "id",
+            "map_id",
+            "text",
+            "color",
+            "shape",
+            "meta",
+            "position",
+            "created_at",
+            "updated_at",
+            "properties",
+        ]
+        read_only_fields = ["map_id", "created_at", "updated_at", "position", "properties"]
+
+
+class MindEdgeSerializer(serializers.ModelSerializer):
+    map_id = serializers.IntegerField(read_only=True)
+    from_node_id = serializers.PrimaryKeyRelatedField(
+        queryset=MindNode.objects.all(),
+        source="from_node",
+    )
+    to_node_id = serializers.PrimaryKeyRelatedField(
+        queryset=MindNode.objects.all(),
+        source="to_node",
+    )
+
+    class Meta:
+        model = MindEdge
+        fields = [
+            "id",
+            "map_id",
+            "from_node_id",
+            "to_node_id",
+            "type",
+            "label",
+            "meta",
+            "created_at",
+        ]
+        read_only_fields = ["id", "map_id", "created_at"]
+
+    def validate(self, attrs):
+        from_node = attrs.get("from_node")
+        to_node = attrs.get("to_node")
+
+        if from_node and to_node and from_node.id == to_node.id:
+            raise serializers.ValidationError("Связь не может ссылаться на один и тот же узел")
+
+        return attrs
+
+
+class MindMapSerializer(serializers.ModelSerializer):
+    nodes_count = serializers.IntegerField(read_only=True)
+    edges_count = serializers.IntegerField(read_only=True)
+    owner_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = MindMap
+        fields = [
+            "id",
+            "title",
+            "description",
+            "is_public",
+            "owner_id",
+            "created_at",
+            "updated_at",
+            "nodes_count",
+            "edges_count",
+        ]
+        read_only_fields = ["id", "owner_id", "created_at", "updated_at", "nodes_count", "edges_count"]
+
+
+class MindMapDetailSerializer(MindMapSerializer):
+    nodes = MindNodeSerializer(many=True, read_only=True)
+    edges = MindEdgeSerializer(many=True, read_only=True)
+
+    class Meta(MindMapSerializer.Meta):
+        fields = MindMapSerializer.Meta.fields + ["nodes", "edges"]

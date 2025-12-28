@@ -25,7 +25,7 @@ from django.utils import timezone
 from django.utils.html import linebreaks
 from rest_framework import generics, status, viewsets, mixins
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -40,6 +40,11 @@ from core.ai_generator import AIContentGenerator
 from core.models import (
     Client,
     ContentTemplate,
+    MindEdge,
+    MindMap,
+    MindNode,
+    MindNodePosition,
+    MindNodeProperty,
     Post,
     PostImage,
     PostVideo,
@@ -79,6 +84,12 @@ from .serializers import (
     ClientSettingsSerializer,
     ClientSummarySerializer,
     ContentTemplateSerializer,
+    MindEdgeSerializer,
+    MindMapDetailSerializer,
+    MindMapSerializer,
+    MindNodePropertySerializer,
+    MindNodePositionSerializer,
+    MindNodeSerializer,
     PostDetailSerializer,
     PostSerializer,
     PostToneSerializer,
@@ -2712,3 +2723,198 @@ class WordstatResultViewSet(mixins.UpdateModelMixin, viewsets.GenericViewSet):
     def get_queryset(self):
         client = get_active_client(self.request.user)
         return WordstatResult.objects.filter(query__client=client)
+
+
+# ============================================================================
+# Mind maps
+# ============================================================================
+
+
+def _touch_mind_map(map_id: int) -> None:
+    MindMap.objects.filter(pk=map_id).update(updated_at=timezone.now())
+
+
+class MindMapViewSet(viewsets.ModelViewSet):
+    """Mind map CRUD limited to the active client."""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = MindMapSerializer
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in {"create", "update", "partial_update", "destroy", "create_node", "create_edge"}:
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def get_serializer_class(self):
+        if self.action == "retrieve":
+            return MindMapDetailSerializer
+        if self.action == "create_node":
+            return MindNodeSerializer
+        if self.action == "create_edge":
+            return MindEdgeSerializer
+        return MindMapSerializer
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        base_qs = MindMap.objects.filter(owner=client).annotate(
+            nodes_count=Count("nodes", distinct=True),
+            edges_count=Count("edges", distinct=True),
+        )
+
+        if self.action == "list":
+            return base_qs.order_by("-updated_at")
+
+        return base_qs.prefetch_related(
+            Prefetch("nodes", queryset=MindNode.objects.select_related("position").prefetch_related("properties")),
+            Prefetch("edges", queryset=MindEdge.objects.all()),
+        )
+
+    def perform_create(self, serializer):
+        client = get_active_client(self.request.user)
+        serializer.save(owner=client)
+
+    @action(detail=True, methods=["post"], url_path="nodes", permission_classes=[IsTenantOwnerOrEditor])
+    def create_node(self, request, pk=None):
+        mind_map = self.get_object()
+        serializer = MindNodeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        node = serializer.save(map=mind_map)
+        _touch_mind_map(mind_map.id)
+        return Response(MindNodeSerializer(node).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="edges", permission_classes=[IsTenantOwnerOrEditor])
+    def create_edge(self, request, pk=None):
+        mind_map = self.get_object()
+        serializer = MindEdgeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        from_node = serializer.validated_data.get("from_node")
+        to_node = serializer.validated_data.get("to_node")
+
+        if from_node and from_node.map_id != mind_map.id:
+            return Response({"detail": "from_node_id не относится к этой карте"}, status=status.HTTP_400_BAD_REQUEST)
+        if to_node and to_node.map_id != mind_map.id:
+            return Response({"detail": "to_node_id не относится к этой карте"}, status=status.HTTP_400_BAD_REQUEST)
+
+        edge = serializer.save(map=mind_map)
+        _touch_mind_map(mind_map.id)
+        return Response(MindEdgeSerializer(edge).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["patch", "delete"], url_path=r"edges/(?P<edge_id>[^/.]+)", permission_classes=[IsTenantOwnerOrEditor])
+    def edge_detail(self, request, pk=None, edge_id=None):
+        mind_map = self.get_object()
+        edge = get_object_or_404(MindEdge.objects.filter(map=mind_map), pk=edge_id)
+
+        if request.method.upper() == "DELETE":
+            edge.delete()
+            _touch_mind_map(mind_map.id)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        serializer = MindEdgeSerializer(edge, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        from_node = serializer.validated_data.get("from_node")
+        to_node = serializer.validated_data.get("to_node")
+
+        if from_node and from_node.map_id != mind_map.id:
+            return Response({"detail": "from_node_id не относится к этой карте"}, status=status.HTTP_400_BAD_REQUEST)
+        if to_node and to_node.map_id != mind_map.id:
+            return Response({"detail": "to_node_id не относится к этой карте"}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+        _touch_mind_map(mind_map.id)
+        return Response(MindEdgeSerializer(edge).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["patch", "delete"], url_path=r"nodes/(?P<node_id>[^/.]+)", permission_classes=[IsTenantOwnerOrEditor])
+    def update_node(self, request, pk=None, node_id=None):
+        mind_map = self.get_object()
+        node = get_object_or_404(MindNode.objects.filter(map=mind_map), pk=node_id)
+
+        if request.method.upper() == "DELETE":
+            node.delete()
+            _touch_mind_map(mind_map.id)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        serializer = MindNodeSerializer(node, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        _touch_mind_map(mind_map.id)
+        return Response(MindNodeSerializer(node).data, status=status.HTTP_200_OK)
+
+
+class MindNodePositionView(APIView):
+    """Upsert node coordinates for the active client's map."""
+
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def put(self, request, node_id):
+        client = get_active_client(request.user)
+        node = get_object_or_404(
+            MindNode.objects.select_related("map", "position"),
+            pk=node_id,
+            map__owner=client,
+        )
+
+        try:
+            position_instance = node.position
+        except MindNodePosition.DoesNotExist:
+            position_instance = None
+
+        serializer = MindNodePositionSerializer(
+            instance=position_instance,
+            data=request.data,
+            partial=position_instance is not None,
+        )
+        serializer.is_valid(raise_exception=True)
+        position = serializer.save(node=node)
+        _touch_mind_map(node.map_id)
+        return Response(MindNodePositionSerializer(position).data, status=status.HTTP_200_OK)
+
+
+class MindNodePropertyViewSet(viewsets.ModelViewSet):
+    """CRUD для свойств узлов карты."""
+
+    serializer_class = MindNodePropertySerializer
+    permission_classes = [IsTenantMember]
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in {"create", "update", "partial_update", "destroy"}:
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        qs = (
+            MindNodeProperty.objects.select_related("node", "node__map")
+            .filter(node__map__owner=client)
+            .order_by("order_index", "id")
+        )
+        node_id = self.request.query_params.get("node_id")
+        if node_id:
+            qs = qs.filter(node_id=node_id)
+        return qs
+
+    def perform_create(self, serializer):
+        node = serializer.validated_data.get("node")
+        if node is None:
+            raise ValidationError("Не указан node")
+
+        client = get_active_client(self.request.user)
+        if node.map.owner_id != client.id:
+            raise PermissionDenied("Узел не относится к текущему клиенту")
+
+        serializer.save()
+        _touch_mind_map(node.map_id)
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        serializer.save()
+        if instance is not None:
+            _touch_mind_map(instance.node.map_id)
+
+    def perform_destroy(self, instance):
+        map_id = instance.node.map_id
+        instance.delete()
+        _touch_mind_map(map_id)
