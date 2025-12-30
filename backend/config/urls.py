@@ -7,8 +7,10 @@ from wagtail.documents import urls as wagtaildocs_urls
 from wagtail import urls as wagtail_urls
 from api.views import VkConnectView, VkCallbackView, VkPublishView, DzenRSSFeedView
 from core import views as core_views
+from core.admin_views import custom_generator_view
 
 urlpatterns = [
+    path('django-admin/custom/', admin.site.admin_view(custom_generator_view), name='admin-custom-generator'),
     path('django-admin/', admin.site.urls),
     path('admin/', include(wagtailadmin_urls)),
     path('documents/', include(wagtaildocs_urls)),

@@ -7,6 +7,8 @@ from rest_framework import serializers
 from core.models import (
     ChannelAnalysis,
     Client,
+    ClientProduct,
+    ProductType,
     ContentTemplate,
     Connection,
     MindEdge,
@@ -938,3 +940,47 @@ class MindMapDetailSerializer(MindMapSerializer):
 
     class Meta(MindMapSerializer.Meta):
         fields = MindMapSerializer.Meta.fields + ["nodes", "edges"]
+
+
+class ClientProductSerializer(serializers.ModelSerializer):
+    owner_id = serializers.IntegerField(read_only=True)
+    product_type_id = serializers.PrimaryKeyRelatedField(
+        queryset=ProductType.objects.all(),
+        source="product_type",
+        required=False,
+        allow_null=True,
+    )
+    product_type_name = serializers.CharField(source="product_type.name", read_only=True)
+
+    class Meta:
+        model = ClientProduct
+        fields = [
+            "id",
+            "name",
+            "product_type_id",
+            "product_type_name",
+            "short_description",
+            "packages",
+            "structure",
+            "owner_id",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "owner_id", "created_at", "updated_at"]
+
+
+class ProductTypeSerializer(serializers.ModelSerializer):
+    owner_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = ProductType
+        fields = [
+            "id",
+            "name",
+            "value",
+            "goal",
+            "owner_id",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "owner_id", "created_at", "updated_at"]

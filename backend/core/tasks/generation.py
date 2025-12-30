@@ -3,7 +3,11 @@ import logging
 import os
 import queue
 import random
+import json
+import shutil
+import subprocess
 import threading
+import tempfile
 import uuid
 import re
 from collections import defaultdict
@@ -40,6 +44,8 @@ from ..photo_postprocessing import apply_text_overlay_to_image
 
 logger = logging.getLogger(__name__)
 
+CUSTOM_POST_AI_MODEL = "tngtech/deepseek-r1t-chimera:free"
+
 WEEKDAY_LABELS = [
     "понедельник",
     "вторник",
@@ -53,6 +59,16 @@ WEEKDAY_LABELS = [
 MAX_WEEKLY_POSTS = 21
 TIE_BREAKER_DAY_ORDER = [0, 2, 4, 1, 3, 5, 6]
 DEFAULT_TEMPLATE_LENGTH = 1200
+
+
+def _configure_custom_generator_model(generator: AIContentGenerator) -> None:
+    """
+    Custom-flow: посты должны генерироваться строго через заданную модель,
+    без fallback на другие модели.
+    """
+    generator.model = CUSTOM_POST_AI_MODEL
+    generator.post_model = CUSTOM_POST_AI_MODEL
+    generator.fallback_model = CUSTOM_POST_AI_MODEL
 
 
 def _get_client_timezone(client: Client):
@@ -875,6 +891,1024 @@ def generate_posts_from_seo_keyword_set(
         "created": created_posts,
         "requested": total_posts,
         "errors": errors,
+    }
+
+
+@shared_task
+def generate_posts_from_custom_task(
+    client_id: int,
+    template_id: int,
+    posts_count: int,
+    task: str,
+    created_by_id: Optional[int] = None,
+):
+    """Сгенерировать серию постов по произвольной задаче (freeform)."""
+    try:
+        client = Client.objects.get(id=client_id)
+    except Client.DoesNotExist:
+        logger.error("Client %s не найден для custom генератора", client_id)
+        return {"success": False, "error": "client_not_found"}
+
+    task_text = (task or "").strip()
+    if not task_text:
+        logger.error("Пустая задача для custom генератора (client=%s)", client_id)
+        return {"success": False, "error": "task_required"}
+
+    try:
+        template = ContentTemplate.get_for_client_or_system(client, template_id)
+    except ContentTemplate.DoesNotExist:
+        logger.error(
+            "Шаблон %s не найден или недоступен клиенту %s (custom генератор)",
+            template_id,
+            client_id,
+        )
+        return {"success": False, "error": "template_not_found"}
+
+    try:
+        total_posts = max(1, int(posts_count))
+    except (TypeError, ValueError):
+        total_posts = 1
+    total_posts = max(1, min(99, total_posts))
+
+    template_config = {
+        "tone": template.tone,
+        "length": template.length,
+        "language": template.language,
+        "type": template.type,
+        "seo_prompt_template": template.seo_prompt_template,
+        "trend_prompt_template": template.trend_prompt_template,
+        "prompt_type": "trend",
+        "additional_instructions": template.additional_instructions,
+        "include_hashtags": template.include_hashtags,
+        "max_hashtags": template.max_hashtags,
+        "brand": client.get_brand_display_name(),
+        "avatar": client.avatar or "",
+        "pains": client.pains or "",
+        "desires": client.desires or "",
+        "objections": client.objections or "",
+        "books": client.expert_books or "",
+    }
+
+    topic_name = client.name or client.slug
+    wordstat_phrases = _select_wordstat_phrases(client)
+
+    try:
+        generator = AIContentGenerator()
+    except ValueError as exc:
+        logger.error("Ошибка инициализации AI генератора (custom): %s", exc)
+        return {"success": False, "error": "ai_generator_error"}
+
+    _configure_custom_generator_model(generator)
+
+    created_posts = 0
+    errors: List[Dict[str, str]] = []
+
+    for index in range(1, total_posts + 1):
+        logger.info(
+            "[CUSTOM %s] Генерация поста %s/%s по задаче",
+            client_id,
+            index,
+            total_posts,
+        )
+
+        trend_description = (
+            f"ЗАДАЧА:\n{task_text}\n\n"
+            f"Сгенерируй уникальный вариант №{index} из {total_posts}. "
+            "Не повторяй структуру и формулировки прошлых вариантов."
+        )
+
+        result = generator.generate_post_text(
+            trend_title=task_text,
+            trend_description=trend_description,
+            trend_url="",
+            topic_name=topic_name,
+            template_config=template_config,
+            seo_keywords=None,
+            wordstat_phrases=wordstat_phrases,
+        )
+
+        if not result or not result.get("success"):
+            error_message = (result or {}).get("error", "Неизвестная ошибка AI")
+            logger.error("[CUSTOM %s] Ошибка генерации: %s", client_id, error_message)
+            errors.append({"index": str(index), "error": str(error_message)})
+            continue
+
+        result = _apply_wordstat_refinement(
+            generator=generator,
+            base_result=result,
+            phrases=wordstat_phrases,
+            language=getattr(template, "language", "ru"),
+            log_prefix="custom-text",
+        )
+
+        hashtags = result.get("hashtags", [])
+        tags = []
+        if isinstance(hashtags, list):
+            tags.extend(hashtags)
+        tags.append("custom")
+        wordstat_phrases_used = result.get("wordstat_phrases_used") or wordstat_phrases or []
+
+        seen = set()
+        deduped_tags = []
+        for tag in tags:
+            if isinstance(tag, str):
+                normalized = tag.strip()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    deduped_tags.append(normalized)
+
+        hook_title = result.get("hook_title", "")
+        Post.objects.create(
+            client=client,
+            template=template,
+            title=result["title"],
+            hook_title=hook_title,
+            text=result["text"],
+            status="draft",
+            tags=deduped_tags,
+            source_links=[],
+            generated_by="custom-generator",
+            created_by_id=created_by_id,
+            wordstat_phrases_used=wordstat_phrases_used,
+        )
+        _increment_wordstat_usage(client, wordstat_phrases_used)
+        created_posts += 1
+
+    logger.info(
+        "Custom генерация постов для client %s завершена: %s/%s успешно",
+        client_id,
+        created_posts,
+        total_posts,
+    )
+
+    return {
+        "success": created_posts > 0,
+        "created": created_posts,
+        "requested": total_posts,
+        "errors": errors,
+    }
+
+
+def _extract_three_scene_briefs_from_text(
+    title: str,
+    text: str,
+    hook_title: str = "",
+) -> List[str]:
+    briefs: List[str] = []
+    normalized_title = str(title or "").strip()
+    if normalized_title:
+        briefs.append(normalized_title)
+
+    normalized_hook = str(hook_title or "").strip()
+    if normalized_hook:
+        briefs.append(normalized_hook)
+
+    body = str(text or "")
+    lines = [line.strip() for line in re.split(r"[\\r\\n]+", body) if line.strip()]
+    if not lines:
+        sentences = [s.strip() for s in re.split(r"[.!?]+", body) if s.strip()]
+        lines = sentences
+
+    for line in lines:
+        if len(briefs) >= 3:
+            break
+        if line not in briefs:
+            briefs.append(line)
+
+    while len(briefs) < 3:
+        briefs.append(normalized_title or "Сцена")
+
+    return briefs[:3]
+
+
+def _extract_three_scene_briefs(post: Post) -> List[str]:
+    return _extract_three_scene_briefs_from_text(
+        title=str(getattr(post, "title", "") or ""),
+        text=str(getattr(post, "text", "") or ""),
+        hook_title=str(getattr(post, "hook_title", "") or ""),
+    )
+
+
+def _concat_three_videos_to_one(video_paths: List[str]) -> Dict[str, Any]:
+    """
+    Склеить 3 видео в один ролик (без аудио), с приведением к вертикальному формату.
+    """
+    if len(video_paths) != 3:
+        return {"success": False, "error": "expected_3_videos", "video_path": None, "cleanup_paths": []}
+    for path in video_paths:
+        if not path or not os.path.exists(path):
+            return {"success": False, "error": "missing_scene_video", "video_path": None, "cleanup_paths": []}
+
+    if not shutil.which("ffmpeg"):
+        return {"success": False, "error": "ffmpeg_not_found", "video_path": None, "cleanup_paths": []}
+
+    fd, output_path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+
+    target_w = int(os.getenv("CUSTOM_VIDEO_WIDTH", "720"))
+    target_h = int(os.getenv("CUSTOM_VIDEO_HEIGHT", "1280"))
+
+    def _scene_filter(idx: int) -> str:
+        return (
+            f"[{idx}:v]"
+            f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,"
+            f"setsar=1"
+            f"[v{idx}]"
+        )
+
+    filter_complex = (
+        f"{_scene_filter(0)};"
+        f"{_scene_filter(1)};"
+        f"{_scene_filter(2)};"
+        f"[v0][v1][v2]concat=n=3:v=1:a=0[v]"
+    )
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_paths[0],
+        "-i",
+        video_paths[1],
+        "-i",
+        video_paths[2],
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        os.getenv("CUSTOM_VIDEO_PRESET", "veryfast"),
+        "-crf",
+        os.getenv("CUSTOM_VIDEO_CRF", "23"),
+        output_path,
+    ]
+
+    try:
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except subprocess.CalledProcessError as exc:
+        try:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        except OSError:
+            pass
+        return {
+            "success": False,
+            "error": f"ffmpeg_concat_failed: {(exc.stderr or exc.stdout or str(exc))[:400]}",
+            "video_path": None,
+            "cleanup_paths": [],
+        }
+
+    return {"success": True, "video_path": output_path, "cleanup_paths": [output_path]}
+
+
+def _strip_code_fences(value: str) -> str:
+    if not value:
+        return ""
+    text = value.strip()
+    text = re.sub(r"^```(?:json)?\\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\\s*```$", "", text)
+    return text.strip()
+
+
+def _parse_json_object(value: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not value:
+        return None
+    raw = _strip_code_fences(value)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _generate_custom_video_scenarios(
+    generator: AIContentGenerator,
+    post_title: str,
+    post_text: str,
+    videos_count: int,
+) -> List[List[str]]:
+    """
+    Вернуть список сценариев, каждый сценарий = 3 сцены (3 промпта) для VEO.
+    ВАЖНО: без доп. системных/клиентских инструкций — только базовый промпт.
+    """
+    normalized_title = (post_title or "").strip()
+    normalized_text = (post_text or "").strip()
+
+    prompt = f"""
+You are a director and scriptwriter for short vertical videos (9:16).
+Based on the post below, create EXACTLY {videos_count} different VIDEO SCRIPTS.
+Each video script MUST have EXACTLY 3 scenes.
+
+Return STRICT JSON (no markdown), schema:
+{{
+  "videos": [
+    {{
+      "scenes": [
+        "Scene 1 prompt (English, 1-2 sentences)",
+        "Scene 2 prompt (English, 1-2 sentences)",
+        "Scene 3 prompt (English, 1-2 sentences)"
+      ]
+    }}
+  ]
+}}
+
+Rules for every scene prompt:
+- English language
+- Vertical 9:16, cinematic, realistic, dynamic camera motion
+- NO TITLES / NO ON-SCREEN TEXT / NO SUBTITLES / NO CAPTIONS / NO OVERLAYS / NO WATERMARKS / NO LOGOS
+- If there is any dialogue/voiceover, it MUST be in Russian (no English speech)
+- Keep each scene prompt under 350 characters
+- Videos must be noticeably different from each other (different angles, locations, pacing)
+
+Post:
+Title: {normalized_title}
+Text: {normalized_text[:1200]}
+""".strip()
+
+    response = generator.get_ai_response(
+        prompt=prompt,
+        max_tokens=1200,
+        temperature=0.7,
+        response_format={"type": "json_object"},
+    )
+    parsed = _parse_json_object(response)
+    videos = (parsed or {}).get("videos")
+    scenarios: List[List[str]] = []
+    if isinstance(videos, list):
+        for item in videos:
+            if not isinstance(item, dict):
+                continue
+            scenes = item.get("scenes")
+            if not isinstance(scenes, list):
+                continue
+            cleaned = []
+            for scene in scenes:
+                if not isinstance(scene, str):
+                    continue
+                scene_text = scene.strip()
+                if scene_text:
+                    cleaned.append(scene_text)
+            if len(cleaned) == 3:
+                scenarios.append(cleaned)
+
+    if len(scenarios) >= videos_count:
+        return scenarios[:videos_count]
+
+    fallback_briefs = _extract_three_scene_briefs_from_text(
+        title=normalized_title,
+        text=normalized_text,
+        hook_title="",
+    )
+    while len(scenarios) < videos_count:
+        variant = [
+            (
+                f"{fallback_briefs[0]}. Vertical 9:16, cinematic, realistic, dynamic camera motion. "
+                "NO TITLES / NO ON-SCREEN TEXT / NO SUBTITLES / NO CAPTIONS. "
+                "If dialogue/voiceover appears, it MUST be in Russian."
+            ),
+            (
+                f"{fallback_briefs[1]}. Vertical 9:16, cinematic, realistic, dynamic camera motion. "
+                "NO TITLES / NO ON-SCREEN TEXT / NO SUBTITLES / NO CAPTIONS. "
+                "If dialogue/voiceover appears, it MUST be in Russian."
+            ),
+            (
+                f"{fallback_briefs[2]}. Vertical 9:16, cinematic, realistic, dynamic camera motion. "
+                "NO TITLES / NO ON-SCREEN TEXT / NO SUBTITLES / NO CAPTIONS. "
+                "If dialogue/voiceover appears, it MUST be in Russian."
+            ),
+        ]
+        scenarios.append(variant)
+
+    return scenarios[:videos_count]
+
+
+def _generate_three_scene_videos_for_single_post(
+    post: Post,
+    videos_per_post: int,
+    prompt_generator: AIContentGenerator,
+    language: str,
+    video_method: str,
+    video_options: Dict[str, Any],
+    max_attempts: int,
+    log_prefix: str = "CustomVideos",
+    source_title: Optional[str] = None,
+    source_text: Optional[str] = None,
+    source_hook_title: Optional[str] = None,
+) -> Dict[str, Any]:
+    stats = {
+        "saved": 0,
+        "attempts": 0,
+        "errors": [],
+    }
+    try:
+        videos_per_post_int = max(1, min(5, int(videos_per_post)))
+    except (TypeError, ValueError):
+        videos_per_post_int = 1
+
+    requested_method = (video_method or "veo").strip().lower() or "veo"
+    if requested_method != "veo":
+        logger.warning(
+            "[%s] Метод %s не поддерживается для 3-сценного custom видео; использую veo",
+            log_prefix,
+            requested_method,
+        )
+        requested_method = "veo"
+
+    max_attempts = max(1, min(2, int(max_attempts)))
+    parallel_scenes = 2 if requested_method == "veo" else 1
+
+    base_title = (source_title if source_title is not None else (post.title or "")).strip()
+    base_text = (source_text if source_text is not None else (post.text or "")).strip()
+    scenarios = _generate_custom_video_scenarios(
+        generator=prompt_generator,
+        post_title=base_title,
+        post_text=base_text,
+        videos_count=videos_per_post_int,
+    )
+
+    def _cleanup(paths: List[str]):
+        for path in paths:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+    def _generate_scene_clip(scene_idx: int, prompt_text: str) -> Dict[str, Any]:
+        prompt_text = (prompt_text or "").strip()
+        if not prompt_text:
+            return {
+                "success": False,
+                "scene_idx": scene_idx,
+                "error": "empty_prompt",
+                "video_path": None,
+                "attempts": 0,
+                "cleanup_paths": [],
+            }
+
+        attempts = 0
+        cleanup_paths: List[str] = []
+        last_error = None
+
+        for attempt_no in range(1, max_attempts + 1):
+            attempts += 1
+            try:
+                generator = AIContentGenerator()
+            except ValueError as exc:
+                last_error = str(exc)
+                break
+
+            logger.info(
+                "[%s] Пост %s: видео сцена %s/3 (попытка %s/%s)",
+                log_prefix,
+                post.id,
+                scene_idx,
+                attempt_no,
+                max_attempts,
+            )
+            result = generator.generate_video_from_text(
+                prompt=prompt_text,
+                method=requested_method,
+                **video_options,
+            )
+            cleanup_paths.extend(result.get("cleanup_paths") or [])
+
+            video_path = result.get("video_path")
+            if result.get("success") and video_path and os.path.exists(video_path):
+                return {
+                    "success": True,
+                    "scene_idx": scene_idx,
+                    "error": None,
+                    "video_path": video_path,
+                    "attempts": attempts,
+                    "cleanup_paths": cleanup_paths,
+                }
+            last_error = result.get("error") or "video_generation_failed"
+
+        return {
+            "success": False,
+            "scene_idx": scene_idx,
+            "error": last_error or "video_generation_failed",
+            "video_path": None,
+            "attempts": attempts,
+            "cleanup_paths": cleanup_paths,
+        }
+
+    for video_idx in range(1, videos_per_post_int + 1):
+        scenes_for_video = scenarios[video_idx - 1] if len(scenarios) >= video_idx else None
+        if not scenes_for_video or len(scenes_for_video) != 3:
+            stats["errors"].append(
+                {
+                    "post_id": post.id,
+                    "video_index": video_idx,
+                    "error": "scenario_missing",
+                    "prompt_start": (base_title or "")[:120],
+                }
+            )
+            continue
+
+        clip_paths: List[str] = ["", "", ""]
+        cleanup_paths: List[str] = []
+        clip_errors: List[str] = []
+
+        max_workers = min(parallel_scenes, 3)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_generate_scene_clip, scene_idx, prompt_text): scene_idx
+                for scene_idx, prompt_text in enumerate(scenes_for_video, start=1)
+            }
+
+            for future in as_completed(futures):
+                try:
+                    scene_result = future.result()
+                except Exception as exc:
+                    scene_idx = futures[future]
+                    scene_result = {
+                        "success": False,
+                        "scene_idx": scene_idx,
+                        "error": str(exc),
+                        "video_path": None,
+                        "attempts": 0,
+                        "cleanup_paths": [],
+                    }
+
+                stats["attempts"] += int(scene_result.get("attempts") or 0)
+                cleanup_paths.extend(scene_result.get("cleanup_paths") or [])
+
+                scene_idx = int(scene_result.get("scene_idx") or 0)
+                if not scene_result.get("success"):
+                    clip_errors.append(f"scene_{scene_idx}_failed:{scene_result.get('error') or 'failed'}")
+                    continue
+
+                video_path = scene_result.get("video_path")
+                if video_path and os.path.exists(video_path) and 1 <= scene_idx <= 3:
+                    clip_paths[scene_idx - 1] = video_path
+                else:
+                    clip_errors.append(f"scene_{scene_idx}_failed:missing_video_path")
+
+        if not all(clip_paths):
+            _cleanup([p for p in clip_paths if p] + cleanup_paths)
+            stats["errors"].append(
+                {
+                    "post_id": post.id,
+                    "video_index": video_idx,
+                    "error": ";".join(clip_errors) or "scene_generation_failed",
+                    "prompt_start": (base_title or "")[:120],
+                }
+            )
+            continue
+
+        concat_result = _concat_three_videos_to_one(clip_paths)
+        if not concat_result.get("success"):
+            _cleanup(clip_paths + cleanup_paths + (concat_result.get("cleanup_paths") or []))
+            stats["errors"].append(
+                {
+                    "post_id": post.id,
+                    "video_index": video_idx,
+                    "error": concat_result.get("error") or "concat_failed",
+                    "prompt_start": (base_title or "")[:120],
+                }
+            )
+            continue
+
+        final_path = concat_result["video_path"]
+        try:
+            filename = f"post_{post.id}_{uuid.uuid4().hex[:8]}.mp4"
+            with open(final_path, "rb") as video_file:
+                post_video = PostVideo(
+                    post=post,
+                    order=post.videos.count(),
+                    caption=(post.title or "")[:255],
+                )
+                post_video.video.save(filename, File(video_file), save=True)
+            stats["saved"] += 1
+        except Exception as exc:
+            stats["errors"].append(
+                {
+                    "post_id": post.id,
+                    "video_index": video_idx,
+                    "error": str(exc),
+                    "prompt_start": (base_title or "")[:120],
+                }
+            )
+        finally:
+            _cleanup(clip_paths + cleanup_paths + [final_path] + (concat_result.get("cleanup_paths") or []))
+
+    return stats
+
+
+@shared_task(queue="media")
+def generate_posts_with_videos_from_custom_task(
+    client_id: int,
+    template_id: int,
+    posts_count: int,
+    task: str,
+    videos_per_post: int,
+    created_by_id: Optional[int] = None,
+):
+    """Сгенерировать серию постов по задаче и создать видео (каждое видео из 3 сцен)."""
+    try:
+        client = Client.objects.get(id=client_id)
+    except Client.DoesNotExist:
+        logger.error("Client %s не найден для custom+video генератора", client_id)
+        return {"success": False, "error": "client_not_found"}
+
+    task_text = (task or "").strip()
+    if not task_text:
+        return {"success": False, "error": "task_required"}
+
+    try:
+        template = ContentTemplate.get_for_client_or_system(client, template_id)
+    except ContentTemplate.DoesNotExist:
+        return {"success": False, "error": "template_not_found"}
+
+    try:
+        total_posts = max(1, int(posts_count))
+    except (TypeError, ValueError):
+        total_posts = 1
+    total_posts = max(1, min(99, total_posts))
+
+    try:
+        videos_per_post_int = max(1, min(5, int(videos_per_post)))
+    except (TypeError, ValueError):
+        videos_per_post_int = 1
+
+    template_config = {
+        "tone": template.tone,
+        "length": template.length,
+        "language": template.language,
+        "type": template.type,
+        "seo_prompt_template": template.seo_prompt_template,
+        "trend_prompt_template": template.trend_prompt_template,
+        "prompt_type": "trend",
+        "additional_instructions": template.additional_instructions,
+        "include_hashtags": template.include_hashtags,
+        "max_hashtags": template.max_hashtags,
+        "brand": client.get_brand_display_name(),
+        "avatar": client.avatar or "",
+        "pains": client.pains or "",
+        "desires": client.desires or "",
+        "objections": client.objections or "",
+        "books": client.expert_books or "",
+    }
+
+    topic_name = client.name or client.slug
+    wordstat_phrases = _select_wordstat_phrases(client)
+
+    try:
+        generator = AIContentGenerator()
+    except ValueError as exc:
+        logger.error("Ошибка инициализации AI генератора (custom+video): %s", exc)
+        return {"success": False, "error": "ai_generator_error"}
+
+    _configure_custom_generator_model(generator)
+
+    created_posts: List[Post] = []
+    errors: List[Dict[str, str]] = []
+
+    for index in range(1, total_posts + 1):
+        trend_description = (
+            f"ЗАДАЧА:\n{task_text}\n\n"
+            f"Сгенерируй уникальный вариант №{index} из {total_posts}. "
+            "Не повторяй структуру и формулировки прошлых вариантов."
+        )
+
+        result = generator.generate_post_text(
+            trend_title=task_text,
+            trend_description=trend_description,
+            trend_url="",
+            topic_name=topic_name,
+            template_config=template_config,
+            seo_keywords=None,
+            wordstat_phrases=wordstat_phrases,
+        )
+
+        if not result or not result.get("success"):
+            error_message = (result or {}).get("error", "Неизвестная ошибка AI")
+            errors.append({"index": str(index), "error": str(error_message)})
+            continue
+
+        result = _apply_wordstat_refinement(
+            generator=generator,
+            base_result=result,
+            phrases=wordstat_phrases,
+            language=getattr(template, "language", "ru"),
+            log_prefix="custom-video-text",
+        )
+
+        hashtags = result.get("hashtags", [])
+        tags = []
+        if isinstance(hashtags, list):
+            tags.extend(hashtags)
+        tags.extend(["custom", "video"])
+
+        seen = set()
+        deduped_tags = []
+        for tag in tags:
+            if isinstance(tag, str):
+                normalized = tag.strip()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    deduped_tags.append(normalized)
+
+        wordstat_phrases_used = result.get("wordstat_phrases_used") or wordstat_phrases or []
+        hook_title = result.get("hook_title", "")
+        post = Post.objects.create(
+            client=client,
+            template=template,
+            title=result["title"],
+            hook_title=hook_title,
+            text=result["text"],
+            status="draft",
+            tags=deduped_tags,
+            source_links=[],
+            generated_by="custom-generator",
+            created_by_id=created_by_id,
+            wordstat_phrases_used=wordstat_phrases_used,
+        )
+        _increment_wordstat_usage(client, wordstat_phrases_used)
+        created_posts.append(post)
+
+    if not created_posts:
+        return {
+            "success": False,
+            "created_posts": [],
+            "requested": total_posts,
+            "errors": errors,
+        }
+
+    try:
+        prompt_generator = AIContentGenerator()
+    except ValueError as exc:
+        logger.error("Ошибка инициализации AI генератора (custom+video prompt): %s", exc)
+        return {
+            "success": True,
+            "created_posts": [p.id for p in created_posts],
+            "requested": total_posts,
+            "errors": errors,
+            "videos": {"success": False, "error": "ai_generator_error"},
+        }
+
+    _configure_custom_generator_model(prompt_generator)
+
+    video_method = (
+        os.getenv("SEO_VIDEO_METHOD")
+        or os.getenv("VIDEO_GENERATOR_METHOD")
+        or "veo"
+    ).lower()
+    video_options: Dict[str, Any] = {}
+    bot_username = os.getenv("VEO_BOT_USERNAME")
+    if bot_username:
+        video_options["bot_username"] = bot_username
+    session_path = (
+        os.getenv("VEO_SESSION_PATH")
+        or os.getenv("VEO_SESSION_FILE")
+        or os.getenv("TELEGRAM_SESSION_PATH")
+    )
+    if session_path:
+        video_options["session_path"] = session_path
+    session_name = os.getenv("VEO_SESSION_NAME")
+    if session_name:
+        video_options["session_name"] = session_name
+    # Для custom multi-prompt (3 сцены) режим /video может "подвисать" при параллельных запросах.
+    # В best-effort режиме, если меню не ответило, всё равно отправляем промпт (часто бот уже в VEO режиме).
+    video_options.setdefault("mode_selection", "best_effort")
+    max_attempts_per_scene = max(1, int(os.getenv("VEO_VIDEO_MAX_ATTEMPTS", "2")))
+
+    video_saved = 0
+    video_attempts = 0
+    video_errors: List[Dict[str, Any]] = []
+
+    for post in created_posts:
+        stats = _generate_three_scene_videos_for_single_post(
+            post=post,
+            videos_per_post=videos_per_post_int,
+            prompt_generator=prompt_generator,
+            language=getattr(template, "language", "ru"),
+            video_method=video_method,
+            video_options=video_options,
+            max_attempts=max_attempts_per_scene,
+            log_prefix=f"CUSTOM {client_id}",
+        )
+        video_saved += stats["saved"]
+        video_attempts += stats["attempts"]
+        video_errors.extend(stats["errors"])
+
+    return {
+        "success": True,
+        "created_posts": [p.id for p in created_posts],
+        "requested": total_posts,
+        "errors": errors,
+        "videos": {
+            "videos_per_post": videos_per_post_int,
+            "saved": video_saved,
+            "attempts": video_attempts,
+            "errors": video_errors,
+        },
+    }
+
+
+@shared_task(queue="media")
+def generate_videos_from_trend_item_description(
+    trend_item_id: int,
+    videos_per_post: int = 1,
+    created_by_id: Optional[int] = None,
+    force_new_post: bool = False,
+):
+    """Сгенерировать видео (3 сцены) по description тренда и сохранить в связанном посте."""
+    try:
+        trend = TrendItem.objects.select_related("client", "used_for_post", "topic").get(id=trend_item_id)
+    except TrendItem.DoesNotExist:
+        logger.error("TrendItem %s не найден для custom gen видео", trend_item_id)
+        return {"success": False, "error": "trend_not_found"}
+
+    client = trend.client
+    if not client:
+        return {"success": False, "error": "client_required"}
+
+    source_title = (trend.title or "").strip()
+    source_text = (trend.description or "").strip()
+    if not source_title and not source_text:
+        return {"success": False, "error": "no_source_text"}
+
+    previous_post_id = getattr(trend, "used_for_post_id", None)
+    post = None if force_new_post else trend.used_for_post
+    created_post = False
+    if not post:
+        template = ContentTemplate.get_default_for_client(client)
+
+        def _dedupe_tags(values: List[str]) -> List[str]:
+            seen = set()
+            result = []
+            for value in values:
+                if isinstance(value, str):
+                    normalized = value.strip()
+                    if normalized and normalized not in seen:
+                        seen.add(normalized)
+                        result.append(normalized)
+            return result
+
+        topic_name = ""
+        try:
+            topic_name = (trend.topic.name or "").strip()
+        except Exception:
+            topic_name = ""
+        if not topic_name:
+            topic_name = client.name or client.slug
+
+        template_config = {
+            "tone": getattr(template, "tone", "professional"),
+            "length": getattr(template, "length", 1200),
+            "language": getattr(template, "language", "ru"),
+            "type": getattr(template, "type", "selling"),
+            "seo_prompt_template": getattr(template, "seo_prompt_template", ""),
+            "trend_prompt_template": getattr(template, "trend_prompt_template", ""),
+            "prompt_type": "trend",
+            "additional_instructions": getattr(template, "additional_instructions", ""),
+            "include_hashtags": getattr(template, "include_hashtags", True),
+            "max_hashtags": getattr(template, "max_hashtags", 5),
+            "brand": client.get_brand_display_name(),
+            "avatar": client.avatar or "",
+            "pains": client.pains or "",
+            "desires": client.desires or "",
+            "objections": client.objections or "",
+            "books": client.expert_books or "",
+        }
+
+        seo_keywords = _get_latest_seo_keywords_for_client(client)
+        wordstat_phrases = _select_wordstat_phrases(client)
+
+        post_title = (source_title or "Trend")[:255]
+        post_text = source_text or source_title or ""
+        hook_title = ""
+        tags = ["trend", "custom", "video"]
+        wordstat_phrases_used: List[str] = []
+
+        try:
+            post_generator = AIContentGenerator()
+        except ValueError as exc:
+            logger.warning("AI генератор недоступен (trend->post), создаю placeholder пост: %s", exc)
+        else:
+            result = post_generator.generate_post_text(
+                trend_title=source_title or "Trend",
+                trend_description=source_text or source_title or "Trend description",
+                trend_url=trend.url or "",
+                topic_name=topic_name,
+                template_config=template_config,
+                seo_keywords=seo_keywords,
+                wordstat_phrases=wordstat_phrases,
+            )
+            if result and result.get("success"):
+                result = _apply_wordstat_refinement(
+                    generator=post_generator,
+                    base_result=result,
+                    phrases=wordstat_phrases,
+                    language=getattr(template, "language", "ru"),
+                    log_prefix="trend-custom-video",
+                )
+
+                post_title = (result.get("title") or post_title)[:255]
+                hook_title = result.get("hook_title") or ""
+                post_text = result.get("text") or post_text
+                hashtags = result.get("hashtags") or []
+                tags = []
+                if isinstance(hashtags, list):
+                    tags.extend([t for t in hashtags if isinstance(t, str)])
+                tags.extend(["trend", "custom", "video"])
+                tags = _dedupe_tags(tags)
+                wordstat_phrases_used = result.get("wordstat_phrases_used") or wordstat_phrases or []
+            else:
+                logger.warning(
+                    "Не удалось сгенерировать текст поста из тренда %s для custom video: %s",
+                    trend_item_id,
+                    (result or {}).get("error", "post_generation_failed"),
+                )
+
+        try:
+            post = Post.objects.create(
+                client=client,
+                template=template,
+                title=post_title,
+                hook_title=hook_title,
+                text=post_text,
+                status="draft",
+                tags=tags,
+                source_links=[trend.url] if trend.url else [],
+                generated_by="trenditem-custom-video",
+                created_by_id=created_by_id,
+                wordstat_phrases_used=wordstat_phrases_used,
+            )
+            if wordstat_phrases_used:
+                _increment_wordstat_usage(client, wordstat_phrases_used)
+        except Exception as exc:
+            logger.error("Не удалось сохранить пост из тренда %s: %s", trend_item_id, exc, exc_info=True)
+            return {"success": False, "error": "post_save_failed"}
+
+        trend.used_for_post = post
+        trend.save(update_fields=["used_for_post"])
+        created_post = True
+
+    try:
+        prompt_generator = AIContentGenerator()
+    except ValueError as exc:
+        logger.error("Ошибка инициализации AI генератора (trend video): %s", exc)
+        return {"success": True, "post_id": post.id, "created_post": created_post, "videos": {"success": False}}
+
+    try:
+        videos_per_post_int = max(1, min(5, int(videos_per_post)))
+    except (TypeError, ValueError):
+        videos_per_post_int = 1
+
+    video_method = (
+        os.getenv("SEO_VIDEO_METHOD")
+        or os.getenv("VIDEO_GENERATOR_METHOD")
+        or "veo"
+    ).lower()
+    video_options: Dict[str, Any] = {}
+    bot_username = os.getenv("VEO_BOT_USERNAME")
+    if bot_username:
+        video_options["bot_username"] = bot_username
+    session_path = (
+        os.getenv("VEO_SESSION_PATH")
+        or os.getenv("VEO_SESSION_FILE")
+        or os.getenv("TELEGRAM_SESSION_PATH")
+    )
+    if session_path:
+        video_options["session_path"] = session_path
+    session_name = os.getenv("VEO_SESSION_NAME")
+    if session_name:
+        video_options["session_name"] = session_name
+    max_attempts_per_scene = max(1, int(os.getenv("VEO_VIDEO_MAX_ATTEMPTS", "2")))
+
+    stats = _generate_three_scene_videos_for_single_post(
+        post=post,
+        videos_per_post=videos_per_post_int,
+        prompt_generator=prompt_generator,
+        language=getattr(getattr(post, "template", None), "language", "ru"),
+        video_method=video_method,
+        video_options=video_options,
+        max_attempts=max_attempts_per_scene,
+        log_prefix=f"TREND {trend_item_id}",
+        source_title=source_title or (post.title or ""),
+        source_text=source_text or (post.text or ""),
+        source_hook_title="",
+    )
+
+    return {
+        "success": True,
+        "trend_item_id": trend_item_id,
+        "post_id": post.id,
+        "previous_post_id": previous_post_id,
+        "created_post": created_post,
+        "videos_per_post": videos_per_post_int,
+        "saved": stats["saved"],
+        "attempts": stats["attempts"],
+        "errors": stats["errors"],
     }
 
 

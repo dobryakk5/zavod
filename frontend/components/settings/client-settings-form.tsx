@@ -38,11 +38,6 @@ const settingsFormSchema = z.object({
   desires: z.string().optional(),
   objections: z.string().optional(),
   expert_books: z.string().optional(),
-  telegram_source_channels: z.string().optional(),
-  rss_source_feeds: z.string().optional(),
-  youtube_source_channels: z.string().optional(),
-  instagram_source_accounts: z.string().optional(),
-  vkontakte_source_groups: z.string().optional(),
 });
 
 type SettingsFormValues = z.infer<typeof settingsFormSchema>;
@@ -64,11 +59,6 @@ export function ClientSettingsForm() {
       desires: '',
       objections: '',
       expert_books: '',
-      telegram_source_channels: '',
-      rss_source_feeds: '',
-      youtube_source_channels: '',
-      instagram_source_accounts: '',
-      vkontakte_source_groups: '',
     },
   });
 
@@ -88,11 +78,6 @@ export function ClientSettingsForm() {
         desires: data.desires || '',
         objections: data.objections || '',
         expert_books: data.expert_books || '',
-        telegram_source_channels: data.telegram_source_channels || '',
-        rss_source_feeds: data.rss_source_feeds || '',
-        youtube_source_channels: data.youtube_source_channels || '',
-        instagram_source_accounts: data.instagram_source_accounts || '',
-        vkontakte_source_groups: data.vkontakte_source_groups || '',
       });
     } catch (error) {
       toast.error('Не удалось загрузить настройки');
@@ -341,107 +326,6 @@ export function ClientSettingsForm() {
             </FormItem>
           )}
         />
-
-        <div className="space-y-4 rounded-lg border border-slate-200 p-4">
-          <div>
-            <p className="text-base font-semibold">Источники контента </p>
-            <p className="text-sm text-muted-foreground">
-              Тут каналы новостей и конкурентов. Добавьте ссылки или идентификаторы через запятую (можно переносить на новую строку).
-            </p>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="telegram_source_channels"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Telegram каналы</FormLabel>
-                  <FormControl>
-                    <CustomTextarea
-                      placeholder="@rian_ru, @tjournal"
-                      className="min-h-[80px]"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>Указывайте @username или ссылку, через запятую.</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="rss_source_feeds"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>RSS / Atom фиды</FormLabel>
-                  <FormControl>
-                    <CustomTextarea
-                      placeholder="https://lenta.ru/rss, https://example.com/feed.xml"
-                      className="min-h-[80px]"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>Полные URL фидов.</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="youtube_source_channels"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>YouTube каналы</FormLabel>
-                  <FormControl>
-                    <CustomTextarea
-                      placeholder="UC_x5XG1OV2P6uZZ5FSM9Ttw, @channel_handle"
-                      className="min-h-[80px]"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>ID канала или @handle, через запятую.</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="instagram_source_accounts"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Instagram аккаунты</FormLabel>
-                  <FormControl>
-                    <CustomTextarea
-                      placeholder="username1, username2"
-                      className="min-h-[80px]"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>Список usernames.</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="vkontakte_source_groups"
-              render={({ field }) => (
-                <FormItem className="md:col-span-2">
-                  <FormLabel>VK сообщества</FormLabel>
-                  <FormControl>
-                    <CustomTextarea
-                      placeholder="apiclub, https://vk.com/thecode"
-                      className="min-h-[80px]"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>screen name или ссылка, через запятую.</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-        </div>
 
         <Button type="submit" disabled={loading}>
           {loading ? 'Сохранение...' : 'Сохранить изменения'}

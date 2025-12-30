@@ -1,0 +1,947 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
+
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { CustomTextarea } from '@/components/ui/custom-textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { clientProductsApi } from '@/lib/api/clientProducts';
+import { productTypesApi } from '@/lib/api/productTypes';
+import { useRole } from '@/lib/hooks';
+import type { ClientProduct, ProductStructure, ProductType } from '@/lib/types';
+
+type ProductRouteParams = { id: string };
+type ProductRouteParamsInput = ProductRouteParams | Promise<ProductRouteParams> | undefined;
+
+interface ProductPageProps {
+  params?: Promise<ProductRouteParams>;
+}
+
+type ProductPackage = { name: string; description?: string | null; price?: number | null };
+
+const normalizePackages = (raw: ClientProduct['packages']): ProductPackage[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      const name = typeof item?.name === 'string' ? item.name : '';
+      const description = typeof item?.description === 'string' ? item.description : '';
+      const rawPrice = (item as { price?: unknown } | null)?.price;
+      const price =
+        typeof rawPrice === 'number'
+          ? rawPrice
+          : typeof rawPrice === 'string'
+            ? Number.parseFloat(rawPrice.replace(',', '.'))
+            : null;
+      return { name, description, price: Number.isFinite(price) ? price : null };
+    })
+    .filter((pkg) => pkg.name.trim().length > 0);
+};
+
+type AudienceRow = { parameter: string; value: string };
+type TransformationRow = { was: string; became: string };
+type MetricRow = { metric: string; promise: string };
+type MethodRow = { component: string; template: string };
+type LessonFormatRow = { stage: string; percent: number | null };
+type ProgramModuleRow = { module: string; result: string };
+
+const toStr = (value: unknown) => (typeof value === 'string' ? value : value == null ? '' : String(value));
+
+const toNumberOrNull = (value: unknown) => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value.replace(',', '.'));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure => {
+  const base = (raw ?? {}) as Record<string, unknown>;
+  const audience = Array.isArray(base.audience)
+    ? (base.audience as Array<Record<string, unknown>>).map((row) => ({
+        parameter: toStr(row?.parameter),
+        value: toStr(row?.value)
+      }))
+    : [];
+  const transformation = Array.isArray(base.transformation)
+    ? (base.transformation as Array<Record<string, unknown>>).map((row) => ({
+        was: toStr(row?.was),
+        became: toStr(row?.became)
+      }))
+    : [];
+  const metrics = Array.isArray(base.metrics)
+    ? (base.metrics as Array<Record<string, unknown>>).map((row) => ({
+        metric: toStr(row?.metric),
+        promise: toStr(row?.promise)
+      }))
+    : [];
+  const method = Array.isArray(base.method)
+    ? (base.method as Array<Record<string, unknown>>).map((row) => ({
+        component: toStr(row?.component),
+        template: toStr(row?.template)
+      }))
+    : [];
+  const lesson_format = Array.isArray(base.lesson_format)
+    ? (base.lesson_format as Array<Record<string, unknown>>).map((row) => ({
+        stage: toStr(row?.stage),
+        percent: toNumberOrNull(row?.percent)
+      }))
+    : [];
+  const program_modules = Array.isArray(base.program_modules)
+    ? (base.program_modules as Array<Record<string, unknown>>).map((row) => ({
+        module: toStr(row?.module),
+        result: toStr(row?.result)
+      }))
+    : [];
+  const packaging = (base.packaging ?? {}) as Record<string, unknown>;
+
+  return {
+    audience,
+    transformation,
+    metrics,
+    method,
+    lesson_format,
+    program_modules,
+    packaging: {
+      name: packaging?.name == null ? '' : toStr(packaging?.name),
+      slogan: packaging?.slogan == null ? '' : toStr(packaging?.slogan),
+      promise: packaging?.promise == null ? '' : toStr(packaging?.promise)
+    },
+  };
+};
+
+export default function ProductPage({ params }: ProductPageProps) {
+  const router = useRouter();
+  const { canEdit } = useRole();
+
+  const [productId, setProductId] = useState<number | null>(null);
+  const [product, setProduct] = useState<ClientProduct | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [productName, setProductName] = useState('');
+  const [productTypeId, setProductTypeId] = useState<number | null>(null);
+  const [shortDescription, setShortDescription] = useState('');
+  const [packages, setPackages] = useState<ProductPackage[]>([]);
+  const [types, setTypes] = useState<ProductType[]>([]);
+  const [audience, setAudience] = useState<AudienceRow[]>([]);
+  const [transformation, setTransformation] = useState<TransformationRow[]>([]);
+  const [metrics, setMetrics] = useState<MetricRow[]>([]);
+  const [method, setMethod] = useState<MethodRow[]>([]);
+  const [lessonFormat, setLessonFormat] = useState<LessonFormatRow[]>([]);
+  const [programModules, setProgramModules] = useState<ProgramModuleRow[]>([]);
+  const [packagingName, setPackagingName] = useState('');
+  const [packagingSlogan, setPackagingSlogan] = useState('');
+  const [packagingPromise, setPackagingPromise] = useState('');
+
+  useEffect(() => {
+    let isActive = true;
+    const paramsInput = params as ProductRouteParamsInput;
+
+    Promise.resolve(paramsInput)
+      .then((resolved) => {
+        if (!isActive) return;
+        if (!resolved) {
+          setProductId(null);
+          return;
+        }
+        const parsedId = Number.parseInt(resolved.id, 10);
+        setProductId(Number.isNaN(parsedId) ? null : parsedId);
+      })
+      .catch(() => {
+        if (isActive) setProductId(null);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [params]);
+
+  const loadProduct = async () => {
+    if (productId === null) return;
+    setLoading(true);
+    try {
+      const [data, typeData] = await Promise.all([clientProductsApi.detail(productId), productTypesApi.list()]);
+      setProduct(data);
+      setProductName(data.name ?? '');
+      setProductTypeId(data.product_type_id ?? null);
+      setShortDescription(data.short_description ?? '');
+      setPackages(normalizePackages(data.packages));
+      setTypes(typeData);
+      const structure = normalizeStructure(data.structure);
+      setAudience(structure.audience ?? []);
+      setTransformation(structure.transformation ?? []);
+      setMetrics(structure.metrics ?? []);
+      setMethod(structure.method ?? []);
+      setLessonFormat(structure.lesson_format ?? []);
+      setProgramModules(structure.program_modules ?? []);
+      setPackagingName(structure.packaging?.name ?? '');
+      setPackagingSlogan(structure.packaging?.slogan ?? '');
+      setPackagingPromise(structure.packaging?.promise ?? '');
+    } catch (err) {
+      console.error('Failed to load product', err);
+      toast.error('Не удалось загрузить продукт');
+      setProduct(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (productId !== null) {
+      void loadProduct();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productId]);
+
+  const packagesCount = useMemo(() => packages.length, [packages]);
+
+  const handleAddAudienceRow = () => setAudience((prev) => [...prev, { parameter: '', value: '' }]);
+  const handleAddTransformationRow = () => setTransformation((prev) => [...prev, { was: '', became: '' }]);
+  const handleAddMetricRow = () => setMetrics((prev) => [...prev, { metric: '', promise: '' }]);
+  const handleAddMethodRow = () => setMethod((prev) => [...prev, { component: '', template: '' }]);
+  const handleAddLessonFormatRow = () => setLessonFormat((prev) => [...prev, { stage: '', percent: null }]);
+  const handleAddProgramModuleRow = () => setProgramModules((prev) => [...prev, { module: '', result: '' }]);
+
+  const handleAddPackage = () => {
+    setPackages((prev) => [...prev, { name: '', description: '', price: null }]);
+  };
+
+  const handleDeletePackage = (index: number) => {
+    setPackages((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSave = async () => {
+    if (!canEdit || productId === null) return;
+    const nextName = productName.trim();
+    if (!nextName) return;
+
+    const normalizedPackages = packages
+      .map((pkg) => ({
+        name: pkg.name.trim(),
+        description: (pkg.description ?? '').trim() || null,
+        price: typeof pkg.price === 'number' && Number.isFinite(pkg.price) ? pkg.price : null
+      }))
+      .filter((pkg) => pkg.name.length > 0);
+
+    const structure: ProductStructure = {
+      audience: audience
+        .map((row) => ({ parameter: row.parameter.trim(), value: row.value.trim() }))
+        .filter((row) => row.parameter.length > 0 || row.value.length > 0),
+      transformation: transformation
+        .map((row) => ({ was: row.was.trim(), became: row.became.trim() }))
+        .filter((row) => row.was.length > 0 || row.became.length > 0),
+      metrics: metrics
+        .map((row) => ({ metric: row.metric.trim(), promise: row.promise.trim() }))
+        .filter((row) => row.metric.length > 0 || row.promise.length > 0),
+      method: method
+        .map((row) => ({ component: row.component.trim(), template: row.template.trim() }))
+        .filter((row) => row.component.length > 0 || row.template.length > 0),
+      lesson_format: lessonFormat
+        .map((row) => ({
+          stage: row.stage.trim(),
+          percent: typeof row.percent === 'number' && Number.isFinite(row.percent) ? row.percent : null
+        }))
+        .filter((row) => row.stage.length > 0 || row.percent !== null),
+      program_modules: programModules
+        .map((row) => ({ module: row.module.trim(), result: row.result.trim() }))
+        .filter((row) => row.module.length > 0 || row.result.length > 0),
+      packaging: {
+        name: packagingName.trim() ? packagingName.trim() : null,
+        slogan: packagingSlogan.trim() ? packagingSlogan.trim() : null,
+        promise: packagingPromise.trim() ? packagingPromise.trim() : null
+      },
+    };
+
+    setSaving(true);
+    try {
+      const updated = await clientProductsApi.update(productId, {
+        name: nextName,
+        product_type_id: productTypeId,
+        short_description: shortDescription.trim() ? shortDescription.trim() : null,
+        packages: normalizedPackages,
+        structure: structure as unknown as Record<string, unknown>
+      });
+      setProduct(updated);
+      setPackages(normalizePackages(updated.packages));
+      const updatedStructure = normalizeStructure(updated.structure);
+      setAudience(updatedStructure.audience ?? []);
+      setTransformation(updatedStructure.transformation ?? []);
+      setMetrics(updatedStructure.metrics ?? []);
+      setMethod(updatedStructure.method ?? []);
+      setLessonFormat(updatedStructure.lesson_format ?? []);
+      setProgramModules(updatedStructure.program_modules ?? []);
+      setPackagingName(updatedStructure.packaging?.name ?? '');
+      setPackagingSlogan(updatedStructure.packaging?.slogan ?? '');
+      setPackagingPromise(updatedStructure.packaging?.promise ?? '');
+      toast.success('Продукт сохранён');
+    } catch (err) {
+      console.error('Failed to update product', err);
+      toast.error('Не удалось сохранить продукт');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!canEdit || productId === null) return;
+    if (!confirm('Удалить продукт? Это действие нельзя отменить.')) return;
+    try {
+      await clientProductsApi.delete(productId);
+      toast.success('Продукт удалён');
+      router.push('/products');
+    } catch (err) {
+      console.error('Failed to delete product', err);
+      toast.error('Не удалось удалить продукт');
+    }
+  };
+
+  if (loading && !product) {
+    return <div className="text-muted-foreground">Загрузка…</div>;
+  }
+
+  if (!product) {
+    return (
+      <div className="space-y-4">
+        <Link href="/products">
+          <Button variant="ghost" size="sm">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Назад к продуктам
+          </Button>
+        </Link>
+        <div className="rounded-lg border px-4 py-6 text-muted-foreground">
+          Продукт не найден или недоступен.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <Link href="/products">
+          <Button variant="ghost" size="sm">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Назад к продуктам
+          </Button>
+        </Link>
+
+        {canEdit && (
+          <Button variant="destructive" size="sm" onClick={handleDelete}>
+            <Trash2 className="h-4 w-4 mr-2" />
+            Удалить
+          </Button>
+        )}
+      </div>
+
+      <div className="space-y-1">
+        <h1 className="text-3xl font-bold">Продукт</h1>
+        <p className="text-gray-500">
+          Структура продукта и пакеты ({packagesCount}).
+        </p>
+      </div>
+
+      <div className="rounded-xl border bg-card/70 p-4 shadow-sm space-y-4">
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Название продукта</div>
+          <Input value={productName} onChange={(e) => setProductName(e.target.value)} disabled={!canEdit || saving} />
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Тип продукта</div>
+          <Select
+            value={productTypeId == null ? 'none' : String(productTypeId)}
+            onValueChange={(value) => setProductTypeId(value === 'none' ? null : Number(value))}
+            disabled={!canEdit || saving}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Выберите тип продукта" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">— Без типа —</SelectItem>
+              {types.map((t) => (
+                <SelectItem key={t.id} value={String(t.id)}>
+                  {t.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="text-xs text-muted-foreground">
+            Типы редактируются во вкладке «Типы продуктов».
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Краткое описание</div>
+          <CustomTextarea
+            value={shortDescription}
+            onChange={(e) => setShortDescription(e.target.value)}
+            className="min-h-[110px]"
+            disabled={!canEdit || saving}
+          />
+        </div>
+      </div>
+
+      <div className="rounded-xl border bg-card/70 p-4 shadow-sm space-y-6">
+        <div className="space-y-1">
+          <div className="text-sm font-medium">Структура продукта</div>
+          <div className="text-xs text-muted-foreground">Заполните блоки по шаблону (ЦА → трансформация → метрики → метод → формат → программа → упаковка).</div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium">1. ЦА (кому)</div>
+            {canEdit && (
+              <Button type="button" variant="secondary" size="sm" onClick={handleAddAudienceRow} disabled={saving}>
+                <Plus className="h-4 w-4 mr-2" />
+                Добавить параметр
+              </Button>
+            )}
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Параметр</TableHead>
+                <TableHead>Пример / значение</TableHead>
+                <TableHead className="w-[56px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {audience.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-muted-foreground">
+                    Добавьте строки (Возраст, Уровень, Боль, Страх, Цель…)
+                  </TableCell>
+                </TableRow>
+              ) : (
+                audience.map((row, index) => (
+                  <TableRow key={index}>
+                    <TableCell>
+                      <Input
+                        value={row.parameter}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setAudience((prev) => prev.map((r, i) => (i === index ? { ...r, parameter: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        value={row.value}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setAudience((prev) => prev.map((r, i) => (i === index ? { ...r, value: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {canEdit ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => setAudience((prev) => prev.filter((_, i) => i !== index))}
+                          disabled={saving}
+                          aria-label="Удалить строку"
+                          title="Удалить строку"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium">2. Трансформация (из → в)</div>
+            {canEdit && (
+              <Button type="button" variant="secondary" size="sm" onClick={handleAddTransformationRow} disabled={saving}>
+                <Plus className="h-4 w-4 mr-2" />
+                Добавить пару
+              </Button>
+            )}
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Было</TableHead>
+                <TableHead>Стало</TableHead>
+                <TableHead className="w-[56px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {transformation.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-muted-foreground">
+                    Добавьте пары «было → стало»
+                  </TableCell>
+                </TableRow>
+              ) : (
+                transformation.map((row, index) => (
+                  <TableRow key={index}>
+                    <TableCell>
+                      <Input
+                        value={row.was}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setTransformation((prev) => prev.map((r, i) => (i === index ? { ...r, was: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        value={row.became}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setTransformation((prev) => prev.map((r, i) => (i === index ? { ...r, became: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {canEdit ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => setTransformation((prev) => prev.filter((_, i) => i !== index))}
+                          disabled={saving}
+                          aria-label="Удалить строку"
+                          title="Удалить строку"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium">3. Результат в цифрах</div>
+            {canEdit && (
+              <Button type="button" variant="secondary" size="sm" onClick={handleAddMetricRow} disabled={saving}>
+                <Plus className="h-4 w-4 mr-2" />
+                Добавить метрику
+              </Button>
+            )}
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Метрика</TableHead>
+                <TableHead>Что обещаем</TableHead>
+                <TableHead className="w-[56px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {metrics.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-muted-foreground">
+                    Добавьте метрики и обещания (Listening, Speaking…)
+                  </TableCell>
+                </TableRow>
+              ) : (
+                metrics.map((row, index) => (
+                  <TableRow key={index}>
+                    <TableCell>
+                      <Input
+                        value={row.metric}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setMetrics((prev) => prev.map((r, i) => (i === index ? { ...r, metric: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        value={row.promise}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setMetrics((prev) => prev.map((r, i) => (i === index ? { ...r, promise: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {canEdit ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => setMetrics((prev) => prev.filter((_, i) => i !== index))}
+                          disabled={saving}
+                          aria-label="Удалить строку"
+                          title="Удалить строку"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium">4. Метод (как именно)</div>
+            {canEdit && (
+              <Button type="button" variant="secondary" size="sm" onClick={handleAddMethodRow} disabled={saving}>
+                <Plus className="h-4 w-4 mr-2" />
+                Добавить компонент
+              </Button>
+            )}
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Компонент</TableHead>
+                <TableHead>Универсальный шаблон</TableHead>
+                <TableHead className="w-[56px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {method.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-muted-foreground">
+                    Добавьте элементы метода (Контент, Анализ, Практика…)
+                  </TableCell>
+                </TableRow>
+              ) : (
+                method.map((row, index) => (
+                  <TableRow key={index}>
+                    <TableCell>
+                      <Input
+                        value={row.component}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setMethod((prev) => prev.map((r, i) => (i === index ? { ...r, component: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        value={row.template}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setMethod((prev) => prev.map((r, i) => (i === index ? { ...r, template: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {canEdit ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => setMethod((prev) => prev.filter((_, i) => i !== index))}
+                          disabled={saving}
+                          aria-label="Удалить строку"
+                          title="Удалить строку"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium">5. Формат урока</div>
+            {canEdit && (
+              <Button type="button" variant="secondary" size="sm" onClick={handleAddLessonFormatRow} disabled={saving}>
+                <Plus className="h-4 w-4 mr-2" />
+                Добавить этап
+              </Button>
+            )}
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Этап</TableHead>
+                <TableHead className="w-[160px]">% времени</TableHead>
+                <TableHead className="w-[56px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {lessonFormat.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-muted-foreground">
+                    Добавьте этапы и проценты (Разогрев, Контент…)
+                  </TableCell>
+                </TableRow>
+              ) : (
+                lessonFormat.map((row, index) => (
+                  <TableRow key={index}>
+                    <TableCell>
+                      <Input
+                        value={row.stage}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setLessonFormat((prev) => prev.map((r, i) => (i === index ? { ...r, stage: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="1"
+                        inputMode="numeric"
+                        value={row.percent == null ? '' : String(row.percent)}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const parsed = raw.trim() ? Number.parseFloat(raw) : NaN;
+                          setLessonFormat((prev) =>
+                            prev.map((r, i) => (i === index ? { ...r, percent: Number.isFinite(parsed) ? parsed : null } : r))
+                          );
+                        }}
+                        disabled={!canEdit || saving}
+                        className="text-right"
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {canEdit ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => setLessonFormat((prev) => prev.filter((_, i) => i !== index))}
+                          disabled={saving}
+                          aria-label="Удалить строку"
+                          title="Удалить строку"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium">6. Программа (модули)</div>
+            {canEdit && (
+              <Button type="button" variant="secondary" size="sm" onClick={handleAddProgramModuleRow} disabled={saving}>
+                <Plus className="h-4 w-4 mr-2" />
+                Добавить модуль
+              </Button>
+            )}
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Модуль</TableHead>
+                <TableHead>Результат</TableHead>
+                <TableHead className="w-[56px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {programModules.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-muted-foreground">
+                    Добавьте модули и результаты (Foundation, Expansion…)
+                  </TableCell>
+                </TableRow>
+              ) : (
+                programModules.map((row, index) => (
+                  <TableRow key={index}>
+                    <TableCell>
+                      <Input
+                        value={row.module}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setProgramModules((prev) => prev.map((r, i) => (i === index ? { ...r, module: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        value={row.result}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setProgramModules((prev) => prev.map((r, i) => (i === index ? { ...r, result: next } : r)));
+                        }}
+                        disabled={!canEdit || saving}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {canEdit ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => setProgramModules((prev) => prev.filter((_, i) => i !== index))}
+                          disabled={saving}
+                          aria-label="Удалить строку"
+                          title="Удалить строку"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="space-y-3">
+          <div className="text-sm font-medium">7. Упаковка</div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">Название</div>
+              <Input value={packagingName} onChange={(e) => setPackagingName(e.target.value)} disabled={!canEdit || saving} />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">Слоган</div>
+              <Input value={packagingSlogan} onChange={(e) => setPackagingSlogan(e.target.value)} disabled={!canEdit || saving} />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">Обещание</div>
+              <Input value={packagingPromise} onChange={(e) => setPackagingPromise(e.target.value)} disabled={!canEdit || saving} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border bg-card/70 p-4 shadow-sm space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="text-sm font-medium">Пакеты</div>
+            <div className="text-xs text-muted-foreground">Добавьте пакеты (например, Basic/Pro) и их описания.</div>
+          </div>
+          {canEdit && (
+            <Button type="button" variant="secondary" size="sm" onClick={handleAddPackage} disabled={saving}>
+              <Plus className="h-4 w-4 mr-2" />
+              Добавить пакет
+            </Button>
+          )}
+        </div>
+
+        {packages.length === 0 ? (
+          <div className="text-sm text-muted-foreground">Пакетов пока нет.</div>
+        ) : (
+          <div className="space-y-3">
+            {packages.map((pkg, index) => (
+              <div key={index} className="rounded-lg border bg-background p-3 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-medium">Пакет #{index + 1}</div>
+                  {canEdit && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                      onClick={() => handleDeletePackage(index)}
+                      disabled={saving}
+                      aria-label="Удалить пакет"
+                      title="Удалить пакет"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="space-y-1 sm:col-span-2">
+                    <div className="text-xs font-medium text-muted-foreground">Название</div>
+                    <Input
+                      value={pkg.name}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setPackages((prev) => prev.map((p, i) => (i === index ? { ...p, name: next } : p)));
+                      }}
+                      disabled={!canEdit || saving}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs font-medium text-muted-foreground sm:text-right">Цена</div>
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0"
+                      value={typeof pkg.price === 'number' && Number.isFinite(pkg.price) ? String(pkg.price) : ''}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const parsed = raw.trim() ? Number.parseFloat(raw) : NaN;
+                        setPackages((prev) =>
+                          prev.map((p, i) => (i === index ? { ...p, price: Number.isFinite(parsed) ? parsed : null } : p))
+                        );
+                      }}
+                      disabled={!canEdit || saving}
+                      className="sm:text-right"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-muted-foreground">Наполнение</div>
+                  <CustomTextarea
+                    value={pkg.description ?? ''}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setPackages((prev) => prev.map((p, i) => (i === index ? { ...p, description: next } : p)));
+                    }}
+                    disabled={!canEdit || saving}
+                    className="min-h-[80px]"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="secondary" onClick={() => void loadProduct()} disabled={saving || loading}>
+          Обновить
+        </Button>
+        <Button onClick={handleSave} disabled={!canEdit || saving || !productName.trim()}>
+          {saving ? 'Сохранение…' : 'Сохранить'}
+        </Button>
+      </div>
+    </div>
+  );
+}

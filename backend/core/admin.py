@@ -30,6 +30,7 @@ from .models import (
     PostType,
     PostTone,
     SystemSetting,
+    ProductType,
 )
 from .system_settings import invalidate_system_settings_cache, get_image_generation_model, get_image_generation_method
 
@@ -1531,6 +1532,7 @@ class TrendItemAdmin(admin.ModelAdmin):
             "fields": ("extra", "used_for_post", "discovered_at"),
         }),
     )
+    MAX_VIDEOS_PER_POST = 5
 
     def title_short(self, obj):
         return obj.title[:60] + "..." if len(obj.title) > 60 else obj.title
@@ -1539,6 +1541,67 @@ class TrendItemAdmin(admin.ModelAdmin):
     def used(self, obj):
         return "✓" if obj.used_for_post else "-"
     used.short_description = "Used"
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                "<int:trend_id>/custom-gen-video/",
+                self.admin_site.admin_view(self.process_custom_gen_video_request),
+                name="core_trenditem_custom_gen_video",
+            ),
+        ]
+        return custom_urls + urls
+
+    def render_change_form(self, request, context, add=False, change=False, form_url="", obj=None):
+        context["max_videos_per_post"] = self.MAX_VIDEOS_PER_POST
+        context["has_description"] = bool((getattr(obj, "description", "") or "").strip())
+        used_for_post_id = getattr(obj, "used_for_post_id", None) if obj else None
+        context["used_for_post_id"] = used_for_post_id
+        if used_for_post_id:
+            try:
+                context["used_for_post_change_url"] = reverse("admin:core_post_change", args=[used_for_post_id])
+            except Exception:
+                context["used_for_post_change_url"] = ""
+        return super().render_change_form(request, context, add=add, change=change, form_url=form_url, obj=obj)
+
+    def process_custom_gen_video_request(self, request, trend_id: int):
+        change_url = reverse("admin:core_trenditem_change", args=[trend_id])
+        trend = self.get_object(request, str(trend_id))
+
+        if not trend:
+            self.message_user(request, "Тренд не найден", level=messages.ERROR)
+            return HttpResponseRedirect(reverse("admin:core_trenditem_changelist"))
+
+        if request.method != "POST":
+            return HttpResponseRedirect(change_url)
+
+        if not self.has_change_permission(request, trend):
+            raise PermissionDenied
+
+        raw_videos_per_post = request.POST.get("videos_per_post")
+        try:
+            videos_per_post = int(raw_videos_per_post)
+        except (TypeError, ValueError):
+            videos_per_post = 1
+        videos_per_post = max(1, min(self.MAX_VIDEOS_PER_POST, videos_per_post))
+
+        force_new_post = str(request.POST.get("force_new_post") or "").strip().lower() in {"1", "true", "on", "yes"}
+
+        from .tasks import generate_videos_from_trend_item_description
+
+        created_by_id = request.user.id if request.user and request.user.is_authenticated else None
+        generate_videos_from_trend_item_description.delay(trend.id, videos_per_post, created_by_id, force_new_post)
+
+        self.message_user(
+            request,
+            (
+                f"Запущена генерация {videos_per_post} видео (3 сцены) по Description"
+                + (" (создаст новый пост)" if force_new_post else "")
+            ),
+            level=messages.SUCCESS,
+        )
+        return HttpResponseRedirect(change_url)
 
     def generate_posts_action(self, request, queryset):
         """Сгенерировать посты из выбранных трендов"""
@@ -2224,6 +2287,7 @@ CORE_ADMIN_MODEL_ORDER = {
     "TrendItem": 2,
     "Post": 3,
     "SEOKeywordSet": 4,
+    "ProductTypeAdminProxy": 5,
     "SystemSetting": 999,
 }
 
@@ -2251,6 +2315,46 @@ def _core_sorted_get_app_list(*args, **kwargs):
 if not getattr(admin.site, "_core_sorted", False):
     admin.site.get_app_list = _core_sorted_get_app_list
     admin.site._core_sorted = True
+
+
+class ProductTypeAdminProxy(ProductType):
+    class Meta:
+        proxy = True
+        verbose_name = "Тип продукта"
+        verbose_name_plural = "Типы продуктов"
+
+
+@admin.register(ProductTypeAdminProxy)
+class ProductTypeAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "owner", "updated_at")
+    list_select_related = ("owner",)
+    list_filter = ("owner", "updated_at")
+    search_fields = ("name", "value", "goal", "owner__name", "owner__slug")
+    autocomplete_fields = ("owner",)
+    readonly_fields = ("created_at", "updated_at")
+
+    fieldsets = (
+        ("Основное", {"fields": ("owner", "name")}),
+        ("Маркетинг", {"fields": ("value", "goal")}),
+        (
+            "AI требования (9 блоков)",
+            {
+                "fields": (
+                    "requirements_name",
+                    "requirements_packages",
+                    "requirements_audience",
+                    "requirements_transformation",
+                    "requirements_metrics",
+                    "requirements_method",
+                    "requirements_lesson_format",
+                    "requirements_program_modules",
+                    "requirements_packaging",
+                ),
+                "classes": ("collapse",),
+            },
+        ),
+        ("Системное", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
+    )
 
 
 @admin.register(PostType)

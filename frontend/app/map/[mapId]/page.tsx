@@ -101,12 +101,14 @@ export default function MindMapPage() {
         </div>
 
         {hasData && data && (
-          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-            <div className="space-y-2">
-              <h1 className="text-3xl font-bold">{data.title}</h1>
-              <p className="text-muted-foreground">{data.description}</p>
-              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                <span>Обновлено: {formatDateTime(lastSavedAt ?? data.updated_at)}</span>
+          <div className="flex w-full flex-col justify-between gap-3 sm:flex-row sm:items-center">
+            <div className="w-full space-y-2">
+              <h1 className="text-2xl font-bold">{data.title}</h1>
+              <div className="grid w-full gap-1 sm:grid-cols-[1fr_auto] sm:items-baseline">
+                <p className="text-muted-foreground italic">{data.description}</p>
+                <span className="justify-self-end whitespace-nowrap text-sm text-muted-foreground">
+                  Обновлено: {formatDateTime(lastSavedAt ?? data.updated_at)}
+                </span>
               </div>
             </div>
           </div>

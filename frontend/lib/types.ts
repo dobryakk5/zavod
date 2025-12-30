@@ -202,6 +202,39 @@ export interface VkIntegration {
   extra?: Record<string, unknown>;
 }
 
+export interface ClientProduct {
+  id: number;
+  name: string;
+  product_type_id?: number | null;
+  product_type_name?: string | null;
+  short_description?: string | null;
+  packages?: Array<{ name: string; description?: string | null; price?: number | null }> | null;
+  structure?: ProductStructure | null;
+  owner_id?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ProductType {
+  id: number;
+  name: string;
+  value?: string | null;
+  goal?: string | null;
+  owner_id?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ProductStructure {
+  audience?: Array<{ parameter: string; value: string }>;
+  transformation?: Array<{ was: string; became: string }>;
+  metrics?: Array<{ metric: string; promise: string }>;
+  method?: Array<{ component: string; template: string }>;
+  lesson_format?: Array<{ stage: string; percent: number | null }>;
+  program_modules?: Array<{ module: string; result: string }>;
+  packaging?: { name?: string | null; slogan?: string | null; promise?: string | null };
+}
+
 // Mind map domain
 export interface MindMap {
   id: number;

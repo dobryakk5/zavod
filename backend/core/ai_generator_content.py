@@ -1069,6 +1069,374 @@ seo_keywords = [ ... ]
                 "error": str(exc),
             }
 
+    def generate_client_product_from_type(
+        self,
+        product_type_name: str,
+        product_type_value: str = "",
+        product_type_goal: str = "",
+        *,
+        avatar: str = "",
+        pains: str = "",
+        desires: str = "",
+        objections: str = "",
+        wordstat_favorites: Optional[List[str]] = None,
+        brand: str = "",
+        language: str = "ru",
+        requirements_override: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Сгенерировать продукт по типу продукта, настройкам клиента и избранному Wordstat."""
+        try:
+            lang_name = "русском" if language == "ru" else "английском"
+            brand_text = (brand or "").strip() or "без названия"
+
+            type_name = (product_type_name or "").strip() or "Тип продукта"
+            type_value = (product_type_value or "").strip()
+            type_goal = (product_type_goal or "").strip()
+
+            avatar_text = (avatar or "").strip() or "не описан"
+            pains_text = (pains or "").strip() or "не указаны"
+            desires_text = (desires or "").strip() or "не указаны"
+            objections_text = (objections or "").strip() or "не указаны"
+
+            favorites = []
+            for phrase in wordstat_favorites or []:
+                if not isinstance(phrase, str):
+                    continue
+                cleaned = phrase.strip()
+                if cleaned and cleaned not in favorites:
+                    favorites.append(cleaned)
+                if len(favorites) >= 40:
+                    break
+
+            favorites_text = "\n".join(f"- {p}" for p in favorites) if favorites else "нет избранных фраз"
+
+            required_keys = [
+                "name",
+                "packages",
+                "audience",
+                "transformation",
+                "metrics",
+                "method",
+                "lesson_format",
+                "program_modules",
+                "packaging",
+            ]
+
+            requirements: Dict[str, Any]
+
+            if isinstance(requirements_override, dict):
+                requirements = {
+                    key: str(requirements_override.get(key) or "").strip()
+                    for key in required_keys
+                }
+            else:
+                requirements_schema_hint = """
+{
+  "requirements": {
+    "name": "Требования к названию и краткому описанию",
+    "packages": "Требования к пакетам",
+    "audience": "Требования к блоку audience",
+    "transformation": "Требования к блоку transformation",
+    "metrics": "Требования к блоку metrics",
+    "method": "Требования к блоку method",
+    "lesson_format": "Требования к блоку lesson_format",
+    "program_modules": "Требования к блоку program_modules",
+    "packaging": "Требования к блоку packaging"
+  }
+}
+"""
+
+                requirements_prompt = f"""
+Ты — опытный продуктолог и методолог.
+Сначала сформируй ТРЕБОВАНИЯ (не результат) для генерации продукта данного типа.
+
+ВХОДНЫЕ ДАННЫЕ
+- Бренд: {brand_text}
+- Тип продукта: {type_name}
+- Ценность типа: {type_value or "не указана"}
+- Цель типа: {type_goal or "не указана"}
+
+ПОРТРЕТ И МОТИВАЦИЯ АУДИТОРИИ
+- Портрет ЦА: {avatar_text}
+- Боли: {pains_text}
+- Желания: {desires_text}
+- Возражения: {objections_text}
+
+WORDSTAT (ИЗБРАННОЕ)
+{favorites_text}
+
+ЗАДАЧА
+Сгенерируй 9 требований: по одному требованию на каждый блок результата:
+1) name (вместе с short_description),
+2) packages,
+3–9) 7 частей структуры: audience, transformation, metrics, method, lesson_format, program_modules, packaging.
+
+ТРЕБОВАНИЯ К ТРЕБОВАНИЯМ
+- Пиши на {lang_name} языке.
+- Каждое требование — это чёткая инструкция для генерации соответствующего блока (что включить, что исключить, сколько элементов).
+- Обязательный акцент на типе продукта: short_description должен начинаться с "{type_name}:".
+- Не выдумывай лишние блоки: только перечисленные 9.
+- Wordstat использовать как источники формулировок/контекста: 5–12 фраз суммарно по продукту (не обязательно в каждом блоке).
+
+ФОРМАТ ОТВЕТА: СТРОГО JSON по схеме:
+{requirements_schema_hint}
+"""
+
+                req_raw = self.get_ai_response(
+                    requirements_prompt,
+                    max_tokens=1600,
+                    temperature=0.25,
+                    response_format={"type": "json_object"},
+                )
+                if not req_raw:
+                    return {"success": False, "error": "Не удалось получить требования от AI"}
+
+                req_parsed, req_text, req_err = _parse_ai_json_response(req_raw)
+                if req_err or not isinstance(req_parsed, dict):
+                    repaired = self._repair_json_structure(req_text, schema_hint=requirements_schema_hint)
+                    if repaired and isinstance(repaired, dict):
+                        req_parsed = repaired
+                        req_err = None
+                if req_err or not isinstance(req_parsed, dict):
+                    return {
+                        "success": False,
+                        "error": f"Ошибка разбора JSON (requirements): {str(req_err) if req_err else 'invalid response'}",
+                        "raw_response": req_text,
+                    }
+
+                requirements = req_parsed.get("requirements")
+                if not isinstance(requirements, dict):
+                    return {
+                        "success": False,
+                        "error": "AI не вернул requirements",
+                        "raw_response": req_parsed,
+                    }
+
+            for key in required_keys:
+                if not isinstance(requirements.get(key), str) or not str(requirements.get(key)).strip():
+                    requirements[key] = f"Сгенерируй блок '{key}' строго под тип продукта '{type_name}' для аудитории: {avatar_text}."
+
+            common_context = f"""
+КОНТЕКСТ
+- Бренд: {brand_text}
+- Тип продукта: {type_name}
+- Ценность типа: {type_value or "не указана"}
+- Цель типа: {type_goal or "не указана"}
+- Портрет ЦА: {avatar_text}
+- Боли: {pains_text}
+- Желания: {desires_text}
+- Возражения: {objections_text}
+WORDSTAT (избранное):
+{favorites_text}
+"""
+
+            def _generate_block(requirement_key: str, requirement_text: str, schema_hint: str, max_tokens: int = 900) -> Dict[str, Any]:
+                prompt = f"""
+Ты — продуктолог.
+Сгенерируй ТОЛЬКО один блок продукта: {requirement_key}.
+
+{common_context}
+
+ТРЕБОВАНИЕ ДЛЯ ЭТОГО БЛОКА
+{requirement_text}
+
+ДОПОЛНИТЕЛЬНО
+- Верни список "phrases_used" (0–5 фраз), которые реально использовал(а) из Wordstat в этом блоке.
+
+ФОРМАТ ОТВЕТА: СТРОГО валидный JSON по схеме:
+{schema_hint}
+"""
+                raw = self.get_ai_response(
+                    prompt,
+                    max_tokens=max_tokens,
+                    temperature=0.35,
+                    response_format={"type": "json_object"},
+                )
+                if not raw:
+                    return {"success": False, "error": f"Не удалось получить блок {requirement_key} от AI"}
+                parsed, normalized_text, parse_error = _parse_ai_json_response(raw)
+                if parse_error or not isinstance(parsed, dict):
+                    repaired = self._repair_json_structure(normalized_text, schema_hint=schema_hint)
+                    if repaired and isinstance(repaired, dict):
+                        parsed = repaired
+                        parse_error = None
+                if parse_error or not isinstance(parsed, dict):
+                    return {
+                        "success": False,
+                        "error": f"Ошибка разбора JSON ({requirement_key}): {str(parse_error) if parse_error else 'invalid response'}",
+                        "raw_response": normalized_text,
+                    }
+                return {"success": True, "data": parsed}
+
+            schemas = {
+                "name": """
+{
+  "name": "string",
+  "short_description": "string",
+  "phrases_used": ["string"]
+}
+""",
+                "packages": """
+{
+  "packages": [
+    { "name": "string", "description": "string", "price": null }
+  ],
+  "phrases_used": ["string"]
+}
+""",
+                "audience": """
+{
+  "audience": [{ "parameter": "string", "value": "string" }],
+  "phrases_used": ["string"]
+}
+""",
+                "transformation": """
+{
+  "transformation": [{ "was": "string", "became": "string" }],
+  "phrases_used": ["string"]
+}
+""",
+                "metrics": """
+{
+  "metrics": [{ "metric": "string", "promise": "string" }],
+  "phrases_used": ["string"]
+}
+""",
+                "method": """
+{
+  "method": [{ "component": "string", "template": "string" }],
+  "phrases_used": ["string"]
+}
+""",
+                "lesson_format": """
+{
+  "lesson_format": [{ "stage": "string", "percent": 0 }],
+  "phrases_used": ["string"]
+}
+""",
+                "program_modules": """
+{
+  "program_modules": [{ "module": "string", "result": "string" }],
+  "phrases_used": ["string"]
+}
+""",
+                "packaging": """
+{
+  "packaging": { "name": "string", "slogan": "string", "promise": "string" },
+  "phrases_used": ["string"]
+}
+""",
+            }
+
+            blocks_raw: Dict[str, Any] = {"requirements": requirements}
+            phrases_used_all: List[str] = []
+
+            def _merge_phrases(value: Any) -> None:
+                if not isinstance(value, list):
+                    return
+                for item in value:
+                    text_value = str(item or "").strip()
+                    if text_value and text_value not in phrases_used_all:
+                        phrases_used_all.append(text_value)
+
+            block_results: Dict[str, Any] = {}
+            for key in required_keys:
+                res = _generate_block(key, str(requirements.get(key) or ""), schemas[key])
+                if not res.get("success"):
+                    res["requirements"] = requirements
+                    raw = res.get("raw_response")
+                    if raw is not None:
+                        res["raw_response"] = {
+                            "requirements": requirements,
+                            "failed_block": key,
+                            "block_raw_response": raw,
+                        }
+                    return res
+                data = res.get("data") or {}
+                block_results[key] = data
+                _merge_phrases(data.get("phrases_used"))
+
+            name_payload = block_results["name"]
+            product_name = str(name_payload.get("name") or "").strip() or type_name
+            short_description = str(name_payload.get("short_description") or "").strip()
+            if not short_description:
+                short_description = f"{type_name}: продукт для аудитории {avatar_text}"
+            prefix = f"{type_name}:"
+            if not short_description.lower().startswith(prefix.lower()):
+                short_description = f"{prefix} {short_description}".strip()
+
+            def _normalize_packages(value: Any) -> List[Dict[str, Any]]:
+                if not isinstance(value, list):
+                    return []
+                cleaned: List[Dict[str, Any]] = []
+                for item in value:
+                    if not isinstance(item, dict):
+                        continue
+                    pkg_name = str(item.get("name") or "").strip()
+                    if not pkg_name:
+                        continue
+                    pkg_desc = str(item.get("description") or "").strip() or None
+                    raw_price = item.get("price")
+                    price = None
+                    if isinstance(raw_price, (int, float)):
+                        price = float(raw_price)
+                    cleaned.append({"name": pkg_name, "description": pkg_desc, "price": price})
+                return cleaned
+
+            def _normalize_lesson_format(value: Any) -> List[Dict[str, Any]]:
+                if not isinstance(value, list):
+                    return []
+                cleaned: List[Dict[str, Any]] = []
+                for item in value:
+                    if not isinstance(item, dict):
+                        continue
+                    stage = str(item.get("stage") or "").strip()
+                    percent_raw = item.get("percent")
+                    percent = None
+                    if isinstance(percent_raw, (int, float)):
+                        percent = float(percent_raw)
+                    elif isinstance(percent_raw, str):
+                        try:
+                            percent = float(percent_raw.replace(",", "."))
+                        except ValueError:
+                            percent = None
+                    cleaned.append({"stage": stage, "percent": percent})
+                return cleaned
+
+            structure: Dict[str, Any] = {
+                "audience": block_results["audience"].get("audience") if isinstance(block_results["audience"].get("audience"), list) else [],
+                "transformation": block_results["transformation"].get("transformation") if isinstance(block_results["transformation"].get("transformation"), list) else [],
+                "metrics": block_results["metrics"].get("metrics") if isinstance(block_results["metrics"].get("metrics"), list) else [],
+                "method": block_results["method"].get("method") if isinstance(block_results["method"].get("method"), list) else [],
+                "lesson_format": _normalize_lesson_format(block_results["lesson_format"].get("lesson_format")),
+                "program_modules": block_results["program_modules"].get("program_modules") if isinstance(block_results["program_modules"].get("program_modules"), list) else [],
+                "packaging": block_results["packaging"].get("packaging") if isinstance(block_results["packaging"].get("packaging"), dict) else {},
+            }
+
+            packages = _normalize_packages(block_results["packages"].get("packages"))
+
+            blocks_raw["blocks"] = block_results
+
+            return {
+                "success": True,
+                "requirements": requirements,
+                "product": {
+                    "name": product_name,
+                    "short_description": short_description,
+                    "packages": packages,
+                    "structure": structure,
+                },
+                "phrases_used": phrases_used_all[:20],
+                "raw_response": blocks_raw,
+            }
+
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Error generating client product: %s", exc, exc_info=True)
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
 
 class StoryGenerationMixin:
     """Helper mixin for multi-episode story formats."""

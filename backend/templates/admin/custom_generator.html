@@ -1,0 +1,55 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+  <div id="content-main">
+    <form method="post" novalidate>
+      {% csrf_token %}
+
+      {% if form.non_field_errors %}
+        <p class="errornote">{{ form.non_field_errors }}</p>
+      {% endif %}
+
+      <fieldset class="module aligned">
+        <h2>{% translate "Custom генератор постов" %}</h2>
+
+        <div class="form-row">
+          {{ form.client.errors }}
+          {{ form.client.label_tag }}
+          {{ form.client }}
+        </div>
+
+        <div class="form-row">
+          {{ form.template.errors }}
+          {{ form.template.label_tag }}
+          {{ form.template }}
+        </div>
+
+        <div class="form-row">
+          {{ form.posts_count.errors }}
+          {{ form.posts_count.label_tag }}
+          {{ form.posts_count }}
+          <div class="help">{% blocktranslate with max_posts=max_posts %}Максимум {{ max_posts }} постов за один запуск.{% endblocktranslate %}</div>
+        </div>
+
+        <div class="form-row">
+          {{ form.videos_per_post.errors }}
+          {{ form.videos_per_post.label_tag }}
+          {{ form.videos_per_post }}
+          {% if form.videos_per_post.help_text %}<div class="help">{{ form.videos_per_post.help_text }}</div>{% endif %}
+        </div>
+
+        <div class="form-row">
+          {{ form.task.errors }}
+          {{ form.task.label_tag }}
+          {{ form.task }}
+          {% if form.task.help_text %}<div class="help">{{ form.task.help_text }}</div>{% endif %}
+        </div>
+      </fieldset>
+
+      <div class="submit-row">
+        <input type="submit" value="{% translate 'Сохранить настройки' %}" class="default">
+      </div>
+    </form>
+  </div>
+{% endblock %}

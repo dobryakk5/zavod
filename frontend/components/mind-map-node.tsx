@@ -1,7 +1,6 @@
 'use client';
 
 import { MoreVertical } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import type { MindNodeProperty } from '@/lib/types';
@@ -31,13 +30,13 @@ export function MindMapNode({ id, data, onOpenMenu, onSelect }: MindMapNodeProps
     .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
     .filter((p) => (p.title ?? '').trim() || (p.value ?? '').trim() || (p.delta ?? '').trim());
   const openMenuHandler = onOpenMenu ?? data.onOpenMenu;
-  const hasBadges = !!data.color;
   const hasType = !!data.typeLabel?.trim();
   const title = data.title ?? '';
 
   return (
     <div
       className="relative h-full w-full min-w-[260px] max-w-[360px] rounded-xl border border-black bg-white shadow-sm"
+      style={data.color ? { borderColor: data.color } : undefined}
       onPointerDown={() => onSelect?.(id)}
     >
       <div className="flex items-start justify-between gap-2 border-b px-4 py-3">
@@ -69,18 +68,8 @@ export function MindMapNode({ id, data, onOpenMenu, onSelect }: MindMapNodeProps
         </button>
       </div>
 
-      {hasBadges && (
-        <div className="flex flex-wrap gap-2 px-4 py-3 text-xs text-muted-foreground">
-          {data.color && (
-            <Badge style={{ backgroundColor: data.color }} className="text-white">
-              Цвет
-            </Badge>
-          )}
-        </div>
-      )}
-
       {properties.length > 0 && (
-        <div className={cn('grid grid-cols-3 gap-3 px-4 py-3 text-xs', hasBadges ? 'border-t' : '')}>
+        <div className="grid grid-cols-3 gap-3 px-4 py-3 text-xs">
           {properties.map((prop) => (
             <div key={prop.id ?? `${prop.title}-${prop.value}`} className="space-y-1">
               {!!prop.title?.trim() && <div className="text-[11px] font-medium text-muted-foreground">{prop.title}</div>}

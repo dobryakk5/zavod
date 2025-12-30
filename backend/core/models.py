@@ -1467,9 +1467,64 @@ class SystemSetting(models.Model):
 
 
 # ============================================================================
-# Mind map schema (map.* tables)
+# Client products
 # ============================================================================
 
+class ProductType(models.Model):
+    owner = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="owner_id", related_name="product_types")
+    name = models.TextField()
+    value = models.TextField(blank=True, null=True)
+    goal = models.TextField(blank=True, null=True)
+    requirements_name = models.TextField(blank=True, null=True)
+    requirements_packages = models.TextField(blank=True, null=True)
+    requirements_audience = models.TextField(blank=True, null=True)
+    requirements_transformation = models.TextField(blank=True, null=True)
+    requirements_metrics = models.TextField(blank=True, null=True)
+    requirements_method = models.TextField(blank=True, null=True)
+    requirements_lesson_format = models.TextField(blank=True, null=True)
+    requirements_program_modules = models.TextField(blank=True, null=True)
+    requirements_packaging = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."product_types'
+        ordering = ("-updated_at",)
+
+    def __str__(self):
+        return self.name
+
+
+class ClientProduct(models.Model):
+    owner = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="owner_id", related_name="products")
+    name = models.TextField()
+    product_type = models.ForeignKey(
+        ProductType,
+        on_delete=models.SET_NULL,
+        db_column="product_type_id",
+        related_name="products",
+        blank=True,
+        null=True,
+    )
+    short_description = models.TextField(blank=True, null=True)
+    packages = models.JSONField(default=list, blank=True)
+    structure = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."products'
+        ordering = ("-updated_at",)
+
+    def __str__(self):
+        return self.name
+
+
+# ============================================================================
+# Mind map schema (map.* tables)
+# ============================================================================
 
 class MindMap(models.Model):
     owner = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="owner_id", related_name="mind_maps")

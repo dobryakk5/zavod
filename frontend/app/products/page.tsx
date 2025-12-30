@@ -5,10 +5,13 @@ import { useRouter } from 'next/navigation';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { mindMapsApi } from '@/lib/api/mindmaps';
 import { ApiError } from '@/lib/api';
 import type { MindMap } from '@/lib/types';
 import { Copy, Loader2, Trash2 } from 'lucide-react';
+import { ClientProductsTab } from './client-products-tab';
+import { ProductTypesTab } from './product-types-tab';
 
 const formatDate = (iso?: string) =>
   iso ? new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium' }).format(new Date(iso)) : '—';
@@ -314,170 +317,192 @@ export default function ProductsPage() {
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div className="space-y-2">
           <p className="text-sm font-medium text-muted-foreground uppercase">Продукты</p>
-          <h1 className="text-3xl font-bold">Продуктовая карта</h1>
+          <h1 className="text-3xl font-bold">Продукты</h1>
           <p className="text-muted-foreground">
-            Воронки продаж выполнены в виде mind maps (интеллект-карт)
+            Управляйте продуктовой картой и списком продуктов клиента.
           </p>
         </div>
       </div>
 
-      <div className="flex flex-col gap-3 rounded-xl border bg-card/70 p-4 shadow-sm">
-        <div className="flex flex-wrap items-center gap-3">
-          <Input
-            placeholder="Название карты"
-            value={createTitle}
-            onChange={(e) => setCreateTitle(e.target.value)}
-            className="w-full max-w-sm"
-          />
-          <Input
-            placeholder="Описание (опционально)"
-            value={createDescription}
-            onChange={(e) => setCreateDescription(e.target.value)}
-            className="w-full max-w-sm"
-          />
-          <Button onClick={handleCreate} disabled={creating || !createTitle.trim()}>
-            {creating ? 'Создание…' : 'Создать карту'}
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Введите название и нажмите «Создать карту»
-        </p>
-      </div>
+      <Tabs defaultValue="list" className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="list">Список продуктов</TabsTrigger>
+          <TabsTrigger value="types">Типы продуктов</TabsTrigger>
+          <TabsTrigger value="maps">Продуктовая карта</TabsTrigger>
+        </TabsList>
 
-      {error && <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
-      {loading && <div className="text-sm text-muted-foreground">Загрузка mind maps…</div>}
-      {!loading && !error && maps.length === 0 && (
-        <div className="rounded-lg border px-4 py-6 text-muted-foreground">
-          Пока нет карт. Создайте их через backend (таблицы map.mind_maps / map.mind_nodes / map.mind_edges).
-        </div>
-      )}
+        <TabsContent value="list">
+          <ClientProductsTab />
+        </TabsContent>
 
-      {maps.length > 0 && (
-        <div className="rounded-xl border bg-card/70 shadow-sm">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Название</TableHead>
-                <TableHead>Описание</TableHead>
-                <TableHead className="w-[180px]">Обновлено</TableHead>
-                <TableHead className="w-[120px] text-right">Действия</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map(({ map, title, description, saving, error: rowError }) => (
-                <TableRow
-                  key={map.id}
-                  className="cursor-pointer"
-                  onClick={(e) => {
-                    const target = e.target as HTMLElement | null;
-                    if (target?.closest('input,textarea,button,a')) return;
-                    router.push(`/map/${map.id}`);
-                  }}
-                >
-                  <TableCell className="font-medium">
-                    <Input
-                      value={title}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => {
-                        const nextTitle = e.target.value;
-                        setDrafts((prev) => {
-                          const existing = prev[map.id] ?? {
-                            title: map.title ?? '',
-                            description: map.description ?? '',
-                            dirty: false,
-                            saving: false,
-                            error: null,
-                            revision: 0
-                          };
-                          return {
-                            ...prev,
-                            [map.id]: {
-                              ...existing,
-                              title: nextTitle,
-                              dirty: true,
-                              error: null,
-                              revision: existing.revision + 1
-                            }
-                          };
-                        });
+        <TabsContent value="types">
+          <ProductTypesTab />
+        </TabsContent>
+
+        <TabsContent value="maps" className="space-y-8">
+          <div className="flex flex-col gap-3 rounded-xl border bg-card/70 p-4 shadow-sm">
+            <div className="flex flex-wrap items-center gap-3">
+              <Input
+                placeholder="Название карты"
+                value={createTitle}
+                onChange={(e) => setCreateTitle(e.target.value)}
+                className="w-full max-w-sm"
+              />
+              <Input
+                placeholder="Описание (опционально)"
+                value={createDescription}
+                onChange={(e) => setCreateDescription(e.target.value)}
+                className="w-full max-w-sm"
+              />
+              <Button onClick={handleCreate} disabled={creating || !createTitle.trim()}>
+                {creating ? 'Создание…' : 'Создать карту'}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Введите название и нажмите «Создать карту»
+            </p>
+          </div>
+
+          {error && (
+            <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+          {loading && <div className="text-sm text-muted-foreground">Загрузка mind maps…</div>}
+          {!loading && !error && maps.length === 0 && (
+            <div className="rounded-lg border px-4 py-6 text-muted-foreground">
+              Пока нет карт. Создайте их через backend (таблицы map.mind_maps / map.mind_nodes / map.mind_edges).
+            </div>
+          )}
+
+          {maps.length > 0 && (
+            <div className="rounded-xl border bg-card/70 shadow-sm">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Название</TableHead>
+                    <TableHead>Описание</TableHead>
+                    <TableHead className="w-[180px]">Обновлено</TableHead>
+                    <TableHead className="w-[120px] text-right">Действия</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map(({ map, title, description, saving, error: rowError }) => (
+                    <TableRow
+                      key={map.id}
+                      className="cursor-pointer"
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement | null;
+                        if (target?.closest('input,textarea,button,a')) return;
+                        router.push(`/map/${map.id}`);
                       }}
-                      className="h-9"
-                      aria-invalid={rowError ? true : undefined}
-                    />
-                    {rowError ? <div className="mt-1 text-xs text-destructive">{rowError}</div> : null}
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      value={description}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => {
-                        const nextDescription = e.target.value;
-                        setDrafts((prev) => {
-                          const existing = prev[map.id] ?? {
-                            title: map.title ?? '',
-                            description: map.description ?? '',
-                            dirty: false,
-                            saving: false,
-                            error: null,
-                            revision: 0
-                          };
-                          return {
-                            ...prev,
-                            [map.id]: {
-                              ...existing,
-                              description: nextDescription,
-                              dirty: true,
-                              error: null,
-                              revision: existing.revision + 1
-                            }
-                          };
-                        });
-                      }}
-                      className="h-9"
-                    />
-                    {saving ? <div className="mt-1 text-xs text-muted-foreground">Сохранение…</div> : null}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{formatDate(map.updated_at)}</TableCell>
-                  <TableCell className="text-right">
-                    <div className="inline-flex items-center gap-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        disabled={duplicatingId === map.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDuplicateMap(map.id);
-                        }}
-                        aria-label="Сделать копию"
-                        title="Сделать копию"
-                      >
-                        {duplicatingId === map.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
-                        disabled={duplicatingId === map.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDeleteMap(map.id);
-                        }}
-                        aria-label="Удалить"
-                        title="Удалить"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
+                    >
+                      <TableCell className="font-medium">
+                        <Input
+                          value={title}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const nextTitle = e.target.value;
+                            setDrafts((prev) => {
+                              const existing = prev[map.id] ?? {
+                                title: map.title ?? '',
+                                description: map.description ?? '',
+                                dirty: false,
+                                saving: false,
+                                error: null,
+                                revision: 0
+                              };
+                              return {
+                                ...prev,
+                                [map.id]: {
+                                  ...existing,
+                                  title: nextTitle,
+                                  dirty: true,
+                                  error: null,
+                                  revision: existing.revision + 1
+                                }
+                              };
+                            });
+                          }}
+                          className="h-9"
+                          aria-invalid={rowError ? true : undefined}
+                        />
+                        {rowError ? <div className="mt-1 text-xs text-destructive">{rowError}</div> : null}
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          value={description}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const nextDescription = e.target.value;
+                            setDrafts((prev) => {
+                              const existing = prev[map.id] ?? {
+                                title: map.title ?? '',
+                                description: map.description ?? '',
+                                dirty: false,
+                                saving: false,
+                                error: null,
+                                revision: 0
+                              };
+                              return {
+                                ...prev,
+                                [map.id]: {
+                                  ...existing,
+                                  description: nextDescription,
+                                  dirty: true,
+                                  error: null,
+                                  revision: existing.revision + 1
+                                }
+                              };
+                            });
+                          }}
+                          className="h-9"
+                        />
+                        {saving ? <div className="mt-1 text-xs text-muted-foreground">Сохранение…</div> : null}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{formatDate(map.updated_at)}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="inline-flex items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            disabled={duplicatingId === map.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleDuplicateMap(map.id);
+                            }}
+                            aria-label="Сделать копию"
+                            title="Сделать копию"
+                          >
+                            {duplicatingId === map.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                            disabled={duplicatingId === map.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleDeleteMap(map.id);
+                            }}
+                            aria-label="Удалить"
+                            title="Удалить"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

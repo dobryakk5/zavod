@@ -11,13 +11,19 @@ from .ai_generator_base import logger
 from .system_settings import get_photo_prompt_instructions, get_video_prompt_instructions
 
 
-def _get_video_prompt_max_length(default: int = 1900) -> int:
+_VIDEO_PROMPT_HARD_MAX_LENGTH = 1999
+
+
+def _get_video_prompt_max_length(default: int = _VIDEO_PROMPT_HARD_MAX_LENGTH) -> int:
     env_value = os.getenv("VEO_PROMPT_MAX_LENGTH") or os.getenv("VIDEO_PROMPT_MAX_LENGTH")
+    default = default if default and default > 0 else _VIDEO_PROMPT_HARD_MAX_LENGTH
+    default = min(default, _VIDEO_PROMPT_HARD_MAX_LENGTH)
     if not env_value:
         return default
     try:
         value = int(env_value)
-        return value if value > 0 else default
+        value = value if value > 0 else default
+        return min(value, _VIDEO_PROMPT_HARD_MAX_LENGTH)
     except ValueError:
         logger.warning("Некорректное значение VEO_PROMPT_MAX_LENGTH/VIDEO_PROMPT_MAX_LENGTH: %s", env_value)
         return default
@@ -28,6 +34,7 @@ def _limit_video_prompt_length(prompt: str, max_length: Optional[int] = None) ->
     if not prompt:
         return ""
     limit = max_length if max_length and max_length > 0 else _get_video_prompt_max_length()
+    limit = min(limit, _VIDEO_PROMPT_HARD_MAX_LENGTH)
     if limit and len(prompt) > limit:
         logger.info("Промпт для видео превышает лимит %s символов (длина=%s) — обрезаем", limit, len(prompt))
         return prompt[:limit]
@@ -47,14 +54,34 @@ def merge_video_prompt_with_additional(
     """
     base = (base_prompt or "").strip()
     additional = (additional_prompt or "").strip()
-    if additional:
-        if base:
-            combined = f"{base}\n\n{additional}"
-        else:
-            combined = additional
-    else:
-        combined = base
-    return _limit_video_prompt_length(combined, max_length=max_length)
+    limit = max_length if max_length and max_length > 0 else _get_video_prompt_max_length()
+    limit = min(limit, _VIDEO_PROMPT_HARD_MAX_LENGTH)
+
+    if not additional:
+        return _limit_video_prompt_length(base, max_length=limit)
+
+    if not base:
+        return _limit_video_prompt_length(additional, max_length=limit)
+
+    separator = "\n\n"
+    combined_length = len(base) + len(separator) + len(additional)
+    if combined_length <= limit:
+        return f"{base}{separator}{additional}"
+
+    if len(additional) >= limit:
+        logger.info("Промпт для видео превышает лимит %s символов (длина=%s) — обрезаем", limit, combined_length)
+        return additional[:limit]
+
+    space_for_base = limit - len(separator) - len(additional)
+    if space_for_base <= 0:
+        logger.info("Промпт для видео превышает лимит %s символов (длина=%s) — обрезаем", limit, combined_length)
+        return additional[:limit]
+
+    if len(base) > space_for_base:
+        logger.info("Промпт для видео превышает лимит %s символов (длина=%s) — обрезаем", limit, combined_length)
+        base = base[:space_for_base]
+
+    return f"{base}{separator}{additional}"
 
 
 class MediaGenerationMixin:
@@ -159,7 +186,7 @@ class MediaGenerationMixin:
 
             video_prompt = ai_response.strip()
             logger.info("Сгенерирован промпт для видео: %s", video_prompt[:120])
-            return _limit_video_prompt_length(video_prompt)
+            return video_prompt
 
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Error generating video prompt: %s", exc, exc_info=True)

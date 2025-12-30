@@ -1422,14 +1422,39 @@ def _generate_video_veo(
         return {"success": False, "error": "TELEGRAM_API_ID должен быть числом"}
 
     caption = prompt or options.get("fallback_prompt") or "Please animate this image"
+
+    mode_selection_raw = (
+        options.get("mode_selection")
+        or os.getenv("VEO_MODE_SELECTION")
+        or ""
+    )
+    mode_selection = str(mode_selection_raw).strip().lower() or "always"
+    skip_mode_selection = mode_selection in {"skip", "none", "disabled", "off", "0", "false", "no"}
+    best_effort_mode_selection = mode_selection in {"best_effort", "auto", "soft", "soft_fail", "skip_on_timeout"}
+
+    veo_prompt_hard_max = 1999
     max_prompt_length = options.get("max_prompt_length")
     if max_prompt_length is None:
-        env_limit = os.getenv("VEO_PROMPT_MAX_LENGTH", "1500")
+        env_limit = os.getenv("VEO_PROMPT_MAX_LENGTH") or os.getenv("VIDEO_PROMPT_MAX_LENGTH") or str(veo_prompt_hard_max)
         try:
             max_prompt_length = int(env_limit)
         except ValueError:
-            logger.warning("Некорректное значение VEO_PROMPT_MAX_LENGTH: %s", env_limit)
-            max_prompt_length = 1500
+            logger.warning(
+                "Некорректное значение VEO_PROMPT_MAX_LENGTH/VIDEO_PROMPT_MAX_LENGTH: %s",
+                env_limit,
+            )
+            max_prompt_length = veo_prompt_hard_max
+
+    try:
+        max_prompt_length = int(max_prompt_length)
+    except (TypeError, ValueError):
+        max_prompt_length = veo_prompt_hard_max
+
+    if max_prompt_length <= 0:
+        max_prompt_length = veo_prompt_hard_max
+
+    max_prompt_length = min(max_prompt_length, veo_prompt_hard_max)
+
     if len(caption) > max_prompt_length:
         logger.warning(
             "Промпт для VEO превышает %s символов и будет обрезан (длина=%s)",
@@ -1572,8 +1597,21 @@ def _generate_video_veo(
                         """
                         mode_label = "VEO" if mode_name == "veo" else "SORA"
                         seen_message_ids: Set[int] = set()
-                        if not await _select_video_mode(mode_name):
-                            return None, False
+                        should_select_mode = True
+                        if skip_mode_selection and mode_name == "veo":
+                            should_select_mode = False
+
+                        if should_select_mode:
+                            selected = await _select_video_mode(mode_name)
+                            if not selected and not best_effort_mode_selection:
+                                return None, False
+                            if not selected and best_effort_mode_selection:
+                                logger.warning(
+                                    "[VEO Thread %s] Не удалось выбрать режим %s через /video, продолжаю без выбора (mode_selection=%s)",
+                                    thread_id,
+                                    mode_label,
+                                    mode_selection,
+                                )
 
                         logger.info(
                             "[VEO Thread %s] Отправка %s боту (%s режим)...",

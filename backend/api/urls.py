@@ -29,6 +29,8 @@ from .views import (
     VkConnectView,
     VkCallbackView,
     VkPublishView,
+    ClientProductViewSet,
+    ProductTypeViewSet,
     MindMapViewSet,
     MindNodePositionView,
     MindNodePropertyViewSet,
@@ -61,6 +63,8 @@ router.register(r'weekly-sources', WeeklySourceReportViewSet, basename='weekly-s
 router.register(r'weekly-batches', WeeklySourceBatchViewSet, basename='weekly-batches')
 router.register(r'map/node-properties', MindNodePropertyViewSet, basename='mind-node-property')
 router.register(r'map/mind-maps', MindMapViewSet, basename='mind-map')
+router.register(r'products/list', ClientProductViewSet, basename='client-product')
+router.register(r'products/types', ProductTypeViewSet, basename='product-type')
 
 urlpatterns = [
     # Analytics endpoint (must be before router to avoid conflicts)

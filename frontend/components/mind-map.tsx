@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import * as d3 from 'd3';
 import { Button } from '@/components/ui/button';
@@ -27,6 +27,7 @@ type EdgeMeta = {
   target_side?: PortSide;
   line_style?: EdgeLineStyle;
   stroke_width?: number;
+  color?: string;
   arrow?: EdgeArrow;
 } & Record<string, unknown>;
 
@@ -119,6 +120,14 @@ type MindMapProps = {
 };
 
 const NODE_WIDTH = 320;
+const VIEWPORT_MIN_FRACTION = 0.7;
+const VIEWPORT_MIN_PX = 520;
+const CONTENT_PADDING_PX = 80;
+const NODE_HOVER_BUFFER_PX = 10;
+const PORT_RADIUS_PX = 6;
+const ADD_BUTTON_SIZE_PX = 18;
+const ADD_BUTTON_GAP_PX = 10;
+const ADD_NODE_GAP_PX = 180;
 // Header uses `py-3` (24px) + input `h-8` (32px) + inner `border-b` (1px)
 const HEADER_HEIGHT_TITLE_ONLY = 57;
 // Plus `space-y-2` gap (8px) + `text-xs` line (~16px)
@@ -200,6 +209,29 @@ const calculateNodeHeight = (node: MindMapNodeDatum) => {
   return height;
 };
 
+const getNodesBounds = (nodes: MindMapNodeWithSize[]) => {
+  if (!nodes.length) return null;
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (const node of nodes) {
+    if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
+    const right = node.x + node.width;
+    const bottom = node.y + node.height;
+    minX = Math.min(minX, node.x);
+    minY = Math.min(minY, node.y);
+    maxX = Math.max(maxX, right);
+    maxY = Math.max(maxY, bottom);
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+
+  return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+};
+
 export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdges, mapId, onEditNode, onSaved }: MindMapProps) {
   const [nodes, setNodes] = useState<MindMapNodeDatum[]>(
     initialNodes.length ? attachHandlers(initialNodes, { onEditNode }) : attachHandlers(defaultNodes, { onEditNode })
@@ -219,10 +251,13 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
   const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [draggingLink, setDraggingLink] = useState<DraggingLink>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [hoverLockedNodeId, setHoverLockedNodeId] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const innerRef = useRef<SVGGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const zoomTransform = useRef<d3.ZoomTransform>(d3.zoomIdentity);
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const dragOffset = useRef(new Map<string, { dx: number; dy: number }>());
   const draggingLinkRef = useRef<DraggingLink>(null);
   const tempToServerNodeIdRef = useRef(new Map<string, string>());
@@ -231,7 +266,7 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
   const dirtyRef = useRef(false);
   const flushChangesRef = useRef<(() => void) | null>(null);
   const pendingPositionsRef = useRef(new Map<string, { x: number; y: number }>());
-  const pendingNodesRef = useRef(new Map<string, { title: string; x: number; y: number }>());
+  const pendingNodesRef = useRef(new Map<string, { title: string; x: number; y: number; color?: string | null }>());
   const pendingNodeUpdatesRef = useRef(new Map<string, { text: string }>());
   const pendingEdgesRef = useRef(
     new Map<
@@ -282,6 +317,12 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
     () => nodes.map((node) => ({ ...node, width: NODE_WIDTH, height: calculateNodeHeight(node) })),
     [nodes]
   );
+
+  const contentBounds = useMemo(() => getNodesBounds(nodesWithSize), [nodesWithSize]);
+  const [containerHeightPx, setContainerHeightPx] = useState<number>(() => {
+    if (typeof window === 'undefined') return VIEWPORT_MIN_PX;
+    return Math.max(VIEWPORT_MIN_PX, Math.round(window.innerHeight * VIEWPORT_MIN_FRACTION));
+  });
 
   const nodesWithSizeRef = useRef(nodesWithSize);
   useEffect(() => {
@@ -395,6 +436,7 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
         const created = await mindMapsApi.createNode(Number(mapIdNumber), {
           map_id: Number(mapIdNumber),
           text: pendingNode.title || 'Новый узел',
+          color: pendingNode.color ?? null,
           position: { x: latestPos.x, y: latestPos.y },
           meta: {}
         });
@@ -543,8 +585,8 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
   );
 
   const queueNodeCreate = useCallback(
-    (tempId: string, title: string, x: number, y: number) => {
-      pendingNodesRef.current.set(tempId, { title, x, y });
+    (tempId: string, title: string, x: number, y: number, color?: string | null) => {
+      pendingNodesRef.current.set(tempId, { title, x, y, color });
       scheduleFlush();
     },
     [scheduleFlush]
@@ -608,6 +650,89 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
     setNodeMenu(null);
   }, []);
 
+  const fitView = useCallback(
+    (opts?: { animate?: boolean }) => {
+      if (!svgRef.current) return;
+      const zoom = zoomRef.current;
+      const bounds = contentBounds;
+      if (!zoom || !bounds) return false;
+
+      const parent = svgRef.current.parentElement;
+      if (!parent) return false;
+
+      const fullWidth = parent.clientWidth;
+      const fullHeight = parent.clientHeight;
+      if (!fullWidth || !fullHeight) return false;
+
+      const scale = 0.85 / Math.max(bounds.width / fullWidth, bounds.height / fullHeight);
+      if (!Number.isFinite(scale) || scale <= 0) return false;
+
+      const translate = [
+        fullWidth / 2 - scale * (bounds.x + bounds.width / 2),
+        fullHeight / 2 - scale * (bounds.y + bounds.height / 2)
+      ] as const;
+
+      const nextTransform = d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale);
+      const svg = d3.select(svgRef.current);
+      const animate = opts?.animate ?? true;
+      const target = animate ? (svg.transition().duration(600) as any) : (svg as any);
+      target.call(zoom.transform, nextTransform);
+      return true;
+    },
+    [contentBounds]
+  );
+
+  const recalcContainerHeight = useCallback(() => {
+    if (!containerRef.current) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const availablePx = Math.max(240, Math.floor(window.innerHeight - rect.top - 16));
+    const viewportMinPx = Math.max(VIEWPORT_MIN_PX, Math.round(window.innerHeight * VIEWPORT_MIN_FRACTION));
+    const contentDesiredPx = contentBounds ? Math.ceil(contentBounds.height + CONTENT_PADDING_PX * 2) : viewportMinPx;
+    const desiredPx = Math.max(viewportMinPx, contentDesiredPx);
+
+    setContainerHeightPx(Math.min(desiredPx, availablePx));
+  }, [contentBounds]);
+
+  useLayoutEffect(() => {
+    recalcContainerHeight();
+  }, [recalcContainerHeight]);
+
+  useEffect(() => {
+    window.addEventListener('resize', recalcContainerHeight);
+    return () => window.removeEventListener('resize', recalcContainerHeight);
+  }, [recalcContainerHeight]);
+
+  const pendingFitRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialNodes.length) return;
+    pendingFitRef.current = `${mapId ?? 'no-map'}:${initialNodes.length}:${initialEdges.length}`;
+  }, [initialEdges.length, initialNodes.length, mapId]);
+
+  useEffect(() => {
+    if (!pendingFitRef.current) return;
+    if (!initialNodes.length) return;
+
+    const nodeIds = new Set(nodesWithSize.map((node) => node.id));
+    const hasIncomingNodes = initialNodes.some((node) => nodeIds.has(node.id));
+    if (!hasIncomingNodes) return;
+
+    let raf = 0;
+    let attempts = 0;
+    const attempt = () => {
+      attempts += 1;
+      const didFit = fitView({ animate: attempts === 1 });
+      if (didFit || attempts >= 10) {
+        pendingFitRef.current = null;
+        return;
+      }
+      raf = requestAnimationFrame(attempt);
+    };
+
+    raf = requestAnimationFrame(attempt);
+    return () => cancelAnimationFrame(raf);
+  }, [containerHeightPx, fitView, initialNodes, nodesWithSize]);
+
   const getViewportCenter = useCallback(() => {
     const rect = svgRef.current?.getBoundingClientRect();
     const center: [number, number] = rect ? [rect.width / 2, rect.height / 2] : [200, 200];
@@ -637,6 +762,73 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
       }
     },
     [dismissMenus, mapId, onSaved]
+  );
+
+  const setNodeColor = useCallback(
+    async (nodeId: string, color: string) => {
+      setNodes((prev) => prev.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, color } } : n)));
+
+      const pending = pendingNodesRef.current.get(nodeId);
+      if (pending) {
+        pendingNodesRef.current.set(nodeId, { ...pending, color });
+        scheduleFlush();
+        return;
+      }
+
+      const mapIdNumber = typeof mapId === 'string' ? Number(mapId) : mapId;
+      if (mapIdNumber === undefined || Number.isNaN(mapIdNumber)) return;
+
+      try {
+        await mindMapsApi.updateNode(Number(mapIdNumber), nodeId, { color });
+        onSaved?.();
+      } catch (error) {
+        console.error('Failed to update node color', { nodeId, mapId, color }, error);
+      }
+    },
+    [mapId, onSaved, scheduleFlush]
+  );
+
+  const setEdgeColor = useCallback(
+    async (edgeId: string, color: string) => {
+      setEdges((prev) =>
+        prev.map((e) => (e.id === edgeId ? { ...e, meta: { ...(e.meta ?? {}), color } } : e))
+      );
+
+      const pending = pendingEdgesRef.current.get(edgeId);
+      if (pending) {
+        pendingEdgesRef.current.set(edgeId, { ...pending, meta: { ...(pending.meta ?? {}), color } });
+        scheduleFlush();
+        return;
+      }
+
+      const mapIdNumber = typeof mapId === 'string' ? Number(mapId) : mapId;
+      if (mapIdNumber === undefined || Number.isNaN(mapIdNumber)) return;
+
+      const numericId = Number(edgeId);
+      if (Number.isNaN(numericId)) return;
+
+      const edge = edgesRef.current.find((e) => e.id === edgeId);
+      if (!edge) return;
+
+      const meta = edge.meta;
+      const nextMeta: EdgeMeta = {
+        line_style: meta?.line_style ?? 'solid',
+        stroke_width: meta?.stroke_width ?? 2,
+        arrow: meta?.arrow ?? 'forward',
+        ...(meta ?? {}),
+        color,
+        source_side: edge.sourceSide,
+        target_side: edge.targetSide
+      };
+
+      try {
+        await mindMapsApi.updateEdge(Number(mapIdNumber), numericId, { meta: nextMeta });
+        onSaved?.();
+      } catch (error) {
+        console.error('Failed to update edge color', { edgeId, mapId, color }, error);
+      }
+    },
+    [mapId, onSaved, scheduleFlush]
   );
 
   const openEdgeEditor = useCallback((edgeId: string, x: number, y: number) => {
@@ -1157,12 +1349,66 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
         layer.attr('transform', event.transform.toString());
       });
 
+    zoomRef.current = zoom;
     svg.call(zoom as any);
 
     return () => {
       svg.on('.zoom', null);
+      zoomRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const svgEl = svgRef.current;
+
+    let raf = 0;
+    let lastEvent: PointerEvent | null = null;
+
+    const update = () => {
+      raf = 0;
+      const e = lastEvent;
+      if (!e || !svgRef.current) return;
+
+      const [sx, sy] = d3.pointer(e, svgRef.current);
+      const [x, y] = zoomTransform.current.invert([sx, sy]);
+
+      const allNodes = nodesWithSizeRef.current;
+      let nextHovered: string | null = null;
+      for (let i = allNodes.length - 1; i >= 0; i -= 1) {
+        const node = allNodes[i];
+        const left = node.x - NODE_HOVER_BUFFER_PX;
+        const top = node.y - NODE_HOVER_BUFFER_PX;
+        const right = node.x + node.width + NODE_HOVER_BUFFER_PX;
+        const bottom = node.y + node.height + NODE_HOVER_BUFFER_PX;
+        if (x >= left && x <= right && y >= top && y <= bottom) {
+          nextHovered = node.id;
+          break;
+        }
+      }
+
+      setHoveredNodeId((prev) => (prev === nextHovered ? prev : nextHovered));
+    };
+
+    const onMove = (e: PointerEvent) => {
+      lastEvent = e;
+      if (raf) return;
+      raf = requestAnimationFrame(update);
+    };
+
+    const onLeave = () => {
+      lastEvent = null;
+      if (!hoverLockedNodeId) setHoveredNodeId(null);
+    };
+
+    svgEl.addEventListener('pointermove', onMove);
+    svgEl.addEventListener('pointerleave', onLeave);
+    return () => {
+      svgEl.removeEventListener('pointermove', onMove);
+      svgEl.removeEventListener('pointerleave', onLeave);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [hoverLockedNodeId]);
 
   useEffect(() => {
     if (!innerRef.current || !svgRef.current) return;
@@ -1319,8 +1565,61 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
     queueNodeCreate(tempId, optimistic.data.title, pos.x, pos.y);
   };
 
+  const addNodeFrom = useCallback(
+    (sourceId: string, side: PortSide) => {
+      const source = nodesWithSizeRef.current.find((node) => node.id === sourceId);
+      if (!source) return;
+
+      const tempId = crypto.randomUUID();
+      const newNodeHeight = calculateNodeHeight({
+        id: tempId,
+        x: 0,
+        y: 0,
+        data: { title: 'Новый узел', meta: {}, properties: [] }
+      });
+
+      const x =
+        side === 'right'
+          ? source.x + source.width + ADD_NODE_GAP_PX
+          : side === 'left'
+            ? source.x - NODE_WIDTH - ADD_NODE_GAP_PX
+            : source.x;
+      const y =
+        side === 'bottom'
+          ? source.y + source.height + ADD_NODE_GAP_PX
+          : side === 'top'
+            ? source.y - newNodeHeight - ADD_NODE_GAP_PX
+            : source.y;
+
+      const optimistic: MindMapNodeDatum = {
+        id: tempId,
+        x,
+        y,
+        data: { title: 'Новый узел', meta: {}, properties: [], onEdit: onEditNode, onChange: queueNodeUpdate }
+      };
+
+      setNodes((prev) => [...prev, optimistic]);
+      queueNodeCreate(tempId, optimistic.data.title, x, y);
+
+      const edge: MindMapEdgeDatum = {
+        id: crypto.randomUUID(),
+        source: sourceId,
+        target: tempId,
+        sourceSide: side,
+        targetSide: oppositeSide(side)
+      };
+      setEdges((prev) => [...prev, edge]);
+      queueEdgeCreate(edge);
+    },
+    [onEditNode, queueEdgeCreate, queueNodeCreate, queueNodeUpdate]
+  );
+
   return (
-    <div ref={containerRef} className="relative h-[70vh] min-h-[520px] w-full overflow-hidden rounded-xl border bg-card shadow-sm">
+    <div
+      ref={containerRef}
+      className="relative w-full overflow-hidden rounded-xl border bg-card shadow-sm"
+      style={{ height: `${containerHeightPx}px` }}
+    >
       <div className="absolute left-4 top-4 z-10 flex items-center gap-3 rounded-lg bg-background/80 px-3 py-2 text-sm shadow-sm backdrop-blur">
         <Button size="sm" onClick={addNode} className="shadow-sm">
           + Узел
@@ -1335,6 +1634,13 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
           edgeMenu
             ? [
                 { action: 'edit', label: 'Редактировать', onSelect: () => openEdgeEditor(edgeMenu.edgeId, edgeMenu.x, edgeMenu.y) },
+                {
+                  action: 'color',
+                  label: 'Цвет',
+                  currentColor: (edgesRef.current.find((e) => e.id === edgeMenu.edgeId)?.meta?.color as string | undefined) ?? null,
+                  onSelect: () => {},
+                  onSelectColor: (color) => void setEdgeColor(edgeMenu.edgeId, color)
+                },
                 { action: 'delete', label: 'Удалить', destructive: true, onSelect: () => void deleteEdge(edgeMenu.edgeId) }
               ]
             : []
@@ -1454,6 +1760,13 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
                 { action: 'edit', label: 'Редактировать', onSelect: () => onEditNode?.(nodeMenu.nodeId) },
                 { action: 'copy', label: 'Скопировать', onSelect: () => void copyNode(nodeMenu.nodeId) },
                 { action: 'duplicate', label: 'Дублировать', onSelect: () => void duplicateNode(nodeMenu.nodeId) },
+                {
+                  action: 'color',
+                  label: 'Цвет',
+                  currentColor: nodesRef.current.find((n) => n.id === nodeMenu.nodeId)?.data.color ?? null,
+                  onSelect: () => {},
+                  onSelectColor: (color) => void setNodeColor(nodeMenu.nodeId, color)
+                },
                 { action: 'delete', label: 'Удалить', destructive: true, onSelect: () => void deleteNode(nodeMenu.nodeId) }
               ]
             : []
@@ -1463,24 +1776,10 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
       <svg ref={svgRef} className="h-full w-full select-none">
         <defs>
           <marker id="arrow" markerWidth="12" markerHeight="12" refX="12" refY="6" orient="auto" markerUnits="userSpaceOnUse">
-            <path d="M0,0 L12,6 L0,12 z" fill="#0f172a" />
-          </marker>
-          <marker
-            id="arrow-selected"
-            markerWidth="12"
-            markerHeight="12"
-            refX="12"
-            refY="6"
-            orient="auto"
-            markerUnits="userSpaceOnUse"
-          >
-            <path d="M0,0 L12,6 L0,12 z" fill="#ef4444" />
+            <path d="M0,0 L12,6 L0,12 z" fill="context-stroke" />
           </marker>
           <marker id="arrow-start" markerWidth="12" markerHeight="12" refX="0" refY="6" orient="auto" markerUnits="userSpaceOnUse">
-            <path d="M12,0 L0,6 L12,12 z" fill="#0f172a" />
-          </marker>
-          <marker id="arrow-start-selected" markerWidth="12" markerHeight="12" refX="0" refY="6" orient="auto" markerUnits="userSpaceOnUse">
-            <path d="M12,0 L0,6 L12,12 z" fill="#ef4444" />
+            <path d="M12,0 L0,6 L12,12 z" fill="context-stroke" />
           </marker>
           <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
             <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#e2e8f0" strokeWidth="1" />
@@ -1518,12 +1817,14 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
           })()}
 
           <g className="edges">
-            {edgesWithPositions.map((edge) => {
-              const meta = edge.meta;
-              const isSelected = edge.id === selectedEdgeId;
-              const lineStyle: EdgeLineStyle = meta?.line_style === 'dashed' || meta?.line_style === 'dotted' || meta?.line_style === 'solid' ? meta.line_style : 'solid';
-              const arrow: EdgeArrow =
-                meta?.arrow === 'backward' || meta?.arrow === 'both' || meta?.arrow === 'none' || meta?.arrow === 'forward' ? meta.arrow : 'forward';
+	            {edgesWithPositions.map((edge) => {
+	              const meta = edge.meta;
+	              const isSelected = edge.id === selectedEdgeId;
+	              const strokeColor =
+	                isSelected ? '#ef4444' : typeof meta?.color === 'string' && meta.color.trim() ? (meta.color as string) : '#0f172a';
+	              const lineStyle: EdgeLineStyle = meta?.line_style === 'dashed' || meta?.line_style === 'dotted' || meta?.line_style === 'solid' ? meta.line_style : 'solid';
+	              const arrow: EdgeArrow =
+	                meta?.arrow === 'backward' || meta?.arrow === 'both' || meta?.arrow === 'none' || meta?.arrow === 'forward' ? meta.arrow : 'forward';
               const rawWidth = typeof meta?.stroke_width === 'number' ? meta.stroke_width : 2;
               const strokeWidth = Number.isFinite(rawWidth) ? Math.max(1, Math.min(24, rawWidth)) : 2;
               const hitWidth = Math.max(14, strokeWidth + 10);
@@ -1534,18 +1835,8 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
                     ? `${Math.max(1, Math.round(strokeWidth))} ${Math.max(4, Math.round(strokeWidth * 1.8))}`
                     : undefined;
 
-              const markerEnd =
-                arrow === 'forward' || arrow === 'both'
-                  ? isSelected
-                    ? 'url(#arrow-selected)'
-                    : 'url(#arrow)'
-                  : undefined;
-              const markerStart =
-                arrow === 'backward' || arrow === 'both'
-                  ? isSelected
-                    ? 'url(#arrow-start-selected)'
-                    : 'url(#arrow-start)'
-                  : undefined;
+              const markerEnd = arrow === 'forward' || arrow === 'both' ? 'url(#arrow)' : undefined;
+              const markerStart = arrow === 'backward' || arrow === 'both' ? 'url(#arrow-start)' : undefined;
 
               return (
               <g key={edge.id} className="edge">
@@ -1571,19 +1862,19 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
                     setEdgeEditor(null);
                   }}
                 />
-                <path
-                  d={bezierLink(
-                    { x: edge.x1, y: edge.y1 },
-                    edge.sourceSide,
-                    { x: edge.x2, y: edge.y2 },
-                    edge.targetSide
-                  )}
-                  fill="none"
-                  stroke={isSelected ? '#ef4444' : '#0f172a'}
-                  strokeWidth={strokeWidth}
-                  strokeDasharray={dasharray}
-                  strokeLinecap="round"
-                  markerEnd={markerEnd}
+	                <path
+	                  d={bezierLink(
+	                    { x: edge.x1, y: edge.y1 },
+	                    edge.sourceSide,
+	                    { x: edge.x2, y: edge.y2 },
+	                    edge.targetSide
+	                  )}
+	                  fill="none"
+	                  stroke={strokeColor}
+	                  strokeWidth={strokeWidth}
+	                  strokeDasharray={dasharray}
+	                  strokeLinecap="round"
+	                  markerEnd={markerEnd}
                   markerStart={markerStart}
                   opacity={0.75}
                   className={cn(isSelected ? 'drop-shadow-sm' : '', 'pointer-events-none')}
@@ -1620,67 +1911,121 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
                   />
                 </foreignObject>
 
-                {(['top', 'right', 'bottom', 'left'] as PortSide[]).map((side) => {
-                  const p = getPortPosition(node, side);
-                  const candidates = edgesWithPositions.filter(
-                    (edge) =>
-                      (edge.source === node.id && edge.sourceSide === side) || (edge.target === node.id && edge.targetSide === side)
-                  );
-                  const selectedCandidate = candidates.find((edge) => edge.id === selectedEdgeId);
-                  const edgeToRewire = (selectedCandidate ?? candidates[candidates.length - 1]) as
-                    | (typeof candidates)[number]
-                    | undefined;
-                  const movingEnd: 'source' | 'target' | undefined =
-                    edgeToRewire && edgeToRewire.source === node.id && edgeToRewire.sourceSide === side
-                      ? 'source'
-                      : edgeToRewire && edgeToRewire.target === node.id && edgeToRewire.targetSide === side
-                        ? 'target'
-                        : undefined;
-                  const isConnectedPort = !!edgeToRewire && !!movingEnd;
-                  return (
-                    <circle
-                      key={side}
-                      cx={p.x - node.x}
-                      cy={p.y - node.y}
-                      r={6}
-                      fill="#2563eb"
-                      className={cn(
-                        'port opacity-0 transition-opacity duration-150 group-hover:opacity-100 hover:opacity-100',
-                        isConnectedPort ? 'cursor-grab' : 'cursor-crosshair'
-                      )}
-                      onPointerDown={(e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        if (!svgRef.current) return;
-                        const [sx, sy] = d3.pointer(e.nativeEvent, svgRef.current);
-                        const [x, y] = zoomTransform.current.invert([sx, sy]);
-                        if (isConnectedPort && edgeToRewire && movingEnd) {
-                          const fixedNodeId = movingEnd === 'target' ? edgeToRewire.source : edgeToRewire.target;
-                          const fixedSide = movingEnd === 'target' ? edgeToRewire.sourceSide : edgeToRewire.targetSide;
+                {(() => {
+                  const isVisible = hoveredNodeId === node.id || hoverLockedNodeId === node.id;
+                  const hiddenClass = isVisible ? 'opacity-100' : 'opacity-0';
+                  const baseButtonOffset = ADD_BUTTON_GAP_PX + ADD_BUTTON_SIZE_PX / 2;
 
-                          setSelectedEdgeId(edgeToRewire.id);
-                          setEdgeMenu(null);
-                          setNodeMenu(null);
-                          setEdgeEditor(null);
-                          updateDraggingLink({
-                            mode: 'rewire',
-                            edgeId: edgeToRewire.id,
-                            movingEnd,
-                            fixedNodeId,
-                            fixedSide,
-                            x,
-                            y
-                          });
-                        } else {
-                          setEdgeMenu(null);
-                          setNodeMenu(null);
-                          setEdgeEditor(null);
-                          updateDraggingLink({ mode: 'create', sourceId: node.id, side, x, y });
-                        }
-                      }}
-                    />
+                  return (
+                    <>
+                      {(['top', 'right', 'bottom', 'left'] as PortSide[]).map((side) => {
+                        const p = getPortPosition(node, side);
+                        const candidates = edgesWithPositions.filter(
+                          (edge) =>
+                            (edge.source === node.id && edge.sourceSide === side) || (edge.target === node.id && edge.targetSide === side)
+                        );
+                        const selectedCandidate = candidates.find((edge) => edge.id === selectedEdgeId);
+                        const edgeToRewire = (selectedCandidate ?? candidates[candidates.length - 1]) as
+                          | (typeof candidates)[number]
+                          | undefined;
+                        const movingEnd: 'source' | 'target' | undefined =
+                          edgeToRewire && edgeToRewire.source === node.id && edgeToRewire.sourceSide === side
+                            ? 'source'
+                            : edgeToRewire && edgeToRewire.target === node.id && edgeToRewire.targetSide === side
+                              ? 'target'
+                              : undefined;
+                        const isConnectedPort = !!edgeToRewire && !!movingEnd;
+
+                        const dir = sideDir(side);
+                        const bx = p.x - node.x + dir.x * baseButtonOffset;
+                        const by = p.y - node.y + dir.y * baseButtonOffset;
+
+                        return (
+                          <g key={side}>
+                            <circle
+                              cx={p.x - node.x}
+                              cy={p.y - node.y}
+                              r={PORT_RADIUS_PX}
+                              fill="#2563eb"
+                              className={cn(
+                                'port transition-opacity duration-150 hover:opacity-100',
+                                hiddenClass,
+                                isConnectedPort ? 'cursor-grab' : 'cursor-crosshair'
+                              )}
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                if (!svgRef.current) return;
+                                const [sx, sy] = d3.pointer(e.nativeEvent, svgRef.current);
+                                const [x, y] = zoomTransform.current.invert([sx, sy]);
+                                if (isConnectedPort && edgeToRewire && movingEnd) {
+                                  const fixedNodeId = movingEnd === 'target' ? edgeToRewire.source : edgeToRewire.target;
+                                  const fixedSide = movingEnd === 'target' ? edgeToRewire.sourceSide : edgeToRewire.targetSide;
+
+                                  setSelectedEdgeId(edgeToRewire.id);
+                                  setEdgeMenu(null);
+                                  setNodeMenu(null);
+                                  setEdgeEditor(null);
+                                  updateDraggingLink({
+                                    mode: 'rewire',
+                                    edgeId: edgeToRewire.id,
+                                    movingEnd,
+                                    fixedNodeId,
+                                    fixedSide,
+                                    x,
+                                    y
+                                  });
+                                } else {
+                                  setEdgeMenu(null);
+                                  setNodeMenu(null);
+                                  setEdgeEditor(null);
+                                  updateDraggingLink({ mode: 'create', sourceId: node.id, side, x, y });
+                                }
+                              }}
+                            />
+
+                            <g
+                              transform={`translate(${bx}, ${by})`}
+                              className={cn('transition-opacity duration-150', hiddenClass)}
+                              onPointerEnter={() => setHoverLockedNodeId(node.id)}
+                              onPointerLeave={() => setHoverLockedNodeId((prev) => (prev === node.id ? null : prev))}
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                              }}
+                              onPointerUp={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                addNodeFrom(node.id, side);
+                              }}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <rect
+                                x={-ADD_BUTTON_SIZE_PX / 2}
+                                y={-ADD_BUTTON_SIZE_PX / 2}
+                                width={ADD_BUTTON_SIZE_PX}
+                                height={ADD_BUTTON_SIZE_PX}
+                                rx={4}
+                                fill="white"
+                                stroke="#cbd5e1"
+                                strokeWidth={1}
+                              />
+                              <text
+                                x={0}
+                                y={1}
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                                className="select-none fill-slate-900 text-xs font-bold"
+                              >
+                                +
+                              </text>
+                            </g>
+                          </g>
+                        );
+                      })}
+                    </>
                   );
-                })}
+                })()}
               </g>
             ))}
           </g>
