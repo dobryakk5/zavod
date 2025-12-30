@@ -61,14 +61,14 @@ export function ClientProductsTab() {
   const handleCreateRegular = async () => {
     const name = createName.trim();
     const short_description = createShortDescription.trim();
-    if (!name) return;
+    if (!name || !short_description) return;
     setCreatingManual(true);
     setError(null);
     try {
       const created = await clientProductsApi.create({
         name,
         product_type_id: createTypeId,
-        short_description: short_description ? short_description : null,
+        short_description,
         packages: []
       });
       setProducts((prev) => [created, ...prev]);
@@ -187,6 +187,7 @@ export function ClientProductsTab() {
 
   const coreOnboarding = !loading && !error && products.length === 0;
   const canCreateCore = Boolean(createName.trim() && createShortDescription.trim());
+  const canCreateRegular = Boolean(createName.trim() && createShortDescription.trim());
 
   return (
     <div className="space-y-6">
@@ -199,7 +200,7 @@ export function ClientProductsTab() {
             className="w-full max-w-sm"
           />
           <Input
-            placeholder={coreOnboarding ? 'Описание продукта' : 'Краткое описание (опционально)'}
+            placeholder="Описание продукта"
             value={createShortDescription}
             onChange={(e) => setCreateShortDescription(e.target.value)}
             className="w-full max-w-sm"
@@ -246,7 +247,7 @@ export function ClientProductsTab() {
                   </SelectContent>
                 </Select>
               </div>
-              <Button onClick={() => void handleCreateRegular()} disabled={creatingManual || !createName.trim()}>
+              <Button onClick={() => void handleCreateRegular()} disabled={creatingManual || !canCreateRegular}>
                 {creatingManual ? 'Создание…' : 'Добавить продукт'}
               </Button>
             </>
@@ -255,7 +256,7 @@ export function ClientProductsTab() {
         <p className="text-xs text-muted-foreground">
           {coreOnboarding
             ? 'Создайте основной продукт (Core): заполните название и описание, затем выберите «Вручную» или «Автомат».'
-            : 'Введите название и нажмите «Добавить продукт»'}
+            : 'Введите название и описание и нажмите «Добавить продукт»'}
         </p>
       </div>
 

@@ -3,20 +3,19 @@
 
 {% block object-tools-items %}
   {{ block.super }}
-  {% if change and not is_popup and perms.core.change_trenditem %}
-    <li>
-      <form method="post" action="{% url 'admin:core_trenditem_custom_gen_video' original.pk %}" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
-        {% csrf_token %}
-        <input
-          type="number"
-          name="videos_per_post"
-          min="1"
-          max="{{ max_videos_per_post|default:5 }}"
-          value="1"
-          required
-          style="width:6.5em;"
-          title="{% translate 'Видео на пост (каждое видео — ролик из 3 сцен)' %}"
-        >
+	  {% if change and not is_popup and perms.core.change_trenditem %}
+	    <li>
+	      <form method="post" action="{% url 'admin:core_trenditem_custom_gen_video' original.pk %}" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+	        {% csrf_token %}
+	        <input
+	          type="number"
+	          name="videos_per_post"
+	          min="1"
+	          value="1"
+	          required
+	          style="width:6.5em;"
+	          title="{% translate 'Видео на пост (каждое видео — ролик из 3 сцен)' %}"
+	        >
         <label style="display:flex; align-items:center; gap:6px; font-size:12px;">
           <input type="checkbox" name="force_new_post" value="1">
           {% translate "Создать новый пост" %}
@@ -27,12 +26,12 @@
         <div style="margin-top:6px; font-size:12px;">
           {% translate "Текущий пост:" %} <a href="{{ used_for_post_change_url }}">#{{ used_for_post_id }}</a>
         </div>
-      {% endif %}
-      {% if not has_description %}
-        <div style="margin-top:6px; color:#ba2121; font-size:12px;">
-          {% translate "Description пустой — будет использован только Title." %}
-        </div>
-      {% endif %}
-    </li>
-  {% endif %}
+	      {% endif %}
+	      {% if not has_description %}
+	        <div style="margin-top:6px; color:#ba2121; font-size:12px;">
+	          {% translate "Description пустой — Custom gen video недоступен." %}
+	        </div>
+	      {% endif %}
+	    </li>
+	  {% endif %}
 {% endblock %}

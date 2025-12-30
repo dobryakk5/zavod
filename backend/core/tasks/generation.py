@@ -1306,7 +1306,7 @@ def _generate_three_scene_videos_for_single_post(
         "errors": [],
     }
     try:
-        videos_per_post_int = max(1, min(5, int(videos_per_post)))
+        videos_per_post_int = max(1, int(videos_per_post))
     except (TypeError, ValueError):
         videos_per_post_int = 1
 
@@ -1534,7 +1534,7 @@ def generate_posts_with_videos_from_custom_task(
     total_posts = max(1, min(99, total_posts))
 
     try:
-        videos_per_post_int = max(1, min(5, int(videos_per_post)))
+        videos_per_post_int = max(1, int(videos_per_post))
     except (TypeError, ValueError):
         videos_per_post_int = 1
 
@@ -1731,10 +1731,22 @@ def generate_videos_from_trend_item_description(
     if not client:
         return {"success": False, "error": "client_required"}
 
-    source_title = (trend.title or "").strip()
     source_text = (trend.description or "").strip()
-    if not source_title and not source_text:
-        return {"success": False, "error": "no_source_text"}
+    if not source_text:
+        return {"success": False, "error": "description_required"}
+
+    def _make_title_from_description(description: str) -> str:
+        compact = " ".join((description or "").split())
+        if not compact:
+            return "Description"
+        for sep in (".", "!", "?"):
+            idx = compact.find(sep)
+            if 0 < idx < 200:
+                compact = compact[: idx + 1]
+                break
+        if len(compact) > 255:
+            return compact[:252] + "..."
+        return compact
 
     previous_post_id = getattr(trend, "used_for_post_id", None)
     post = None if force_new_post else trend.used_for_post
@@ -1753,81 +1765,11 @@ def generate_videos_from_trend_item_description(
                         result.append(normalized)
             return result
 
-        topic_name = ""
-        try:
-            topic_name = (trend.topic.name or "").strip()
-        except Exception:
-            topic_name = ""
-        if not topic_name:
-            topic_name = client.name or client.slug
-
-        template_config = {
-            "tone": getattr(template, "tone", "professional"),
-            "length": getattr(template, "length", 1200),
-            "language": getattr(template, "language", "ru"),
-            "type": getattr(template, "type", "selling"),
-            "seo_prompt_template": getattr(template, "seo_prompt_template", ""),
-            "trend_prompt_template": getattr(template, "trend_prompt_template", ""),
-            "prompt_type": "trend",
-            "additional_instructions": getattr(template, "additional_instructions", ""),
-            "include_hashtags": getattr(template, "include_hashtags", True),
-            "max_hashtags": getattr(template, "max_hashtags", 5),
-            "brand": client.get_brand_display_name(),
-            "avatar": client.avatar or "",
-            "pains": client.pains or "",
-            "desires": client.desires or "",
-            "objections": client.objections or "",
-            "books": client.expert_books or "",
-        }
-
-        seo_keywords = _get_latest_seo_keywords_for_client(client)
-        wordstat_phrases = _select_wordstat_phrases(client)
-
-        post_title = (source_title or "Trend")[:255]
-        post_text = source_text or source_title or ""
+        post_title = _make_title_from_description(source_text)
+        post_text = source_text
         hook_title = ""
-        tags = ["trend", "custom", "video"]
+        tags = _dedupe_tags(["trend", "custom", "video"])
         wordstat_phrases_used: List[str] = []
-
-        try:
-            post_generator = AIContentGenerator()
-        except ValueError as exc:
-            logger.warning("AI генератор недоступен (trend->post), создаю placeholder пост: %s", exc)
-        else:
-            result = post_generator.generate_post_text(
-                trend_title=source_title or "Trend",
-                trend_description=source_text or source_title or "Trend description",
-                trend_url=trend.url or "",
-                topic_name=topic_name,
-                template_config=template_config,
-                seo_keywords=seo_keywords,
-                wordstat_phrases=wordstat_phrases,
-            )
-            if result and result.get("success"):
-                result = _apply_wordstat_refinement(
-                    generator=post_generator,
-                    base_result=result,
-                    phrases=wordstat_phrases,
-                    language=getattr(template, "language", "ru"),
-                    log_prefix="trend-custom-video",
-                )
-
-                post_title = (result.get("title") or post_title)[:255]
-                hook_title = result.get("hook_title") or ""
-                post_text = result.get("text") or post_text
-                hashtags = result.get("hashtags") or []
-                tags = []
-                if isinstance(hashtags, list):
-                    tags.extend([t for t in hashtags if isinstance(t, str)])
-                tags.extend(["trend", "custom", "video"])
-                tags = _dedupe_tags(tags)
-                wordstat_phrases_used = result.get("wordstat_phrases_used") or wordstat_phrases or []
-            else:
-                logger.warning(
-                    "Не удалось сгенерировать текст поста из тренда %s для custom video: %s",
-                    trend_item_id,
-                    (result or {}).get("error", "post_generation_failed"),
-                )
 
         try:
             post = Post.objects.create(
@@ -1838,13 +1780,11 @@ def generate_videos_from_trend_item_description(
                 text=post_text,
                 status="draft",
                 tags=tags,
-                source_links=[trend.url] if trend.url else [],
+                source_links=[],
                 generated_by="trenditem-custom-video",
                 created_by_id=created_by_id,
                 wordstat_phrases_used=wordstat_phrases_used,
             )
-            if wordstat_phrases_used:
-                _increment_wordstat_usage(client, wordstat_phrases_used)
         except Exception as exc:
             logger.error("Не удалось сохранить пост из тренда %s: %s", trend_item_id, exc, exc_info=True)
             return {"success": False, "error": "post_save_failed"}
@@ -1860,7 +1800,7 @@ def generate_videos_from_trend_item_description(
         return {"success": True, "post_id": post.id, "created_post": created_post, "videos": {"success": False}}
 
     try:
-        videos_per_post_int = max(1, min(5, int(videos_per_post)))
+        videos_per_post_int = max(1, int(videos_per_post))
     except (TypeError, ValueError):
         videos_per_post_int = 1
 
@@ -1894,8 +1834,8 @@ def generate_videos_from_trend_item_description(
         video_options=video_options,
         max_attempts=max_attempts_per_scene,
         log_prefix=f"TREND {trend_item_id}",
-        source_title=source_title or (post.title or ""),
-        source_text=source_text or (post.text or ""),
+        source_title=_make_title_from_description(source_text),
+        source_text=source_text,
         source_hook_title="",
     )
 
@@ -1966,7 +1906,7 @@ def generate_posts_with_videos_from_seo_keyword_set(
         videos_per_post_int = max(1, int(videos_per_post))
     except (TypeError, ValueError):
         videos_per_post_int = 1
-    videos_per_post_int = max(1, min(5, videos_per_post_int))
+    videos_per_post_int = max(1, videos_per_post_int)
 
     selected_keywords = _select_seo_keywords_for_posts(keywords, total_posts)
     if not selected_keywords:
@@ -2715,7 +2655,7 @@ def _generate_videos_batch(posts: List[Post], videos_per_post: int = 1, language
         return {"success": False, "error": "no_posts"}
 
     try:
-        videos_per_post_int = max(1, min(5, int(videos_per_post)))
+        videos_per_post_int = max(1, int(videos_per_post))
     except (TypeError, ValueError):
         videos_per_post_int = 1
 

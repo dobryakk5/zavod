@@ -1,0 +1,2 @@
+Hello from Python!
+Тест Яндекс.Диск API

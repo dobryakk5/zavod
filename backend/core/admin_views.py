@@ -41,7 +41,6 @@ class CustomPostGeneratorForm(forms.Form):
     videos_per_post = forms.IntegerField(
         label="Видео на пост",
         min_value=1,
-        max_value=5,
         initial=1,
         required=True,
         help_text="Каждое видео генерируется как ролик из 3 сцен.",

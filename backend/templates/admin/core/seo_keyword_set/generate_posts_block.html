@@ -42,11 +42,11 @@
     </form>
   </div>
 
-  <div class="seo-generate-posts__section">
-    <div class="seo-generate-posts__section-title">Посты + вертикальные видео (VEO)</div>
-    <p class="help">
-      Выберите шаблон, количество постов и сколько видео генерировать на каждый пост (до {{ max_videos_per_post }} роликов через Telegram VEO бот).
-    </p>
+	  <div class="seo-generate-posts__section">
+	    <div class="seo-generate-posts__section-title">Посты + вертикальные видео (VEO)</div>
+	    <p class="help">
+	      Выберите шаблон, количество постов и сколько видео генерировать на каждый пост (через Telegram VEO бот).
+	    </p>
 
     <form method="post" action="{{ videos_action_url }}" class="seo-generate-posts__form">
       <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
@@ -74,20 +74,17 @@
         >
         <span class="help-inline">Максимум {{ max_posts }} постов за запуск</span>
       </div>
-      <div class="form-row">
-        <label for="id_videos_per_post">Видео на пост</label>
-        <input
-          type="number"
-          name="videos_per_post"
-          id="id_videos_per_post"
-          min="1"
-          max="{{ max_videos_per_post }}"
-          value="{{ default_videos_per_post }}"
-          pattern="\d{1,2}"
-          required
-        >
-        <span class="help-inline">До {{ max_videos_per_post }} роликов на каждый пост</span>
-      </div>
+	      <div class="form-row">
+	        <label for="id_videos_per_post">Видео на пост</label>
+	        <input
+	          type="number"
+	          name="videos_per_post"
+	          id="id_videos_per_post"
+	          min="1"
+	          value="{{ default_videos_per_post }}"
+	          required
+	        >
+	      </div>
       <div class="form-row">
         <button type="submit" class="button default">Создать посты + видео</button>
       </div>

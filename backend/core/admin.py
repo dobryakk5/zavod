@@ -1532,8 +1532,6 @@ class TrendItemAdmin(admin.ModelAdmin):
             "fields": ("extra", "used_for_post", "discovered_at"),
         }),
     )
-    MAX_VIDEOS_PER_POST = 5
-
     def title_short(self, obj):
         return obj.title[:60] + "..." if len(obj.title) > 60 else obj.title
     title_short.short_description = "Title"
@@ -1554,7 +1552,6 @@ class TrendItemAdmin(admin.ModelAdmin):
         return custom_urls + urls
 
     def render_change_form(self, request, context, add=False, change=False, form_url="", obj=None):
-        context["max_videos_per_post"] = self.MAX_VIDEOS_PER_POST
         context["has_description"] = bool((getattr(obj, "description", "") or "").strip())
         used_for_post_id = getattr(obj, "used_for_post_id", None) if obj else None
         context["used_for_post_id"] = used_for_post_id
@@ -1579,12 +1576,20 @@ class TrendItemAdmin(admin.ModelAdmin):
         if not self.has_change_permission(request, trend):
             raise PermissionDenied
 
+        if not (getattr(trend, "description", "") or "").strip():
+            self.message_user(
+                request,
+                "Description пустой — заполните Description и попробуйте снова.",
+                level=messages.ERROR,
+            )
+            return HttpResponseRedirect(change_url)
+
         raw_videos_per_post = request.POST.get("videos_per_post")
         try:
             videos_per_post = int(raw_videos_per_post)
         except (TypeError, ValueError):
             videos_per_post = 1
-        videos_per_post = max(1, min(self.MAX_VIDEOS_PER_POST, videos_per_post))
+        videos_per_post = max(1, videos_per_post)
 
         force_new_post = str(request.POST.get("force_new_post") or "").strip().lower() in {"1", "true", "on", "yes"}
 
@@ -1853,7 +1858,6 @@ class ContentTemplateAdmin(admin.ModelAdmin):
 @admin.register(SEOKeywordSet)
 class SEOKeywordSetAdmin(admin.ModelAdmin):
     MAX_POSTS_PER_RUN = 99
-    MAX_VIDEOS_PER_POST = 5
 
     list_display = ("group_type", "topic", "client", "status", "keywords_count", "ai_model", "created_at")
     list_filter = ("group_type", "status", "client", "created_at")
@@ -1978,7 +1982,6 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
         posts_action_url = reverse("admin:core_seokeywordset_generate_posts", args=[obj.pk])
         videos_action_url = reverse("admin:core_seokeywordset_generate_posts_videos", args=[obj.pk])
         max_posts = self.MAX_POSTS_PER_RUN
-        max_videos = self.MAX_VIDEOS_PER_POST
         context = {
             "posts_action_url": posts_action_url,
             "videos_action_url": videos_action_url,
@@ -1989,7 +1992,6 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
             "default_videos_per_post": 1,
             "keyword_count": keyword_count,
             "max_posts": max_posts,
-            "max_videos_per_post": max_videos,
         }
         html = render_to_string("admin/core/seo_keyword_set/generate_posts_block.html", context)
         return mark_safe(html)
@@ -2134,7 +2136,7 @@ class SEOKeywordSetAdmin(admin.ModelAdmin):
             videos_per_post = int(raw_videos_per_post)
         except (TypeError, ValueError):
             videos_per_post = 1
-        videos_per_post = max(1, min(self.MAX_VIDEOS_PER_POST, videos_per_post))
+        videos_per_post = max(1, videos_per_post)
 
         from .tasks import generate_posts_with_videos_from_seo_keyword_set
 
