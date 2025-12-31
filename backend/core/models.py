@@ -703,7 +703,7 @@ class VeoVideoExport(models.Model):
 
     telegram_message_id = models.BigIntegerField(null=True, blank=True, db_index=True)
     telegram_message_date = models.DateTimeField(null=True, blank=True)
-    bot_username = models.CharField(max_length=255, blank=True)
+    bot_username = models.CharField(max_length=255, blank=True, db_index=True)
     source_url = models.TextField(blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)

@@ -486,12 +486,41 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
     log("Yandex Disk:")
     log(f"  dir: {args.disk_dir}")
 
-    veo_export_model = None
-    if getattr(args, "save_db", False):
+    resume_last_message_id: Optional[int] = None
+    resume_enabled = not bool(getattr(args, "no_resume", False))
+
+    try:
         veo_export_model = _setup_django(args.django_settings, repo_root)
-        log(f"DB: enabled (settings={args.django_settings})")
-    else:
-        log("DB: disabled")
+    except Exception as exc:
+        raise RuntimeError(
+            "Не удалось подключиться к Django/БД для сохранения экспорта. "
+            "Проверьте, что вы запускаете из проекта и выполнены миграции: "
+            "python backend/manage.py migrate"
+        ) from exc
+
+    log(f"DB: enabled (settings={args.django_settings})")
+    if resume_enabled:
+        base_dir = (args.disk_dir or "").strip("/").strip() or "disk/zavod/video"
+
+        def _load_last_id() -> Optional[int]:
+            row = (
+                veo_export_model.objects.filter(
+                    bot_username=bot_username,
+                    disk_path__startswith=f"{base_dir}/",
+                )
+                .exclude(telegram_message_id__isnull=True)
+                .order_by("-telegram_message_id")
+                .first()
+            )
+            if not row:
+                return None
+            return int(row.telegram_message_id)
+
+        resume_last_message_id = await asyncio.to_thread(_load_last_id)
+        if resume_last_message_id is not None:
+            log(f"Resume: last exported telegram_message_id={resume_last_message_id}")
+        else:
+            log("Resume: no previous exports found")
 
     client = TelegramClient(session_base, api_id_int, api_hash)
     await client.connect()
@@ -541,6 +570,16 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
                         ext=job.ext,
                     )
 
+                    if resume_enabled:
+                        def _already_exported() -> bool:
+                            return veo_export_model.objects.filter(disk_path=remote_path).exists()
+
+                        if await asyncio.to_thread(_already_exported):
+                            log(f"  - already exported: {remote_path}")
+                            async with stats_lock:
+                                stats["skipped_videos"] += 1
+                            continue
+
                     if args.dry_run:
                         log(f"  - dry-run: {job.source_type} -> {remote_path}")
                         async with stats_lock:
@@ -588,20 +627,19 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
                         async with stats_lock:
                             stats["uploaded_videos"] += 1
 
-                        if veo_export_model is not None:
-                            def _save() -> None:
-                                veo_export_model.objects.update_or_create(
-                                    disk_path=remote_path,
-                                    defaults={
-                                        "request_text": job.request_text or "",
-                                        "telegram_message_id": job.msg_id,
-                                        "telegram_message_date": job.msg_date,
-                                        "bot_username": bot_username,
-                                        "source_url": job.url or "",
-                                    },
-                                )
+                        def _save() -> None:
+                            veo_export_model.objects.update_or_create(
+                                disk_path=remote_path,
+                                defaults={
+                                    "request_text": job.request_text or "",
+                                    "telegram_message_id": job.msg_id,
+                                    "telegram_message_date": job.msg_date,
+                                    "bot_username": bot_username,
+                                    "source_url": job.url or "",
+                                },
+                            )
 
-                            await asyncio.to_thread(_save)
+                        await asyncio.to_thread(_save)
                     except Exception as exc:
                         log(f"  ! ошибка при обработке видео: {exc}")
                         async with stats_lock:
@@ -633,6 +671,14 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
 
             if msg_id is None:
                 continue
+            if resume_enabled and resume_last_message_id is not None:
+                if oldest_first:
+                    if int(msg_id) <= resume_last_message_id:
+                        continue
+                else:
+                    if int(msg_id) <= resume_last_message_id:
+                        log(f"Resume: reached telegram_message_id={msg_id}, stopping scan.")
+                        break
             if args.min_id and msg_id < args.min_id:
                 continue
             if args.max_id and msg_id > args.max_id:
@@ -739,9 +785,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--workers", type=int, default=4, help="Количество параллельных воркеров (скачивание/загрузка)")
     parser.add_argument(
-        "--save-db",
+        "--no-resume",
         action="store_true",
-        help="Сохранять записи в БД (таблица core.VeoVideoExport)",
+        help="Не продолжать с последнего сохраненного сообщения (сканировать заново)",
     )
     parser.add_argument(
         "--django-settings",
