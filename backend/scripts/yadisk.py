@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from dotenv import load_dotenv
 
@@ -6,6 +7,27 @@ load_dotenv()
 
 TOKEN = os.getenv("YADISK_TOKEN")
 HEADERS = {"Authorization": f"OAuth {TOKEN}"}
+
+
+def safe_request(req_func, *args, retries: int = 5, backoff: int = 2, **kwargs):
+    """
+    Выполнить запрос с ретраями на 423 Locked (часто бывает у Я.Диска при параллельных аплоадах).
+
+    Возвращает объект Response, как requests.*.
+    """
+    for i in range(retries):
+        try:
+            response = req_func(*args, **kwargs)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.HTTPError as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 423 and i < retries - 1:
+                wait = backoff * (i + 1)
+                print(f"⚠️ Locked, retry in {wait}s…")
+                time.sleep(wait)
+                continue
+            raise
 
 
 def create_folder(disk_path: str):
@@ -25,17 +47,18 @@ def create_folder(disk_path: str):
     for part in parts:
         current = f"{current}/{part}" if current else part
         params = {"path": current}
-        r = requests.put(url, headers=HEADERS, params=params)
-
-        if r.status_code not in (201, 409):  # 409 = папка уже есть
-            r.raise_for_status()
+        try:
+            safe_request(requests.put, url, headers=HEADERS, params=params)
+        except requests.exceptions.HTTPError as e:
+            # 409 = папка уже существует (не ошибка)
+            if getattr(getattr(e, "response", None), "status_code", None) != 409:
+                raise
 
 
 def get_upload_link(disk_path: str) -> str:
     url = "https://cloud-api.yandex.net/v1/disk/resources/upload"
     params = {"path": disk_path, "overwrite": "true"}
-    r = requests.get(url, headers=HEADERS, params=params)
-    r.raise_for_status()
+    r = safe_request(requests.get, url, headers=HEADERS, params=params)
     return r.json()["href"]
 
 
@@ -47,8 +70,7 @@ def upload_file(local_path: str, disk_path: str, logger=print):
     upload_url = get_upload_link(disk_path)
 
     with open(local_path, "rb") as f:
-        r = requests.put(upload_url, files={"file": f})
-        r.raise_for_status()
+        safe_request(requests.put, upload_url, files={"file": f})
 
     if logger:
         logger(f"Файл загружен: {disk_path}")
