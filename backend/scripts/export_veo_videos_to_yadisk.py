@@ -486,7 +486,8 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
     log("Yandex Disk:")
     log(f"  dir: {args.disk_dir}")
 
-    resume_last_message_id: Optional[int] = None
+    resume_min_exported_id: Optional[int] = None
+    resume_max_exported_id: Optional[int] = None
     resume_enabled = not bool(getattr(args, "no_resume", False))
 
     try:
@@ -502,23 +503,24 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
     if resume_enabled:
         base_dir = (args.disk_dir or "").strip("/").strip() or "disk/zavod/video"
 
-        def _load_last_id() -> Optional[int]:
-            row = (
+        def _load_resume_bounds() -> Tuple[Optional[int], Optional[int]]:
+            from django.db.models import Max, Min  # type: ignore
+
+            agg = (
                 veo_export_model.objects.filter(
                     bot_username=bot_username,
                     disk_path__startswith=f"{base_dir}/",
                 )
                 .exclude(telegram_message_id__isnull=True)
-                .order_by("-telegram_message_id")
-                .first()
+                .aggregate(min_id=Min("telegram_message_id"), max_id=Max("telegram_message_id"))
             )
-            if not row:
-                return None
-            return int(row.telegram_message_id)
+            min_id = agg.get("min_id")
+            max_id = agg.get("max_id")
+            return (int(min_id) if min_id is not None else None, int(max_id) if max_id is not None else None)
 
-        resume_last_message_id = await asyncio.to_thread(_load_last_id)
-        if resume_last_message_id is not None:
-            log(f"Resume: last exported telegram_message_id={resume_last_message_id}")
+        resume_min_exported_id, resume_max_exported_id = await asyncio.to_thread(_load_resume_bounds)
+        if resume_min_exported_id is not None or resume_max_exported_id is not None:
+            log(f"Resume: exported range telegram_message_id=[{resume_min_exported_id}..{resume_max_exported_id}]")
         else:
             log("Resume: no previous exports found")
 
@@ -662,7 +664,29 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
         oldest_first = bool(args.oldest_first)
         only_incoming = bool(args.only_incoming)
 
-        async for msg in client.iter_messages(bot, limit=limit, reverse=oldest_first):
+        scan_min_id = int(args.min_id) if args.min_id else 0
+        scan_max_id = int(args.max_id) if args.max_id else 0
+
+        # Resume semantics:
+        # - Default direction (newest -> oldest): continue further into history (older than already exported).
+        #   That means: start from message_id < resume_min_exported_id.
+        # - oldest_first (oldest -> newest): continue forward (newer than already exported).
+        #   That means: start from message_id > resume_max_exported_id.
+        if resume_enabled and resume_min_exported_id is not None and not oldest_first:
+            resume_cap = max(0, resume_min_exported_id - 1)
+            scan_max_id = resume_cap if scan_max_id <= 0 else min(scan_max_id, resume_cap)
+            log(f"Resume: scanning older messages with id <= {scan_max_id}")
+        if resume_enabled and resume_max_exported_id is not None and oldest_first:
+            scan_min_id = max(scan_min_id, resume_max_exported_id)
+            log(f"Resume: scanning newer messages with id > {scan_min_id}")
+
+        async for msg in client.iter_messages(
+            bot,
+            limit=limit,
+            reverse=oldest_first,
+            min_id=scan_min_id,
+            max_id=scan_max_id,
+        ):
             async with stats_lock:
                 stats["scanned_messages"] += 1
 
@@ -671,14 +695,6 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
 
             if msg_id is None:
                 continue
-            if resume_enabled and resume_last_message_id is not None:
-                if oldest_first:
-                    if int(msg_id) <= resume_last_message_id:
-                        continue
-                else:
-                    if int(msg_id) <= resume_last_message_id:
-                        log(f"Resume: reached telegram_message_id={msg_id}, stopping scan.")
-                        break
             if args.min_id and msg_id < args.min_id:
                 continue
             if args.max_id and msg_id > args.max_id:
