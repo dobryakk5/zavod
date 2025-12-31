@@ -62,18 +62,45 @@ def get_upload_link(disk_path: str) -> str:
     return r.json()["href"]
 
 
-def upload_file(local_path: str, disk_path: str, logger=print):
+def upload_file(
+    local_path: str,
+    disk_path: str,
+    logger=print,
+    *,
+    retries: int = 5,
+    backoff: int = 2,
+):
     folder = os.path.dirname(disk_path)
     if folder:
         create_folder(folder)
 
-    upload_url = get_upload_link(disk_path)
+    if retries < 1:
+        retries = 1
 
-    with open(local_path, "rb") as f:
-        safe_request(requests.put, upload_url, files={"file": f})
+    for attempt in range(retries):
+        upload_url = get_upload_link(disk_path)
+        try:
+            with open(local_path, "rb") as f:
+                r = requests.put(upload_url, files={"file": f})
+                r.raise_for_status()
+            if logger:
+                logger(f"Файл загружен: {disk_path}")
+            return
+        except requests.exceptions.HTTPError as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 404 and attempt < retries - 1:
+                wait = 1
+                print(f"⚠️ 404 upload-target, получаем новую ссылку (попытка {attempt + 1}), жду {wait}s…")
+                time.sleep(wait)
+                continue
+            if status == 423 and attempt < retries - 1:
+                wait = backoff * (attempt + 1)
+                print(f"⚠️ Locked, retry in {wait}s…")
+                time.sleep(wait)
+                continue
+            raise
 
-    if logger:
-        logger(f"Файл загружен: {disk_path}")
+    raise RuntimeError(f"Не удалось загрузить файл на Я.Диск после {retries} попыток: {disk_path}")
 
 
 if __name__ == "__main__":
