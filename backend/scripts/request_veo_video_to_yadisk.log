@@ -158,3 +158,17 @@ DB: enabled (settings=config.settings.dev)
 === Image [1/4]: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png ===
 [img 1/4] [inflight 1/2] [1/103] Sent. start_message_id=11671 topic=Что такое SEO-контент и почему без него сайт не продаёт?
 [img 1/4] [inflight 2/2] [2/103] Sent. start_message_id=11675 topic=Почему SEO-тексты есть, а клиентов нет?
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_publisher_client_3.session
+Request:
+  images: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open2.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open3.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/close.png
+  prompts_file: backend/scripts/word_gen.txt (count=103)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+=== Image [1/4]: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png ===
+[img 1/4] [inflight 1/2] [1/103] Sent. start_message_id=11681 topic=Что такое SEO-контент и почему без него сайт не продаёт?
+[img 1/4] [inflight 2/2] [2/103] Sent. start_message_id=11685 topic=Почему SEO-тексты есть, а клиентов нет?

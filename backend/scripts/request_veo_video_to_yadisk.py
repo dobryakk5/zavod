@@ -26,6 +26,8 @@ import asyncio
 import importlib.util
 import os
 import re
+import shutil
+import sqlite3
 import sys
 import tempfile
 import time
@@ -537,6 +539,55 @@ def _is_auth_key_duplicated_error(exc: BaseException) -> bool:
     return "AuthKeyDuplicatedError" in text or "authorization key" in text.lower()
 
 
+def _is_sqlite_readonly_error(exc: BaseException) -> bool:
+    if isinstance(exc, sqlite3.OperationalError) and "readonly" in str(exc).lower():
+        return True
+    return "readonly database" in str(exc).lower()
+
+
+def _prepare_writable_session(
+    *,
+    session_base: str,
+    session_label: str,
+    force_temp: bool = False,
+) -> Tuple[str, str, List[str]]:
+    """
+    Telethon использует sqlite-файл .session и пишет в него даже при connect().
+    Если файл/директория read-only (часто на серверах/деплоях), копируем .session в /tmp.
+    """
+    label = session_label if session_label.endswith(".session") else f"{session_base}.session"
+    label = os.path.abspath(os.path.expanduser(label))
+    base = label[:-8] if label.endswith(".session") else os.path.abspath(os.path.expanduser(session_base))
+
+    parent = os.path.dirname(label) or "."
+    file_exists = os.path.exists(label)
+    file_writable = os.access(label, os.W_OK) if file_exists else False
+    dir_writable = os.access(parent, os.W_OK)
+
+    if not force_temp:
+        if file_exists and file_writable:
+            return base, label, []
+        if (not file_exists) and dir_writable:
+            return base, label, []
+
+    tmp_dir = tempfile.mkdtemp(prefix="tg_session_")
+    new_label = os.path.join(tmp_dir, os.path.basename(label))
+    try:
+        if file_exists:
+            shutil.copy2(label, new_label)
+            journal = label + "-journal"
+            if os.path.exists(journal):
+                try:
+                    shutil.copy2(journal, new_label + "-journal")
+                except OSError:
+                    pass
+    except Exception:
+        # Если копирование не удалось — всё равно пробуем создать новую сессию в /tmp.
+        pass
+
+    return new_label[:-8], new_label, [tmp_dir]
+
+
 def _normalize_for_match(value: str) -> str:
     cleaned = (value or "").lower()
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -717,10 +768,38 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
         log(f"  dir: {args.disk_dir}")
         log(f"DB: enabled (settings={args.django_settings})")
 
+        session_base, session_label, temp_session_dirs = _prepare_writable_session(
+            session_base=session_base,
+            session_label=session_label,
+        )
+        if temp_session_dirs:
+            log(f"⚠️ Session sqlite is read-only; using temp session in: {temp_session_dirs[0]}")
+
         client = TelegramClient(session_base, api_id_int, api_hash)
         try:
             await client.connect()
         except Exception as exc:
+            if _is_sqlite_readonly_error(exc):
+                # Иногда os.access() говорит "writable", но sqlite всё равно не может писать.
+                session_base, session_label, temp_session_dirs = _prepare_writable_session(
+                    session_base=session_base,
+                    session_label=session_label,
+                    force_temp=True,
+                )
+                if temp_session_dirs:
+                    log(f"⚠️ Session sqlite is read-only; retry with temp session in: {temp_session_dirs[0]}")
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                    client = TelegramClient(session_base, api_id_int, api_hash)
+                    await client.connect()
+                    exc = None  # type: ignore[assignment]
+                if exc is None:
+                    pass
+                else:
+                    raise
+
             # Частый кейс: старый session-ключ "сожжён" из-за использования под разными IP.
             if session_explicit or not _is_auth_key_duplicated_error(exc):
                 raise
@@ -736,17 +815,27 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
             for base, label in _list_session_candidates(repo_root):
                 if base == session_base:
                     continue
-                alt_client = TelegramClient(base, api_id_int, api_hash)
+                base2, label2, temp_session_dirs = _prepare_writable_session(session_base=base, session_label=label)
+                if temp_session_dirs:
+                    log(f"  - session sqlite is read-only; using temp in: {temp_session_dirs[0]}")
+                alt_client = TelegramClient(base2, api_id_int, api_hash)
                 try:
                     await alt_client.connect()
                     client = alt_client
-                    session_base, session_label = base, label
+                    session_base, session_label = base2, label2
                     log(f"✅ Using session: {session_label}")
                     fallback_ok = True
                     break
                 except Exception as inner_exc:
                     if _is_auth_key_duplicated_error(inner_exc):
-                        log(f"  - rejected: {label} ({inner_exc})")
+                        log(f"  - rejected: {label2} ({inner_exc})")
+                        try:
+                            await alt_client.disconnect()
+                        except Exception:
+                            pass
+                        continue
+                    if _is_sqlite_readonly_error(inner_exc):
+                        log(f"  - rejected (readonly sqlite): {label2}")
                         try:
                             await alt_client.disconnect()
                         except Exception:
@@ -783,12 +872,13 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
             for base, label in _list_session_candidates(repo_root):
                 if base == session_base:
                     continue
-                alt_client = TelegramClient(base, api_id_int, api_hash)
+                base2, label2, temp_session_dirs = _prepare_writable_session(session_base=base, session_label=label)
+                alt_client = TelegramClient(base2, api_id_int, api_hash)
                 try:
                     await alt_client.connect()
                     await _ensure_user_session(alt_client)
                     client = alt_client
-                    session_base, session_label = base, label
+                    session_base, session_label = base2, label2
                     log(f"✅ Using session: {session_label}")
                     fallback_ok = True
                     break
@@ -799,10 +889,13 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
                         pass
                     # Пропускаем только authkey-ошибки и bot-сессии.
                     if _is_auth_key_duplicated_error(inner_exc) or "authoriz" in str(inner_exc).lower():
-                        log(f"  - rejected: {label} ({inner_exc})")
+                        log(f"  - rejected: {label2} ({inner_exc})")
+                        continue
+                    if _is_sqlite_readonly_error(inner_exc):
+                        log(f"  - rejected (readonly sqlite): {label2}")
                         continue
                     if "авторизована как бот" in str(inner_exc).lower() or "session is bot" in str(inner_exc).lower():
-                        log(f"  - skipped bot session: {label}")
+                        log(f"  - skipped bot session: {label2}")
                         continue
                     raise
 
@@ -942,7 +1035,13 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
                         batch.append(msg)
                 return new_last_seen_id, batch
 
+            start_image = int(getattr(args, "start_image", 1) or 1)
+            if start_image < 1:
+                start_image = 1
+
             for image_index, image_path in enumerate(image_paths, start=1):
+                if image_index < start_image:
+                    continue
                 if not os.path.exists(image_path):
                     raise FileNotFoundError(f"Не найден файл изображения: {image_path}")
 
@@ -1163,6 +1262,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         nargs="*",
         default=[],
         help="Список картинок (если не задано, используется open/open2/open3/close)",
+    )
+    parser.add_argument(
+        "--start-image",
+        type=int,
+        default=1,
+        help="С какого номера картинки стартовать (1 = первая)",
     )
     parser.add_argument(
         "--prompts-file",
