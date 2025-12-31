@@ -1,0 +1,84 @@
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_collector_client_3.session
+Request:
+  image: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png
+  prompts_file: backend/scripts/word_gen.txt (count=102)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_collector_client_3.session
+Request:
+  image: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png
+  prompts_file: backend/scripts/word_gen.txt (count=102)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+[1/102] Sent. start_message_id=11580 prompt=Что такое SEO-контент и почему без него сайт не продаёт?
+[2/102] Sent. start_message_id=11585 prompt=Почему SEO-тексты есть, а клиентов нет?
+Файл загружен: disk/zavod/video/2025-12-31/131050_11583.mp4
+✅ exported: disk/zavod/video/2025-12-31/131050_11583.mp4
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_collector_client_3.session
+Request:
+  image: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png
+  prompts_file: backend/scripts/word_gen.txt (count=102)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+[1/102] Sent. start_message_id=11591 prompt=Что такое SEO-контент и почему без него сайт не продаёт?
+
+не используй титров и текстов в видео
+[2/102] Sent. start_message_id=11595 prompt=Почему SEO-тексты есть, а клиентов нет?
+
+не используй титров и текстов в видео
+[3/102] Sent. start_message_id=11599 prompt=Как создавать контент для SEO, а не «для галочки»?
+
+не используй титров и текстов в видео
+[4/102] Sent. start_message_id=11603 prompt=Почему статьи не выходят в топ, даже если написаны по ТЗ?
+
+не используй титров и текстов в видео
+[5/102] Sent. start_message_id=11607 prompt=Что важнее: ключевые слова или смысл?
+
+не используй титров и текстов в видео
+[6/102] Sent. start_message_id=11611 prompt=SEO-контент — это не тексты, а система продаж
+
+не используй титров и текстов в видео
+[7/102] Sent. start_message_id=11615 prompt=Большинство SEO-статей не работают вообще
+
+не используй титров и текстов в видео
+[8/102] Sent. start_message_id=11619 prompt=Контент может привлекать трафик, но не клиентов
+
+не используй титров и текстов в видео
+[9/102] Sent. start_message_id=11623 prompt=SEO не равно копирайтинг!
+
+не используй титров и текстов в видео
+[10/102] Sent. start_message_id=11627 prompt=Хватит писать тексты, которые никто не читает!
+
+не используй титров и текстов в видео
+[11/102] Sent. start_message_id=11631 prompt=SEO-контент должен продавать!
+
+не используй титров и текстов в видео
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_collector_client_3.session
+Request:
+  image: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png
+  prompts_file: backend/scripts/word_gen.txt (count=102)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+[1/102] Sent. start_message_id=11636 prompt=Что такое SEO-контент и почему без него сайт не продаёт?
+
+не используй титров и текстов в видео
