@@ -20,19 +20,12 @@ import {
 } from '@/components/ui/form';
 import { CustomTextarea } from '@/components/ui/custom-textarea';
 import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { toast } from 'sonner';
 import type { ClientSettings } from '@/lib/types';
 
 const settingsFormSchema = z.object({
   brand_name: z.string().optional(),
-  timezone: z.string().optional(),
+  niche: z.string().optional(),
   avatar: z.string().optional(),
   pains: z.string().optional(),
   desires: z.string().optional(),
@@ -53,7 +46,7 @@ export function ClientSettingsForm() {
     resolver: zodResolver(settingsFormSchema),
     defaultValues: {
       brand_name: '',
-      timezone: '',
+      niche: '',
       avatar: '',
       pains: '',
       desires: '',
@@ -72,7 +65,7 @@ export function ClientSettingsForm() {
       setSettings(data);
       form.reset({
         brand_name: data.brand_name || '',
-        timezone: data.timezone || '',
+        niche: data.niche || '',
         avatar: data.avatar || '',
         pains: data.pains || '',
         desires: data.desires || '',
@@ -174,26 +167,15 @@ export function ClientSettingsForm() {
 
         <FormField
           control={form.control}
-          name="timezone"
+          name="niche"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Часовой пояс</FormLabel>
-              <Select onValueChange={field.onChange} value={field.value}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Выберите часовой пояс" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectItem value="UTC">UTC</SelectItem>
-                  <SelectItem value="Europe/Moscow">Europe/Moscow</SelectItem>
-                  <SelectItem value="Europe/London">Europe/London</SelectItem>
-                  <SelectItem value="America/New_York">America/New_York</SelectItem>
-                  <SelectItem value="Asia/Tokyo">Asia/Tokyo</SelectItem>
-                </SelectContent>
-              </Select>
+              <FormLabel>Ниша</FormLabel>
+              <FormControl>
+                <Input placeholder='Например: "пиццерия"' {...field} />
+              </FormControl>
               <FormDescription>
-                Используется для планирования публикаций
+                Например &quot;пиццерия&quot; или &quot;школа психологии&quot;
               </FormDescription>
               <FormMessage />
             </FormItem>

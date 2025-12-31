@@ -26,7 +26,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -39,6 +39,8 @@ try:
     from telethon import TelegramClient
 except Exception:  # pragma: no cover
     TelegramClient = None
+
+import html as html_lib
 
 
 URL_RE = re.compile(r'https?://[^\s<>"{}|\\^`[\]]+')
@@ -53,6 +55,84 @@ class ExportStats:
     uploaded_videos: int
     skipped_videos: int
     errors: int
+
+
+@dataclass(frozen=True)
+class VideoJob:
+    msg_id: int
+    msg_date: object
+    index: int
+    source_type: str  # "media" | "url"
+    url: Optional[str]
+    msg: object
+    ext: str
+    request_text: str
+
+
+def _make_logger(log_file: Optional[str]) -> Tuple[Callable[[str], None], Callable[[], None]]:
+    log_path: Optional[Path] = None
+    handle = None
+    if log_file:
+        candidate = (log_file or "").strip()
+        if candidate and candidate != "-":
+            log_path = Path(candidate)
+            if not log_path.is_absolute():
+                log_path = (Path(__file__).resolve().parent / log_path).resolve()
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(log_path, "a", encoding="utf-8")
+
+    def _log(message: str) -> None:
+        line = str(message)
+        print(line)
+        if handle:
+            handle.write(line + "\n")
+            handle.flush()
+
+    def _close() -> None:
+        nonlocal handle
+        if handle:
+            try:
+                handle.close()
+            finally:
+                handle = None
+
+    return _log, _close
+
+
+def _extract_request_text(message_text: str) -> str:
+    """
+    Вернуть фрагмент от "Ваш запрос:" до "🎛️ Инструмент:".
+    Если маркеры не найдены — вернуть пустую строку.
+    """
+    text = (message_text or "").replace("\r\n", "\n")
+    match = re.search(
+        r"(Ваш запрос:\s*.*?)(?:\n?\s*🎛️\s*Инструмент:)",
+        text,
+        flags=re.IGNORECASE | re.S,
+    )
+    if not match:
+        return ""
+    fragment = match.group(1)
+    fragment = re.sub(r"^\s*(?:📍\s*)?Ваш запрос:\s*", "", fragment, flags=re.IGNORECASE)
+    fragment = html_lib.unescape(fragment).strip()
+    # Часто VEO возвращает формат "Scene 1: ... Scene 2: ..." — убираем только "Scene 1:" в начале.
+    fragment = re.sub(r"^\s*scene\s*1\s*[:\-]\s*", "", fragment, flags=re.IGNORECASE)
+    return fragment.strip()
+
+
+def _setup_django(settings_module: str, repo_root: Path):
+    """
+    Ленивый setup Django для сохранения записей в БД.
+    """
+    backend_dir = repo_root / "backend"
+    sys.path.insert(0, str(backend_dir))
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings_module)
+    import django  # type: ignore
+
+    django.setup()
+    from core.models import VeoVideoExport  # type: ignore
+
+    return VeoVideoExport
 
 
 def _load_local_yadisk_module() -> object:
@@ -234,45 +314,90 @@ def _is_video_message(msg) -> bool:
     return False
 
 
-def _download_video_url(url: str, timeout_s: int) -> Optional[str]:
+def _extract_mp4_from_html(body: str) -> Tuple[Optional[str], str]:
+    """
+    Попробовать достать прямую mp4 ссылку из HTML/JS.
+    Портировано из backend/core/foto_video_gen.py (без Django-зависимостей).
+    """
+    if not body:
+        return None, "HTML body is empty"
+    normalized = html_lib.unescape(body)
+    normalized = normalized.replace("\\/", "/")
+    match = MP4_URL_RE.search(normalized)
+    if match:
+        return match.group(0), f"MP4 matched: {match.group(0)}"
+    src_match = re.search(
+        r'id=["\\\']videoSource["\\\']\\s+src=["\\\']([^"\\\']+\.mp4[^"\\\']*)',
+        normalized,
+        flags=re.I,
+    )
+    if src_match:
+        return src_match.group(1), f"videoSource src matched: {src_match.group(1)}"
+    return None, "MP4 not found in HTML"
+
+
+def _is_candidate_video_link(url: str, message_text: str) -> bool:
+    lowered = (url or "").lower()
+    if not lowered.startswith(("http://", "https://")):
+        return False
+    if ".mp4" in lowered:
+        return True
+    # Типичный формат ответа бота: "Вот прямая ссылка (...) на качественную версию."
+    if "прямая ссылка" in (message_text or "").lower():
+        return True
+    # Основной домен, который встречался в ответах.
+    if "getvideo.syntxai.net" in lowered:
+        return True
+    return False
+
+
+def _download_video_from_link(url: str, timeout_s: int, _depth: int = 0) -> Optional[str]:
     try:
-        resp = requests.get(url, timeout=timeout_s)
-        resp.raise_for_status()
+        with requests.get(url, timeout=timeout_s, stream=True) as resp:
+            resp.raise_for_status()
+
+            content_type = (resp.headers.get("Content-Type") or "").lower()
+            if "video" not in content_type and "octet-stream" not in content_type:
+                if _depth >= 2:
+                    print(f"  ! ссылка не выглядит как видео (Content-Type={content_type or 'unknown'}): {url}")
+                    return None
+
+                body = ""
+                try:
+                    body = resp.text or ""
+                except Exception:
+                    body = ""
+                mp4_url, _reason = _extract_mp4_from_html(body)
+                if mp4_url:
+                    return _download_video_from_link(mp4_url, timeout_s=timeout_s, _depth=_depth + 1)
+
+                print(f"  ! ссылка не выглядит как видео (Content-Type={content_type or 'unknown'}): {url}")
+                return None
+
+            fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1024 * 512):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                if os.path.getsize(tmp_path) < 10 * 1024:
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                    print(f"  ! файл слишком маленький (не похоже на видео): {url}")
+                    return None
+                return tmp_path
+            except Exception:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                raise
     except Exception as exc:
         print(f"  ! не удалось скачать {url}: {exc}")
         return None
-
-    content_type = (resp.headers.get("Content-Type") or "").lower()
-    if "video" not in content_type and "octet-stream" not in content_type:
-        body = ""
-        try:
-            body = resp.text or ""
-        except Exception:
-            body = ""
-        mp4 = MP4_URL_RE.search(body)
-        if mp4:
-            return _download_video_url(mp4.group(0), timeout_s=timeout_s)
-        print(f"  ! ссылка не выглядит как видео (Content-Type={content_type or 'unknown'}): {url}")
-        return None
-
-    fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(resp.content)
-        if os.path.getsize(tmp_path) < 10 * 1024:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-            print(f"  ! файл слишком маленький (не похоже на видео): {url}")
-            return None
-        return tmp_path
-    except Exception:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
 
 
 def _safe_disk_path_part(value: str) -> str:
@@ -327,6 +452,8 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
     if not os.getenv("YADISK_TOKEN"):
         raise RuntimeError("Нужен YADISK_TOKEN (OAuth токен Яндекс.Диск). Добавьте его в .env или окружение.")
 
+    log, close_log = _make_logger(args.log_file)
+
     yadisk_mod = _load_local_yadisk_module()
     upload_file = getattr(yadisk_mod, "upload_file", None)
     if not callable(upload_file):
@@ -353,11 +480,18 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
     if not bot_username:
         raise RuntimeError("Не задан бот (используйте --bot)")
 
-    print("Telegram:")
-    print(f"  bot: {bot_username}")
-    print(f"  session: {session_label}")
-    print("Yandex Disk:")
-    print(f"  dir: {args.disk_dir}")
+    log("Telegram:")
+    log(f"  bot: {bot_username}")
+    log(f"  session: {session_label}")
+    log("Yandex Disk:")
+    log(f"  dir: {args.disk_dir}")
+
+    veo_export_model = None
+    if getattr(args, "save_db", False):
+        veo_export_model = _setup_django(args.django_settings, repo_root)
+        log(f"DB: enabled (settings={args.django_settings})")
+    else:
+        log("DB: disabled")
 
     client = TelegramClient(session_base, api_id_int, api_hash)
     await client.connect()
@@ -369,20 +503,130 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
             )
 
         bot = await client.get_entity(bot_username)
+        try:
+            latest_list = await client.get_messages(bot, limit=1)
+            latest = latest_list[0] if latest_list else None
+            if latest is not None:
+                latest_id = getattr(latest, "id", None)
+                latest_date = getattr(latest, "date", None)
+                log(f"Chat latest message: id={latest_id}, date={latest_date}")
+        except Exception:
+            pass
 
-        scanned_messages = 0
-        found_videos = 0
-        downloaded_videos = 0
-        uploaded_videos = 0
-        skipped_videos = 0
-        errors = 0
+        stats_lock = asyncio.Lock()
+        stats = {
+            "scanned_messages": 0,
+            "found_videos": 0,
+            "downloaded_videos": 0,
+            "uploaded_videos": 0,
+            "skipped_videos": 0,
+            "errors": 0,
+        }
+
+        queue: asyncio.Queue[Optional[VideoJob]] = asyncio.Queue(maxsize=max(10, int(args.workers) * 5))
+
+        async def _worker(worker_id: int) -> None:
+            while True:
+                job = await queue.get()
+                try:
+                    if job is None:
+                        return
+
+                    remote_path = _build_remote_path(
+                        disk_dir=args.disk_dir,
+                        bot_username=bot_username,
+                        msg_id=job.msg_id,
+                        msg_date=job.msg_date,
+                        index=job.index,
+                        ext=job.ext,
+                    )
+
+                    if args.dry_run:
+                        log(f"  - dry-run: {job.source_type} -> {remote_path}")
+                        async with stats_lock:
+                            stats["skipped_videos"] += 1
+                        continue
+
+                    local_path: Optional[str] = None
+                    try:
+                        if job.source_type == "media":
+                            fd, tmp_path = tempfile.mkstemp(suffix=job.ext if job.ext.startswith(".") else ".mp4")
+                            os.close(fd)
+                            downloaded = await client.download_media(job.msg, file=tmp_path)
+                            if not downloaded or not os.path.exists(downloaded):
+                                log("  ! не удалось скачать медиа из сообщения")
+                                async with stats_lock:
+                                    stats["errors"] += 1
+                                continue
+                            local_path = str(downloaded)
+                        else:
+                            if not job.url:
+                                async with stats_lock:
+                                    stats["errors"] += 1
+                                continue
+                            local_path = await asyncio.to_thread(
+                                _download_video_from_link,
+                                job.url,
+                                int(args.url_timeout),
+                            )
+                            if not local_path:
+                                async with stats_lock:
+                                    stats["errors"] += 1
+                                continue
+
+                        async with stats_lock:
+                            stats["downloaded_videos"] += 1
+
+                        def _upload() -> None:
+                            try:
+                                upload_file(local_path=local_path, disk_path=remote_path, logger=log)
+                            except TypeError:
+                                upload_file(local_path=local_path, disk_path=remote_path)
+                                log(f"Файл загружен: {remote_path}")
+
+                        await asyncio.to_thread(_upload)
+                        async with stats_lock:
+                            stats["uploaded_videos"] += 1
+
+                        if veo_export_model is not None:
+                            def _save() -> None:
+                                veo_export_model.objects.update_or_create(
+                                    disk_path=remote_path,
+                                    defaults={
+                                        "request_text": job.request_text or "",
+                                        "telegram_message_id": job.msg_id,
+                                        "telegram_message_date": job.msg_date,
+                                        "bot_username": bot_username,
+                                        "source_url": job.url or "",
+                                    },
+                                )
+
+                            await asyncio.to_thread(_save)
+                    except Exception as exc:
+                        log(f"  ! ошибка при обработке видео: {exc}")
+                        async with stats_lock:
+                            stats["errors"] += 1
+                    finally:
+                        if local_path and os.path.exists(local_path):
+                            try:
+                                os.remove(local_path)
+                            except OSError:
+                                pass
+
+                    if args.sleep and args.sleep > 0:
+                        await asyncio.sleep(args.sleep)
+                finally:
+                    queue.task_done()
+
+        workers = [asyncio.create_task(_worker(i + 1)) for i in range(int(args.workers))]
 
         limit = args.limit if args.limit and args.limit > 0 else None
         oldest_first = bool(args.oldest_first)
         only_incoming = bool(args.only_incoming)
 
         async for msg in client.iter_messages(bot, limit=limit, reverse=oldest_first):
-            scanned_messages += 1
+            async with stats_lock:
+                stats["scanned_messages"] += 1
 
             msg_id = getattr(msg, "id", None)
             msg_date = getattr(msg, "date", None)
@@ -396,86 +640,84 @@ async def export_videos(args: argparse.Namespace) -> ExportStats:
             if only_incoming and getattr(msg, "out", False):
                 continue
 
-            per_message_sources: List[Tuple[str, str]] = []
+            sources: List[Tuple[str, str, Optional[str]]] = []
+
             if _is_video_message(msg):
                 ext = ".mp4"
                 file_obj = getattr(msg, "file", None)
                 msg_ext = getattr(file_obj, "ext", None)
                 if isinstance(msg_ext, str) and msg_ext:
                     ext = msg_ext
-                per_message_sources.append(("media", ext))
+                sources.append(("media", ext, None))
 
+            msg_text = (getattr(msg, "raw_text", None) or getattr(msg, "message", None) or "") or ""
+            request_text = _extract_request_text(msg_text)
+            candidate_urls: List[str] = []
+            for url in _extract_urls_from_message(msg):
+                if _is_candidate_video_link(url, msg_text):
+                    candidate_urls.append(url)
+
+            # Исторический случай: прямые .mp4 в тексте.
             for mp4_url in _extract_mp4_urls_from_message(msg):
-                per_message_sources.append((mp4_url, ".mp4"))
+                if mp4_url not in candidate_urls:
+                    candidate_urls.append(mp4_url)
 
-            if not per_message_sources:
+            for url in candidate_urls:
+                sources.append(("url", ".mp4", url))
+
+            if not sources:
                 continue
 
-            print(f"[{msg_id}] найдено источников видео: {len(per_message_sources)}")
-
-            for idx, (source, ext) in enumerate(per_message_sources, start=1):
-                found_videos += 1
-                remote_path = _build_remote_path(
-                    disk_dir=args.disk_dir,
-                    bot_username=bot_username,
-                    msg_id=msg_id,
-                    msg_date=msg_date,
-                    index=(idx if len(per_message_sources) > 1 else 0),
-                    ext=ext,
+            per_message_jobs: List[VideoJob] = []
+            total_sources = len(sources)
+            for i, (source_type, ext, url) in enumerate(sources):
+                suffix_index = 0
+                if total_sources > 1 and i > 0:
+                    suffix_index = i + 1  # 2,3,... (первый файл без суффикса)
+                per_message_jobs.append(
+                    VideoJob(
+                        msg_id=int(msg_id),
+                        msg_date=msg_date,
+                        index=suffix_index,
+                        source_type=source_type,
+                        url=url,
+                        msg=msg,
+                        ext=ext,
+                        request_text=request_text,
+                    )
                 )
 
-                if args.dry_run:
-                    print(f"  - dry-run: {source} -> {remote_path}")
-                    skipped_videos += 1
-                    continue
+            log(f"[{msg_id}] найдено источников видео: {len(per_message_jobs)}")
+            async with stats_lock:
+                stats["found_videos"] += len(per_message_jobs)
 
-                local_path: Optional[str] = None
-                try:
-                    if source == "media":
-                        fd, tmp_path = tempfile.mkstemp(suffix=ext if ext.startswith(".") else ".mp4")
-                        os.close(fd)
-                        downloaded = await client.download_media(msg, file=tmp_path)
-                        if not downloaded or not os.path.exists(downloaded):
-                            print("  ! не удалось скачать медиа из сообщения")
-                            errors += 1
-                            continue
-                        local_path = str(downloaded)
-                    else:
-                        local_path = _download_video_url(source, timeout_s=args.url_timeout)
-                        if not local_path:
-                            errors += 1
-                            continue
+            for job in per_message_jobs:
+                await queue.put(job)
 
-                    downloaded_videos += 1
-                    upload_file(local_path=local_path, disk_path=remote_path)
-                    uploaded_videos += 1
-                except Exception as exc:
-                    errors += 1
-                    print(f"  ! ошибка при обработке видео: {exc}")
-                finally:
-                    if local_path and os.path.exists(local_path):
-                        try:
-                            os.remove(local_path)
-                        except OSError:
-                            pass
+            if args.max_videos:
+                async with stats_lock:
+                    already_uploaded = stats["uploaded_videos"]
+                if already_uploaded >= args.max_videos:
+                    log(f"Достигнут лимит --max-videos={args.max_videos}, остановка.")
+                    break
 
-                if args.sleep and args.sleep > 0:
-                    await asyncio.sleep(args.sleep)
+        await queue.join()
+        for _ in workers:
+            await queue.put(None)
+        await asyncio.gather(*workers, return_exceptions=True)
 
-            if args.max_videos and uploaded_videos >= args.max_videos:
-                print(f"Достигнут лимит --max-videos={args.max_videos}, остановка.")
-                break
-
-        return ExportStats(
-            scanned_messages=scanned_messages,
-            found_videos=found_videos,
-            downloaded_videos=downloaded_videos,
-            uploaded_videos=uploaded_videos,
-            skipped_videos=skipped_videos,
-            errors=errors,
-        )
+        async with stats_lock:
+            return ExportStats(
+                scanned_messages=int(stats["scanned_messages"]),
+                found_videos=int(stats["found_videos"]),
+                downloaded_videos=int(stats["downloaded_videos"]),
+                uploaded_videos=int(stats["uploaded_videos"]),
+                skipped_videos=int(stats["skipped_videos"]),
+                errors=int(stats["errors"]),
+            )
     finally:
         await client.disconnect()
+        close_log()
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -490,6 +732,22 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     session_group.add_argument("--session-name", default=None, help="Имя/путь сессии Telethon (без .session)")
 
     parser.add_argument("--disk-dir", default="disk/zavod/video", help="Папка на Яндекс.Диске")
+    parser.add_argument(
+        "--log-file",
+        default="export_veo_videos_to_yadisk.log",
+        help="Файл текстового лога (относительно backend/scripts; '-' отключает запись)",
+    )
+    parser.add_argument("--workers", type=int, default=4, help="Количество параллельных воркеров (скачивание/загрузка)")
+    parser.add_argument(
+        "--save-db",
+        action="store_true",
+        help="Сохранять записи в БД (таблица core.VeoVideoExport)",
+    )
+    parser.add_argument(
+        "--django-settings",
+        default="config.settings.dev",
+        help="DJANGO_SETTINGS_MODULE для сохранения в БД (по умолчанию config.settings.dev)",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Лимит сообщений (0 = без лимита)")
     parser.add_argument("--min-id", type=int, default=0, help="Обрабатывать сообщения с id >= min-id")
     parser.add_argument("--max-id", type=int, default=0, help="Обрабатывать сообщения с id <= max-id")

@@ -616,6 +616,7 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
         fields = [
             "slug",
             "brand_name",
+            "niche",
             "timezone",
             "avatar",
             "pains",

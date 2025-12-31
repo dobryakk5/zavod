@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { SchedulePostDialog } from './schedule-post-dialog';
 import { ChevronLeft, ChevronRight, Trash2, Loader2 } from 'lucide-react';
 import { sanitizeRichText } from '@/lib/sanitize-html';
+import { highlightPhrasesInHtml } from '@/lib/highlight-html';
 import Link from 'next/link';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -148,9 +149,10 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
     prev: null,
     next: null,
   });
-  const sanitizedText = useMemo(
-    () => sanitizeRichText(post?.text || ''),
-    [post?.text]
+  const sanitizedText = useMemo(() => sanitizeRichText(post?.text || ''), [post?.text]);
+  const highlightedText = useMemo(
+    () => highlightPhrasesInHtml(sanitizedText, post?.wordstat_phrases_used),
+    [post?.wordstat_phrases_used, sanitizedText]
   );
 
   const loadPost = useCallback(async () => {
@@ -553,10 +555,10 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
       <div className="space-y-4">
         <div>
           <h2 className="text-lg font-semibold mb-2">Текст</h2>
-          {sanitizedText ? (
+          {highlightedText ? (
             <div
               className="prose max-w-none whitespace-pre-wrap break-words text-gray-900"
-              dangerouslySetInnerHTML={{ __html: sanitizedText }}
+              dangerouslySetInnerHTML={{ __html: highlightedText }}
             />
           ) : (
             <p className="text-gray-500">Текст не добавлен</p>

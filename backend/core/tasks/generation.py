@@ -299,13 +299,22 @@ def _apply_wordstat_refinement(
     return base_result
 
 
-def _select_wordstat_phrases(client: Client, limit: int = 2) -> List[str]:
+def _select_wordstat_phrases(client: Client, min_limit: int = 3, max_limit: int = 5) -> List[str]:
     """Выбрать избранные фразы Wordstat для клиента по приоритету.
 
     Приоритет рассчитывается как count / (10 * used), где used=0.01 если ещё не
     использовали фразу. Берём top-N по приоритету без дубликатов.
+
+    По умолчанию используем 3–5 фраз (если столько доступно).
     """
-    if not client or limit <= 0:
+    if not client:
+        return []
+
+    min_limit = max(int(min_limit), 0)
+    max_limit = max(int(max_limit), 0)
+    if max_limit < min_limit:
+        min_limit, max_limit = max_limit, min_limit
+    if max_limit <= 0:
         return []
 
     def _calculate_priority(entries: List[Tuple[float, str]]) -> List[str]:
@@ -313,9 +322,12 @@ def _select_wordstat_phrases(client: Client, limit: int = 2) -> List[str]:
         for _, phrase in sorted(entries, key=lambda x: x[0], reverse=True):
             if phrase not in ordered:
                 ordered.append(phrase)
-            if len(ordered) >= limit:
+            if len(ordered) >= max_limit:
                 break
-        return ordered
+        if len(ordered) <= min_limit:
+            return ordered
+        desired_limit = random.randint(min_limit, len(ordered))
+        return ordered[:desired_limit]
 
     phrases: List[str] = []
     priorities: List[tuple[float, str]] = []

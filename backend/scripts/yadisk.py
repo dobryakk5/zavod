@@ -39,7 +39,7 @@ def get_upload_link(disk_path: str) -> str:
     return r.json()["href"]
 
 
-def upload_file(local_path: str, disk_path: str):
+def upload_file(local_path: str, disk_path: str, logger=print):
     folder = os.path.dirname(disk_path)
     if folder:
         create_folder(folder)
@@ -50,7 +50,8 @@ def upload_file(local_path: str, disk_path: str):
         r = requests.put(upload_url, files={"file": f})
         r.raise_for_status()
 
-    print(f"Файл загружен: {disk_path}")
+    if logger:
+        logger(f"Файл загружен: {disk_path}")
 
 
 if __name__ == "__main__":

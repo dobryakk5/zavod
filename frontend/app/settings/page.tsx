@@ -1,6 +1,7 @@
 'use client';
 
 import { ClientSettingsForm } from '@/components/settings/client-settings-form';
+import { ClientTimezoneSetting } from '@/components/settings/client-timezone-setting';
 import { SocialAccountsManager } from '@/components/settings/social-accounts-manager';
 import { VkIntegrationsPanel } from '@/components/settings/vk-integrations-panel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -29,6 +30,9 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="social" className="space-y-6">
+          <div className="max-w-2xl">
+            <ClientTimezoneSetting />
+          </div>
           <SocialAccountsManager />
         </TabsContent>
 

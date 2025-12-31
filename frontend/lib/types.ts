@@ -298,6 +298,7 @@ export interface MindNodeProperty {
 export interface ClientSettings {
   slug?: string;
   brand_name?: string;
+  niche?: string;
   timezone?: string;
   avatar?: string;
   pains?: string;

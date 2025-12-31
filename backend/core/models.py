@@ -15,6 +15,13 @@ class Client(models.Model):
         verbose_name="Название бренда",
         help_text="Используется при упоминании бренда в постах",
     )
+    niche = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="Ниша",
+        help_text='Например "пиццерия" или "школа психологии"',
+    )
     slug = models.SlugField(unique=True)
     timezone = models.CharField(max_length=64, default="Europe/Helsinki")
 
@@ -678,6 +685,36 @@ class PostVideo(models.Model):
 
     def __str__(self):
         return f"Video #{self.id} for {self.post}"
+
+
+class VeoVideoExport(models.Model):
+    """
+    Архив выгруженных VEO-видео на Яндекс.Диск.
+
+    Хранит путь на диске и текстовый фрагмент из ответа бота
+    (от "Ваш запрос:" до "🎛️ Инструмент:").
+    """
+
+    disk_path = models.CharField(max_length=1024, unique=True)
+    request_text = models.TextField(
+        blank=True,
+        help_text='Фрагмент ответа VEO: от "Ваш запрос:" до "🎛️ Инструмент:"',
+    )
+
+    telegram_message_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    telegram_message_date = models.DateTimeField(null=True, blank=True)
+    bot_username = models.CharField(max_length=255, blank=True)
+    source_url = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        verbose_name = "VEO Video Export"
+        verbose_name_plural = "VEO Video Exports"
+
+    def __str__(self):
+        return self.disk_path
 
 
 class Schedule(models.Model):
