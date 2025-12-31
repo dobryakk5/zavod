@@ -73,6 +73,19 @@ class ExportJob:
     request_text: str
 
 
+@dataclass
+class PromptState:
+    index: int
+    topic: str
+    prompt: str
+    start_id: int
+    sent_at: float
+    deadline: float
+    required: int
+    found: int = 0
+    bot_request_text: str = ""
+
+
 def _make_logger(log_file: Optional[str]) -> Tuple[Callable[[str], None], Callable[[], None]]:
     log_path: Optional[Path] = None
     handle = None
@@ -192,6 +205,8 @@ def _resolve_session_base(
             return max(paths_list, key=lambda p: p.stat().st_mtime)
 
         candidate = newest([p for p in all_sessions if p.name.startswith("session_collector_client_")])
+        if candidate is None:
+            candidate = newest([p for p in all_sessions if p.name.startswith("session_publisher_client_")])
         if candidate is None:
             candidate = newest([p for p in all_sessions if p.stem == "veo_generator"])
         if candidate is None:
@@ -393,37 +408,44 @@ def _download_video_from_link(url: str, timeout_s: int, _depth: int = 0) -> Opti
         return None
 
 
+def _safe_filename_part(value: str, *, max_len: int = 120) -> str:
+    """
+    Безопасная часть имени файла для Я.Диска:
+    - пробелы -> _
+    - / \\ -> _
+    - остальное: буквы/цифры/underscore/.- оставляем, прочее -> _
+    """
+    cleaned = (value or "").strip()
+    cleaned = cleaned.replace("\\", "_").replace("/", "_")
+    cleaned = re.sub(r"\s+", "_", cleaned, flags=re.UNICODE).strip("_")
+    cleaned = re.sub(r"[^\w\.-]+", "_", cleaned, flags=re.UNICODE).strip("_")
+    if not cleaned:
+        cleaned = "unknown"
+    if max_len and len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip("_")
+    return cleaned or "unknown"
+
+
 def _build_remote_path(
     *,
     disk_dir: str,
-    msg_id: int,
-    msg_date: Any,
+    image_path: str,
+    topic: str,
     index: int,
-    ext: str,
 ) -> str:
-    day_part = "unknown_date"
-    try:
-        if msg_date:
-            day_part = msg_date.strftime("%Y-%m-%d")
-            time_part = msg_date.strftime("%H%M%S")
-        else:
-            time_part = "unknown_time"
-    except Exception:
-        time_part = "unknown_time"
+    """
+    Имя файла: 'вордстат_<фраза>.mp4' (без даты/номера).
+    Чтобы не было коллизий между разными картинками — складываем в подпапку по имени картинки.
+    """
+    base_dir = (disk_dir or "").strip("/").strip() or "disk/zavod/video"
+    image_stem = _safe_filename_part(Path(image_path).stem, max_len=40)
+    phrase = _safe_filename_part(topic, max_len=140)
 
-    name = f"{time_part}_{msg_id}"
-    if index:
+    name = f"вордстат_{phrase}"
+    if index and index > 1:
         name = f"{name}_{index}"
 
-    ext_clean = ext if ext.startswith(".") else f".{ext}"
-    ext_clean = ext_clean.lower()
-    if ext_clean not in {".mp4", ".mov", ".m4v", ".webm"}:
-        ext_clean = ".mp4"
-
-    base_dir = disk_dir.strip("/").strip()
-    if not base_dir:
-        base_dir = "disk/zavod/video"
-    return f"{base_dir}/{day_part}/{name}{ext_clean}"
+    return f"{base_dir}/{image_stem}/{name}.mp4"
 
 
 def _resolve_image_path(value: Optional[str]) -> str:
@@ -436,6 +458,136 @@ def _resolve_image_path(value: Optional[str]) -> str:
     if not default_path.exists():
         raise FileNotFoundError(f"Не найден open.png рядом со скриптом: {default_path}")
     return str(default_path)
+
+
+def _resolve_images(*, image: Optional[str], images: Sequence[str]) -> List[str]:
+    """
+    Вернуть список абсолютных путей картинок.
+
+    Приоритет:
+      1) --image (одна картинка)
+      2) --images (список)
+      3) дефолтная последовательность (open/open2/open3/close)
+    """
+    if image:
+        return [_resolve_image_path(image)]
+
+    resolved: List[str] = []
+    for item in images or []:
+        candidate = (item or "").strip()
+        if not candidate:
+            continue
+        resolved.append(_resolve_image_path(candidate))
+    if resolved:
+        return resolved
+
+    scripts_dir = Path(__file__).resolve().parent
+    defaults = [
+        scripts_dir / "open.png",
+        scripts_dir / "open2.png",
+        scripts_dir / "open3.png",
+        scripts_dir / "close.png",
+    ]
+    return [str(p.resolve()) for p in defaults if p.exists()]
+
+
+def _list_session_candidates(repo_root: Path) -> List[Tuple[str, str]]:
+    """
+    Вернуть список кандидатов (session_base, session_label) в порядке предпочтения.
+    Используется для фолбэка при AuthKeyDuplicatedError.
+    """
+    sessions_dir = repo_root / "backend" / "telegram_sessions"
+    if not sessions_dir.exists():
+        return []
+
+    all_sessions = [
+        p for p in sessions_dir.glob("*.session")
+        if p.is_file() and "_thread_" not in p.name
+    ]
+    if not all_sessions:
+        return []
+
+    def newest_first(paths: Iterable[Path]) -> List[Path]:
+        return sorted(list(paths), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    ordered: List[Path] = []
+    ordered.extend(newest_first([p for p in all_sessions if p.name.startswith("session_collector_client_")]))
+    ordered.extend(newest_first([p for p in all_sessions if p.name.startswith("session_publisher_client_")]))
+    ordered.extend(newest_first([p for p in all_sessions if p.stem == "veo_generator"]))
+    rest = [p for p in all_sessions if p not in set(ordered)]
+    ordered.extend(newest_first(rest))
+
+    unique: List[Tuple[str, str]] = []
+    seen = set()
+    for p in ordered:
+        label = str(p)
+        base = label[:-8] if label.endswith(".session") else label
+        if base in seen:
+            continue
+        seen.add(base)
+        unique.append((base, label))
+    return unique
+
+
+def _is_auth_key_duplicated_error(exc: BaseException) -> bool:
+    name = exc.__class__.__name__
+    if name == "AuthKeyDuplicatedError":
+        return True
+    text = str(exc or "")
+    return "AuthKeyDuplicatedError" in text or "authorization key" in text.lower()
+
+
+def _normalize_for_match(value: str) -> str:
+    cleaned = (value or "").lower()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _pick_active_prompt(active: List[PromptState], extracted_request_text: str) -> Optional[PromptState]:
+    """
+    Попробовать сопоставить входящий "Ваш запрос:" с одним из активных промптов.
+    Если сопоставление не уверенное — вернуть None.
+    """
+    if not active:
+        return None
+    norm_extracted = _normalize_for_match(extracted_request_text or "")
+    if not norm_extracted:
+        return None
+
+    best: Optional[PromptState] = None
+    best_score = 0
+    for state in active:
+        norm_prompt = _normalize_for_match(state.prompt)
+        norm_topic = _normalize_for_match(state.topic)
+
+        score = 0
+        if norm_prompt and (norm_prompt in norm_extracted or norm_extracted in norm_prompt):
+            score = 3
+        elif norm_topic and (norm_topic in norm_extracted or norm_extracted in norm_topic):
+            score = 2
+        elif norm_topic and norm_extracted and norm_topic.split(" ", 1)[0] in norm_extracted:
+            score = 1
+
+        if score > best_score:
+            best_score = score
+            best = state
+
+    return best if best_score >= 2 else None
+
+
+async def _ensure_user_session(client: Any) -> None:
+    """
+    Убедиться, что сессия авторизована как user, а не bot.
+    Иначе Telegram не даст писать другим ботам (UserIsBotError).
+    """
+    me = await client.get_me()
+    if getattr(me, "bot", False):
+        username = getattr(me, "username", None)
+        raise RuntimeError(
+            "Telegram-сессия авторизована как бот"
+            + (f" (@{username})" if username else "")
+            + ". Нужна user-сессия (вход по номеру телефона)."
+        )
 
 
 def _load_prompts_from_file(path: str) -> List[str]:
@@ -511,6 +663,7 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
             raise RuntimeError("TELEGRAM_API_ID должен быть числом") from exc
 
         repo_root = Path(__file__).resolve().parents[2]
+        session_explicit = bool(args.session_path or args.session_name)
         session_base, session_label = _resolve_session_base(
             session_path=args.session_path,
             session_name=args.session_name,
@@ -521,7 +674,9 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
         if not bot_username:
             raise RuntimeError("Не задан бот (используйте --bot или VEO_BOT_USERNAME)")
 
-        image_path = _resolve_image_path(args.image)
+        image_paths = _resolve_images(image=args.image, images=args.images or [])
+        if not image_paths:
+            raise RuntimeError("Не найдено ни одного изображения для отправки (open/open2/open3/close).")
         prompt_text = (args.prompt or "").strip()
 
         prompts: List[str] = []
@@ -551,7 +706,7 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
         log(f"  bot: {bot_username}")
         log(f"  session: {session_label}")
         log("Request:")
-        log(f"  image: {image_path}")
+        log(f"  images: {', '.join(image_paths)}")
         if args.prompts_file:
             log(f"  prompts_file: {args.prompts_file} (count={len(prompts)})")
         else:
@@ -563,18 +718,111 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
         log(f"DB: enabled (settings={args.django_settings})")
 
         client = TelegramClient(session_base, api_id_int, api_hash)
-        await client.connect()
+        try:
+            await client.connect()
+        except Exception as exc:
+            # Частый кейс: старый session-ключ "сожжён" из-за использования под разными IP.
+            if session_explicit or not _is_auth_key_duplicated_error(exc):
+                raise
+
+            log(f"⚠️ Session rejected ({session_label}): {exc}")
+            log("Trying another *.session from backend/telegram_sessions…")
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
+            fallback_ok = False
+            for base, label in _list_session_candidates(repo_root):
+                if base == session_base:
+                    continue
+                alt_client = TelegramClient(base, api_id_int, api_hash)
+                try:
+                    await alt_client.connect()
+                    client = alt_client
+                    session_base, session_label = base, label
+                    log(f"✅ Using session: {session_label}")
+                    fallback_ok = True
+                    break
+                except Exception as inner_exc:
+                    if _is_auth_key_duplicated_error(inner_exc):
+                        log(f"  - rejected: {label} ({inner_exc})")
+                        try:
+                            await alt_client.disconnect()
+                        except Exception:
+                            pass
+                        continue
+                    try:
+                        await alt_client.disconnect()
+                    except Exception:
+                        pass
+                    raise
+
+            if not fallback_ok:
+                raise RuntimeError(
+                    "Не удалось подобрать рабочую Telegram-сессию. "
+                    "Удалите/пересоздайте *.session в backend/telegram_sessions и авторизуйтесь заново."
+                ) from exc
+
+        # Доп. проверка: иногда в *.session попадает бот-аккаунт (bot token),
+        # а бот не может писать другому боту (VEO).
+        try:
+            await _ensure_user_session(client)
+        except Exception as exc:
+            if session_explicit:
+                raise
+
+            log(f"⚠️ Session is bot ({session_label}): {exc}")
+            log("Trying another *.session from backend/telegram_sessions…")
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
+            fallback_ok = False
+            for base, label in _list_session_candidates(repo_root):
+                if base == session_base:
+                    continue
+                alt_client = TelegramClient(base, api_id_int, api_hash)
+                try:
+                    await alt_client.connect()
+                    await _ensure_user_session(alt_client)
+                    client = alt_client
+                    session_base, session_label = base, label
+                    log(f"✅ Using session: {session_label}")
+                    fallback_ok = True
+                    break
+                except Exception as inner_exc:
+                    try:
+                        await alt_client.disconnect()
+                    except Exception:
+                        pass
+                    # Пропускаем только authkey-ошибки и bot-сессии.
+                    if _is_auth_key_duplicated_error(inner_exc) or "authoriz" in str(inner_exc).lower():
+                        log(f"  - rejected: {label} ({inner_exc})")
+                        continue
+                    if "авторизована как бот" in str(inner_exc).lower() or "session is bot" in str(inner_exc).lower():
+                        log(f"  - skipped bot session: {label}")
+                        continue
+                    raise
+
+            if not fallback_ok:
+                raise RuntimeError(
+                    "Нет подходящей user-сессии Telegram. "
+                    "Удалите bot-сессию и авторизуйтесь как пользователь: "
+                    "python backend/scripts/authorize_telegram.py --session-type collector --client-id <id>"
+                ) from exc
         try:
             if not await client.is_user_authorized():
                 raise RuntimeError(
                     "Telegram-сессия не авторизована. "
-                    "Сначала выполните: python backend/scripts/authorize_telegram.py --session-type collector"
+                    "Удалите старый *.session и выполните вход как пользователь (по номеру телефона): "
+                    "python backend/scripts/authorize_telegram.py --session-type collector --client-id <id>"
                 )
 
             bot = await client.get_entity(bot_username)
             exported: List[ExportedItem] = []
             errors: List[str] = []
-            sent_image_msg_id: int = 0
             exported_lock = asyncio.Lock()
             telethon_lock = asyncio.Lock()
             worker_sem = asyncio.Semaphore(max(1, int(args.workers)))
@@ -669,12 +917,15 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
                 if args.max_videos_per_prompt and int(args.max_videos_per_prompt) > 0
                 else 1
             )
+            inflight_prompts = max(1, int(getattr(args, "inflight_prompts", 1) or 1))
             topics = [(p or "").strip() for p in prompts if (p or "").strip()]
             prompt_suffix = (args.prompt_suffix or "").strip()
-            prompts_to_send = [
-                f"{topic}\n\n{prompt_suffix}" if prompt_suffix else topic
-                for topic in topics
-            ]
+            prompt_items: List[Tuple[str, str]] = []
+            for topic in topics:
+                prompt = f"{topic}\n\n{prompt_suffix}" if prompt_suffix else topic
+                prompt_items.append((topic, prompt))
+
+            prompts_to_send = [item[1] for item in prompt_items]
             scheduled_paths: set[str] = set()
 
             async def _get_new_incoming(bot_entity, *, last_seen_id: int) -> Tuple[int, List[Any]]:
@@ -691,45 +942,110 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
                         batch.append(msg)
                 return new_last_seen_id, batch
 
-            for idx, current_prompt in enumerate(prompts_to_send, start=1):
-                image_msg_id = int(sent_image_msg_id or 0)
-                prompt_msg_id = 0
-                need_send_image = args.send_image == "per_prompt" or (
-                    args.send_image == "once" and not sent_image_msg_id
-                )
+            for image_index, image_path in enumerate(image_paths, start=1):
+                if not os.path.exists(image_path):
+                    raise FileNotFoundError(f"Не найден файл изображения: {image_path}")
 
-                try:
-                    async with telethon_lock:
-                        if args.order == "image_first":
-                            if need_send_image:
-                                image_caption = (args.image_caption or "").strip() or None
-                                image_msg = await client.send_file(bot, image_path, caption=image_caption)
-                                image_msg_id = int(getattr(image_msg, "id", 0) or 0)
-                                if args.send_image == "once" and image_msg_id:
-                                    sent_image_msg_id = image_msg_id
-                            prompt_msg = await client.send_message(bot, current_prompt)
-                            prompt_msg_id = int(getattr(prompt_msg, "id", 0) or 0)
-                        else:
-                            prompt_msg = await client.send_message(bot, current_prompt)
-                            prompt_msg_id = int(getattr(prompt_msg, "id", 0) or 0)
-                            if need_send_image:
-                                image_caption = (args.image_caption or "").strip() or None
-                                image_msg = await client.send_file(bot, image_path, caption=image_caption)
-                                image_msg_id = int(getattr(image_msg, "id", 0) or 0)
-                                if args.send_image == "once" and image_msg_id:
-                                    sent_image_msg_id = image_msg_id
-                except Exception as exc:
-                    raise RuntimeError(f"Не удалось отправить запрос: {exc}") from exc
+                sent_image_msg_id: int = 0
+                log(f"=== Image [{image_index}/{len(image_paths)}]: {image_path} ===")
 
-                start_id = max(image_msg_id, prompt_msg_id)
-                log(f"[{idx}/{len(prompts_to_send)}] Sent. start_message_id={start_id or 'unknown'} prompt={current_prompt}")
+                async with telethon_lock:
+                    latest_list = await client.get_messages(bot, limit=1)
+                last_seen_id = int(getattr(latest_list[0], "id", 0) or 0) if latest_list else 0
 
-                deadline = time.time() + float(args.wait_seconds)
-                last_seen_id = int(start_id or 0)
-                found_for_prompt = 0
-                last_extracted_request_text = ""
+                queue: List[Tuple[int, str, str]] = [
+                    (i + 1, topic, prompt) for i, (topic, prompt) in enumerate(prompt_items)
+                ]
+                next_idx = 0
+                active: List[PromptState] = []
 
-                while time.time() < deadline and found_for_prompt < max_videos_per_prompt:
+                async def _send_next_prompt() -> Optional[PromptState]:
+                    nonlocal sent_image_msg_id
+                    if next_idx >= len(queue):
+                        return None
+                    prompt_index, topic, prompt = queue[next_idx]
+
+                    image_msg_id = int(sent_image_msg_id or 0)
+                    prompt_msg_id = 0
+                    need_send_image = args.send_image == "per_prompt" or (
+                        args.send_image == "once" and not sent_image_msg_id
+                    )
+
+                    try:
+                        async with telethon_lock:
+                            if args.order == "image_first":
+                                if need_send_image:
+                                    image_caption = (args.image_caption or "").strip() or None
+                                    image_msg = await client.send_file(bot, image_path, caption=image_caption)
+                                    image_msg_id = int(getattr(image_msg, "id", 0) or 0)
+                                    if args.send_image == "once" and image_msg_id:
+                                        sent_image_msg_id = image_msg_id
+                                prompt_msg = await client.send_message(bot, prompt)
+                                prompt_msg_id = int(getattr(prompt_msg, "id", 0) or 0)
+                            else:
+                                prompt_msg = await client.send_message(bot, prompt)
+                                prompt_msg_id = int(getattr(prompt_msg, "id", 0) or 0)
+                                if need_send_image:
+                                    image_caption = (args.image_caption or "").strip() or None
+                                    image_msg = await client.send_file(bot, image_path, caption=image_caption)
+                                    image_msg_id = int(getattr(image_msg, "id", 0) or 0)
+                                    if args.send_image == "once" and image_msg_id:
+                                        sent_image_msg_id = image_msg_id
+                    except Exception as exc:
+                        raise RuntimeError(f"Не удалось отправить запрос: {exc}") from exc
+
+                    start_id = max(image_msg_id, prompt_msg_id)
+                    now = time.time()
+                    state = PromptState(
+                        index=prompt_index,
+                        topic=topic,
+                        prompt=prompt,
+                        start_id=int(start_id or 0),
+                        sent_at=now,
+                        deadline=now + float(args.wait_seconds),
+                        required=max_videos_per_prompt,
+                    )
+                    log(
+                        f"[img {image_index}/{len(image_paths)}] "
+                        f"[inflight {len(active) + 1}/{inflight_prompts}] "
+                        f"[{prompt_index}/{len(queue)}] "
+                        f"Sent. start_message_id={state.start_id or 'unknown'} topic={topic}"
+                    )
+                    return state
+
+                # Заполняем окно (по умолчанию 2 промпта на старте).
+                while len(active) < inflight_prompts and next_idx < len(queue):
+                    state = await _send_next_prompt()
+                    if state is None:
+                        break
+                    active.append(state)
+                    next_idx += 1
+
+                while active or next_idx < len(queue):
+                    # Таймауты активных промптов.
+                    now = time.time()
+                    for state in list(active):
+                        if now > state.deadline and state.found < state.required:
+                            message = f"timeout waiting video link for topic: {state.topic}"
+                            if args.stop_on_error:
+                                raise RuntimeError(message)
+                            log(f"⚠️ {message}")
+                            active.remove(state)
+
+                    # Добираем окно, если есть свободные слоты.
+                    while len(active) < inflight_prompts and next_idx < len(queue):
+                        interval = float(args.sleep_between_prompts or 0.0)
+                        if interval > 0:
+                            await asyncio.sleep(interval)
+                        state = await _send_next_prompt()
+                        if state is None:
+                            break
+                        active.append(state)
+                        next_idx += 1
+
+                    if not active:
+                        continue
+
                     last_seen_id, incoming = await _get_new_incoming(bot, last_seen_id=last_seen_id)
                     for msg in incoming:
                         msg_id = getattr(msg, "id", None)
@@ -740,8 +1056,9 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
                         msg_text = (getattr(msg, "raw_text", None) or getattr(msg, "message", None) or "") or ""
 
                         extracted_request_text = _extract_request_text(msg_text).strip()
-                        if extracted_request_text:
-                            last_extracted_request_text = extracted_request_text
+                        matched_state = _pick_active_prompt(active, extracted_request_text) if extracted_request_text else None
+                        if matched_state and extracted_request_text:
+                            matched_state.bot_request_text = extracted_request_text
 
                         candidate_urls: List[str] = []
                         for url in _extract_urls_from_message(msg):
@@ -766,23 +1083,26 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
                         if not sources:
                             continue
 
-                        request_text = (last_extracted_request_text or extracted_request_text or "").strip()
+                        target = matched_state or (active[0] if active else None)
+                        if target is None:
+                            continue
+
+                        request_text = (extracted_request_text or target.bot_request_text or "").strip()
                         total_sources = len(sources)
                         for i, (source_type, ext, url) in enumerate(sources):
-                            if found_for_prompt >= max_videos_per_prompt:
+                            if target.found >= target.required:
                                 break
+                            if source_type != "media" and not url:
+                                continue
 
                             index_suffix = 0 if i == 0 or total_sources == 1 else i + 1
                             remote_path = _build_remote_path(
                                 disk_dir=args.disk_dir,
-                                msg_id=msg_id_int,
-                                msg_date=msg_date,
+                                image_path=image_path,
+                                topic=target.topic,
                                 index=index_suffix,
-                                ext=ext,
                             )
                             if remote_path in scheduled_paths:
-                                continue
-                            if source_type != "media" and not url:
                                 continue
                             scheduled_paths.add(remote_path)
                             job = ExportJob(
@@ -793,25 +1113,16 @@ async def request_and_export(args: argparse.Namespace) -> List[ExportedItem]:
                                 msg_date=msg_date,
                                 url=url or "",
                                 ext=ext,
-                                request_text=request_text or "",
+                                request_text=request_text,
                             )
                             _track_task(asyncio.create_task(_process_job(job)))
-                            found_for_prompt += 1
-                            log(f"↳ got video source (msg_id={msg_id_int}) -> {remote_path}")
-                            if found_for_prompt >= max_videos_per_prompt:
-                                break
+                            target.found += 1
+                            log(f"↳ got video source (topic='{target.topic}', msg_id={msg_id_int}) -> {remote_path}")
 
-                    if found_for_prompt < max_videos_per_prompt:
-                        await asyncio.sleep(max(0.2, float(args.poll_interval)))
+                        if target.found >= target.required and target in active:
+                            active.remove(target)
 
-                if found_for_prompt < max_videos_per_prompt:
-                    raise RuntimeError(
-                        f"Не получена ссылка на видео для промпта за {int(args.wait_seconds)} секунд: {current_prompt}"
-                    )
-
-                interval = float(args.sleep_between_prompts or 0.0)
-                if interval > 0:
-                    await asyncio.sleep(interval)
+                    await asyncio.sleep(max(0.2, float(args.poll_interval)))
 
             if pending_tasks:
                 log(f"Waiting for {len(pending_tasks)} export task(s) (workers={int(args.workers)})…")
@@ -848,6 +1159,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
     parser.add_argument("--image", default=None, help="Путь к картинке (по умолчанию backend/scripts/open.png)")
     parser.add_argument(
+        "--images",
+        nargs="*",
+        default=[],
+        help="Список картинок (если не задано, используется open/open2/open3/close)",
+    )
+    parser.add_argument(
         "--prompts-file",
         default="backend/scripts/word_gen.txt",
         help="Путь к файлу со списком фраз (берутся строки вида '* ...' или '- ...')",
@@ -861,7 +1178,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--prompt-suffix",
-        default="не используй титров и текстов в видео",
+        default="не используй титров и текстов в видео\nне используй текстов в картинках",
         help="Уточнение, добавляемое к каждой теме ролика",
     )
     parser.add_argument(
@@ -894,6 +1211,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--wait-seconds", type=int, default=600, help="Максимальное ожидание ответа бота (сек)")
     parser.add_argument("--poll-interval", type=float, default=1.0, help="Интервал поллинга истории (сек)")
     parser.add_argument("--max-videos-per-prompt", type=int, default=1, help="Сколько видео сохранять на одну фразу")
+    parser.add_argument(
+        "--inflight-prompts",
+        type=int,
+        default=2,
+        help="Сколько промптов держать в работе одновременно (по умолчанию 2)",
+    )
     parser.add_argument("--url-timeout", type=int, default=300, help="Таймаут скачивания видео по ссылке (сек)")
     parser.add_argument(
         "--sleep-between-prompts",

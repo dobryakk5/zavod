@@ -82,3 +82,79 @@ DB: enabled (settings=config.settings.dev)
 [1/102] Sent. start_message_id=11636 prompt=Что такое SEO-контент и почему без него сайт не продаёт?
 
 не используй титров и текстов в видео
+↳ got video source (msg_id=11639) -> disk/zavod/video/2025-12-31/132905_11639.mp4
+[2/102] Sent. start_message_id=11641 prompt=Почему SEO-тексты есть, а клиентов нет?
+
+не используй титров и текстов в видео
+Файл загружен: disk/zavod/video/2025-12-31/132905_11639.mp4
+✅ exported: disk/zavod/video/2025-12-31/132905_11639.mp4
+↳ got video source (msg_id=11648) -> disk/zavod/video/2025-12-31/133047_11648.mp4
+[3/102] Sent. start_message_id=11654 prompt=Как создавать контент для SEO, а не «для галочки»?
+
+не используй титров и текстов в видео
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_collector_client_3.session
+Request:
+  images: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open2.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open3.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/close.png
+  prompts_file: backend/scripts/word_gen.txt (count=103)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_collector_client_3.session
+Request:
+  images: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open2.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open3.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/close.png
+  prompts_file: backend/scripts/word_gen.txt (count=103)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_collector_client_3.session
+Request:
+  images: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open2.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open3.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/close.png
+  prompts_file: backend/scripts/word_gen.txt (count=103)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+⚠️ Session rejected (/Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_collector_client_3.session): The authorization key (session file) was used under two different IP addresses simultaneously, and can no longer be used. Use the same session exclusively, or use different sessions (caused by InvokeWithLayerRequest(InitConnectionRequest(GetConfigRequest)))
+Trying another *.session from backend/telegram_sessions…
+✅ Using session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_publisher_client_3.session
+=== Image [1/4]: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png ===
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_publisher_client_3.session
+Request:
+  images: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open2.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open3.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/close.png
+  prompts_file: backend/scripts/word_gen.txt (count=103)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+=== Image [1/4]: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png ===
+[img 1/4] [1/103] Sent. start_message_id=11665 prompt=Что такое SEO-контент и почему без него сайт не продаёт?
+
+не используй титров и текстов в видео
+Telegram:
+  bot: @syntxaibot
+  session: /Users/pavellebedev/Desktop/proj/zavod/backend/telegram_sessions/session_publisher_client_3.session
+Request:
+  images: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open2.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open3.png, /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/close.png
+  prompts_file: backend/scripts/word_gen.txt (count=103)
+  order: image_first
+  send_image: per_prompt
+Yandex Disk:
+  dir: disk/zavod/video
+DB: enabled (settings=config.settings.dev)
+=== Image [1/4]: /Users/pavellebedev/Desktop/proj/zavod/backend/scripts/open.png ===
+[img 1/4] [inflight 1/2] [1/103] Sent. start_message_id=11671 topic=Что такое SEO-контент и почему без него сайт не продаёт?
+[img 1/4] [inflight 2/2] [2/103] Sent. start_message_id=11675 topic=Почему SEO-тексты есть, а клиентов нет?
