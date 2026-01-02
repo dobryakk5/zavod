@@ -28,6 +28,8 @@ for _proxy_key, _proxy_value in _proxy_env.items():
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me")  # поменяешь потом на нормальный
 DEBUG = os.getenv("DEBUG", "True") == "True"
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+GOOGLE_API_KEY = os.getenv("Google_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID") or os.getenv("CSE_ID") or os.getenv("GOOGLE_CX", "")
 
 DEFAULT_ALLOWED_HOSTS = [
     "localhost",
@@ -285,8 +287,29 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        # Silence noisy per-request INFO logs from httpx/httpcore.
+        "httpx": {
+            "handlers": ["console", "runserver_file", "celery_file"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "httpcore": {
+            "handlers": ["console", "runserver_file", "celery_file"],
+            "level": "WARNING",
+            "propagate": False,
+        },
         "celery": {
             "handlers": ["console", "celery_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "core.services.website_scan_service": {
+            "handlers": ["console", "runserver_file", "celery_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "core.tasks.website_scan": {
+            "handlers": ["console", "runserver_file", "celery_file"],
             "level": "INFO",
             "propagate": False,
         },

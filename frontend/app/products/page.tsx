@@ -80,8 +80,9 @@ export default function ProductsPage() {
       setError(null);
       try {
         const data = await mindMapsApi.list();
-        setMaps(data);
-        syncDraftsFromMaps(data);
+        const productMaps = data.filter((item) => (item.type ?? 'product') !== 'website');
+        setMaps(productMaps);
+        syncDraftsFromMaps(productMaps);
       } catch (err: unknown) {
         console.error('Failed to load mind maps', err);
         if (err instanceof ApiError && err.status === 404) {

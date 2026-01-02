@@ -70,6 +70,10 @@ export default function EditNodePage() {
   const lastSavedNodeRef = useRef<{ title: string; typeLabel: string } | null>(null);
 
   const node = useMemo(() => mapData?.nodes.find((n) => String(n.id) === String(nodeId)), [mapData?.nodes, nodeId]);
+  const isWebsiteNode = useMemo(() => {
+    const entity = node?.meta && typeof node.meta === 'object' ? (node.meta as Record<string, unknown>).entity : undefined;
+    return entity === 'website';
+  }, [node?.meta]);
 
   const saveNodeNow = useCallback(
     async (next: { title: string; typeLabel: string }) => {
@@ -78,7 +82,11 @@ export default function EditNodePage() {
       setSaving(true);
       setError(null);
       try {
-        const meta = { ...(form.meta ?? {}), metric_type: next.typeLabel || undefined };
+        const meta = {
+          ...(form.meta ?? {}),
+          metric_type: next.typeLabel || undefined,
+          ...(isWebsiteNode ? { page_title: next.title } : {}),
+        };
         await mindMapsApi.updateNode(Number(mapId), nodeId, { text: next.title, meta });
         lastSavedNodeRef.current = { title: next.title, typeLabel: next.typeLabel };
       } catch (err) {
@@ -88,7 +96,7 @@ export default function EditNodePage() {
         setSaving(false);
       }
     },
-    [form.meta, mapId, nodeId]
+    [form.meta, isWebsiteNode, mapId, nodeId]
   );
 
   const load = useCallback(async () => {
@@ -104,14 +112,32 @@ export default function EditNodePage() {
         return;
       }
 
+      const meta = (currentNode.meta ?? {}) as Record<string, unknown>;
+      const websiteTitleRaw =
+        (typeof meta.page_title === 'string' && meta.page_title.trim()) ||
+        (typeof meta.title === 'string' && meta.title.trim()) ||
+        '';
+      const websiteTitle = websiteTitleRaw || currentNode.text;
+
+      const websiteUrlRaw =
+        (typeof meta.metric_type === 'string' && meta.metric_type.trim() && meta.metric_type !== 'url' ? meta.metric_type.trim() : '') ||
+        (typeof meta.page_url === 'string' && meta.page_url.trim() ? meta.page_url.trim() : '') ||
+        (typeof meta.url === 'string' && meta.url.trim() ? meta.url.trim() : '');
+
       setForm({
-        title: currentNode.text,
-        typeLabel: (typeof currentNode.meta?.metric_type === 'string' && currentNode.meta.metric_type) || '',
-        meta: currentNode.meta ?? {}
+        title: typeof meta.entity === 'string' && meta.entity === 'website' ? websiteTitle : currentNode.text,
+        typeLabel:
+          typeof meta.entity === 'string' && meta.entity === 'website'
+            ? websiteUrlRaw
+            : (typeof meta.metric_type === 'string' && meta.metric_type) || '',
+        meta: (currentNode.meta ?? {}) as Record<string, unknown>
       });
       lastSavedNodeRef.current = {
-        title: currentNode.text,
-        typeLabel: (typeof currentNode.meta?.metric_type === 'string' && currentNode.meta.metric_type) || ''
+        title: typeof meta.entity === 'string' && meta.entity === 'website' ? websiteTitle : currentNode.text,
+        typeLabel:
+          typeof meta.entity === 'string' && meta.entity === 'website'
+            ? websiteUrlRaw
+            : (typeof meta.metric_type === 'string' && meta.metric_type) || ''
       };
       setProperties(toDrafts(currentNode.properties ?? []));
     } catch (err) {
@@ -241,7 +267,11 @@ export default function EditNodePage() {
     setSaving(true);
     setError(null);
     try {
-      const meta = { ...(form.meta ?? {}), metric_type: form.typeLabel || undefined };
+      const meta = {
+        ...(form.meta ?? {}),
+        metric_type: form.typeLabel || undefined,
+        ...(isWebsiteNode ? { page_title: form.title } : {}),
+      };
       await mindMapsApi.updateNode(Number(mapId), nodeId, { text: form.title, meta });
 
       const originalMap = new Map((node?.properties ?? []).map((p) => [p.id, p]));
@@ -331,8 +361,9 @@ export default function EditNodePage() {
                 <label className="text-sm text-black">Тип</label>
                 <Input
                   value={form.typeLabel}
-                  onChange={(e) => setForm((p) => ({ ...p, typeLabel: e.target.value }))}
+                  onChange={(e) => !isWebsiteNode && setForm((p) => ({ ...p, typeLabel: e.target.value }))}
                   onBlur={() => void saveNodeNow({ title: form.title, typeLabel: form.typeLabel })}
+                  readOnly={isWebsiteNode}
                   className={INPUT_CLASS}
                 />
               </div>

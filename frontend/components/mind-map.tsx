@@ -45,6 +45,21 @@ type MindMapNodeWithSize = MindMapNodeDatum & { width: number; height: number };
 
 type Point = { x: number; y: number };
 
+type TreeNode = { id: string; children: TreeNode[] };
+
+const buildTree = (nodes: Array<{ id: string }>, edges: Array<{ source: string; target: string }>, rootId: string): TreeNode | null => {
+  const map = new Map<string, TreeNode>();
+  nodes.forEach((n) => map.set(n.id, { id: n.id, children: [] }));
+
+  edges.forEach((e) => {
+    const parent = map.get(e.source);
+    const child = map.get(e.target);
+    if (parent && child) parent.children.push(child);
+  });
+
+  return map.get(rootId) ?? null;
+};
+
 const sideDir = (side: PortSide): Point => {
   switch (side) {
     case 'top':
@@ -115,7 +130,9 @@ type MindMapProps = {
   initialNodes?: MindMapNodeDatum[];
   initialEdges?: MindMapEdgeDatum[];
   mapId?: string | number;
+  mode?: 'generic' | 'product';
   onEditNode?: (nodeId: string) => void;
+  onOpenProduct?: (productId: number) => void;
   onSaved?: () => void;
 };
 
@@ -125,6 +142,9 @@ const VIEWPORT_MIN_PX = 520;
 const CONTENT_PADDING_PX = 80;
 const NODE_HOVER_BUFFER_PX = 10;
 const PORT_RADIUS_PX = 6;
+const BRANCH_STUB_PX = 10;
+const BRANCH_CIRCLE_DIAMETER_PX = 10;
+const BRANCH_CIRCLE_RADIUS_PX = BRANCH_CIRCLE_DIAMETER_PX / 2;
 const ADD_BUTTON_SIZE_PX = 18;
 const ADD_BUTTON_GAP_PX = 10;
 const ADD_NODE_GAP_PX = 180;
@@ -253,6 +273,7 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
   const [draggingLink, setDraggingLink] = useState<DraggingLink>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoverLockedNodeId, setHoverLockedNodeId] = useState<string | null>(null);
+  const [collapsedJunctions, setCollapsedJunctions] = useState<Set<string>>(() => new Set());
   const svgRef = useRef<SVGSVGElement>(null);
   const innerRef = useRef<SVGGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -319,10 +340,9 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
   );
 
   const contentBounds = useMemo(() => getNodesBounds(nodesWithSize), [nodesWithSize]);
-  const [containerHeightPx, setContainerHeightPx] = useState<number>(() => {
-    if (typeof window === 'undefined') return VIEWPORT_MIN_PX;
-    return Math.max(VIEWPORT_MIN_PX, Math.round(window.innerHeight * VIEWPORT_MIN_FRACTION));
-  });
+  // Keep SSR/client initial render identical to avoid hydration mismatch.
+  // We recalc the real height after mount in `useLayoutEffect`.
+  const [containerHeightPx, setContainerHeightPx] = useState<number>(VIEWPORT_MIN_PX);
 
   const nodesWithSizeRef = useRef(nodesWithSize);
   useEffect(() => {
@@ -650,11 +670,131 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
     setNodeMenu(null);
   }, []);
 
+  const websiteTreeLayoutKey = useMemo(() => {
+    const websiteNodes = nodes.filter((n) => typeof n.data?.meta?.entity === 'string' && n.data.meta.entity === 'website');
+    if (!websiteNodes.length) return null;
+    if (!edges.length) return null;
+    return `${mapId ?? 'no-map'}:${websiteNodes.length}:${edges.length}`;
+  }, [edges.length, mapId, nodes]);
+
+  const toggleJunction = useCallback((key: string) => {
+    setCollapsedJunctions((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const hiddenNodeIds = useMemo(() => {
+    if (!collapsedJunctions.size) return new Set<string>();
+
+    const nodeMap = new Map(nodesWithSize.map((node) => [node.id, node]));
+
+    const childrenMap = new Map<string, string[]>();
+    for (const edge of edges) {
+      const arr = childrenMap.get(edge.source);
+      if (arr) arr.push(edge.target);
+      else childrenMap.set(edge.source, [edge.target]);
+    }
+
+    const hidden = new Set<string>();
+    const queue: string[] = [];
+
+    for (const edge of edges) {
+      const sourceNode = nodeMap.get(edge.source);
+      const targetNode = nodeMap.get(edge.target);
+      if (!sourceNode || !targetNode) continue;
+
+      const sourceSide = edge.sourceSide ?? inferSideBetween(sourceNode, targetNode);
+      const key = `${edge.source}:${sourceSide}`;
+      if (!collapsedJunctions.has(key)) continue;
+
+      if (hidden.has(edge.target)) continue;
+      hidden.add(edge.target);
+      queue.push(edge.target);
+    }
+
+    while (queue.length) {
+      const parent = queue.shift()!;
+      const children = childrenMap.get(parent);
+      if (!children) continue;
+      for (const child of children) {
+        if (hidden.has(child)) continue;
+        hidden.add(child);
+        queue.push(child);
+      }
+    }
+
+    return hidden;
+  }, [collapsedJunctions, edges, nodesWithSize]);
+
+  const autoTreeLayoutAppliedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!websiteTreeLayoutKey) return;
+    if (autoTreeLayoutAppliedRef.current === websiteTreeLayoutKey) return;
+
+    const websiteNodes = nodes.filter((n) => typeof n.data?.meta?.entity === 'string' && n.data.meta.entity === 'website');
+    if (!websiteNodes.length) return;
+
+    // Root: prefer explicit marker from backend, fallback to node with no incoming edges.
+    const rootNode =
+      websiteNodes.find((n) => n.data?.meta?.is_root === true) ??
+      websiteNodes.find((n) => typeof n.data?.meta?.depth === 'number' && n.data.meta.depth === 0) ??
+      (() => {
+        const incoming = new Set(edges.map((e) => e.target));
+        return websiteNodes.find((n) => !incoming.has(n.id)) ?? null;
+      })();
+    if (!rootNode) return;
+
+    const rootData = buildTree(
+      websiteNodes.map((n) => ({ id: n.id })),
+      edges.map((e) => ({ source: e.source, target: e.target })),
+      rootNode.id
+    );
+    if (!rootData) return;
+
+    const hierarchyRoot = d3.hierarchy<TreeNode>(rootData, (d) => d.children);
+    const treeLayout = d3.tree<TreeNode>().nodeSize([240, 560]);
+    const positionedRoot = treeLayout(hierarchyRoot);
+
+    const positions = new Map<string, { x: number; y: number }>();
+    for (const d of positionedRoot.descendants()) {
+      // Horizontal tree: swap x/y (mind map style).
+      positions.set(String(d.data.id), { x: d.y, y: d.x });
+    }
+
+    // Center vertically.
+    const ys = Array.from(positions.values()).map((p) => p.y);
+    if (ys.length) {
+      const shift = (Math.min(...ys) + Math.max(...ys)) / 2;
+      for (const [id, p] of positions) positions.set(id, { x: p.x, y: p.y - shift });
+    }
+
+    setNodes((prev) =>
+      prev.map((node) => {
+        const p = positions.get(node.id);
+        if (!p) return node;
+        return { ...node, x: p.x, y: p.y };
+      })
+    );
+
+    // Persist positions (batched by existing flush scheduler).
+    for (const [id, p] of positions) {
+      pendingPositionsRef.current.set(id, { x: p.x, y: p.y });
+    }
+    scheduleFlush();
+
+    autoTreeLayoutAppliedRef.current = websiteTreeLayoutKey;
+  }, [edges, nodes, scheduleFlush, websiteTreeLayoutKey]);
+
   const fitView = useCallback(
     (opts?: { animate?: boolean }) => {
       if (!svgRef.current) return;
       const zoom = zoomRef.current;
-      const bounds = contentBounds;
+      const hidden = typeof hiddenNodeIds?.has === 'function' ? hiddenNodeIds : new Set<string>();
+      const visibleNodes = nodesWithSizeRef.current.filter((node) => !hidden.has(node.id));
+      const bounds = getNodesBounds(visibleNodes.length ? visibleNodes : nodesWithSizeRef.current);
       if (!zoom || !bounds) return false;
 
       const parent = svgRef.current.parentElement;
@@ -679,7 +819,7 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
       target.call(zoom.transform, nextTransform);
       return true;
     },
-    [contentBounds]
+    [hiddenNodeIds]
   );
 
   const recalcContainerHeight = useCallback(() => {
@@ -1332,6 +1472,141 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
       .filter(Boolean) as Array<MindMapEdgeDatum & { sourceSide: PortSide; targetSide: PortSide; x1: number; y1: number; x2: number; y2: number }>;
   }, [edges, nodesWithSize]);
 
+  const websiteAutoCollapse = useMemo(() => {
+    const websiteNodes = nodes.filter((n) => typeof n.data?.meta?.entity === 'string' && n.data.meta.entity === 'website');
+    if (!websiteNodes.length) return { enabled: false, key: null as string | null };
+
+    const root =
+      websiteNodes.find((n) => n.data?.meta?.is_root === true) ??
+      websiteNodes.find((n) => typeof n.data?.meta?.depth === 'number' && n.data.meta.depth === 0);
+    const totalPagesRaw = root?.data?.meta?.count;
+    const totalPages = typeof totalPagesRaw === 'number' && Number.isFinite(totalPagesRaw) ? totalPagesRaw : null;
+    const enabled = typeof totalPages === 'number' ? totalPages > 30 : websiteNodes.length > 60;
+    return { enabled, key: `${mapId ?? 'no-map'}:${enabled ? '1' : '0'}:${totalPages ?? 'na'}` };
+  }, [mapId, nodes]);
+
+  const sourceJunctions = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        sourceId: string;
+        sourceSide: PortSide;
+        port: Point;
+        stubEnd: Point;
+        center: Point;
+        outStart: Point;
+        edgeIds: string[];
+        color: string;
+        lineStyle: EdgeLineStyle;
+        strokeWidth: number;
+      }
+    >();
+
+    const clampStroke = (raw: unknown) => {
+      const val = typeof raw === 'number' ? raw : 2;
+      return Number.isFinite(val) ? Math.max(1, Math.min(24, val)) : 2;
+    };
+
+    for (const edge of edgesWithPositions) {
+      const key = `${edge.source}:${edge.sourceSide}`;
+      const dir = sideDir(edge.sourceSide);
+      const port = { x: edge.x1, y: edge.y1 };
+      const stubEnd = { x: port.x + dir.x * BRANCH_STUB_PX, y: port.y + dir.y * BRANCH_STUB_PX };
+      const center = { x: stubEnd.x + dir.x * BRANCH_CIRCLE_RADIUS_PX, y: stubEnd.y + dir.y * BRANCH_CIRCLE_RADIUS_PX };
+      const outStart = { x: center.x + dir.x * BRANCH_CIRCLE_RADIUS_PX, y: center.y + dir.y * BRANCH_CIRCLE_RADIUS_PX };
+
+      const rawWidth = edge.meta?.stroke_width;
+      const strokeWidth = clampStroke(rawWidth);
+      const rawColor = typeof edge.meta?.color === 'string' && edge.meta.color.trim() ? (edge.meta.color as string) : '#0f172a';
+      const rawStyle = edge.meta?.line_style;
+      const lineStyle: EdgeLineStyle = rawStyle === 'dashed' || rawStyle === 'dotted' || rawStyle === 'solid' ? rawStyle : 'solid';
+
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, {
+          key,
+          sourceId: edge.source,
+          sourceSide: edge.sourceSide,
+          port,
+          stubEnd,
+          center,
+          outStart,
+          edgeIds: [edge.id],
+          color: rawColor,
+          lineStyle,
+          strokeWidth
+        });
+        continue;
+      }
+
+      existing.edgeIds.push(edge.id);
+      existing.strokeWidth = Math.max(existing.strokeWidth, strokeWidth);
+      if (existing.color !== rawColor) existing.color = '#0f172a';
+      if (existing.lineStyle !== lineStyle) existing.lineStyle = 'solid';
+    }
+
+    return groups;
+  }, [edgesWithPositions]);
+
+  const autoCollapseAppliedRef = useRef<string | null>(null);
+  const pendingAutoFitRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!websiteAutoCollapse.enabled) {
+      autoCollapseAppliedRef.current = null;
+      return;
+    }
+    if (!websiteAutoCollapse.key) return;
+    if (autoCollapseAppliedRef.current === websiteAutoCollapse.key) return;
+    if (!sourceJunctions.size) return;
+
+    const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+    const desired = new Set<string>();
+    for (const [key, group] of sourceJunctions) {
+      const node = nodeMap.get(group.sourceId);
+      const meta = node?.data?.meta as Record<string, unknown> | undefined;
+      if (!meta || meta.entity !== 'website') continue;
+      const depth = typeof meta.depth === 'number' ? meta.depth : null;
+      const isRoot = meta.is_root === true || depth === 0;
+      if (!isRoot) desired.add(key);
+    }
+
+    setCollapsedJunctions(desired);
+    autoCollapseAppliedRef.current = websiteAutoCollapse.key;
+    pendingAutoFitRef.current = websiteAutoCollapse.key;
+  }, [nodes, sourceJunctions, websiteAutoCollapse.enabled, websiteAutoCollapse.key]);
+
+  useEffect(() => {
+    if (!pendingAutoFitRef.current) return;
+    if (!websiteAutoCollapse.enabled) {
+      pendingAutoFitRef.current = null;
+      return;
+    }
+    const key = pendingAutoFitRef.current;
+    pendingAutoFitRef.current = null;
+    // Fit after auto-collapse so we don't zoom out to hidden nodes.
+    requestAnimationFrame(() => {
+      if (pendingAutoFitRef.current) return;
+      if (autoCollapseAppliedRef.current !== key) return;
+      fitView({ animate: true });
+    });
+  }, [fitView, websiteAutoCollapse.enabled, websiteAutoCollapse.key]);
+
+  useEffect(() => {
+    if (!collapsedJunctions.size) return;
+    if (!sourceJunctions.size) {
+      setCollapsedJunctions(new Set());
+      return;
+    }
+    setCollapsedJunctions((prev) => {
+      const next = new Set<string>();
+      for (const key of prev) {
+        if (sourceJunctions.has(key)) next.add(key);
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [collapsedJunctions.size, sourceJunctions]);
+
   useEffect(() => {
     if (!svgRef.current || !innerRef.current) return;
 
@@ -1797,119 +2072,219 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
         />
 
         <g ref={innerRef}>
-          {draggingLink && (() => {
-            const startNodeId = draggingLink.mode === 'create' ? draggingLink.sourceId : draggingLink.fixedNodeId;
-            const startSide = draggingLink.mode === 'create' ? draggingLink.side : draggingLink.fixedSide;
-            const sourceNode = nodesWithSize.find((n) => n.id === startNodeId);
-            if (!sourceNode) return null;
-            const p = getPortPosition(sourceNode, startSide);
-            const endSide = oppositeSide(inferSideBetweenPoints(p, { x: draggingLink.x, y: draggingLink.y }));
-            return (
-              <path
-                d={bezierLink(p, startSide, { x: draggingLink.x, y: draggingLink.y }, endSide)}
-                fill="none"
-                stroke="#2563eb"
-                strokeWidth={2}
-                strokeDasharray="5 4"
-                pointerEvents="none"
-              />
-            );
-          })()}
+	          {draggingLink && (() => {
+	            const startNodeId = draggingLink.mode === 'create' ? draggingLink.sourceId : draggingLink.fixedNodeId;
+	            const startSide = draggingLink.mode === 'create' ? draggingLink.side : draggingLink.fixedSide;
+	            const sourceNode = nodesWithSize.find((n) => n.id === startNodeId);
+	            if (!sourceNode) return null;
+	            const port = getPortPosition(sourceNode, startSide);
+	            const dir = sideDir(startSide);
+	            const stubEnd = { x: port.x + dir.x * BRANCH_STUB_PX, y: port.y + dir.y * BRANCH_STUB_PX };
+	            const center = { x: stubEnd.x + dir.x * BRANCH_CIRCLE_RADIUS_PX, y: stubEnd.y + dir.y * BRANCH_CIRCLE_RADIUS_PX };
+	            const outStart = { x: center.x + dir.x * BRANCH_CIRCLE_RADIUS_PX, y: center.y + dir.y * BRANCH_CIRCLE_RADIUS_PX };
+	            const endSide = oppositeSide(inferSideBetweenPoints(outStart, { x: draggingLink.x, y: draggingLink.y }));
+	            return (
+	              <>
+	                <path
+	                  d={`M ${port.x} ${port.y} L ${stubEnd.x} ${stubEnd.y}`}
+	                  fill="none"
+	                  stroke="#2563eb"
+	                  strokeWidth={2}
+	                  strokeDasharray="5 4"
+	                  strokeLinecap="round"
+	                  pointerEvents="none"
+	                />
+	                <circle
+	                  cx={center.x}
+	                  cy={center.y}
+	                  r={BRANCH_CIRCLE_RADIUS_PX}
+	                  fill="white"
+	                  stroke="#2563eb"
+	                  strokeWidth={2}
+	                  pointerEvents="none"
+	                />
+	                <path
+	                  d={bezierLink(outStart, startSide, { x: draggingLink.x, y: draggingLink.y }, endSide)}
+	                  fill="none"
+	                  stroke="#2563eb"
+	                  strokeWidth={2}
+	                  strokeDasharray="5 4"
+	                  strokeLinecap="round"
+	                  pointerEvents="none"
+	                />
+	              </>
+	            );
+	          })()}
 
-          <g className="edges">
+	          <g className="edges">
+	            {Array.from(sourceJunctions.values()).map((group) => {
+	              if (hiddenNodeIds.has(group.sourceId)) return null;
+	              const dasharray =
+	                group.lineStyle === 'dashed'
+	                  ? `${Math.max(6, Math.round(group.strokeWidth * 2))} ${Math.max(4, Math.round(group.strokeWidth * 1.5))}`
+	                  : group.lineStyle === 'dotted'
+	                    ? `${Math.max(1, Math.round(group.strokeWidth))} ${Math.max(4, Math.round(group.strokeWidth * 1.8))}`
+	                    : undefined;
+
+	              return (
+	                <path
+	                  key={`junction-stub:${group.key}`}
+	                  d={`M ${group.port.x} ${group.port.y} L ${group.stubEnd.x} ${group.stubEnd.y}`}
+	                  fill="none"
+	                  stroke={group.color}
+	                  strokeWidth={group.strokeWidth}
+	                  strokeDasharray={dasharray}
+	                  strokeLinecap="round"
+	                  opacity={0.75}
+	                  pointerEvents="none"
+	                />
+	              );
+	            })}
+
 	            {edgesWithPositions.map((edge) => {
+	              if (hiddenNodeIds.has(edge.source) || hiddenNodeIds.has(edge.target)) return null;
+
+	              const groupKey = `${edge.source}:${edge.sourceSide}`;
+	              const junction = sourceJunctions.get(groupKey);
+	              const isJunctionCollapsed = collapsedJunctions.has(groupKey);
+	              if (isJunctionCollapsed) return null;
+
 	              const meta = edge.meta;
 	              const isSelected = edge.id === selectedEdgeId;
 	              const strokeColor =
 	                isSelected ? '#ef4444' : typeof meta?.color === 'string' && meta.color.trim() ? (meta.color as string) : '#0f172a';
-	              const lineStyle: EdgeLineStyle = meta?.line_style === 'dashed' || meta?.line_style === 'dotted' || meta?.line_style === 'solid' ? meta.line_style : 'solid';
+	              const lineStyle: EdgeLineStyle =
+	                meta?.line_style === 'dashed' || meta?.line_style === 'dotted' || meta?.line_style === 'solid' ? meta.line_style : 'solid';
 	              const arrow: EdgeArrow =
 	                meta?.arrow === 'backward' || meta?.arrow === 'both' || meta?.arrow === 'none' || meta?.arrow === 'forward' ? meta.arrow : 'forward';
-              const rawWidth = typeof meta?.stroke_width === 'number' ? meta.stroke_width : 2;
-              const strokeWidth = Number.isFinite(rawWidth) ? Math.max(1, Math.min(24, rawWidth)) : 2;
-              const hitWidth = Math.max(14, strokeWidth + 10);
-              const dasharray =
-                lineStyle === 'dashed'
-                  ? `${Math.max(6, Math.round(strokeWidth * 2))} ${Math.max(4, Math.round(strokeWidth * 1.5))}`
-                  : lineStyle === 'dotted'
-                    ? `${Math.max(1, Math.round(strokeWidth))} ${Math.max(4, Math.round(strokeWidth * 1.8))}`
-                    : undefined;
+	              const rawWidth = typeof meta?.stroke_width === 'number' ? meta.stroke_width : 2;
+	              const strokeWidth = Number.isFinite(rawWidth) ? Math.max(1, Math.min(24, rawWidth)) : 2;
+	              const hitWidth = Math.max(14, strokeWidth + 10);
+	              const dasharray =
+	                lineStyle === 'dashed'
+	                  ? `${Math.max(6, Math.round(strokeWidth * 2))} ${Math.max(4, Math.round(strokeWidth * 1.5))}`
+	                  : lineStyle === 'dotted'
+	                    ? `${Math.max(1, Math.round(strokeWidth))} ${Math.max(4, Math.round(strokeWidth * 1.8))}`
+	                    : undefined;
 
-              const markerEnd = arrow === 'forward' || arrow === 'both' ? 'url(#arrow)' : undefined;
-              const markerStart = arrow === 'backward' || arrow === 'both' ? 'url(#arrow-start)' : undefined;
+	              const markerEnd = arrow === 'forward' || arrow === 'both' ? 'url(#arrow)' : undefined;
+	              const markerStart = arrow === 'backward' || arrow === 'both' ? 'url(#arrow-start)' : undefined;
 
-              return (
-              <g key={edge.id} className="edge">
-                <path
-                  d={bezierLink(
-                    { x: edge.x1, y: edge.y1 },
-                    edge.sourceSide,
-                    { x: edge.x2, y: edge.y2 },
-                    edge.targetSide
-                  )}
-                  fill="none"
-                  stroke="transparent"
-                  strokeWidth={hitWidth}
-                  className="cursor-pointer"
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    const rect = containerRef.current?.getBoundingClientRect();
-                    if (!rect) return;
-                    setSelectedEdgeId(edge.id);
-                    setEdgeMenu({ edgeId: edge.id, x: e.clientX - rect.left, y: e.clientY - rect.top });
-                    setNodeMenu(null);
-                    setEdgeEditor(null);
-                  }}
-                />
-	                <path
-	                  d={bezierLink(
-	                    { x: edge.x1, y: edge.y1 },
-	                    edge.sourceSide,
-	                    { x: edge.x2, y: edge.y2 },
-	                    edge.targetSide
+	              const start = junction?.outStart ?? { x: edge.x1, y: edge.y1 };
+	              const labelX = (start.x + edge.x2) / 2;
+	              const labelY = (start.y + edge.y2) / 2 - 6;
+
+	              const pathD = bezierLink(start, edge.sourceSide, { x: edge.x2, y: edge.y2 }, edge.targetSide);
+
+	              return (
+	                <g key={edge.id} className="edge">
+	                  <path
+	                    d={pathD}
+	                    fill="none"
+	                    stroke="transparent"
+	                    strokeWidth={hitWidth}
+	                    className="cursor-pointer"
+	                    onPointerDown={(e) => {
+	                      e.stopPropagation();
+	                      e.preventDefault();
+	                      const rect = containerRef.current?.getBoundingClientRect();
+	                      if (!rect) return;
+	                      setSelectedEdgeId(edge.id);
+	                      setEdgeMenu({ edgeId: edge.id, x: e.clientX - rect.left, y: e.clientY - rect.top });
+	                      setNodeMenu(null);
+	                      setEdgeEditor(null);
+	                    }}
+	                  />
+	                  <path
+	                    d={pathD}
+	                    fill="none"
+	                    stroke={strokeColor}
+	                    strokeWidth={strokeWidth}
+	                    strokeDasharray={dasharray}
+	                    strokeLinecap="round"
+	                    markerEnd={markerEnd}
+	                    markerStart={markerStart}
+	                    opacity={0.75}
+	                    className={cn(isSelected ? 'drop-shadow-sm' : '', 'pointer-events-none')}
+	                  />
+	                  {edge.label && (
+	                    <text x={labelX} y={labelY} textAnchor="middle" className="fill-slate-600 text-xs">
+	                      {edge.label}
+	                    </text>
 	                  )}
-	                  fill="none"
-	                  stroke={strokeColor}
-	                  strokeWidth={strokeWidth}
-	                  strokeDasharray={dasharray}
-	                  strokeLinecap="round"
-	                  markerEnd={markerEnd}
-                  markerStart={markerStart}
-                  opacity={0.75}
-                  className={cn(isSelected ? 'drop-shadow-sm' : '', 'pointer-events-none')}
-                />
-                {edge.label && (
-                  <text
-                    x={(edge.x1 + edge.x2) / 2}
-                    y={(edge.y1 + edge.y2) / 2 - 6}
-                    textAnchor="middle"
-                    className="fill-slate-600 text-xs"
-                  >
-                    {edge.label}
-                  </text>
-                )}
-              </g>
-              );
-            })}
-          </g>
+	                </g>
+	              );
+	            })}
 
-          <g className="nodes">
-            {nodesWithSize.map((node) => (
-              <g
-                key={node.id}
-                className="node group cursor-grab"
-                data-node-id={node.id}
-                transform={`translate(${node.x}, ${node.y})`}
-              >
-                <foreignObject width={node.width} height={node.height}>
-                  <MindMapNodeCard
-                    id={node.id}
-                    data={{ ...node.data, onChange: node.data.onChange ?? queueNodeUpdate }}
-                    onOpenMenu={openNodeMenu}
-                    onSelect={(nodeId) => setSelectedNodeId(nodeId)}
-                  />
-                </foreignObject>
+	            {Array.from(sourceJunctions.values()).map((group) => {
+	              if (hiddenNodeIds.has(group.sourceId)) return null;
+	              const isCollapsed = collapsedJunctions.has(group.key);
+
+	              return (
+	                <g
+	                  key={`junction:${group.key}`}
+	                  className="cursor-pointer"
+	                  onPointerDown={(e) => {
+	                    e.stopPropagation();
+	                    e.preventDefault();
+	                    setSelectedEdgeId((prev) => (prev && group.edgeIds.includes(prev) ? null : prev));
+	                    setEdgeEditor(null);
+	                    dismissMenus();
+	                    toggleJunction(group.key);
+	                  }}
+	                >
+	                  <circle
+	                    cx={group.center.x}
+	                    cy={group.center.y}
+	                    r={BRANCH_CIRCLE_RADIUS_PX}
+	                    fill="white"
+	                    stroke={group.color}
+	                    strokeWidth={Math.min(3, Math.max(1, group.strokeWidth))}
+	                  />
+	                  {isCollapsed && (
+	                    <>
+	                      <line
+	                        x1={group.center.x - 3}
+	                        y1={group.center.y}
+	                        x2={group.center.x + 3}
+	                        y2={group.center.y}
+	                        stroke={group.color}
+	                        strokeWidth={1.5}
+	                        strokeLinecap="round"
+	                      />
+	                      <line
+	                        x1={group.center.x}
+	                        y1={group.center.y - 3}
+	                        x2={group.center.x}
+	                        y2={group.center.y + 3}
+	                        stroke={group.color}
+	                        strokeWidth={1.5}
+	                        strokeLinecap="round"
+	                      />
+	                    </>
+	                  )}
+	                </g>
+	              );
+	            })}
+	          </g>
+
+	          <g className="nodes">
+	            {nodesWithSize.map((node) =>
+	              hiddenNodeIds.has(node.id) ? null : (
+	                <g
+	                  key={node.id}
+	                  className="node group cursor-grab"
+	                  data-node-id={node.id}
+	                  transform={`translate(${node.x}, ${node.y})`}
+	                >
+	                <foreignObject width={node.width} height={node.height}>
+	                  <MindMapNodeCard
+	                    id={node.id}
+	                    data={{ ...node.data, onChange: node.data.onChange ?? queueNodeUpdate }}
+	                    onOpenMenu={openNodeMenu}
+	                    onSelect={(nodeId) => setSelectedNodeId(nodeId)}
+	                  />
+	                </foreignObject>
 
                 {(() => {
                   const isVisible = hoveredNodeId === node.id || hoverLockedNodeId === node.id;
@@ -1918,23 +2293,24 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
 
                   return (
                     <>
-                      {(['top', 'right', 'bottom', 'left'] as PortSide[]).map((side) => {
-                        const p = getPortPosition(node, side);
-                        const candidates = edgesWithPositions.filter(
-                          (edge) =>
-                            (edge.source === node.id && edge.sourceSide === side) || (edge.target === node.id && edge.targetSide === side)
-                        );
-                        const selectedCandidate = candidates.find((edge) => edge.id === selectedEdgeId);
-                        const edgeToRewire = (selectedCandidate ?? candidates[candidates.length - 1]) as
-                          | (typeof candidates)[number]
-                          | undefined;
+	                              {(['top', 'right', 'bottom', 'left'] as PortSide[]).map((side) => {
+	                        const p = getPortPosition(node, side);
+	                        const candidates = edgesWithPositions.filter(
+	                          (edge) =>
+	                            (edge.source === node.id && edge.sourceSide === side) || (edge.target === node.id && edge.targetSide === side)
+	                        );
+	                        const hasPortConnection = candidates.length > 0;
+	                        const selectedCandidate = candidates.find((edge) => edge.id === selectedEdgeId);
+	                        const edgeToRewire = (selectedCandidate ?? candidates[candidates.length - 1]) as
+	                          | (typeof candidates)[number]
+	                          | undefined;
                         const movingEnd: 'source' | 'target' | undefined =
                           edgeToRewire && edgeToRewire.source === node.id && edgeToRewire.sourceSide === side
                             ? 'source'
                             : edgeToRewire && edgeToRewire.target === node.id && edgeToRewire.targetSide === side
-                              ? 'target'
-                              : undefined;
-                        const isConnectedPort = !!edgeToRewire && !!movingEnd;
+	                              ? 'target'
+	                              : undefined;
+	                        const isConnectedPort = hasPortConnection && !!edgeToRewire && !!movingEnd;
 
                         const dir = sideDir(side);
                         const bx = p.x - node.x + dir.x * baseButtonOffset;
@@ -1952,15 +2328,16 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
                                 hiddenClass,
                                 isConnectedPort ? 'cursor-grab' : 'cursor-crosshair'
                               )}
-                              onPointerDown={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                                if (!svgRef.current) return;
-                                const [sx, sy] = d3.pointer(e.nativeEvent, svgRef.current);
-                                const [x, y] = zoomTransform.current.invert([sx, sy]);
-                                if (isConnectedPort && edgeToRewire && movingEnd) {
-                                  const fixedNodeId = movingEnd === 'target' ? edgeToRewire.source : edgeToRewire.target;
-                                  const fixedSide = movingEnd === 'target' ? edgeToRewire.sourceSide : edgeToRewire.targetSide;
+	                              onPointerDown={(e) => {
+	                                e.stopPropagation();
+	                                e.preventDefault();
+	                                if (!svgRef.current) return;
+	                                const [sx, sy] = d3.pointer(e.nativeEvent, svgRef.current);
+	                                const [x, y] = zoomTransform.current.invert([sx, sy]);
+	                                const shouldRewire = isConnectedPort && (e.shiftKey || e.altKey);
+	                                if (shouldRewire && edgeToRewire && movingEnd) {
+	                                  const fixedNodeId = movingEnd === 'target' ? edgeToRewire.source : edgeToRewire.target;
+	                                  const fixedSide = movingEnd === 'target' ? edgeToRewire.sourceSide : edgeToRewire.targetSide;
 
                                   setSelectedEdgeId(edgeToRewire.id);
                                   setEdgeMenu(null);
@@ -1980,55 +2357,58 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
                                   setNodeMenu(null);
                                   setEdgeEditor(null);
                                   updateDraggingLink({ mode: 'create', sourceId: node.id, side, x, y });
-                                }
-                              }}
-                            />
+	                                }
+	                              }}
+	                            />
 
-                            <g
-                              transform={`translate(${bx}, ${by})`}
-                              className={cn('transition-opacity duration-150', hiddenClass)}
-                              onPointerEnter={() => setHoverLockedNodeId(node.id)}
-                              onPointerLeave={() => setHoverLockedNodeId((prev) => (prev === node.id ? null : prev))}
-                              onPointerDown={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                              }}
-                              onPointerUp={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                                addNodeFrom(node.id, side);
-                              }}
-                              style={{ cursor: 'pointer' }}
-                            >
-                              <rect
-                                x={-ADD_BUTTON_SIZE_PX / 2}
-                                y={-ADD_BUTTON_SIZE_PX / 2}
-                                width={ADD_BUTTON_SIZE_PX}
-                                height={ADD_BUTTON_SIZE_PX}
-                                rx={4}
-                                fill="white"
-                                stroke="#cbd5e1"
-                                strokeWidth={1}
-                              />
-                              <text
-                                x={0}
-                                y={1}
-                                textAnchor="middle"
-                                dominantBaseline="middle"
-                                className="select-none fill-slate-900 text-xs font-bold"
-                              >
-                                +
-                              </text>
-                            </g>
-                          </g>
-                        );
-                      })}
+	                            {!hasPortConnection && (
+	                              <g
+	                                transform={`translate(${bx}, ${by})`}
+	                                className={cn('transition-opacity duration-150', hiddenClass)}
+	                                onPointerEnter={() => setHoverLockedNodeId(node.id)}
+	                                onPointerLeave={() => setHoverLockedNodeId((prev) => (prev === node.id ? null : prev))}
+	                                onPointerDown={(e) => {
+	                                  e.stopPropagation();
+	                                  e.preventDefault();
+	                                }}
+	                                onPointerUp={(e) => {
+	                                  e.stopPropagation();
+	                                  e.preventDefault();
+	                                  addNodeFrom(node.id, side);
+	                                }}
+	                                style={{ cursor: 'pointer' }}
+	                              >
+	                                <rect
+	                                  x={-ADD_BUTTON_SIZE_PX / 2}
+	                                  y={-ADD_BUTTON_SIZE_PX / 2}
+	                                  width={ADD_BUTTON_SIZE_PX}
+	                                  height={ADD_BUTTON_SIZE_PX}
+	                                  rx={4}
+	                                  fill="white"
+	                                  stroke="#cbd5e1"
+	                                  strokeWidth={1}
+	                                />
+	                                <text
+	                                  x={0}
+	                                  y={1}
+	                                  textAnchor="middle"
+	                                  dominantBaseline="middle"
+	                                  className="select-none fill-slate-900 text-xs font-bold"
+	                                >
+	                                  +
+	                                </text>
+	                              </g>
+	                            )}
+	                          </g>
+	                        );
+	                      })}
                     </>
                   );
                 })()}
-              </g>
-            ))}
-          </g>
+	                </g>
+	              )
+	            )}
+	          </g>
         </g>
       </svg>
     </div>

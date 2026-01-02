@@ -1083,6 +1083,7 @@ seo_keywords = [ ... ]
         brand: str = "",
         language: str = "ru",
         requirements_override: Optional[Dict[str, Any]] = None,
+        additional_context: str = "",
     ) -> Dict[str, Any]:
         """Сгенерировать продукт по типу продукта, настройкам клиента и избранному Wordstat."""
         try:
@@ -1109,6 +1110,12 @@ seo_keywords = [ ... ]
                     break
 
             favorites_text = "\n".join(f"- {p}" for p in favorites) if favorites else "нет избранных фраз"
+            extra_context_text = (additional_context or "").strip()
+            extra_context_block = (
+                f"\n\nКОНТЕКСТ CORE-ПРОДУКТА (если передан)\n{extra_context_text}"
+                if extra_context_text
+                else ""
+            )
 
             required_keys = [
                 "name",
@@ -1164,6 +1171,7 @@ seo_keywords = [ ... ]
 
 WORDSTAT (ИЗБРАННОЕ)
 {favorites_text}
+{extra_context_block}
 
 ЗАДАЧА
 Сгенерируй 9 требований: по одному требованию на каждый блок результата:
@@ -1228,6 +1236,7 @@ WORDSTAT (ИЗБРАННОЕ)
 - Возражения: {objections_text}
 WORDSTAT (избранное):
 {favorites_text}
+{extra_context_block}
 """
 
             def _generate_block(requirement_key: str, requirement_text: str, schema_hint: str, max_tokens: int = 900) -> Dict[str, Any]:

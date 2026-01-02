@@ -32,6 +32,7 @@ export function MindMapNode({ id, data, onOpenMenu, onSelect }: MindMapNodeProps
   const openMenuHandler = onOpenMenu ?? data.onOpenMenu;
   const hasType = !!data.typeLabel?.trim();
   const title = data.title ?? '';
+  const isWebsiteNode = typeof data.meta?.entity === 'string' && data.meta.entity === 'website';
 
   return (
     <div
@@ -68,21 +69,30 @@ export function MindMapNode({ id, data, onOpenMenu, onSelect }: MindMapNodeProps
         </button>
       </div>
 
-      {properties.length > 0 && (
-        <div className="grid grid-cols-3 gap-3 px-4 py-3 text-xs">
-          {properties.map((prop) => (
-            <div key={prop.id ?? `${prop.title}-${prop.value}`} className="space-y-1">
-              {!!prop.title?.trim() && <div className="text-[11px] font-medium text-muted-foreground">{prop.title}</div>}
-              {!!prop.value?.trim() && <div className="text-sm font-semibold text-foreground">{prop.value}</div>}
-              {!!prop.delta?.trim() && (
-                <div className={cn('font-semibold', prop.delta.includes('-') ? 'text-red-500' : 'text-emerald-500')}>
-                  {prop.delta}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      {properties.length > 0 &&
+        (isWebsiteNode ? (
+          <div className="space-y-1 px-4 py-3 text-xs">
+            {properties.map((prop) => (
+              <div key={prop.id ?? `${prop.title}-${prop.value}`} className="text-sm font-semibold text-foreground">
+                {(prop.value ?? '').trim() || '0'} - {(prop.title ?? '').trim()}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-3 px-4 py-3 text-xs">
+            {properties.map((prop) => (
+              <div key={prop.id ?? `${prop.title}-${prop.value}`} className="space-y-1">
+                {!!prop.title?.trim() && <div className="text-[11px] font-medium text-muted-foreground">{prop.title}</div>}
+                {!!prop.value?.trim() && <div className="text-sm font-semibold text-foreground">{prop.value}</div>}
+                {!!prop.delta?.trim() && (
+                  <div className={cn('font-semibold', prop.delta.includes('-') ? 'text-red-500' : 'text-emerald-500')}>
+                    {prop.delta}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ))}
     </div>
   );
 }

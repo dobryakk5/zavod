@@ -90,7 +90,7 @@ export default function MindMapPage() {
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
           <Button asChild variant="ghost" size="sm" className="px-2">
-            <Link href="/products" className="inline-flex items-center gap-2">
+            <Link href={data?.type === 'website' ? '/analytics' : '/products'} className="inline-flex items-center gap-2">
               <ArrowLeft className="h-4 w-4" />
               К списку
             </Link>
@@ -127,7 +127,9 @@ export default function MindMapPage() {
         initialNodes={graphNodes}
         initialEdges={graphEdges}
         mapId={mapId}
+        mode={data?.type === 'product' ? 'product' : 'generic'}
         onEditNode={handleEditNode}
+        onOpenProduct={(productId) => router.push(`/product/${productId}`)}
         onSaved={() => setLastSavedAt(new Date().toISOString())}
       />
     </div>

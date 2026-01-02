@@ -7,6 +7,7 @@ import {
   type ChannelAnalysisRecord,
   type WeeklySourceBatch,
 } from '@/lib/api/analytics';
+import { websitesApi, type WebsiteScan, type WebsiteScanStatus } from '@/lib/api/websites';
 import { clientApi } from '@/lib/api/client';
 import type { ClientSettings } from '@/lib/types';
 import { useRole } from '@/lib/hooks';
@@ -19,9 +20,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
-import { Loader2, Trash2 } from 'lucide-react';
+import { Loader2, RefreshCw, Trash2 } from 'lucide-react';
 
 const statusLabels: Record<WeeklySourceBatch['status'], string> = {
+  pending: 'В очереди',
+  in_progress: 'В работе',
+  completed: 'Готово',
+  failed: 'Ошибка',
+};
+
+const websiteScanStatusLabels: Record<WebsiteScanStatus, string> = {
   pending: 'В очереди',
   in_progress: 'В работе',
   completed: 'Готово',
@@ -312,6 +320,324 @@ function WeeklySourcesTab() {
   );
 }
 
+function WebsiteTab() {
+  const { canEdit } = useRole();
+  const router = useRouter();
+  const [hydrated, setHydrated] = useState(false);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [maxDepth, setMaxDepth] = useState(3);
+  const [maxPages, setMaxPages] = useState(100);
+  const [creating, setCreating] = useState(false);
+  const [history, setHistory] = useState<WebsiteScan[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [rerunId, setRerunId] = useState<number | null>(null);
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
+
+  const loadHistory = async (options?: { silent?: boolean }) => {
+    if (!options?.silent) setLoading(true);
+    try {
+      const data = await websitesApi.listScans();
+      setHistory(data);
+    } catch (error) {
+      toast.error('Не удалось загрузить историю сканов');
+    } finally {
+      if (!options?.silent) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+
+    const load = async (silent = false) => {
+      if (!isMounted) return;
+      await loadHistory({ silent });
+    };
+
+    void load(false);
+    intervalId = setInterval(() => void load(true), 5000);
+    return () => {
+      isMounted = false;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, []);
+
+  const handleCreate = async () => {
+    if (!canEdit || creating) return;
+    const trimmed = baseUrl.trim();
+    if (!trimmed) {
+      toast.error('Введите URL сайта');
+      return;
+    }
+
+    setCreating(true);
+    try {
+      await websitesApi.createScan({
+        base_url: trimmed,
+        max_depth: Math.max(0, Math.min(10, Number(maxDepth) || 3)),
+        max_pages: Math.max(1, Math.min(500, Number(maxPages) || 100)),
+      });
+      toast.success('Скан сайта запущен');
+      setBaseUrl('');
+      await loadHistory();
+    } catch (error) {
+      toast.error('Не удалось запустить скан');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleOpenMindMap = (scan: WebsiteScan) => {
+    if (scan.status !== 'completed' || !scan.mind_map_id) return;
+    router.push(`/map/${scan.mind_map_id}`);
+  };
+
+  const handleDelete = async (scanId: number) => {
+    if (!canEdit || deletingId === scanId) return;
+    const confirmed =
+      typeof window !== 'undefined' ? window.confirm('Удалить скан сайта и все найденные страницы?') : true;
+    if (!confirmed) return;
+
+    setDeletingId(scanId);
+    try {
+      await websitesApi.deleteScan(scanId);
+      setHistory((prev) => prev.filter((item) => item.id !== scanId));
+      toast.success('Скан удалён');
+    } catch (error) {
+      toast.error('Не удалось удалить скан');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleRerun = async (scanId: number) => {
+    if (!canEdit || rerunId === scanId) return;
+    setRerunId(scanId);
+    try {
+      const result = await websitesApi.rerunScan(scanId);
+      if (result.success) {
+        toast.success('Скан перезапущен');
+        await loadHistory({ silent: true });
+      } else {
+        toast.error('Не удалось перезапустить скан');
+      }
+    } catch (error) {
+      toast.error('Не удалось перезапустить скан');
+    } finally {
+      setRerunId(null);
+    }
+  };
+
+  const formatScanProgress = (scan: WebsiteScan) => {
+    const total = typeof scan.pages_total === 'number' && scan.pages_total > 0 ? scan.pages_total : null;
+    const done = typeof scan.pages_count === 'number' && scan.pages_count >= 0 ? scan.pages_count : 0;
+    const startedAt = scan.started_at || scan.created_at;
+
+    if (!total) return { label: `${scan.progress}%`, percent: scan.progress };
+
+    const percent =
+      scan.status === 'completed'
+        ? 100
+        : Math.min(99, Math.max(0, Math.round((done / Math.max(1, total)) * 100)));
+
+    let etaSeconds: number | null = null;
+    if (hydrated && scan.status === 'in_progress') {
+      const elapsedSeconds = Math.max(0, (Date.now() - new Date(startedAt).getTime()) / 1000);
+      if (done < 2) {
+        etaSeconds = Math.round(total * 2);
+      } else {
+        const avg = elapsedSeconds / Math.max(1, done);
+        etaSeconds = Math.max(0, Math.round(avg * Math.max(0, total - done)));
+      }
+    }
+
+    const baseLabel = `${done}/${total}`;
+    if (etaSeconds !== null) return { label: `${baseLabel} • Осталось секунд: ~${etaSeconds}`, percent };
+    return { label: baseLabel, percent };
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="max-w-xl space-y-4">
+        <div className="space-y-1">
+          <h2 className="text-2xl font-semibold">Website</h2>
+          <p className="text-sm text-muted-foreground">Строим дерево страниц (до 3 уровней / до 100 страниц).</p>
+        </div>
+
+        <div className="grid gap-3">
+          <div className="space-y-2">
+            <Label htmlFor="websiteUrl">URL сайта</Label>
+            <Input
+              id="websiteUrl"
+              placeholder="https://example.com"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              disabled={!canEdit}
+            />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="maxDepth">Глубина</Label>
+              <Input
+                id="maxDepth"
+                type="number"
+                min={0}
+                max={10}
+                value={maxDepth}
+                onChange={(e) => setMaxDepth(Number(e.target.value))}
+                disabled={!canEdit}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="maxPages">Лимит страниц</Label>
+              <Input
+                id="maxPages"
+                type="number"
+                min={1}
+                max={500}
+                value={maxPages}
+                onChange={(e) => setMaxPages(Number(e.target.value))}
+                disabled={!canEdit}
+              />
+            </div>
+          </div>
+
+          <Button onClick={handleCreate} disabled={!canEdit || creating || !baseUrl.trim()}>
+            {creating ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Запускаем...
+              </>
+            ) : (
+              'Запустить скан'
+            )}
+          </Button>
+        </div>
+      </div>
+
+      <div>
+        <div className="space-y-1">
+          <h2 className="text-2xl font-semibold">История сканов</h2>
+          <p className="text-gray-500 text-sm">Обновление каждые 5 секунд.</p>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center gap-2 text-gray-500 mt-6">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Загружаем историю
+          </div>
+        ) : history.length === 0 ? (
+          <p className="text-sm text-gray-500 mt-4">Пока нет сканов. Запустите первый скан выше.</p>
+        ) : (
+          <div className="mt-6 rounded-lg border bg-white shadow-sm">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-gray-50">
+                  <TableHead>Сайт</TableHead>
+                  <TableHead className="hidden md:table-cell">Страниц</TableHead>
+                  <TableHead className="hidden md:table-cell">Прогресс</TableHead>
+                  <TableHead>Создан</TableHead>
+                  <TableHead className="w-40 text-right">Действия</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {history.map((item) => (
+                  (() => {
+                    const progressInfo = formatScanProgress(item);
+                    return (
+                  <TableRow
+                    key={item.id}
+                    className={item.status === 'completed' && item.mind_map_id ? 'cursor-pointer' : ''}
+                    onClick={() => handleOpenMindMap(item)}
+                  >
+                    <TableCell className="space-y-1">
+                      <div className="font-medium text-gray-900">{item.base_url}</div>
+                      {item.status === 'failed' && item.error?.trim() ? (
+                        <div className="text-xs text-red-600">{item.error}</div>
+                      ) : (
+                        <div className="text-xs text-gray-500">{websiteScanStatusLabels[item.status]}</div>
+                      )}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell text-sm text-gray-600">
+                      {item.pages_total ? `${item.pages_count ?? 0}/${item.pages_total}` : item.pages_count ?? '—'}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      {item.status === 'failed' ? (
+                        <div className="flex flex-col gap-1">
+                          <Progress value={0} intent="error" />
+                          <span className="text-xs text-gray-500">&nbsp;</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          <Progress value={progressInfo.percent} intent="default" />
+                          <span className="text-xs text-gray-500">
+                            {progressInfo.label}
+                          </span>
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-sm text-gray-600">{new Date(item.created_at).toLocaleString('ru-RU')}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={item.status !== 'completed' || !item.mind_map_id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenMindMap(item);
+                          }}
+                        >
+                          Открыть
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleRerun(item.id);
+                          }}
+                          disabled={rerunId === item.id || !canEdit}
+                          title="Перезапустить"
+                        >
+                          {rerunId === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDelete(item.id);
+                          }}
+                          disabled={deletingId === item.id || !canEdit}
+                          title="Удалить"
+                        >
+                          {deletingId === item.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4 text-red-600" />
+                          )}
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                    );
+                  })()
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AnalyticsPage() {
   const [channelUrl, setChannelUrl] = useState('');
   const [channelType, setChannelType] = useState<ChannelAnalysisRecord['channel_type']>('telegram');
@@ -319,7 +645,7 @@ export default function AnalyticsPage() {
   const [history, setHistory] = useState<ChannelAnalysisRecord[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<'single' | 'weekly'>('single');
+  const [activeTab, setActiveTab] = useState<'single' | 'weekly' | 'website'>('single');
   const router = useRouter();
 
   useEffect(() => {
@@ -403,13 +729,14 @@ export default function AnalyticsPage() {
     <div className="container mx-auto py-8 space-y-6">
       <div className="mb-4">
         <h1 className="text-3xl font-bold">Аналитика</h1>
-        <p className="text-gray-500 mt-2">Один канал или подборка за неделю</p>
+        <p className="text-gray-500 mt-2">Один канал, подборка за неделю или Website</p>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'single' | 'weekly')} className="space-y-6">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'single' | 'weekly' | 'website')} className="space-y-6">
         <TabsList>
           <TabsTrigger value="single">Один канал</TabsTrigger>
           <TabsTrigger value="weekly">Подборка за неделю</TabsTrigger>
+          <TabsTrigger value="website">Website</TabsTrigger>
         </TabsList>
 
         <TabsContent value="single" className="space-y-8">
@@ -539,6 +866,10 @@ export default function AnalyticsPage() {
 
         <TabsContent value="weekly">
           <WeeklySourcesTab />
+        </TabsContent>
+
+        <TabsContent value="website">
+          <WebsiteTab />
         </TabsContent>
       </Tabs>
     </div>

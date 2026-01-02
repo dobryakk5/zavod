@@ -40,6 +40,10 @@ from .weekly_sources import (
     run_weekly_sources_for_client,
     process_weekly_source,
 )
+from .website_scan import (
+    run_website_scan_task,
+    maybe_schedule_next_website_scan_for_client,
+)
 # Generation tasks (10)
 from .generation import (
     generate_post_from_trend,
@@ -90,6 +94,8 @@ __all__ = [
     'analyze_channel_task',
     'run_weekly_sources_for_client',
     'process_weekly_source',
+    'run_website_scan_task',
+    'maybe_schedule_next_website_scan_for_client',
 
     # Generation (10)
     'generate_post_from_trend',

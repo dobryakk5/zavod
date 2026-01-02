@@ -33,7 +33,20 @@ def sync_product_types(source: Client, target: Client) -> int:
     source_rows = list(
         ProductType.objects.filter(owner=source)
         .order_by("id")
-        .values("name", "value", "goal")
+        .values(
+            "name",
+            "value",
+            "goal",
+            "requirements_name",
+            "requirements_packages",
+            "requirements_audience",
+            "requirements_transformation",
+            "requirements_metrics",
+            "requirements_method",
+            "requirements_lesson_format",
+            "requirements_program_modules",
+            "requirements_packaging",
+        )
     )
     if not source_rows:
         return 0
@@ -58,6 +71,15 @@ def sync_product_types(source: Client, target: Client) -> int:
                 name=name,
                 value=row.get("value"),
                 goal=row.get("goal"),
+                requirements_name=row.get("requirements_name"),
+                requirements_packages=row.get("requirements_packages"),
+                requirements_audience=row.get("requirements_audience"),
+                requirements_transformation=row.get("requirements_transformation"),
+                requirements_metrics=row.get("requirements_metrics"),
+                requirements_method=row.get("requirements_method"),
+                requirements_lesson_format=row.get("requirements_lesson_format"),
+                requirements_program_modules=row.get("requirements_program_modules"),
+                requirements_packaging=row.get("requirements_packaging"),
             )
         )
 
@@ -66,6 +88,65 @@ def sync_product_types(source: Client, target: Client) -> int:
 
     ProductType.objects.bulk_create(to_create)
     return len(to_create)
+
+
+@transaction.atomic
+def migrate_client_product_types_to_system(client: Client) -> int:
+    """
+    Move (and deduplicate) client-scoped product types into the system client.
+
+    - Products that reference client-owned types are re-pointed to the system type by normalized name.
+    - Client-owned ProductType rows are deleted afterwards.
+    - If a client type name doesn't exist in system, it is created in system (including requirements_* fields).
+
+    Returns the number of ClientProduct rows updated.
+    """
+
+    system_client = Client.get_system_client()
+    if client.pk == system_client.pk:
+        return 0
+
+    from core.models import ClientProduct  # local import to avoid circulars in managed=False models
+
+    client_types = list(ProductType.objects.filter(owner=client).order_by("id"))
+    if not client_types:
+        return 0
+
+    ensure_system_product_type_templates()
+
+    system_types = list(ProductType.objects.filter(owner=system_client).order_by("id"))
+    system_by_name = {_normalize_name(t.name): t for t in system_types if (t.name or "").strip()}
+
+    updated_products = 0
+
+    for old_type in client_types:
+        key = _normalize_name(old_type.name)
+        if not key:
+            continue
+
+        system_type = system_by_name.get(key)
+        if not system_type:
+            system_type = ProductType.objects.create(
+                owner=system_client,
+                name=(old_type.name or "").strip() or "Type",
+                value=old_type.value,
+                goal=old_type.goal,
+                requirements_name=getattr(old_type, "requirements_name", None),
+                requirements_packages=getattr(old_type, "requirements_packages", None),
+                requirements_audience=getattr(old_type, "requirements_audience", None),
+                requirements_transformation=getattr(old_type, "requirements_transformation", None),
+                requirements_metrics=getattr(old_type, "requirements_metrics", None),
+                requirements_method=getattr(old_type, "requirements_method", None),
+                requirements_lesson_format=getattr(old_type, "requirements_lesson_format", None),
+                requirements_program_modules=getattr(old_type, "requirements_program_modules", None),
+                requirements_packaging=getattr(old_type, "requirements_packaging", None),
+            )
+            system_by_name[key] = system_type
+
+        updated_products += ClientProduct.objects.filter(owner=client, product_type=old_type).update(product_type=system_type)
+
+    ProductType.objects.filter(owner=client).delete()
+    return updated_products
 
 
 @transaction.atomic

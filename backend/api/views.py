@@ -47,4 +47,5 @@ from .views_products import (  # noqa: F401
     ProductTypeViewSet,
 )
 from .views_social import DzenRSSFeedView, TgChannelView  # noqa: F401
-
+from .views_websites import WebsiteScanViewSet  # noqa: F401
+from .views_google import GoogleCSESearchView  # noqa: F401

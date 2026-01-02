@@ -19,7 +19,7 @@ export default function WordstatDetailPage() {
   const [query, setQuery] = useState<WordstatQuery | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
-  const [filterType, setFilterType] = useState<WordstatResultType | 'all'>('all');
+  const [filterType, setFilterType] = useState<WordstatResultType | 'all'>('top_request');
   const [phraseDraft, setPhraseDraft] = useState<string>('');
   const [groupNameDraft, setGroupNameDraft] = useState<string>('');
 
@@ -86,6 +86,15 @@ export default function WordstatDetailPage() {
 
   const isGroupDraft = useMemo(() => extractPhrases(phraseDraft).length > 1, [phraseDraft]);
 
+  const hasUnsavedPhraseChanges = useMemo(() => {
+    if (!query) return false;
+    const draft = extractPhrases(phraseDraft);
+    const existing = (query.phrases || []).map((item) => (item || '').trim()).filter(Boolean);
+    if (draft.length !== existing.length) return true;
+    const existingSet = new Set(existing);
+    return draft.some((item) => !existingSet.has(item));
+  }, [phraseDraft, query]);
+
   const resultTypeLabel = (type: WordstatResultType) => {
     switch (type) {
       case 'association':
@@ -96,6 +105,39 @@ export default function WordstatDetailPage() {
         return 'Мимо';
       default:
         return 'Запрос';
+    }
+  };
+
+  const handleAppendPhrase = async (phrase: string) => {
+    if (!query?.id) return;
+    const normalized = (phrase || '').trim();
+    if (!normalized) return;
+
+    if (hasUnsavedPhraseChanges) {
+      toast.error('Сначала сохраните изменения в списке фраз (кнопка «Добавить фразы»).');
+      return;
+    }
+
+    const existingSet = new Set<string>((query.phrases || []).map((item) => (item || '').trim()).filter(Boolean));
+    if (existingSet.has(normalized)) {
+      toast('Фраза уже есть в запросе');
+      return;
+    }
+
+    setUpdating(true);
+    try {
+      const data = await wordstatApi.append(Number(query.id), { phrases: [normalized] });
+      setQuery(data);
+      setPhraseDraft(getQueryText(data));
+      toast.success('Фраза добавлена в запрос');
+      if (data.id) {
+        router.push(`/seo/${data.id}`);
+      }
+    } catch (error) {
+      console.error('Failed to append Wordstat phrase', error);
+      toast.error('Не удалось добавить фразу');
+    } finally {
+      setUpdating(false);
     }
   };
 
@@ -314,7 +356,15 @@ export default function WordstatDetailPage() {
                               : ''
                         }`}
                       >
-                        {row.phrase}
+                        <button
+                          type="button"
+                          onClick={() => handleAppendPhrase(row.phrase)}
+                          disabled={updating}
+                          className="text-left underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-70"
+                          title="Добавить фразу в запрос"
+                        >
+                          {row.phrase}
+                        </button>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">

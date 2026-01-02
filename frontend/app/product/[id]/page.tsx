@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import { productTypesApi } from '@/lib/api/productTypes';
+import { ApiError } from '@/lib/api';
 import { useRole } from '@/lib/hooks';
 import type { ClientProduct, ProductStructure, ProductType } from '@/lib/types';
 
@@ -49,6 +50,7 @@ type MetricRow = { metric: string; promise: string };
 type MethodRow = { component: string; template: string };
 type LessonFormatRow = { stage: string; percent: number | null };
 type ProgramModuleRow = { module: string; result: string };
+type RelatedProductRef = NonNullable<ProductStructure['related_products']>[number];
 
 const toStr = (value: unknown) => (typeof value === 'string' ? value : value == null ? '' : String(value));
 
@@ -100,6 +102,36 @@ const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure =
       }))
     : [];
   const packaging = (base.packaging ?? {}) as Record<string, unknown>;
+  const related_products = Array.isArray(base.related_products)
+    ? (base.related_products as unknown[])
+        .map((item) => {
+          if (item == null) return null;
+          if (typeof item === 'number') {
+            return { id: item, name: '', product_type_id: null, product_type_name: null, short_description: null } satisfies RelatedProductRef;
+          }
+          if (typeof item === 'string') {
+            const id = toNumberOrNull(item);
+            if (id == null) return null;
+            return { id, name: '', product_type_id: null, product_type_name: null, short_description: null } satisfies RelatedProductRef;
+          }
+          if (typeof item !== 'object') return null;
+          const row = item as Record<string, unknown>;
+          const id = toNumberOrNull(row.id);
+          if (id == null) return null;
+          const name = toStr(row.name);
+          const product_type_id = toNumberOrNull(row.product_type_id);
+          const product_type_name = (() => {
+            const text = toStr(row.product_type_name).trim();
+            return text.length > 0 ? text : null;
+          })();
+          const short_description = (() => {
+            const text = toStr(row.short_description).trim();
+            return text.length > 0 ? text : null;
+          })();
+          return { id, name, product_type_id, product_type_name, short_description } satisfies RelatedProductRef;
+        })
+        .filter((item): item is Exclude<typeof item, null> => item !== null)
+    : [];
 
   return {
     audience,
@@ -113,6 +145,7 @@ const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure =
       slogan: packaging?.slogan == null ? '' : toStr(packaging?.slogan),
       promise: packaging?.promise == null ? '' : toStr(packaging?.promise)
     },
+    related_products,
   };
 };
 
@@ -139,6 +172,26 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [packagingName, setPackagingName] = useState('');
   const [packagingSlogan, setPackagingSlogan] = useState('');
   const [packagingPromise, setPackagingPromise] = useState('');
+  const [relatedProducts, setRelatedProducts] = useState<RelatedProductRef[]>([]);
+
+  const [createRelatedName, setCreateRelatedName] = useState('');
+  const [createRelatedTypeId, setCreateRelatedTypeId] = useState<number | null>(null);
+  const [createRelatedShortDescription, setCreateRelatedShortDescription] = useState('');
+  const [creatingRelated, setCreatingRelated] = useState(false);
+
+  const coreTypeId = useMemo(() => {
+    const core = types.find((t) => t.name.trim().toLowerCase() === 'core');
+    return core?.id ?? null;
+  }, [types]);
+
+  const isCore = useMemo(() => {
+    if (coreTypeId != null) return productTypeId === coreTypeId;
+    return (product?.product_type_name ?? '').trim().toLowerCase() === 'core';
+  }, [coreTypeId, product?.product_type_name, productTypeId]);
+
+  const relatedTypeOptions = useMemo(() => {
+    return types.filter((t) => t.name.trim().toLowerCase() !== 'core');
+  }, [types]);
 
   useEffect(() => {
     let isActive = true;
@@ -184,6 +237,7 @@ export default function ProductPage({ params }: ProductPageProps) {
       setPackagingName(structure.packaging?.name ?? '');
       setPackagingSlogan(structure.packaging?.slogan ?? '');
       setPackagingPromise(structure.packaging?.promise ?? '');
+      setRelatedProducts(structure.related_products ?? []);
     } catch (err) {
       console.error('Failed to load product', err);
       toast.error('Не удалось загрузить продукт');
@@ -201,6 +255,7 @@ export default function ProductPage({ params }: ProductPageProps) {
   }, [productId]);
 
   const packagesCount = useMemo(() => packages.length, [packages]);
+  const canCreateRelated = Boolean(createRelatedName.trim() && createRelatedTypeId != null);
 
   const handleAddAudienceRow = () => setAudience((prev) => [...prev, { parameter: '', value: '' }]);
   const handleAddTransformationRow = () => setTransformation((prev) => [...prev, { was: '', became: '' }]);
@@ -215,6 +270,62 @@ export default function ProductPage({ params }: ProductPageProps) {
 
   const handleDeletePackage = (index: number) => {
     setPackages((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleCreateRelatedProduct = async () => {
+    if (!canEdit || saving || creatingRelated) return;
+    if (!isCore) {
+      toast.error('Сопутствующие продукты можно создавать только внутри Core-продукта.');
+      return;
+    }
+
+    const name = createRelatedName.trim();
+    const short_description = createRelatedShortDescription.trim();
+    if (!name || createRelatedTypeId == null) return;
+    if (productId == null) return;
+
+    setCreatingRelated(true);
+    try {
+      const created = await clientProductsApi.createRelatedAi(productId, {
+        name,
+        product_type_id: createRelatedTypeId,
+        short_description: short_description ? short_description : undefined,
+        language: 'ru'
+      });
+
+      const ref: RelatedProductRef = {
+        id: created.id,
+        name: created.name ?? name,
+        product_type_id: created.product_type_id ?? createRelatedTypeId,
+        product_type_name: created.product_type_name ?? null,
+        short_description: created.short_description ?? (short_description ? short_description : null)
+      };
+
+      setRelatedProducts((prev) => {
+        if (prev.some((item) => item.id === ref.id)) return prev;
+        return [ref, ...prev];
+      });
+
+      setCreateRelatedName('');
+      setCreateRelatedTypeId(null);
+      setCreateRelatedShortDescription('');
+      toast.success('Сопутствующий продукт создан и добавлен в список. Нажмите «Сохранить», чтобы привязка к Core сохранилась.');
+    } catch (err) {
+      console.error('Failed to create related product', err);
+      if (err instanceof ApiError) {
+        try {
+          const payload = err.body ? JSON.parse(err.body) : null;
+          const message = payload?.detail || payload?.error;
+          if (message) {
+            toast.error(String(message));
+            return;
+          }
+        } catch {}
+      }
+      toast.error('Не удалось создать сопутствующий продукт');
+    } finally {
+      setCreatingRelated(false);
+    }
   };
 
   const handleSave = async () => {
@@ -257,6 +368,13 @@ export default function ProductPage({ params }: ProductPageProps) {
         slogan: packagingSlogan.trim() ? packagingSlogan.trim() : null,
         promise: packagingPromise.trim() ? packagingPromise.trim() : null
       },
+      related_products: relatedProducts.map((item) => ({
+        id: item.id,
+        name: item.name,
+        product_type_id: item.product_type_id ?? null,
+        product_type_name: item.product_type_name ?? null,
+        short_description: item.short_description ?? null
+      })),
     };
 
     setSaving(true);
@@ -280,6 +398,7 @@ export default function ProductPage({ params }: ProductPageProps) {
       setPackagingName(updatedStructure.packaging?.name ?? '');
       setPackagingSlogan(updatedStructure.packaging?.slogan ?? '');
       setPackagingPromise(updatedStructure.packaging?.promise ?? '');
+      setRelatedProducts(updatedStructure.related_products ?? []);
       toast.success('Продукт сохранён');
     } catch (err) {
       console.error('Failed to update product', err);
@@ -387,6 +506,133 @@ export default function ProductPage({ params }: ProductPageProps) {
           />
         </div>
       </div>
+
+      {isCore ? (
+        <div className="rounded-xl border bg-card/70 p-4 shadow-sm space-y-4">
+          <div className="space-y-1">
+            <div className="text-sm font-medium">Сопутствующие продукты</div>
+            <div className="text-xs text-muted-foreground">
+              Создавайте продукты других типов из Core. После добавления нажмите «Сохранить», чтобы привязка сохранилась.
+            </div>
+          </div>
+
+          {canEdit ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <Input
+                placeholder="Название сопутствующего продукта"
+                value={createRelatedName}
+                onChange={(e) => setCreateRelatedName(e.target.value)}
+                disabled={saving || creatingRelated}
+                className="w-full max-w-sm"
+              />
+              <Input
+                placeholder="Краткое описание (опционально)"
+                value={createRelatedShortDescription}
+                onChange={(e) => setCreateRelatedShortDescription(e.target.value)}
+                disabled={saving || creatingRelated}
+                className="w-full max-w-sm"
+              />
+              <div className="w-full max-w-sm">
+                <Select
+                  value={createRelatedTypeId == null ? 'none' : String(createRelatedTypeId)}
+                  onValueChange={(value) => setCreateRelatedTypeId(value === 'none' ? null : Number(value))}
+                  disabled={saving || creatingRelated}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Тип продукта" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— Выберите тип —</SelectItem>
+                    {relatedTypeOptions.map((t) => (
+                      <SelectItem key={t.id} value={String(t.id)}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button onClick={() => void handleCreateRelatedProduct()} disabled={!canCreateRelated || saving || creatingRelated}>
+                {creatingRelated ? 'Создание…' : 'Добавить'}
+              </Button>
+            </div>
+          ) : null}
+
+          {relatedProducts.length === 0 ? (
+            <div className="rounded-lg border px-4 py-6 text-muted-foreground">
+              Пока нет сопутствующих продуктов.
+            </div>
+          ) : (
+            <div className="rounded-xl border bg-background/30 shadow-sm">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Название</TableHead>
+                    <TableHead>Тип</TableHead>
+                    <TableHead>Описание</TableHead>
+                    <TableHead className="text-right">Действия</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {relatedProducts.map((item) => {
+                    const typeName =
+                      item.product_type_name ??
+                      (item.product_type_id != null ? types.find((t) => t.id === item.product_type_id)?.name : null) ??
+                      '—';
+                    return (
+                      <TableRow
+                        key={item.id}
+                        className="cursor-pointer"
+                        onClick={(e) => {
+                          const target = e.target as HTMLElement | null;
+                          if (target?.closest('button,a')) return;
+                          router.push(`/product/${item.id}`);
+                        }}
+                      >
+                        <TableCell className="font-medium">{item.name || `#${item.id}`}</TableCell>
+                        <TableCell className="text-muted-foreground">{typeName}</TableCell>
+                        <TableCell className="text-muted-foreground">{item.short_description || '—'}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="inline-flex items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/product/${item.id}`);
+                              }}
+                            >
+                              Открыть
+                            </Button>
+                            {canEdit ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!confirm('Убрать продукт из сопутствующих?')) return;
+                                  setRelatedProducts((prev) => prev.filter((p) => p.id !== item.id));
+                                }}
+                                disabled={saving}
+                                aria-label="Убрать из сопутствующих"
+                                title="Убрать из сопутствующих"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      ) : null}
 
       <div className="rounded-xl border bg-card/70 p-4 shadow-sm space-y-6">
         <div className="space-y-1">

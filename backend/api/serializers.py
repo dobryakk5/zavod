@@ -28,6 +28,8 @@ from core.models import (
     Topic,
     TrendItem,
     VkIntegration,
+    WebsiteScan,
+    WebsiteScanPage,
     WordstatQuery,
     WordstatResult,
     WeeklySourceReport,
@@ -771,6 +773,70 @@ class ChannelAnalysisDetailSerializer(ChannelAnalysisListSerializer):
         return normalized
 
 
+class WebsiteScanCreateSerializer(serializers.Serializer):
+    base_url = serializers.CharField()
+    max_depth = serializers.IntegerField(required=False, min_value=0, max_value=10, default=3)
+    max_pages = serializers.IntegerField(required=False, min_value=1, max_value=500, default=100)
+
+
+class WebsiteScanListSerializer(serializers.ModelSerializer):
+    pages_count = serializers.IntegerField(read_only=True, allow_null=True)
+
+    class Meta:
+        model = WebsiteScan
+        fields = [
+            "id",
+            "base_url",
+            "status",
+            "progress",
+            "max_depth",
+            "max_pages",
+            "pages_total",
+            "mind_map_id",
+            "error",
+            "started_at",
+            "finished_at",
+            "created_at",
+            "updated_at",
+            "pages_count",
+        ]
+        read_only_fields = fields
+
+
+class WebsiteScanDetailSerializer(WebsiteScanListSerializer):
+    class Meta(WebsiteScanListSerializer.Meta):
+        fields = WebsiteScanListSerializer.Meta.fields + [
+            "task_id",
+            "robots_url",
+            "robots_txt",
+            "sitemap_urls",
+        ]
+        read_only_fields = fields
+
+
+class WebsiteScanPageSerializer(serializers.ModelSerializer):
+    parent_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = WebsiteScanPage
+        fields = [
+            "id",
+            "url",
+            "parent_id",
+            "depth",
+            "status_code",
+            "content_type",
+            "title",
+            "meta_description",
+            "headings",
+            "wordstats",
+            "can_fetch_all",
+            "can_fetch_googlebot",
+            "fetched_at",
+        ]
+        read_only_fields = fields
+
+
 class WeeklySourceReportSerializer(serializers.ModelSerializer):
     """Serializer for weekly source reports."""
 
@@ -925,6 +991,7 @@ class MindMapSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "description",
+            "type",
             "is_public",
             "owner_id",
             "created_at",
@@ -932,7 +999,7 @@ class MindMapSerializer(serializers.ModelSerializer):
             "nodes_count",
             "edges_count",
         ]
-        read_only_fields = ["id", "owner_id", "created_at", "updated_at", "nodes_count", "edges_count"]
+        read_only_fields = ["id", "type", "owner_id", "created_at", "updated_at", "nodes_count", "edges_count"]
 
 
 class MindMapDetailSerializer(MindMapSerializer):

@@ -23,8 +23,8 @@ export function ClientProductsTab() {
   const [error, setError] = useState<string | null>(null);
 
   const [createName, setCreateName] = useState('');
-  const [createTypeId, setCreateTypeId] = useState<number | null>(null);
   const [createShortDescription, setCreateShortDescription] = useState('');
+  const [filterTypeId, setFilterTypeId] = useState<number | null>(null);
   const [creatingManual, setCreatingManual] = useState(false);
   const [creatingAuto, setCreatingAuto] = useState(false);
 
@@ -58,32 +58,6 @@ export function ClientProductsTab() {
     router.push(`/product/${productId}`);
   };
 
-  const handleCreateRegular = async () => {
-    const name = createName.trim();
-    const short_description = createShortDescription.trim();
-    if (!name || !short_description) return;
-    setCreatingManual(true);
-    setError(null);
-    try {
-      const created = await clientProductsApi.create({
-        name,
-        product_type_id: createTypeId,
-        short_description,
-        packages: []
-      });
-      setProducts((prev) => [created, ...prev]);
-      setCreateName('');
-      setCreateTypeId(null);
-      setCreateShortDescription('');
-      openProduct(created.id);
-    } catch (err) {
-      console.error('Failed to create product', err);
-      setError('Не удалось создать продукт.');
-    } finally {
-      setCreatingManual(false);
-    }
-  };
-
   const handleCreateCoreManual = async () => {
     const name = createName.trim();
     const short_description = createShortDescription.trim();
@@ -98,7 +72,6 @@ export function ClientProductsTab() {
       });
       setProducts((prev) => [created, ...prev]);
       setCreateName('');
-      setCreateTypeId(null);
       setCreateShortDescription('');
       openProduct(created.id);
     } catch (err) {
@@ -123,7 +96,6 @@ export function ClientProductsTab() {
       });
       setProducts((prev) => [created, ...prev]);
       setCreateName('');
-      setCreateTypeId(null);
       setCreateShortDescription('');
       openProduct(created.id);
     } catch (err) {
@@ -146,6 +118,10 @@ export function ClientProductsTab() {
 
   const handleDuplicate = async (product: ClientProduct) => {
     if (duplicatingId) return;
+    if ((product.product_type_name ?? '').trim().toLowerCase() !== 'core') {
+      setError('Сопутствующие продукты создаются внутри Core. В списке можно создавать/копировать только Core-продукты.');
+      return;
+    }
     setDuplicatingId(product.id);
     setError(null);
     try {
@@ -181,13 +157,12 @@ export function ClientProductsTab() {
   };
 
   const rows = useMemo(() => {
-    if (createTypeId == null) return products;
-    return products.filter((product) => product.product_type_id === createTypeId);
-  }, [createTypeId, products]);
+    if (filterTypeId == null) return products;
+    return products.filter((product) => product.product_type_id === filterTypeId);
+  }, [filterTypeId, products]);
 
   const coreOnboarding = !loading && !error && products.length === 0;
   const canCreateCore = Boolean(createName.trim() && createShortDescription.trim());
-  const canCreateRegular = Boolean(createName.trim() && createShortDescription.trim());
 
   return (
     <div className="space-y-6">
@@ -205,58 +180,52 @@ export function ClientProductsTab() {
             onChange={(e) => setCreateShortDescription(e.target.value)}
             className="w-full max-w-sm"
           />
-          {coreOnboarding ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={() => void handleCreateCoreManual()} disabled={!canCreateCore || creatingManual || creatingAuto}>
-                {creatingManual ? 'Создание…' : 'Вручную'}
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => void handleCreateCoreAuto()}
-                disabled={!canCreateCore || creatingAuto || creatingManual}
-              >
-                {creatingAuto ? (
-                  <span className="inline-flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Автомат…
-                  </span>
-                ) : (
-                  'Автомат'
-                )}
-              </Button>
-              <div className="text-xs text-muted-foreground">Тип: Core</div>
-            </div>
-          ) : (
-            <>
-              <div className="w-full max-w-sm">
-                <Select
-                  value={createTypeId == null ? 'none' : String(createTypeId)}
-                  onValueChange={(value) => setCreateTypeId(value === 'none' ? null : Number(value))}
-                  disabled={creatingManual}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Тип продукта (опционально)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">— Без типа —</SelectItem>
-                    {types.map((t) => (
-                      <SelectItem key={t.id} value={String(t.id)}>
-                        {t.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={() => void handleCreateRegular()} disabled={creatingManual || !canCreateRegular}>
-                {creatingManual ? 'Создание…' : 'Добавить продукт'}
-              </Button>
-            </>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => void handleCreateCoreManual()} disabled={!canCreateCore || creatingManual || creatingAuto}>
+              {creatingManual ? 'Создание…' : 'Core вручную'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => void handleCreateCoreAuto()}
+              disabled={!canCreateCore || creatingAuto || creatingManual}
+            >
+              {creatingAuto ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Core автомат…
+                </span>
+              ) : (
+                'Core автомат'
+              )}
+            </Button>
+            <div className="text-xs text-muted-foreground">В списке создаётся только Core</div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="w-full max-w-sm">
+            <Select
+              value={filterTypeId == null ? 'all' : String(filterTypeId)}
+              onValueChange={(value) => setFilterTypeId(value === 'all' ? null : Number(value))}
+              disabled={loading}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Фильтр по типу" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Все типы</SelectItem>
+                {types.map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
         <p className="text-xs text-muted-foreground">
           {coreOnboarding
-            ? 'Создайте основной продукт (Core): заполните название и описание, затем выберите «Вручную» или «Автомат».'
-            : 'Введите название и описание и нажмите «Добавить продукт»'}
+            ? 'Создайте основной продукт (Core): заполните название и описание, затем выберите «Core вручную» или «Core автомат».'
+            : 'Core создаётся из списка, а сопутствующие продукты — внутри Core.'}
         </p>
       </div>
 
@@ -271,7 +240,7 @@ export function ClientProductsTab() {
           Пока нет продуктов. Создайте основной продукт (Core) через форму выше.
         </div>
       )}
-      {!loading && !error && products.length > 0 && rows.length === 0 && createTypeId != null && (
+      {!loading && !error && products.length > 0 && rows.length === 0 && filterTypeId != null && (
         <div className="rounded-lg border px-4 py-6 text-muted-foreground">
           Нет продуктов выбранного типа.
         </div>
@@ -311,13 +280,17 @@ export function ClientProductsTab() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        disabled={duplicatingId === product.id}
+                        disabled={duplicatingId === product.id || (product.product_type_name ?? '').trim().toLowerCase() !== 'core'}
                         onClick={(e) => {
                           e.stopPropagation();
                           void handleDuplicate(product);
                         }}
                         aria-label="Сделать копию"
-                        title="Сделать копию"
+                        title={
+                          (product.product_type_name ?? '').trim().toLowerCase() === 'core'
+                            ? 'Сделать копию'
+                            : 'Копирование сопутствующих продуктов доступно внутри Core'
+                        }
                       >
                         {duplicatingId === product.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
                       </Button>

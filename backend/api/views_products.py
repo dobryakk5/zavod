@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import List
 
@@ -25,7 +26,10 @@ from core.models import (
     ProductType,
     WordstatResult,
 )
-from core.services.product_type_templates import ensure_system_product_type_templates, sync_product_types
+from core.services.product_type_templates import (
+    ensure_system_product_type_templates,
+    migrate_client_product_types_to_system,
+)
 
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers import (
@@ -44,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 class ProductTypeViewSet(viewsets.ModelViewSet):
-    """CRUD for the active client's product types directory."""
+    """Global product types directory (system templates)."""
 
     permission_classes = [IsTenantMember]
     serializer_class = ProductTypeSerializer
@@ -56,22 +60,22 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
-        client = get_active_client(self.request.user)
-        return ProductType.objects.filter(owner=client).order_by("-updated_at")
+        system_client = Client.get_system_client()
+        return ProductType.objects.filter(owner=system_client).order_by("-updated_at")
 
     def list(self, request, *args, **kwargs):
         client = get_active_client(request.user)
-        if not ProductType.objects.filter(owner=client).exists():
-            with transaction.atomic():
-                if not ProductType.objects.filter(owner=client).exists():
-                    ensure_system_product_type_templates()
-                    system_client = Client.get_system_client()
-                    sync_product_types(system_client, client)
+        ensure_system_product_type_templates()
+        if not client.is_system:
+            try:
+                migrate_client_product_types_to_system(client)
+            except Exception:
+                logger.exception("Failed to migrate client product types to system templates")
         return super().list(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        client = get_active_client(self.request.user)
-        serializer.save(owner=client)
+        system_client = Client.get_system_client()
+        serializer.save(owner=system_client)
 
     @action(
         detail=False,
@@ -81,41 +85,11 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
     )
     def load_template(self, request):
         """
-        Copy system product type templates into the active client.
+        Deprecated: product types are global now.
 
-        Only allowed when the client has no product types yet.
+        Kept for backward compatibility with old UI flows.
         """
-
-        client = get_active_client(request.user)
-
-        with transaction.atomic():
-            if ProductType.objects.filter(owner=client).exists():
-                raise ValidationError({"detail": "У клиента уже есть типы продукта."})
-
-            ensure_system_product_type_templates()
-            system_client = Client.get_system_client()
-            templates = list(ProductType.objects.filter(owner=system_client).order_by("id"))
-            if not templates:
-                return Response(
-                    {"detail": "В системе нет шаблонных типов продукта."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-            ProductType.objects.bulk_create(
-                [
-                    ProductType(
-                        owner=client,
-                        name=tpl.name,
-                        value=tpl.value,
-                        goal=tpl.goal,
-                    )
-                    for tpl in templates
-                ]
-            )
-
-        queryset = ProductType.objects.filter(owner=client).order_by("-updated_at")
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        raise ValidationError({"detail": "Типы продуктов глобальные. Управляйте ими в системном справочнике."})
 
     @action(
         detail=True,
@@ -175,10 +149,26 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
                 "program_modules": getattr(product_type, "requirements_program_modules", None),
                 "packaging": getattr(product_type, "requirements_packaging", None),
             }
-            if all(isinstance(v, str) and v.strip() for v in candidate.values()):
-                saved_requirements = {k: str(v).strip() for k, v in candidate.items()}
+            missing = [k for k, v in candidate.items() if not isinstance(v, str) or not v.strip()]
+            if missing:
+                return Response(
+                    {
+                        "success": False,
+                        "error": (
+                            "У типа продукта нет AI-требований для генерации. "
+                            "Заполните requirements_* в /django-admin/core/producttypeadminproxy/ "
+                            f"(пустые: {', '.join(missing)})."
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            saved_requirements = {k: str(v).strip() for k, v in candidate.items()}  # type: ignore[arg-type]
         except Exception:
-            saved_requirements = None
+            logger.exception("Failed to load product type requirements for generation")
+            return Response(
+                {"success": False, "error": "Не удалось прочитать requirements_* для типа продукта."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         result = generator.generate_client_product_from_type(
             product_type_name=product_type.name,
@@ -193,36 +183,6 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
             language=language,
             requirements_override=saved_requirements,
         )
-
-        requirements = result.get("requirements")
-        if not isinstance(requirements, dict):
-            raw = result.get("raw_response") or {}
-            requirements = raw.get("requirements") if isinstance(raw, dict) else None
-
-        if isinstance(requirements, dict):
-            product_type.requirements_name = str(requirements.get("name") or "").strip() or None
-            product_type.requirements_packages = str(requirements.get("packages") or "").strip() or None
-            product_type.requirements_audience = str(requirements.get("audience") or "").strip() or None
-            product_type.requirements_transformation = str(requirements.get("transformation") or "").strip() or None
-            product_type.requirements_metrics = str(requirements.get("metrics") or "").strip() or None
-            product_type.requirements_method = str(requirements.get("method") or "").strip() or None
-            product_type.requirements_lesson_format = str(requirements.get("lesson_format") or "").strip() or None
-            product_type.requirements_program_modules = str(requirements.get("program_modules") or "").strip() or None
-            product_type.requirements_packaging = str(requirements.get("packaging") or "").strip() or None
-            product_type.save(
-                update_fields=[
-                    "requirements_name",
-                    "requirements_packages",
-                    "requirements_audience",
-                    "requirements_transformation",
-                    "requirements_metrics",
-                    "requirements_method",
-                    "requirements_lesson_format",
-                    "requirements_program_modules",
-                    "requirements_packaging",
-                    "updated_at",
-                ]
-            )
 
         if not result.get("success"):
             return Response(
@@ -284,11 +244,13 @@ class ClientProductViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
 
     @staticmethod
-    def _ensure_core_product_type(client: Client) -> ProductType:
-        core_type = ProductType.objects.filter(owner=client, name__iexact="Core").first()
+    def _ensure_core_product_type(_: Client) -> ProductType:
+        ensure_system_product_type_templates()
+        system_client = Client.get_system_client()
+        core_type = ProductType.objects.filter(owner=system_client, name__iexact="Core").first()
         if core_type:
             return core_type
-        return ProductType.objects.create(owner=client, name="Core", value=None, goal=None)
+        return ProductType.objects.create(owner=system_client, name="Core", value=None, goal=None)
 
     @staticmethod
     def _normalize_core_description(value: str) -> str:
@@ -305,12 +267,48 @@ class ClientProductViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
+        ensure_system_product_type_templates()
+        if not client.is_system:
+            try:
+                migrate_client_product_types_to_system(client)
+            except Exception:
+                logger.exception("Failed to migrate client product types to system templates")
         return ClientProduct.objects.select_related("product_type").filter(owner=client).order_by("-updated_at")
 
     def _ensure_product_type_belongs_to_client(self, serializer, client: Client) -> None:
         product_type = serializer.validated_data.get("product_type")
-        if product_type and product_type.owner_id != client.id:
-            raise ValidationError({"product_type_id": "Этот тип продукта не принадлежит активному клиенту."})
+        if not product_type:
+            return
+        system_client = Client.get_system_client()
+        if product_type.owner_id != system_client.id:
+            raise ValidationError({"product_type_id": "Тип продукта должен быть системным (общим для всех)."})
+
+    @staticmethod
+    def _normalize_typed_description(type_name: str, value: str) -> str:
+        cleaned = (value or "").strip()
+        prefix = f"{(type_name or '').strip()}:".strip()
+        if not prefix or prefix == ":":
+            return cleaned
+        if cleaned.lower().startswith(prefix.lower()):
+            return cleaned
+        return f"{prefix} {cleaned}".strip()
+
+    @staticmethod
+    def _format_core_context(core_product: ClientProduct) -> str:
+        structure = core_product.structure if isinstance(core_product.structure, dict) else {}
+        packages = core_product.packages if isinstance(core_product.packages, list) else []
+
+        summary = {
+            "core": {
+                "id": core_product.id,
+                "name": core_product.name,
+                "short_description": core_product.short_description,
+            },
+            "packages": packages,
+            "structure": structure,
+        }
+
+        return json.dumps(summary, ensure_ascii=False)
 
     def perform_create(self, serializer):
         client = get_active_client(self.request.user)
@@ -411,6 +409,130 @@ class ClientProductViewSet(viewsets.ModelViewSet):
             product_type=core_type,
             name=name,
             short_description=self._normalize_core_description(short_description),
+            packages=product_data.get("packages") if isinstance(product_data.get("packages"), list) else [],
+            structure=product_data.get("structure") if isinstance(product_data.get("structure"), dict) else {},
+        )
+        serializer = self.get_serializer(created)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="create-related-ai",
+        permission_classes=[IsTenantOwnerOrEditor],
+    )
+    def create_related_ai(self, request, pk=None):
+        """
+        Create a related product inside a Core product using the Core context.
+
+        Payload:
+        - name: string (required)
+        - product_type_id: number (required, must be system/global)
+        - short_description: string (optional, used as extra hint)
+        - language: 'ru' | 'en' (optional)
+        """
+
+        client = get_active_client(request.user)
+        core_product = get_object_or_404(ClientProduct.objects.select_related("product_type"), pk=pk, owner=client)
+        core_type_name = (getattr(core_product.product_type, "name", None) or "").strip().lower()
+        if core_type_name != "core":
+            raise ValidationError({"detail": "Сопутствующие продукты можно создавать только внутри Core-продукта."})
+
+        name = str(request.data.get("name") or "").strip()
+        if not name:
+            raise ValidationError({"name": "Название обязательно."})
+
+        try:
+            product_type_id = int(request.data.get("product_type_id"))
+        except (TypeError, ValueError):
+            raise ValidationError({"product_type_id": "Укажите product_type_id (число)."})
+
+        system_client = Client.get_system_client()
+        product_type = get_object_or_404(ProductType.objects.select_related("owner"), pk=product_type_id)
+        if product_type.owner_id != system_client.id:
+            raise ValidationError({"product_type_id": "Тип продукта должен быть системным (общим для всех)."})
+        if (product_type.name or "").strip().lower() == "core":
+            raise ValidationError({"product_type_id": "Core создаётся в общем списке. Внутри Core создавайте сопутствующие типы."})
+
+        language = (request.data.get("language") or "ru").strip().lower()
+        if language not in {"ru", "en"}:
+            language = "ru"
+
+        hint = str(request.data.get("short_description") or "").strip()
+
+        candidate = {
+            "name": getattr(product_type, "requirements_name", None),
+            "packages": getattr(product_type, "requirements_packages", None),
+            "audience": getattr(product_type, "requirements_audience", None),
+            "transformation": getattr(product_type, "requirements_transformation", None),
+            "metrics": getattr(product_type, "requirements_metrics", None),
+            "method": getattr(product_type, "requirements_method", None),
+            "lesson_format": getattr(product_type, "requirements_lesson_format", None),
+            "program_modules": getattr(product_type, "requirements_program_modules", None),
+            "packaging": getattr(product_type, "requirements_packaging", None),
+        }
+        missing = [k for k, v in candidate.items() if not isinstance(v, str) or not v.strip()]
+        if missing:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "У типа продукта нет AI-требований для генерации. "
+                        "Заполните requirements_* в /django-admin/core/producttypeadminproxy/ "
+                        f"(пустые: {', '.join(missing)})."
+                    )
+                }
+            )
+
+        requirements_override = {k: str(v).strip() for k, v in candidate.items()}  # type: ignore[arg-type]
+        requirements_override["name"] = (
+            f"{requirements_override['name']}\n\n"
+            "ДОПОЛНИТЕЛЬНО ДЛЯ ЭТОГО ПРОДУКТА\n"
+            f"- Название строго: '{name}'.\n"
+            f"- short_description должен начинаться с '{product_type.name}:' и быть связан с Core.\n"
+            + (f"- Уточнение от пользователя: {hint}\n" if hint else "")
+        ).strip()
+
+        core_context = self._format_core_context(core_product)
+
+        try:
+            generator = AIContentGenerator()
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        result = generator.generate_client_product_from_type(
+            product_type_name=product_type.name,
+            product_type_value=product_type.value or "",
+            product_type_goal=product_type.goal or "",
+            avatar=client.avatar or "",
+            pains=client.pains or "",
+            desires=client.desires or "",
+            objections=client.objections or "",
+            wordstat_favorites=[],
+            brand=client.get_brand_display_name(),
+            language=language,
+            requirements_override=requirements_override,
+            additional_context=core_context,
+        )
+
+        if not result.get("success"):
+            return Response(
+                {"detail": result.get("error") or "Не удалось сгенерировать сопутствующий продукт", "raw_response": result.get("raw_response")},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        product_data = result.get("product") or {}
+        if not isinstance(product_data, dict):
+            return Response({"detail": "Некорректный ответ генератора"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        generated_short_description = str(product_data.get("short_description") or "").strip()
+        if not generated_short_description:
+            generated_short_description = f"{product_type.name}: {name}"
+
+        created = ClientProduct.objects.create(
+            owner=client,
+            product_type=product_type,
+            name=name,
+            short_description=self._normalize_typed_description(product_type.name, generated_short_description) or None,
             packages=product_data.get("packages") if isinstance(product_data.get("packages"), list) else [],
             structure=product_data.get("structure") if isinstance(product_data.get("structure"), dict) else {},
         )

@@ -85,6 +85,15 @@ export default function WordstatFavoritesPage() {
     }
   };
 
+  const handleGoogleSearch = (phrase: string) => {
+    const q = (phrase || '').trim();
+    if (!q) return;
+    const params = new URLSearchParams();
+    params.set('tab', 'competitors');
+    params.set('q', q);
+    router.push(`/seo?${params.toString()}`);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
@@ -145,6 +154,15 @@ export default function WordstatFavoritesPage() {
                           aria-label="Отметить как мимо"
                         >
                           <ThumbsDown className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleGoogleSearch(row.phrase)}
+                          className="rounded-md p-2 text-slate-600 transition hover:text-slate-900"
+                          title="Google search"
+                          aria-label="Google search"
+                        >
+                          <span className="text-[13px] font-semibold leading-none">G</span>
                         </button>
                       </div>
                     </TableCell>

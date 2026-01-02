@@ -37,6 +37,16 @@ export const clientProductsApi = {
     });
   },
 
+  createRelatedAi: async (
+    coreProductId: string | number,
+    payload: { name: string; product_type_id: number; short_description?: string; language?: 'ru' | 'en' }
+  ) => {
+    return apiFetch<ClientProduct>(`/products/list/${coreProductId}/create-related-ai/`, {
+      method: 'POST',
+      body: payload
+    });
+  },
+
   update: async (
     id: string | number,
     payload: Partial<{

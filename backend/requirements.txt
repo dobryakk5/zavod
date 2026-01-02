@@ -16,6 +16,9 @@ redis>=5.0,<6.0
 pytrends>=4.9,<5.0
 feedparser>=6.0,<7.0
 requests>=2.31,<3.0
+httpx[http2]>=0.27,<1.0
+pymorphy2>=0.9,<1.0
+pymorphy2-dicts-ru>=2.4,<3.0
 beautifulsoup4>=4.12,<5.0
 lxml>=5.0,<6.0
 
