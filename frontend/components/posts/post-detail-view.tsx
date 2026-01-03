@@ -127,6 +127,8 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
   const clientSlug = clientInfo?.client?.slug;
   const isDevMode = process.env.NEXT_PUBLIC_DEV_MODE === 'true';
   const canGenerateVideo = isDevMode || clientSlug === 'zavod';
+  const isMediaFeatureLocked = !MEDIA_FEATURES_AVAILABLE || !canGenerateVideo;
+  const paidFeatureHoverLabel = 'Платная функция';
   const [post, setPost] = useState<PostDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [imageGenerationLoading, setImageGenerationLoading] = useState(false);
@@ -495,7 +497,7 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
   const imageCooldownLabel = isImageOnCooldown ? formatCooldownDuration(imageCooldownRemainingMs) : '';
   const videoCooldownLabel = isVideoOnCooldown ? formatCooldownDuration(videoCooldownRemainingMs) : '';
   const imageGenerationDisabled = !canEdit || imageGenerationLoading || !MEDIA_FEATURES_AVAILABLE || isImageOnCooldown;
-  const videoGenerationDisabled = !canEdit || loading || !MEDIA_FEATURES_AVAILABLE || !canGenerateVideo || isVideoOnCooldown;
+  const videoGenerationDisabled = !canEdit || loading || isMediaFeatureLocked || isVideoOnCooldown;
   const videoFromTextDisabled = videoGenerationDisabled || !post.text;
 
   return (
@@ -582,12 +584,19 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
               <div className="flex flex-wrap gap-2">
                 <Button
                   disabled={imageGenerationDisabled}
-                  variant="default"
+                  variant="secondary"
                   onClick={handleGenerateImage}
-                  className={imageGenerationLoading ? 'animate-pulse' : ''}
+                  title={paidFeatureHoverLabel}
+                  className={[
+                    imageGenerationLoading ? 'animate-pulse' : '',
+                    'group disabled:pointer-events-auto',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                 >
                   {imageGenerationLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Изображение
+                  <span className="group-hover:hidden">Изображение</span>
+                  <span className="hidden group-hover:inline">{paidFeatureHoverLabel}</span>
                 </Button>
               </div>
               {isImageOnCooldown && showImageCooldownMessage && (
@@ -602,18 +611,23 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
               <div className="flex flex-wrap gap-2">
                 <Button
                   disabled={videoGenerationDisabled}
-                  variant={MEDIA_FEATURES_AVAILABLE && canGenerateVideo ? 'default' : 'secondary'}
+                  variant={isMediaFeatureLocked ? 'secondary' : 'default'}
                   onClick={() => handleGenerateVideo()}
+                  title={paidFeatureHoverLabel}
+                  className="group disabled:pointer-events-auto"
                 >
-                  {canGenerateVideo ? 'Видео по изображению' : 'Сгенерировать видео (только dev)'}
+                  <span className="group-hover:hidden">Видео по фото</span>
+                  <span className="hidden group-hover:inline">{paidFeatureHoverLabel}</span>
                 </Button>
                 <Button
                   disabled={videoFromTextDisabled}
-                  variant={MEDIA_FEATURES_AVAILABLE && canGenerateVideo ? 'default' : 'secondary'}
+                  variant={isMediaFeatureLocked ? 'secondary' : 'default'}
                   onClick={() => handleGenerateVideo({ source: 'text', method: 'veo' })}
-                  title={!post.text ? 'Добавьте текст в пост, чтобы сгенерировать видео по тексту' : undefined}
+                  title={paidFeatureHoverLabel}
+                  className="group disabled:pointer-events-auto"
                 >
-                  Видео по тексту
+                  <span className="group-hover:hidden">Видео по тексту</span>
+                  <span className="hidden group-hover:inline">{paidFeatureHoverLabel}</span>
                 </Button>
               </div>
               {isVideoOnCooldown && showVideoCooldownMessage && (

@@ -9,6 +9,7 @@ This module re-exports view classes from smaller `views_*.py` modules to keep
 
 # Non-extracted views (still live in the legacy module).
 from .views_misc import (  # noqa: F401
+    ArticleViewSet,
     ChannelAnalysisViewSet,
     ClientExpertBooksView,
     ClientInfoView,
@@ -48,4 +49,12 @@ from .views_products import (  # noqa: F401
 )
 from .views_social import DzenRSSFeedView, TgChannelView  # noqa: F401
 from .views_websites import WebsiteScanViewSet  # noqa: F401
-from .views_google import GoogleCSESearchView  # noqa: F401
+from .views_google import (  # noqa: F401
+    GoogleCSESearchView,
+    GoogleCompetitorsAnalyzeView,
+    GoogleCompetitorsStoreView,
+    GoogleCompetitorsSitesView,
+    GoogleCompetitorsResolveView,
+    GoogleCompetitorsMarkView,
+    GoogleCompetitorsCachedView,
+)

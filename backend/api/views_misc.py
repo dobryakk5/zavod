@@ -41,7 +41,10 @@ from config.celery import app as celery_app
 
 from core.audience_profiles import merge_audience_profiles
 from core.ai_generator import AIContentGenerator
+from core.article_prompt_templates import ARTICLE_BLOCK_PROMPTS
 from core.models import (
+    Article,
+    ArticleBlock,
     Client,
     ClientProduct,
     ProductType,
@@ -79,6 +82,9 @@ from core.services.posting_service import update_post_status_after_publish
 from .authentication import CookieJWTAuthentication
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
 from .serializers import (
+    ArticleListSerializer,
+    ArticleSerializer,
+    ArticleBlockSerializer,
     ChannelAnalysisDetailSerializer,
     ChannelAnalysisListSerializer,
     ClientProductSerializer,
@@ -1264,6 +1270,779 @@ class StoryViewSet(viewsets.ModelViewSet):
             'message': f'Generating posts from story: {story.title}',
             'task_id': task.id
         })
+
+
+def _strip_code_fences(text: str) -> str:
+    value = (text or "").strip()
+    if value.startswith("```json"):
+        value = value[7:]
+    if value.startswith("```"):
+        value = value[3:]
+    if value.endswith("```"):
+        value = value[:-3]
+    return value.strip()
+
+
+def _parse_ai_json_object(raw_response: str):
+    if not raw_response:
+        return None
+    candidates: list[str] = []
+    cleaned = _strip_code_fences(raw_response)
+    if cleaned:
+        candidates.append(cleaned)
+    if raw_response.strip() and raw_response.strip() not in candidates:
+        candidates.append(raw_response.strip())
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _parse_optional_positive_int(value):
+    if value in (None, "", 0):
+        return None
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _build_article_outline(
+    wordstat: str,
+    why_now: list[str],
+    solution: list[str],
+    *,
+    lead_product_name: str = "",
+    tripwire_product_name: str = "",
+    level3: dict | None = None,
+) -> str:
+    safe_wordstat = (wordstat or "").strip()
+    why_now_items = [str(item).strip() for item in (why_now or []) if str(item).strip()]
+    solution_items = [str(item).strip() for item in (solution or []) if str(item).strip()]
+
+    lines: list[str] = []
+    lines.append(f"# {safe_wordstat}")
+    lines.append("")
+    lines.append("SEO-H1 (чётко по запросу)")
+    lines.append("")
+    lines.append("## Вступление:")
+    lines.append("")
+    lines.append("### боль")
+    if why_now_items:
+        for item in why_now_items:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- (какая боль/срочность у пользователя)")
+    lines.append("")
+    lines.append("### узнавание")
+    lines.append("- (как пользователь узнаёт себя в ситуации)")
+    lines.append("- (признаки/симптомы, по которым он понимает, что это про него)")
+    lines.append("")
+    lines.append("### обещание")
+    if solution_items:
+        for item in solution_items:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- (к какому решению/логике подводим)")
+    lines.append("")
+
+    def _append_level3(block_title: str, answer_hint: str) -> bool:
+        if not isinstance(level3, dict):
+            return False
+        entry = level3.get(block_title)
+        if not isinstance(entry, dict):
+            return False
+        subquery = str(entry.get("subquery_h2") or "").strip()
+        if subquery:
+            lines.append(f"## {subquery}")
+        keywords = entry.get("keywords") if isinstance(entry.get("keywords"), list) else []
+        keyword_values = [str(item).strip() for item in keywords if str(item).strip()]
+        if keyword_values:
+            lines.append(f"- ключи: {', '.join(keyword_values)}")
+        micro_intent = str(entry.get("micro_intent") or "").strip()
+        if micro_intent:
+            lines.append(f"- микро-интент: {micro_intent}")
+        lines.append(f"- ответ: {answer_hint}")
+        return True
+
+    def _append_level3_placeholder(answer_hint: str):
+        lines.append("## (подзапрос)")
+        lines.append("- ключи: (1–2 ключа из Wordstat избранного)")
+        lines.append("- микро-интент: (какой микро-интент закрываем)")
+        lines.append(f"- ответ: {answer_hint}")
+
+    lines.append("## Блок «Почему проблема возникает»")
+    if not _append_level3("Блок «Почему проблема возникает»", "(причины/механика проблемы: от простого к сложному)"):
+        _append_level3_placeholder("(причины/механика проблемы: от простого к сложному)")
+    lines.append("")
+    lines.append("## Блок «Типичные ошибки»")
+    if not _append_level3("Блок «Типичные ошибки»", "(что обычно делают неправильно и почему не работает)"):
+        _append_level3_placeholder("(что обычно делают неправильно и почему не работает)")
+    lines.append("")
+    lines.append("## Блок «Правильная логика / система»")
+    if not _append_level3("Блок «Правильная логика / система»", "(правильный принцип/система мышления)"):
+        _append_level3_placeholder("(правильный принцип/система мышления)")
+    lines.append("")
+    lines.append("## Блок «Пошаговая модель»")
+    if not _append_level3("Блок «Пошаговая модель»", "(какие шаги и в каком порядке)"):
+        _append_level3_placeholder("(какие шаги и в каком порядке)")
+    lines.append("- Шаг 1: (что сделать)")
+    lines.append("- Шаг 2: (что сделать)")
+    lines.append("- Шаг 3: (что сделать)")
+    lines.append("")
+    lines.append("## Блок «Пример / кейс / сценарий»")
+    if not _append_level3("Блок «Пример / кейс / сценарий»", "(короткий сценарий применения шагов)"):
+        _append_level3_placeholder("(короткий сценарий применения шагов)")
+    lines.append("")
+    lines.append("## Блок «Что делать дальше»")
+    if not _append_level3("Блок «Что делать дальше»", "(варианты следующего шага и когда нужен специалист/инструмент)"):
+        _append_level3_placeholder("(варианты следующего шага и когда нужен специалист/инструмент)")
+    lines.append("- (варианты следующего шага)")
+    lines.append("- (когда стоит обратиться к специалисту/инструменту)")
+    lines.append("")
+    lines.append("## Мягкий переход к продукту:")
+    if not _append_level3("Мягкий переход к продукту:", "(как связать решение с продуктом без давления)"):
+        _append_level3_placeholder("(как связать решение с продуктом без давления)")
+    if lead_product_name.strip():
+        lines.append(f"- Lead: {lead_product_name.strip()}")
+    if tripwire_product_name.strip():
+        lines.append(f"- Tripwire: {tripwire_product_name.strip()}")
+    lines.append("- (мягко связать решение с продуктом/услугой без давления)")
+    lines.append("")
+
+    lines.append("## Закрывающее утверждение")
+    lines.append("- (2–3 предложения: ясность, структура, без CTA)")
+    lines.append("")
+    return "\n".join(lines)
+
+
+class ArticleViewSet(viewsets.ModelViewSet):
+    """Статьи (скелеты) по Wordstat запросам."""
+
+    permission_classes = [IsTenantMember]
+    http_method_names = ["get", "post", "head", "options"]
+    pagination_class = None
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return Article.objects.filter(client=client).order_by("-created_at")
+
+    def get_permissions(self):
+        if self.action in {
+            "start",
+            "save_choices",
+            "save_seo_blocks",
+            "generate_seo_blocks",
+            "update_outline",
+            "update_wordstat",
+            "update_audience",
+            "generate_outline",
+            "blocks_update",
+            "blocks_generate",
+        }:
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ArticleListSerializer
+        return ArticleSerializer
+
+    def _get_block_queryset(self, article: Article):
+        return ArticleBlock.objects.filter(article=article).order_by("order", "id")
+
+    def _get_system_block_prompt_template(self, block_key: str) -> str:
+        """
+        Системный промпт для блока (общий для всех клиентов/статей).
+        Редактируется в Django Admin в модели ArticleBlockPromptTemplate.
+        """
+        from core.models import ArticleBlockPromptTemplate
+
+        row = ArticleBlockPromptTemplate.objects.filter(block_key=block_key).only("prompt_template").first()
+        if row and (row.prompt_template or "").strip():
+            return row.prompt_template
+        return ARTICLE_BLOCK_PROMPTS.get(block_key, "")
+
+    def _sync_blocks_from_seo_blocks(self, article: Article):
+        block_titles = [
+            "Вступление",
+            "Блок «Почему проблема возникает»",
+            "Блок «Типичные ошибки»",
+            "Блок «Правильная логика / система»",
+            "Блок «Пошаговая модель»",
+            "Блок «Пример / кейс / сценарий»",
+            "Блок «Что делать дальше»",
+            "Мягкий переход к продукту:",
+            "Закрывающее утверждение",
+        ]
+        level3 = article.seo_blocks if isinstance(article.seo_blocks, dict) else {}
+
+        for order, block_key in enumerate(block_titles, start=1):
+            entry = level3.get(block_key) if isinstance(level3, dict) else None
+            if not isinstance(entry, dict):
+                entry = {}
+            subquery_h2 = str(entry.get("subquery_h2") or "")[:300]
+            micro_intent = str(entry.get("micro_intent") or "")[:300]
+            keywords = entry.get("keywords") if isinstance(entry.get("keywords"), list) else []
+            keywords_norm = [str(item).strip() for item in keywords if str(item).strip()][:2]
+
+            block, created = ArticleBlock.objects.get_or_create(
+                article=article,
+                block_key=block_key,
+                defaults={
+                    "order": order,
+                    "subquery_h2": subquery_h2,
+                    "micro_intent": micro_intent,
+                    "keywords": keywords_norm,
+                    "prompt_template": "",
+                    "status": "blueprint_ready" if subquery_h2 or micro_intent or keywords_norm else "draft",
+                },
+            )
+            if created:
+                continue
+
+            changed = False
+            if block.order != order:
+                block.order = order
+                changed = True
+            if block.subquery_h2 != subquery_h2:
+                block.subquery_h2 = subquery_h2
+                changed = True
+            if block.micro_intent != micro_intent:
+                block.micro_intent = micro_intent
+                changed = True
+            if (block.keywords or []) != keywords_norm:
+                block.keywords = keywords_norm
+                changed = True
+
+            if not block.content.strip() and block.status != "failed":
+                desired_status = "blueprint_ready" if subquery_h2 or micro_intent or keywords_norm else "draft"
+                if block.status != desired_status:
+                    block.status = desired_status
+                    changed = True
+
+            if changed:
+                block.save(
+                    update_fields=[
+                        "order",
+                        "subquery_h2",
+                        "micro_intent",
+                        "keywords",
+                        "status",
+                        "updated_at",
+                    ]
+                )
+
+    @action(detail=True, methods=["get"])
+    def blocks(self, request, pk=None):
+        article = self.get_object()
+        self._sync_blocks_from_seo_blocks(article)
+        serializer = ArticleBlockSerializer(self._get_block_queryset(article), many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def blocks_update(self, request, pk=None):
+        article = self.get_object()
+        block_id = request.data.get("block_id")
+        try:
+            block_id_int = int(str(block_id))
+        except (TypeError, ValueError):
+            return Response({"error": "block_id обязателен"}, status=status.HTTP_400_BAD_REQUEST)
+
+        block = get_object_or_404(ArticleBlock, id=block_id_int, article=article)
+
+        if "subquery_h2" in request.data:
+            block.subquery_h2 = str(request.data.get("subquery_h2") or "")[:300]
+        if "micro_intent" in request.data:
+            block.micro_intent = str(request.data.get("micro_intent") or "")[:300]
+        if "keywords" in request.data:
+            raw_keywords = request.data.get("keywords")
+            if isinstance(raw_keywords, list):
+                block.keywords = [str(item).strip() for item in raw_keywords if str(item).strip()][:2]
+            else:
+                return Response({"error": "keywords должен быть массивом"}, status=status.HTTP_400_BAD_REQUEST)
+        if "prompt_is_custom" in request.data:
+            block.prompt_is_custom = bool(request.data.get("prompt_is_custom"))
+        if "content" in request.data:
+            block.content = str(request.data.get("content") or "")
+        if "prompt_template" in request.data:
+            block.prompt_template = str(request.data.get("prompt_template") or "")
+
+        if block.content.strip():
+            block.status = "ready"
+        elif block.status != "failed":
+            block.status = "blueprint_ready"
+
+        block.save(
+            update_fields=[
+                "subquery_h2",
+                "micro_intent",
+                "keywords",
+                "prompt_template",
+                "prompt_is_custom",
+                "content",
+                "status",
+                "updated_at",
+            ]
+        )
+        serializer = ArticleBlockSerializer(block)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def blocks_generate(self, request, pk=None):
+        article = self.get_object()
+        block_id = request.data.get("block_id")
+        try:
+            block_id_int = int(str(block_id))
+        except (TypeError, ValueError):
+            return Response({"error": "block_id обязателен"}, status=status.HTTP_400_BAD_REQUEST)
+
+        block = get_object_or_404(ArticleBlock, id=block_id_int, article=article)
+
+        try:
+            generator = AIContentGenerator()
+        except Exception:
+            block.status = "failed"
+            block.save(update_fields=["status", "updated_at"])
+            return Response(
+                {"error": "AI генератор не настроен (нет ключа/доступа)"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        def _format_context() -> str:
+            parts: list[str] = []
+            if article.selected_why_now:
+                parts.append("Почему ищет сейчас:")
+                parts.extend([f"- {item}" for item in article.selected_why_now])
+            if article.selected_solution:
+                parts.append("К какому решению ведём:")
+                parts.extend([f"- {item}" for item in article.selected_solution])
+            return "\n".join(parts).strip()
+
+        def _format_product_context() -> str:
+            parts: list[str] = []
+            if article.lead_product_name:
+                parts.append(f"Lead: {article.lead_product_name}")
+            if article.tripwire_product_name:
+                parts.append(f"Tripwire: {article.tripwire_product_name}")
+            return "\n".join(parts).strip()
+
+        variables = {
+            "main_query": article.wordstat,
+            "audience": (article.audience or "").strip(),
+            "context": _format_context(),
+            "h2_title": (block.subquery_h2 or "").strip(),
+            "subquery": (block.subquery_h2 or "").strip(),
+            "intent": (block.micro_intent or "").strip(),
+            "product_context": _format_product_context(),
+        }
+
+        keywords = [str(k).strip() for k in (block.keywords or []) if str(k).strip()][:2]
+        if not keywords:
+            keywords = [article.wordstat]
+        variables["keywords"] = ", ".join(keywords)
+
+        base_template = self._get_system_block_prompt_template(block.block_key).strip()
+        if not base_template:
+            base_template = "Контекст статьи: {{context}}\n\nЗадача: Напиши блок по теме {{main_query}}."
+        correction = (block.prompt_template or "").strip()
+        if correction:
+            template = f"{base_template}\n\nКорректировка (учти при написании):\n{correction}"
+        else:
+            template = base_template
+
+        prompt_used = template
+        for key, value in variables.items():
+            prompt_used = prompt_used.replace(f"{{{{{key}}}}}", value)
+
+        if block.block_key not in {"Закрывающее утверждение"}:
+            prompt_used = (
+                prompt_used
+                + "\n\nSEO требования:\n"
+                + f"- Используй 1–2 ключа: {', '.join(keywords)}\n"
+                + "- Держи фокус: 1 подзапрос = 1 смысл, не смешивай интенты.\n"
+            )
+
+        block.prompt_used = prompt_used
+
+        ai_text = generator.get_ai_response(prompt_used, max_tokens=850, temperature=0.35)
+        if not ai_text:
+            block.status = "failed"
+            block.save(update_fields=["prompt_used", "status", "updated_at"])
+            return Response({"error": "Не удалось сгенерировать блок"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        block.content = ai_text.strip()
+        block.status = "ready"
+        block.regeneration_count = (block.regeneration_count or 0) + 1
+        block.save(update_fields=["prompt_used", "content", "status", "regeneration_count", "updated_at"])
+
+        serializer = ArticleBlockSerializer(block)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["post"])
+    def start(self, request):
+        client = get_active_client(request.user)
+        raw_phrase = request.data.get("phrase") or request.data.get("wordstat") or ""
+        phrase = str(raw_phrase).strip()
+        if not phrase:
+            return Response({"error": "Укажите Wordstat фразу"}, status=status.HTTP_400_BAD_REQUEST)
+
+        article = Article.objects.create(
+            client=client,
+            wordstat=phrase[:500],
+            status="draft",
+            created_by=request.user,
+        )
+        self._sync_blocks_from_seo_blocks(article)
+
+        try:
+            generator = AIContentGenerator()
+        except Exception:
+            article.status = "failed"
+            article.save(update_fields=["status", "updated_at"])
+            return Response(
+                {"error": "AI генератор не настроен (нет ключа/доступа)"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        prompt = f"""
+Ты помощник редактора. По поисковому запросу (Wordstat) нужно сгенерировать варианты для двух списков.
+
+Запрос: "{phrase}"
+
+1) Почему пользователь это ищет именно сейчас?
+2) К какому решению его можно подвести?
+
+Требования:
+- Верни строго JSON-объект.
+- Ключи: "why_now" и "solution".
+- Значения: массивы строк (каждая строка 4-12 слов), по 6-10 вариантов.
+- Не пиши статьи и объяснения, только варианты.
+"""
+
+        ai_raw = generator.get_ai_response(
+            prompt,
+            max_tokens=700,
+            temperature=0.6,
+            response_format={"type": "json_object"},
+        )
+        parsed = _parse_ai_json_object(ai_raw or "")
+        why_now = parsed.get("why_now") if isinstance(parsed, dict) else None
+        solution = parsed.get("solution") if isinstance(parsed, dict) else None
+
+        if not isinstance(why_now, list) or not isinstance(solution, list):
+            article.status = "failed"
+            article.save(update_fields=["status", "updated_at"])
+            return Response(
+                {"error": "Не удалось получить варианты от AI"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        article.options_why_now = [str(item).strip() for item in why_now if str(item).strip()]
+        article.options_solution = [str(item).strip() for item in solution if str(item).strip()]
+        article.status = "options_ready"
+        article.save(update_fields=["options_why_now", "options_solution", "status", "updated_at"])
+
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def save_choices(self, request, pk=None):
+        article = self.get_object()
+        selected_why_now = request.data.get("selected_why_now") or request.data.get("why_now") or []
+        selected_solution = request.data.get("selected_solution") or request.data.get("solution") or []
+        lead_product_id = request.data.get("lead_product_id")
+        lead_product_name = request.data.get("lead_product_name") or ""
+        tripwire_product_id = request.data.get("tripwire_product_id")
+        tripwire_product_name = request.data.get("tripwire_product_name") or ""
+
+        if not isinstance(selected_why_now, list) or not isinstance(selected_solution, list):
+            return Response(
+                {"error": "selected_why_now и selected_solution должны быть массивами строк"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        article.selected_why_now = [str(item).strip() for item in selected_why_now if str(item).strip()]
+        article.selected_solution = [str(item).strip() for item in selected_solution if str(item).strip()]
+        article.lead_product_id = _parse_optional_positive_int(lead_product_id)
+        article.lead_product_name = str(lead_product_name)[:255]
+        article.tripwire_product_id = _parse_optional_positive_int(tripwire_product_id)
+        article.tripwire_product_name = str(tripwire_product_name)[:255]
+
+        if article.status == "draft":
+            article.status = "options_ready"
+
+        article.save(
+            update_fields=[
+                "selected_why_now",
+                "selected_solution",
+                "lead_product_id",
+                "lead_product_name",
+                "tripwire_product_id",
+                "tripwire_product_name",
+                "status",
+                "updated_at",
+            ]
+        )
+
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def update_wordstat(self, request, pk=None):
+        article = self.get_object()
+        raw_wordstat = request.data.get("wordstat") or request.data.get("phrase") or ""
+        wordstat = str(raw_wordstat).strip()
+        if not wordstat:
+            return Response({"error": "Укажите wordstat"}, status=status.HTTP_400_BAD_REQUEST)
+
+        article.wordstat = wordstat[:500]
+        raw_audience = request.data.get("audience")
+        if raw_audience is not None:
+            article.audience = str(raw_audience or "")
+
+        if article.outline_markdown:
+            lines = (article.outline_markdown or "").splitlines()
+            if lines:
+                first = lines[0].strip()
+                if first.startswith("#"):
+                    lines[0] = f"# {article.wordstat}"
+                    article.outline_markdown = "\n".join(lines)
+
+        article.save(update_fields=["wordstat", "audience", "outline_markdown", "updated_at"])
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def update_audience(self, request, pk=None):
+        article = self.get_object()
+        raw = request.data.get("audience")
+        if raw is None:
+            return Response({"error": "audience обязателен"}, status=status.HTTP_400_BAD_REQUEST)
+        article.audience = str(raw or "")
+        article.save(update_fields=["audience", "updated_at"])
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def update_outline(self, request, pk=None):
+        article = self.get_object()
+        outline = request.data.get("outline_markdown")
+        if outline is None:
+            return Response({"error": "outline_markdown обязателен"}, status=status.HTTP_400_BAD_REQUEST)
+        article.outline_markdown = str(outline)
+        # Status is updated only by the blueprint generator.
+        article.save(update_fields=["outline_markdown", "updated_at"])
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def save_seo_blocks(self, request, pk=None):
+        article = self.get_object()
+        raw = request.data.get("seo_blocks")
+        if not isinstance(raw, dict):
+            return Response({"error": "seo_blocks должен быть объектом"}, status=status.HTTP_400_BAD_REQUEST)
+        article.seo_blocks = raw
+        article.save(update_fields=["seo_blocks", "updated_at"])
+        self._sync_blocks_from_seo_blocks(article)
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def generate_seo_blocks(self, request, pk=None):
+        article = self.get_object()
+
+        favorite_rows = (
+            WordstatResult.objects.filter(query__client=article.client, result_type="favorite")
+            .order_by("-count", "phrase")
+            .values("phrase", "count")
+        )
+        favorites: list[dict[str, object]] = []
+        seen_fav: set[str] = set()
+        for row in favorite_rows:
+            phrase = str(row.get("phrase") or "").strip()
+            if not phrase:
+                continue
+            key = phrase.lower()
+            if key in seen_fav:
+                continue
+            seen_fav.add(key)
+            favorites.append({"phrase": phrase, "count": int(row.get("count") or 0)})
+            if len(favorites) >= 60:
+                break
+
+        block_titles = [
+            "Блок «Почему проблема возникает»",
+            "Блок «Типичные ошибки»",
+            "Блок «Правильная логика / система»",
+            "Блок «Пошаговая модель»",
+            "Блок «Пример / кейс / сценарий»",
+            "Блок «Что делать дальше»",
+            "Мягкий переход к продукту:",
+        ]
+
+        allowed_keyword_map = {str(item["phrase"]).strip().lower(): str(item["phrase"]).strip() for item in favorites if item.get("phrase")}
+
+        def _normalize_keywords(raw_value):
+            keywords: list[str] = []
+            if isinstance(raw_value, list):
+                for item in raw_value:
+                    candidate = str(item).strip()
+                    if not candidate:
+                        continue
+                    canonical = allowed_keyword_map.get(candidate.lower())
+                    if canonical and canonical not in keywords:
+                        keywords.append(canonical)
+                    if len(keywords) >= 2:
+                        break
+            if not keywords:
+                first_phrase = str(favorites[0].get("phrase") or "").strip() if favorites else ""
+                keywords = [first_phrase] if first_phrase else [article.wordstat]
+            return keywords
+
+        level3: dict[str, dict[str, object]] = {}
+        try:
+            generator = AIContentGenerator()
+            prompt = f"""
+Сделай УРОВЕНЬ 3 SEO-логики для структуры статьи по запросу: "{article.wordstat}".
+
+Условия для КАЖДОГО блока:
+- придумай 1 подзапрос (короткий, как отдельный H2; 4–12 слов, без кавычек)
+- выбери 1–2 ключа СТРОГО из Wordstat избранного ниже (используй поле phrase)
+- сформулируй 1 микро-интент (что именно читатель хочет понять/решить)
+
+Wordstat избранное (ключи для выбора):
+{json.dumps(favorites, ensure_ascii=False)}
+
+Блоки (используй названия как есть):
+{json.dumps(block_titles, ensure_ascii=False)}
+
+Верни строго JSON:
+{{
+  "blocks": [
+    {{
+      "block": "<одно из названий блока выше>",
+      "subquery_h2": "<подзапрос>",
+      "keywords": ["<ключ1>", "<ключ2>"],
+      "micro_intent": "<микро-интент>"
+    }}
+  ]
+}}
+
+НЕ пиши контент статьи, только эти поля.
+"""
+            ai_raw = generator.get_ai_response(
+                prompt,
+                max_tokens=1200,
+                temperature=0.4,
+                response_format={"type": "json_object"},
+            )
+            parsed = _parse_ai_json_object(ai_raw or "")
+            blocks = parsed.get("blocks") if isinstance(parsed, dict) else None
+            if isinstance(blocks, list):
+                for item in blocks:
+                    if not isinstance(item, dict):
+                        continue
+                    block = str(item.get("block") or "").strip()
+                    if block not in block_titles:
+                        continue
+                    subquery = str(item.get("subquery_h2") or "").strip()
+                    micro_intent = str(item.get("micro_intent") or "").strip()
+                    keywords = _normalize_keywords(item.get("keywords"))
+                    level3[block] = {"subquery_h2": subquery, "keywords": keywords, "micro_intent": micro_intent}
+        except Exception:
+            logger.exception("Failed to generate level3 SEO structure for article %s", article.id)
+
+        article.seo_blocks = level3
+        if article.status == "draft":
+            article.status = "options_ready"
+        article.save(update_fields=["seo_blocks", "status", "updated_at"])
+        self._sync_blocks_from_seo_blocks(article)
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def generate_outline(self, request, pk=None):
+        article = self.get_object()
+        selected_why_now = request.data.get("selected_why_now") or request.data.get("why_now") or []
+        selected_solution = request.data.get("selected_solution") or request.data.get("solution") or []
+        lead_product_id = request.data.get("lead_product_id")
+        lead_product_name = request.data.get("lead_product_name") or ""
+        tripwire_product_id = request.data.get("tripwire_product_id")
+        tripwire_product_name = request.data.get("tripwire_product_name") or ""
+
+        if not isinstance(selected_why_now, list) or not isinstance(selected_solution, list):
+            return Response(
+                {"error": "selected_why_now и selected_solution должны быть массивами строк"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        article.selected_why_now = [str(item).strip() for item in selected_why_now if str(item).strip()]
+        article.selected_solution = [str(item).strip() for item in selected_solution if str(item).strip()]
+        article.lead_product_id = _parse_optional_positive_int(lead_product_id)
+        article.lead_product_name = str(lead_product_name)[:255]
+        article.tripwire_product_id = _parse_optional_positive_int(tripwire_product_id)
+        article.tripwire_product_name = str(tripwire_product_name)[:255]
+
+        block_titles = [
+            "Блок «Почему проблема возникает»",
+            "Блок «Типичные ошибки»",
+            "Блок «Правильная логика / система»",
+            "Блок «Пошаговая модель»",
+            "Блок «Пример / кейс / сценарий»",
+            "Блок «Что делать дальше»",
+            "Мягкий переход к продукту:",
+        ]
+
+        level3 = article.seo_blocks if isinstance(article.seo_blocks, dict) else {}
+        if not level3:
+            try:
+                response = self.generate_seo_blocks(request, pk=pk)
+                if isinstance(response.data, dict) and isinstance(response.data.get("seo_blocks"), dict):
+                    level3 = response.data.get("seo_blocks")  # type: ignore[assignment]
+            except Exception:
+                logger.exception("Failed to auto-generate seo blocks for article %s", article.id)
+
+        filtered_level3: dict[str, dict[str, object]] = {}
+        if isinstance(level3, dict):
+            for key, value in level3.items():
+                if key in block_titles and isinstance(value, dict):
+                    filtered_level3[key] = value
+        article.seo_blocks = filtered_level3
+        self._sync_blocks_from_seo_blocks(article)
+
+        article.outline_markdown = _build_article_outline(
+            article.wordstat,
+            article.selected_why_now,
+            article.selected_solution,
+            lead_product_name=article.lead_product_name,
+            tripwire_product_name=article.tripwire_product_name,
+            level3=article.seo_blocks,
+        )
+        article.status = "outline_ready"
+        article.save(
+            update_fields=[
+                "selected_why_now",
+                "selected_solution",
+                "lead_product_id",
+                "lead_product_name",
+                "tripwire_product_id",
+                "tripwire_product_name",
+                "seo_blocks",
+                "outline_markdown",
+                "status",
+                "updated_at",
+            ]
+        )
+
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
 
 
 class ContentTemplateViewSet(viewsets.ModelViewSet):

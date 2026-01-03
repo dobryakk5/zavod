@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import List
 
-from django.db import IntegrityError, connection, transaction
+from config.celery import app as celery_app
+from core import tasks
 from django.db.models import Count, Prefetch
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -14,7 +14,6 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.ai_generator import AIContentGenerator
 from core.models import (
     Client,
     ClientProduct,
@@ -24,10 +23,10 @@ from core.models import (
     MindNodePosition,
     MindNodeProperty,
     ProductType,
-    WordstatResult,
 )
 from core.services.product_type_templates import (
     ensure_system_product_type_templates,
+    ensure_system_product_type_requirements,
     migrate_client_product_types_to_system,
 )
 
@@ -101,139 +100,22 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
         """Generate a client product for this product type using the default AI model."""
         product_type = self.get_object()
         client = get_active_client(request.user)
+        ensure_system_product_type_templates()
 
         language = (request.data.get("language") or "ru").strip().lower()
         if language not in {"ru", "en"}:
             language = "ru"
 
-        favorites_qs = (
-            WordstatResult.objects.filter(query__client=client, result_type="favorite")
-            .order_by("-count", "phrase")
-            .values_list("phrase", flat=True)
-        )
-        favorites: List[str] = []
-        for phrase in favorites_qs[:200]:
-            value = (phrase or "").strip()
-            if value and value not in favorites:
-                favorites.append(value)
-            if len(favorites) >= 40:
-                break
-
-        if not favorites:
-            return Response(
-                {
-                    "success": False,
-                    "error": "В Wordstat нет избранных фраз. Отметьте нужные фразы как «избранное» и повторите.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            generator = AIContentGenerator()
-        except ValueError as exc:
-            return Response(
-                {"success": False, "error": str(exc)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        saved_requirements = None
-        try:
-            candidate = {
-                "name": getattr(product_type, "requirements_name", None),
-                "packages": getattr(product_type, "requirements_packages", None),
-                "audience": getattr(product_type, "requirements_audience", None),
-                "transformation": getattr(product_type, "requirements_transformation", None),
-                "metrics": getattr(product_type, "requirements_metrics", None),
-                "method": getattr(product_type, "requirements_method", None),
-                "lesson_format": getattr(product_type, "requirements_lesson_format", None),
-                "program_modules": getattr(product_type, "requirements_program_modules", None),
-                "packaging": getattr(product_type, "requirements_packaging", None),
-            }
-            missing = [k for k, v in candidate.items() if not isinstance(v, str) or not v.strip()]
-            if missing:
-                return Response(
-                    {
-                        "success": False,
-                        "error": (
-                            "У типа продукта нет AI-требований для генерации. "
-                            "Заполните requirements_* в /django-admin/core/producttypeadminproxy/ "
-                            f"(пустые: {', '.join(missing)})."
-                        ),
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            saved_requirements = {k: str(v).strip() for k, v in candidate.items()}  # type: ignore[arg-type]
-        except Exception:
-            logger.exception("Failed to load product type requirements for generation")
-            return Response(
-                {"success": False, "error": "Не удалось прочитать requirements_* для типа продукта."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        result = generator.generate_client_product_from_type(
-            product_type_name=product_type.name,
-            product_type_value=product_type.value or "",
-            product_type_goal=product_type.goal or "",
-            avatar=client.avatar or "",
-            pains=client.pains or "",
-            desires=client.desires or "",
-            objections=client.objections or "",
-            wordstat_favorites=favorites,
-            brand=client.name,
-            language=language,
-            requirements_override=saved_requirements,
-        )
-
-        if not result.get("success"):
-            return Response(
-                {
-                    "success": False,
-                    "error": result.get("error") or "Не удалось сгенерировать продукт",
-                    "raw_response": result.get("raw_response"),
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        product_data = result.get("product") or {}
-        if not isinstance(product_data, dict):
-            return Response(
-                {"success": False, "error": "Некорректный ответ генератора"},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        def _create_product():
-            return ClientProduct.objects.create(
-                owner=client,
-                product_type=product_type,
-                name=str(product_data.get("name") or product_type.name).strip() or product_type.name,
-                short_description=(str(product_data.get("short_description") or "").strip() or None),
-                packages=product_data.get("packages") if isinstance(product_data.get("packages"), list) else [],
-                structure=product_data.get("structure") if isinstance(product_data.get("structure"), dict) else {},
-            )
-
-        try:
-            with transaction.atomic():
-                created = _create_product()
-        except IntegrityError as exc:
-            # map.products is managed outside Django migrations; occasionally the ID sequence can drift.
-            if "products_pkey" not in str(exc):
-                raise
-            logger.warning(
-                "ClientProduct insert failed due to primary key conflict; resetting sequence and retrying"
-            )
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT setval(
-                      pg_get_serial_sequence('map.products','id'),
-                      COALESCE((SELECT MAX(id) FROM map.products), 1)
-                    )
-                    """
-                )
-            with transaction.atomic():
-                created = _create_product()
-        serializer = ClientProductSerializer(created)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        task = tasks.generate_client_product_for_type_task.delay(client.id, product_type.id, language=language)
+        payload = {"success": True, "message": f"Запущена генерация продукта типа {product_type.name}", "task_id": task.id}
+        if getattr(task, "ready", None) and task.ready() and isinstance(getattr(task, "result", None), dict):
+            payload["result"] = task.result
+            product_id = task.result.get("product_id")
+            if product_id:
+                product = ClientProduct.objects.select_related("product_type").filter(pk=product_id, owner=client).first()
+                if product:
+                    payload["product"] = ClientProductSerializer(product).data
+        return Response(payload, status=status.HTTP_202_ACCEPTED)
 
 
 class ClientProductViewSet(viewsets.ModelViewSet):
@@ -250,7 +132,9 @@ class ClientProductViewSet(viewsets.ModelViewSet):
         core_type = ProductType.objects.filter(owner=system_client, name__iexact="Core").first()
         if core_type:
             return core_type
-        return ProductType.objects.create(owner=system_client, name="Core", value=None, goal=None)
+        created = ProductType.objects.create(owner=system_client, name="Core", value=None, goal=None)
+        ensure_system_product_type_requirements()
+        return created
 
     @staticmethod
     def _normalize_core_description(value: str) -> str:
@@ -363,57 +247,21 @@ class ClientProductViewSet(viewsets.ModelViewSet):
         if language not in {"ru", "en"}:
             language = "ru"
 
-        core_type = self._ensure_core_product_type(client)
-
-        try:
-            generator = AIContentGenerator()
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        requirements_override = {
-            "name": (
-                f"Используй название строго: '{name}'. "
-                f"short_description должен начинаться с 'Core:' и передавать смысл: {short_description}."
-            )
-        }
-
-        result = generator.generate_client_product_from_type(
-            product_type_name=core_type.name,
-            product_type_value=core_type.value or "",
-            product_type_goal=short_description,
-            avatar=client.avatar or "",
-            pains=client.pains or "",
-            desires=client.desires or "",
-            objections=client.objections or "",
-            wordstat_favorites=[],
-            brand=client.name,
-            language=language,
-            requirements_override=requirements_override,
-        )
-
-        if not result.get("success"):
-            return Response(
-                {
-                    "detail": result.get("error") or "Не удалось сгенерировать core-продукт",
-                    "raw_response": result.get("raw_response"),
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        product_data = result.get("product") or {}
-        if not isinstance(product_data, dict):
-            return Response({"detail": "Некорректный ответ генератора"}, status=status.HTTP_502_BAD_GATEWAY)
-
-        created = ClientProduct.objects.create(
-            owner=client,
-            product_type=core_type,
+        task = tasks.generate_core_product_task.delay(
+            client.id,
             name=name,
-            short_description=self._normalize_core_description(short_description),
-            packages=product_data.get("packages") if isinstance(product_data.get("packages"), list) else [],
-            structure=product_data.get("structure") if isinstance(product_data.get("structure"), dict) else {},
+            short_description=short_description,
+            language=language,
         )
-        serializer = self.get_serializer(created)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        payload = {"success": True, "message": "Запущена генерация Core-продукта", "task_id": task.id}
+        if getattr(task, "ready", None) and task.ready() and isinstance(getattr(task, "result", None), dict):
+            payload["result"] = task.result
+            product_id = task.result.get("product_id")
+            if product_id:
+                product = ClientProduct.objects.select_related("product_type").filter(pk=product_id, owner=client).first()
+                if product:
+                    payload["product"] = ClientProductSerializer(product).data
+        return Response(payload, status=status.HTTP_202_ACCEPTED)
 
     @action(
         detail=True,
@@ -439,8 +287,6 @@ class ClientProductViewSet(viewsets.ModelViewSet):
             raise ValidationError({"detail": "Сопутствующие продукты можно создавать только внутри Core-продукта."})
 
         name = str(request.data.get("name") or "").strip()
-        if not name:
-            raise ValidationError({"name": "Название обязательно."})
 
         try:
             product_type_id = int(request.data.get("product_type_id"))
@@ -459,85 +305,59 @@ class ClientProductViewSet(viewsets.ModelViewSet):
             language = "ru"
 
         hint = str(request.data.get("short_description") or "").strip()
+        ensure_system_product_type_templates()
 
-        candidate = {
-            "name": getattr(product_type, "requirements_name", None),
-            "packages": getattr(product_type, "requirements_packages", None),
-            "audience": getattr(product_type, "requirements_audience", None),
-            "transformation": getattr(product_type, "requirements_transformation", None),
-            "metrics": getattr(product_type, "requirements_metrics", None),
-            "method": getattr(product_type, "requirements_method", None),
-            "lesson_format": getattr(product_type, "requirements_lesson_format", None),
-            "program_modules": getattr(product_type, "requirements_program_modules", None),
-            "packaging": getattr(product_type, "requirements_packaging", None),
+        task = tasks.generate_related_product_task.delay(
+            client.id,
+            core_product.id,
+            product_type.id,
+            name=name or None,
+            hint=hint,
+            language=language,
+        )
+        payload = {
+            "success": True,
+            "message": f"Запущена генерация сопутствующего продукта типа {product_type.name}",
+            "task_id": task.id,
         }
-        missing = [k for k, v in candidate.items() if not isinstance(v, str) or not v.strip()]
-        if missing:
-            raise ValidationError(
-                {
-                    "detail": (
-                        "У типа продукта нет AI-требований для генерации. "
-                        "Заполните requirements_* в /django-admin/core/producttypeadminproxy/ "
-                        f"(пустые: {', '.join(missing)})."
-                    )
-                }
-            )
+        if getattr(task, "ready", None) and task.ready() and isinstance(getattr(task, "result", None), dict):
+            payload["result"] = task.result
+            product_id = task.result.get("product_id")
+            if product_id:
+                product = ClientProduct.objects.select_related("product_type").filter(pk=product_id, owner=client).first()
+                if product:
+                    payload["product"] = ClientProductSerializer(product).data
+        return Response(payload, status=status.HTTP_202_ACCEPTED)
 
-        requirements_override = {k: str(v).strip() for k, v in candidate.items()}  # type: ignore[arg-type]
-        requirements_override["name"] = (
-            f"{requirements_override['name']}\n\n"
-            "ДОПОЛНИТЕЛЬНО ДЛЯ ЭТОГО ПРОДУКТА\n"
-            f"- Название строго: '{name}'.\n"
-            f"- short_description должен начинаться с '{product_type.name}:' и быть связан с Core.\n"
-            + (f"- Уточнение от пользователя: {hint}\n" if hint else "")
-        ).strip()
-
-        core_context = self._format_core_context(core_product)
+    @action(detail=False, methods=["get"], url_path="generation-status", permission_classes=[IsTenantMember])
+    def generation_status(self, request):
+        """Вернуть состояние задачи генерации продукта по task_id."""
+        task_id = request.query_params.get("task_id")
+        if not task_id:
+            return Response({"success": False, "error": "task_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            generator = AIContentGenerator()
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            async_result = celery_app.AsyncResult(task_id)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to fetch product generation status for %s: %s", task_id, exc, exc_info=True)
+            return Response({"success": False, "error": "Не удалось получить статус задачи"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        result = generator.generate_client_product_from_type(
-            product_type_name=product_type.name,
-            product_type_value=product_type.value or "",
-            product_type_goal=product_type.goal or "",
-            avatar=client.avatar or "",
-            pains=client.pains or "",
-            desires=client.desires or "",
-            objections=client.objections or "",
-            wordstat_favorites=[],
-            brand=client.get_brand_display_name(),
-            language=language,
-            requirements_override=requirements_override,
-            additional_context=core_context,
-        )
+        state = (async_result.state or "").lower()
+        payload = {"success": state == "success", "status": state, "task_id": task_id}
 
-        if not result.get("success"):
-            return Response(
-                {"detail": result.get("error") or "Не удалось сгенерировать сопутствующий продукт", "raw_response": result.get("raw_response")},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+        if state == "success" and isinstance(async_result.result, dict):
+            payload["result"] = async_result.result
+            product_id = async_result.result.get("product_id")
+            if product_id:
+                client = get_active_client(request.user)
+                product = ClientProduct.objects.select_related("product_type").filter(pk=product_id, owner=client).first()
+                if product:
+                    payload["product"] = ClientProductSerializer(product).data
+        elif state in ("failure", "revoked"):
+            error_info = getattr(async_result, "info", None)
+            payload["error"] = str(error_info) if error_info else "Задача завершилась с ошибкой"
 
-        product_data = result.get("product") or {}
-        if not isinstance(product_data, dict):
-            return Response({"detail": "Некорректный ответ генератора"}, status=status.HTTP_502_BAD_GATEWAY)
-
-        generated_short_description = str(product_data.get("short_description") or "").strip()
-        if not generated_short_description:
-            generated_short_description = f"{product_type.name}: {name}"
-
-        created = ClientProduct.objects.create(
-            owner=client,
-            product_type=product_type,
-            name=name,
-            short_description=self._normalize_typed_description(product_type.name, generated_short_description) or None,
-            packages=product_data.get("packages") if isinstance(product_data.get("packages"), list) else [],
-            structure=product_data.get("structure") if isinstance(product_data.get("structure"), dict) else {},
-        )
-        serializer = self.get_serializer(created)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(payload)
 
     def perform_update(self, serializer):
         client = get_active_client(self.request.user)

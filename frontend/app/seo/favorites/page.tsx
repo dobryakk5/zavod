@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { wordstatApi } from '@/lib/api/wordstat';
+import { articlesApi } from '@/lib/api/articles';
+import { ApiError } from '@/lib/api';
 import type { WordstatQuery, WordstatResultType } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,6 +27,7 @@ export default function WordstatFavoritesPage() {
   const [queries, setQueries] = useState<WordstatQuery[]>([]);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
+  const [creatingArticle, setCreatingArticle] = useState<string | null>(null);
 
   const getQueryLabel = (query: WordstatQuery): string => {
     if ((query.group_name || '').trim()) {
@@ -91,7 +94,38 @@ export default function WordstatFavoritesPage() {
     const params = new URLSearchParams();
     params.set('tab', 'competitors');
     params.set('q', q);
+    params.set('save', '1');
     router.push(`/seo?${params.toString()}`);
+  };
+
+  const handleCreateArticle = async (phrase: string) => {
+    const q = (phrase || '').trim();
+    if (!q) return;
+    setCreatingArticle(q);
+    try {
+      const created = await articlesApi.start(q);
+      router.push(`/articles/${created.id}`);
+    } catch (error) {
+      console.error('Failed to create article from favorite phrase', error);
+      if (error instanceof ApiError && error.status === 401) {
+        router.push('/login');
+        return;
+      }
+      if (error instanceof ApiError) {
+        try {
+          const parsed = JSON.parse(error.body || '{}') as { error?: string };
+          if (parsed.error) {
+            toast.error(parsed.error);
+            return;
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+      toast.error('Не удалось создать статью по фразе');
+    } finally {
+      setCreatingArticle(null);
+    }
   };
 
   return (
@@ -163,6 +197,21 @@ export default function WordstatFavoritesPage() {
                           aria-label="Google search"
                         >
                           <span className="text-[13px] font-semibold leading-none">G</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleCreateArticle(row.phrase)}
+                          disabled={Boolean(creatingArticle)}
+                          className={`rounded-md p-2 text-slate-600 transition hover:text-slate-900 ${
+                            creatingArticle ? 'opacity-70' : ''
+                          }`}
+                          title="Создать статью"
+                          aria-label="Создать статью"
+                        >
+                          <span className="inline-flex items-center gap-1 text-[13px] font-semibold leading-none">
+                            Т
+                            {creatingArticle === row.phrase ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                          </span>
                         </button>
                       </div>
                     </TableCell>

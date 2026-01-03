@@ -4,6 +4,7 @@ export type PostStatus = 'draft' | 'ready' | 'approved' | 'scheduled' | 'publish
 export type ScheduleStatus = 'pending' | 'in_progress' | 'published' | 'failed';
 export type StoryStatus = 'draft' | 'ready' | 'approved' | 'generating_posts' | 'completed';
 export type SEOStatus = 'pending' | 'generating' | 'completed' | 'failed';
+export type ArticleStatus = 'draft' | 'options_ready' | 'outline_ready' | 'failed';
 
 export type Platform = 'instagram' | 'telegram' | 'youtube' | 'vkontakte' | 'rss_zen';
 export type ContentType = string; // Now supports custom types
@@ -35,6 +36,50 @@ export interface Post {
   has_images?: boolean;
   has_videos?: boolean;
   next_scheduled_at?: string | null;
+}
+
+export interface Article {
+  id: number;
+  wordstat: string;
+  status: ArticleStatus;
+  audience?: string | null;
+  options_why_now?: string[];
+  options_solution?: string[];
+  selected_why_now?: string[];
+  selected_solution?: string[];
+  tripwire_product_id?: number | null;
+  tripwire_product_name?: string | null;
+  lead_product_id?: number | null;
+  lead_product_name?: string | null;
+  seo_blocks?: Record<
+    string,
+    {
+      subquery_h2?: string;
+      keywords?: string[];
+      micro_intent?: string;
+    }
+  >;
+  outline_markdown?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export type ArticleBlockStatus = 'draft' | 'blueprint_ready' | 'ready' | 'failed';
+
+export interface ArticleBlock {
+  id: number;
+  order: number;
+  block_key: string;
+  subquery_h2: string;
+  micro_intent: string;
+  keywords: string[];
+  prompt_template: string;
+  prompt_used?: string | null;
+  content: string;
+  status: ArticleBlockStatus;
+  regeneration_count: number;
+  created_at: string;
+  updated_at?: string;
 }
 
 export interface PostMediaImage {
@@ -207,6 +252,7 @@ export interface ClientProduct {
   name: string;
   product_type_id?: number | null;
   product_type_name?: string | null;
+  product_type?: ProductType | null;
   short_description?: string | null;
   packages?: Array<{ name: string; description?: string | null; price?: number | null }> | null;
   structure?: ProductStructure | null;
@@ -220,6 +266,15 @@ export interface ProductType {
   name: string;
   value?: string | null;
   goal?: string | null;
+  requirements_name?: string | null;
+  requirements_packages?: string | null;
+  requirements_audience?: string | null;
+  requirements_transformation?: string | null;
+  requirements_metrics?: string | null;
+  requirements_method?: string | null;
+  requirements_lesson_format?: string | null;
+  requirements_program_modules?: string | null;
+  requirements_packaging?: string | null;
   owner_id?: number;
   created_at?: string;
   updated_at?: string;
@@ -427,6 +482,69 @@ export interface GoogleCseSearchResult {
 export interface GoogleCseSearchResponse {
   query: string;
   results: GoogleCseSearchResult[];
+}
+
+export interface GoogleCompetitorAiResult {
+  input_url: string;
+  base_url: string;
+  is_competitor: boolean;
+  one_liner: string;
+  offers: string[];
+  pricing: string;
+  services_url?: string | null;
+  prices_url?: string | null;
+  evidence_urls: string[];
+  error?: string | null;
+}
+
+export interface GoogleCompetitorsResolvedRow {
+  position: number;
+  title: string;
+  url: string;
+  domain: string;
+  base_url: string;
+  cached: boolean;
+  analysis_status: 'pending' | 'in_progress' | 'completed' | 'failed' | string;
+  analysis_error?: string;
+  manual_is_competitor?: boolean | null;
+  is_competitor: boolean;
+  one_liner: string;
+  pricing: string;
+  home_title: string;
+  home_text: string;
+  services_url?: string | null;
+  prices_url?: string | null;
+}
+
+export interface GoogleCompetitorsResolveResponse {
+  query: string;
+  scheduled?: number;
+  results: GoogleCompetitorsResolvedRow[];
+}
+
+export interface GoogleCompetitorsAnalyzeResponse {
+  results: GoogleCompetitorAiResult[];
+}
+
+export interface GoogleCompetitorsStoreResponse {
+  success: boolean;
+  query: string;
+  domains_seen: number;
+  created: number;
+  updated: number;
+}
+
+export interface GoogleCompetitorSiteRow {
+  domain: string;
+  base_url: string;
+  first_seen_query: string;
+  last_seen_query: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GoogleCompetitorSiteListResponse {
+  results: GoogleCompetitorSiteRow[];
 }
 
 

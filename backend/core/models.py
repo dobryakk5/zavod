@@ -343,6 +343,47 @@ class WebsiteScan(models.Model):
         return f"[{self.client.slug}] WebsiteScan {self.base_url} ({self.status})"
 
 
+class CompetitorSite(models.Model):
+    """
+    Deduplicated competitor sites collected from Google search results.
+    Stored per-client and unique by domain.
+    """
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="competitor_sites")
+    domain = models.CharField(max_length=255)
+    base_url = models.CharField(max_length=500, blank=True, default="")
+    first_seen_query = models.CharField(max_length=512, blank=True, default="")
+    last_seen_query = models.CharField(max_length=512, blank=True, default="")
+    home_title = models.CharField(max_length=512, blank=True, default="")
+    home_text = models.TextField(blank=True, default="")
+    services_url = models.CharField(max_length=700, blank=True, default="")
+    prices_url = models.CharField(max_length=700, blank=True, default="")
+    ai_is_competitor = models.BooleanField(blank=True, null=True)
+    ai_one_liner = models.TextField(blank=True, default="")
+    ai_pricing = models.TextField(blank=True, default="")
+    last_analyzed_at = models.DateTimeField(blank=True, null=True)
+    analysis_status = models.CharField(max_length=20, blank=True, default="pending")
+    analysis_error = models.TextField(blank=True, default="")
+    task_id = models.CharField(max_length=255, blank=True, default="")
+    manual_is_competitor = models.BooleanField(blank=True, null=True)
+    manual_marked_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-updated_at",)
+        constraints = [
+            models.UniqueConstraint(fields=["client", "domain"], name="uniq_competitor_site_client_domain"),
+        ]
+        indexes = [
+            models.Index(fields=["client", "domain"], name="comp_site_client_domain_idx"),
+            models.Index(fields=["client", "-updated_at"], name="comp_site_client_updated_idx"),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"{self.client.slug}:{self.domain}"
+
+
 class WebsiteScanPage(models.Model):
     scan = models.ForeignKey(WebsiteScan, on_delete=models.CASCADE, related_name="pages")
     url = models.CharField(max_length=700)
@@ -1046,6 +1087,130 @@ class Story(models.Model):
         if not self.episodes:
             return "Нет эпизодов"
         return "\n".join([f"{ep['order']}. {ep['title']}" for ep in self.episodes])
+
+
+class Article(models.Model):
+    """Статья: скелет/структура для SEO-статьи по Wordstat запросу."""
+
+    STATUS_CHOICES = (
+        ("draft", "Draft"),
+        ("options_ready", "Options Ready"),
+        ("outline_ready", "Outline Ready"),
+        ("failed", "Failed"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="articles")
+    wordstat = models.CharField(max_length=500, help_text="Wordstat фраза / поисковый запрос")
+
+    options_why_now = models.JSONField(default=list, blank=True)
+    options_solution = models.JSONField(default=list, blank=True)
+    selected_why_now = models.JSONField(default=list, blank=True)
+    selected_solution = models.JSONField(default=list, blank=True)
+
+    tripwire_product_id = models.PositiveIntegerField(null=True, blank=True)
+    tripwire_product_name = models.CharField(max_length=255, blank=True)
+    lead_product_id = models.PositiveIntegerField(null=True, blank=True)
+    lead_product_name = models.CharField(max_length=255, blank=True)
+
+    seo_blocks = models.JSONField(default=dict, blank=True)
+
+    outline_markdown = models.TextField(blank=True, help_text="Markdown-структура статьи без контента")
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+
+    audience = models.TextField(blank=True, help_text="Целевая аудитория для промптов статьи")
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_articles",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        verbose_name = "Article"
+        verbose_name_plural = "Articles"
+
+    def __str__(self):
+        return f"[{self.client.slug}] {self.wordstat[:80]}"
+
+
+class ArticleBlock(models.Model):
+    """Атомарный SEO-блок статьи (1 H2 = 1 смысл)."""
+
+    STATUS_CHOICES = (
+        ("draft", "Draft"),
+        ("blueprint_ready", "Blueprint Ready"),
+        ("ready", "Ready"),
+        ("failed", "Failed"),
+    )
+
+    article = models.ForeignKey(Article, on_delete=models.CASCADE, related_name="blocks")
+    order = models.PositiveIntegerField(default=0)
+    block_key = models.CharField(max_length=120, help_text="Системный ключ блока (например: Блок «Типичные ошибки»)")
+
+    subquery_h2 = models.CharField(max_length=300, blank=True)
+    micro_intent = models.CharField(max_length=300, blank=True)
+    keywords = models.JSONField(default=list, blank=True)
+
+    prompt_template = models.TextField(
+        blank=True,
+        help_text="Корректировка (добавляется к системному промпту блока)",
+    )
+    prompt_is_custom = models.BooleanField(
+        default=False,
+        help_text="DEPRECATED: больше не используется (оставлено для совместимости).",
+    )
+    prompt_used = models.TextField(blank=True, help_text="Последний использованный промпт (рендер)")
+
+    content = models.TextField(blank=True, help_text="Сгенерированный текст блока (2–3 абзаца)")
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+    regeneration_count = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("order", "id")
+        unique_together = (("article", "block_key"),)
+        verbose_name = "Article Block"
+        verbose_name_plural = "Article Blocks"
+
+    def __str__(self):
+        return f"[{self.article_id}] {self.block_key}"
+
+
+class ArticleBlockPromptTemplate(models.Model):
+    """Системный шаблон промпта для блоков статьи (общий для всех клиентов/статей)."""
+
+    block_key = models.CharField(max_length=120, unique=True)
+    prompt_template = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("block_key",)
+        verbose_name = "Промпт блока статьи"
+        verbose_name_plural = "Промпты блоков статьи"
+
+    def __str__(self):
+        return self.block_key
+
+
+class Articles(ArticleBlockPromptTemplate):
+    """Proxy-модель для Django Admin: список системных промптов по URL `/django-admin/core/articles/`."""
+
+    class Meta:
+        proxy = True
+        verbose_name = "Промпт статьи"
+        verbose_name_plural = "Промпты статей"
 
 
 class PostType(models.Model):

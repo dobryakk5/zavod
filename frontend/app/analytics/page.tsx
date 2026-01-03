@@ -799,7 +799,7 @@ export default function AnalyticsPage() {
             {isHistoryLoading ? (
               <div className="flex items-center gap-2 text-gray-500 mt-6">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Загружаем список анализов
+                Загружаем список
               </div>
             ) : history.length === 0 ? (
               <p className="text-sm text-gray-500 mt-4">Пока нет завершенных анализов. Запустите первый анализ выше.</p>

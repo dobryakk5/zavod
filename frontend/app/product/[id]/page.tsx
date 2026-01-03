@@ -926,7 +926,7 @@ export default function ProductPage({ params }: ProductPageProps) {
 
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-sm font-medium">5. Формат урока</div>
+            <div className="text-sm font-medium">5. Формат взаимодействия с клиентом</div>
             {canEdit && (
               <Button type="button" variant="secondary" size="sm" onClick={handleAddLessonFormatRow} disabled={saving}>
                 <Plus className="h-4 w-4 mr-2" />
@@ -946,7 +946,7 @@ export default function ProductPage({ params }: ProductPageProps) {
               {lessonFormat.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={3} className="text-muted-foreground">
-                    Добавьте этапы и проценты (Разогрев, Контент…)
+                    Добавьте этапы и проценты (Онбординг, Диагностика, Сопровождение…)
                   </TableCell>
                 </TableRow>
               ) : (

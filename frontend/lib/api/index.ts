@@ -17,3 +17,4 @@ export * from './clientProducts';
 export * from './productTypes';
 export * from './websites';
 export * from './google';
+export * from './articles';

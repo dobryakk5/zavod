@@ -3,13 +3,19 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Loader2, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Check, Loader2, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import { seoApi } from '@/lib/api/seo';
 import { wordstatApi } from '@/lib/api/wordstat';
 import { googleApi } from '@/lib/api/google';
-import type { GoogleCseSearchResult, SEOKeywordSet, SEOStatus, WordstatQuery } from '@/lib/types';
+import type {
+  GoogleCompetitorsResolvedRow,
+  GoogleCseSearchResult,
+  SEOKeywordSet,
+  SEOStatus,
+  WordstatQuery
+} from '@/lib/types';
 import { useRole } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -89,6 +95,30 @@ function StatusBadge({ status }: { status: SEOStatus }) {
   );
 }
 
+const normalizeUrlForCompare = (value?: string | null) => (value || '').trim().replace(/\/+$/, '').toLowerCase();
+
+const buildUniqueSnippet = (value: string, maxLen: number = 240) => {
+  const text = (value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+
+  const rawParts = text.split(/(?<=[.!?…])\s+/).map((s) => s.trim()).filter(Boolean);
+  if (rawParts.length <= 1) return text.slice(0, maxLen);
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of rawParts) {
+    const key = part.toLowerCase().replace(/\s+/g, ' ').replace(/[^\p{L}\p{N}\s]+/gu, '').trim();
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(part);
+    if (out.join(' ').length >= maxLen) break;
+  }
+
+  const joined = out.join(' ');
+  return joined.length > maxLen ? joined.slice(0, maxLen) : joined;
+};
+
 export default function SEOPageClient() {
   const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<'seo' | 'wordstat' | 'competitors'>('seo');
@@ -109,7 +139,12 @@ export default function SEOPageClient() {
   const [googleSearching, setGoogleSearching] = useState(false);
   const [googleQuery, setGoogleQuery] = useState<string | null>(null);
   const [googleResults, setGoogleResults] = useState<GoogleCseSearchResult[]>([]);
+  const [resolvedResults, setResolvedResults] = useState<GoogleCompetitorsResolvedRow[]>([]);
   const [competitorPhrase, setCompetitorPhrase] = useState<string>('');
+  const [competitorSitesLoading, setCompetitorSitesLoading] = useState(false);
+  const [manualCompetitor, setManualCompetitor] = useState('');
+  const [autoGoogle, setAutoGoogle] = useState(false);
+  const [autoGoogleDoneFor, setAutoGoogleDoneFor] = useState<string | null>(null);
   const { canEdit } = useRole();
 
   const loadSeoSets = async (opts?: { silent?: boolean }) => {
@@ -227,6 +262,7 @@ export default function SEOPageClient() {
     if (q) {
       setCompetitorPhrase(q);
     }
+    setAutoGoogle((searchParams.get('save') || '').trim() === '1');
   }, [searchParams]);
 
   useEffect(() => {
@@ -423,6 +459,7 @@ export default function SEOPageClient() {
     setGoogleSearching(true);
     setGoogleQuery(null);
     setGoogleResults([]);
+    setResolvedResults([]);
     try {
       const data = await googleApi.cseSearch(query, 10);
       setGoogleQuery(data.query);
@@ -445,14 +482,125 @@ export default function SEOPageClient() {
     }
   };
 
+  const loadCachedCompetitors = async (phrase: string) => {
+    const q = (phrase || '').trim();
+    if (!q) return;
+    setGoogleQuery(null);
+    setGoogleResults([]);
+    setCompetitorSitesLoading(true);
+    try {
+      const data = await googleApi.competitorsCached(q);
+      setResolvedResults(data.results);
+    } catch (err) {
+      console.error('Failed to load cached competitors', err);
+    } finally {
+      setCompetitorSitesLoading(false);
+    }
+  };
+
+  const resolveCompetitors = async () => {
+    const q = (googleQuery || '').trim();
+    if (!q) return;
+    if (!googleResults.length) return;
+    setCompetitorSitesLoading(true);
+    try {
+      const resolved = await googleApi.competitorsResolve({
+        query: q,
+        results: googleResults.map((r, index) => ({ url: r.url, domain: r.domain, title: r.title, position: index + 1 })),
+        max_results: 10
+      });
+      setResolvedResults(resolved.results);
+    } catch (err) {
+      console.error('Failed to resolve competitors', err);
+      toast.error('Не удалось обработать результаты Google');
+    } finally {
+      setCompetitorSitesLoading(false);
+    }
+  };
+
+  const handleManualCompetitorMark = async (domain: string, isCompetitor: boolean) => {
+    const normalized = (domain || '').trim();
+    if (!normalized) return;
+    try {
+      const res = await googleApi.competitorsMark(normalized, isCompetitor);
+      setResolvedResults((prev) =>
+        prev.map((row) => {
+          if (row.domain !== normalized) return row;
+          const manual_is_competitor = res.manual_is_competitor;
+          return {
+            ...row,
+            manual_is_competitor,
+            is_competitor: manual_is_competitor === null ? row.is_competitor : manual_is_competitor
+          };
+        })
+      );
+    } catch (err) {
+      console.error('Failed to mark competitor', err);
+      toast.error('Не удалось сохранить отметку');
+    }
+  };
+
+  const handleManualAddCompetitor = async () => {
+    const value = manualCompetitor.trim();
+    if (!value) return;
+    try {
+      const resolved = await googleApi.competitorsResolve({
+        query: competitorPhrase || 'manual',
+        results: [{ url: value, domain: value, title: '' }],
+        max_results: 1
+      });
+      setResolvedResults((prev) => {
+        const next = [...prev];
+        resolved.results.forEach((row) => {
+          const idx = next.findIndex((r) => r.domain === row.domain);
+          if (idx >= 0) {
+            next[idx] = row;
+          } else {
+            next.push(row);
+          }
+        });
+        return next;
+      });
+      setManualCompetitor('');
+      toast.success('Сайт конкурента добавлен');
+    } catch (err) {
+      console.error('Failed to add competitor site', err);
+      toast.error('Не удалось добавить сайт конкурента');
+    }
+  };
+
   useEffect(() => {
     if (activeTab !== 'competitors') return;
     const q = (competitorPhrase || '').trim();
     if (!q) return;
-    if (googleQuery === q) return;
-    if (googleSearching) return;
-    handleGoogleSearch(q);
+    if (autoGoogle && autoGoogleDoneFor !== q) {
+      if (!googleSearching) {
+        setAutoGoogleDoneFor(q);
+        handleGoogleSearch(q);
+      }
+      return;
+    }
+    loadCachedCompetitors(q);
   }, [activeTab, competitorPhrase]);
+
+  useEffect(() => {
+    if (activeTab !== 'competitors') return;
+    resolveCompetitors();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, googleQuery, googleResults]);
+
+  useEffect(() => {
+    if (activeTab !== 'competitors') return;
+    if (competitorSitesLoading) return;
+    if (!resolvedResults.length) return;
+    const hasPending = resolvedResults.some((r) => r.analysis_status === 'pending' || r.analysis_status === 'in_progress');
+    if (!hasPending) return;
+    const id = window.setTimeout(() => {
+      resolveCompetitors();
+    }, 5000);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, resolvedResults, competitorSitesLoading]);
 
   return (
     <div className="space-y-6">
@@ -877,35 +1025,107 @@ export default function SEOPageClient() {
                   Нет избранных фраз Wordstat — отметьте фразы как избранные и попробуйте снова.
                 </p>
               )}
+
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">Добавить конкурента</p>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    value={manualCompetitor}
+                    onChange={(e) => setManualCompetitor(e.target.value)}
+                    placeholder="example.com или https://example.com"
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" onClick={handleManualAddCompetitor} disabled={!manualCompetitor.trim()}>
+                    Добавить
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
 
-          {googleQuery && (
+          {competitorPhrase && (
             <Card>
               <CardHeader className="space-y-2">
                 <CardTitle>Результаты Google</CardTitle>
-                <CardDescription>{googleResults.length ? `${googleResults.length} результатов` : 'Ничего не найдено'}</CardDescription>
+                <CardDescription>
+                  {competitorSitesLoading
+                    ? 'Обрабатываем сайты...'
+                    : resolvedResults.length
+                      ? `${resolvedResults.length} сайтов`
+                      : 'Пока нет данных — нажмите «Найти в Google»'}
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                {googleResults.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Попробуйте другую фразу в Wordstat.</p>
+                {competitorSitesLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {googleResults.length ? 'Обрабатываем сайты (проверка БД + анализ новых)...' : 'Загружаем из БД...'}
+                  </div>
+                ) : resolvedResults.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Нет сохранённых результатов для этой фразы. Нажмите «Найти в Google», чтобы собрать сайты.
+                  </p>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[72px]">#</TableHead>
-                        <TableHead className="w-[220px]">Домен</TableHead>
-                        <TableHead>Заголовок</TableHead>
+                        <TableHead className="w-[56px]">#</TableHead>
+                        <TableHead className="w-[180px]">Домен</TableHead>
+                        <TableHead>Сайт</TableHead>
+                        <TableHead className="w-[140px]">Конкурент</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {googleResults.map((row) => (
-                        <TableRow key={`${row.position}-${row.url}`}>
+                      {resolvedResults.map((row) => (
+                        <TableRow key={`${row.position}-${row.domain}`}>
                           <TableCell className="tabular-nums text-muted-foreground">{row.position}</TableCell>
                           <TableCell>
-                            <Badge variant="outline" className="text-xs">
-                              {row.domain || '—'}
-                            </Badge>
+                            <a
+                              href={row.base_url || `https://${row.domain}/`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex underline-offset-2 hover:underline"
+                            >
+                              <Badge variant="outline" className="text-xs">
+                                {row.domain || '—'}
+                              </Badge>
+                            </a>
+                            {row.cached ? (
+                              <div className="mt-1 text-[10px] text-muted-foreground">из БД</div>
+                            ) : null}
+                            <div className="mt-2 flex flex-wrap gap-3">
+                              {(() => {
+                                const base = normalizeUrlForCompare(row.base_url || `https://${row.domain}/`);
+                                const services = normalizeUrlForCompare(row.services_url);
+                                const prices = normalizeUrlForCompare(row.prices_url);
+                                const showServices = Boolean(services && services !== base && services !== prices);
+                                const showPrices = Boolean(prices && prices !== base);
+                                return (
+                                  <>
+                                    {showServices && row.services_url ? (
+                                      <a
+                                        href={row.services_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                                      >
+                                        услуги
+                                      </a>
+                                    ) : null}
+                                    {showPrices && row.prices_url ? (
+                                      <a
+                                        href={row.prices_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                                      >
+                                        цены
+                                      </a>
+                                    ) : null}
+                                  </>
+                                );
+                              })()}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <a
@@ -914,11 +1134,48 @@ export default function SEOPageClient() {
                               rel="noopener noreferrer"
                               className="text-sm font-medium text-slate-900 underline-offset-2 hover:underline"
                             >
-                              {row.title}
+                              {row.title || row.base_url}
                             </a>
-                            {row.snippet ? (
-                              <p className="mt-1 text-xs text-muted-foreground">{row.snippet}</p>
+                            {row.home_text ? (
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {buildUniqueSnippet(row.home_text, 240)}
+                              </p>
+                            ) : (
+                              <p className="mt-1 text-xs text-muted-foreground">Не удалось получить текст главной.</p>
+                            )}
+                            {row.one_liner ? (
+                              <p className="mt-2 text-xs text-slate-700">{row.one_liner}</p>
                             ) : null}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleManualCompetitorMark(row.domain, true)}
+                                className={`rounded-md border p-2 transition ${
+                                  row.manual_is_competitor === true
+                                    ? 'border-blue-200 bg-blue-50 text-blue-700'
+                                    : 'border-slate-200 text-slate-400 hover:text-slate-600'
+                                }`}
+                                title="Конкурент"
+                                aria-label="Конкурент"
+                              >
+                                <Check className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleManualCompetitorMark(row.domain, false)}
+                                className={`rounded-md border p-2 transition ${
+                                  row.manual_is_competitor === false
+                                    ? 'border-slate-300 bg-slate-100 text-slate-900'
+                                    : 'border-slate-200 text-slate-400 hover:text-slate-900'
+                                }`}
+                                title="Не конкурент"
+                                aria-label="Не конкурент"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -928,6 +1185,7 @@ export default function SEOPageClient() {
               </CardContent>
             </Card>
           )}
+
         </TabsContent>
       </Tabs>
     </div>

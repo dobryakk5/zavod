@@ -20,6 +20,7 @@ const navItems = [
   { href: '/posts', label: 'Посты' },
   { href: '/schedule', label: 'Расписание' },
   { href: '/seo', label: 'SEO' },
+  { href: '/articles', label: 'Статьи' },
   { href: '/settings', label: 'Настройки' },
   { href: '/products', label: 'Продукты' }
 ];

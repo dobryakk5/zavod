@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    ArticleViewSet,
     ChannelAnalysisViewSet,
     ClientExpertBooksView,
     ClientInfoView,
@@ -41,6 +42,12 @@ from .views import (
     WordstatResultViewSet,
     WebsiteScanViewSet,
     GoogleCSESearchView,
+    GoogleCompetitorsAnalyzeView,
+    GoogleCompetitorsStoreView,
+    GoogleCompetitorsSitesView,
+    GoogleCompetitorsResolveView,
+    GoogleCompetitorsMarkView,
+    GoogleCompetitorsCachedView,
 )
 
 app_name = 'api'
@@ -51,6 +58,7 @@ router.register(r'posts', PostViewSet, basename='post')
 router.register(r'topics', TopicViewSet, basename='topic')
 router.register(r'trends', TrendItemViewSet, basename='trend')
 router.register(r'stories', StoryViewSet, basename='story')
+router.register(r'articles', ArticleViewSet, basename='article')
 router.register(r'templates', ContentTemplateViewSet, basename='template')
 router.register(r'schedules-manage', ScheduleViewSet, basename='schedule-manage')
 router.register(r'social-accounts', SocialAccountViewSet, basename='social-account')
@@ -88,6 +96,12 @@ urlpatterns = [
 
     # Google
     path('google/cse-search/', GoogleCSESearchView.as_view(), name='google-cse-search'),
+    path('google/competitors/analyze/', GoogleCompetitorsAnalyzeView.as_view(), name='google-competitors-analyze'),
+    path('google/competitors/store/', GoogleCompetitorsStoreView.as_view(), name='google-competitors-store'),
+    path('google/competitors/sites/', GoogleCompetitorsSitesView.as_view(), name='google-competitors-sites'),
+    path('google/competitors/resolve/', GoogleCompetitorsResolveView.as_view(), name='google-competitors-resolve'),
+    path('google/competitors/cached/', GoogleCompetitorsCachedView.as_view(), name='google-competitors-cached'),
+    path('google/competitors/mark/', GoogleCompetitorsMarkView.as_view(), name='google-competitors-mark'),
 
     # Legacy list views (kept for backward compatibility)
     path('posts-list/', PostsListView.as_view(), name='posts-list'),

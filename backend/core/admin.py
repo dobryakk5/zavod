@@ -31,6 +31,9 @@ from .models import (
     PostTone,
     SystemSetting,
     ProductType,
+    Article,
+    Articles,
+    ArticleBlock,
 )
 from .system_settings import invalidate_system_settings_cache, get_image_generation_model, get_image_generation_method
 
@@ -89,6 +92,83 @@ class ClientSEOKeywordSetInline(admin.TabularInline):
                 return ", ".join(preview[:3]) + ("..." if len(preview) > 3 else "")
         return "-"
     keywords_preview.short_description = "Ключи"
+
+
+class ArticleBlockInlineForm(forms.ModelForm):
+    class Meta:
+        model = ArticleBlock
+        fields = "__all__"
+        widgets = {
+            "keywords": forms.Textarea(attrs={"rows": 2, "style": "width: 96%; font-family: monospace;"}),
+            "prompt_used": forms.Textarea(attrs={"rows": 10, "style": "width: 96%; font-family: monospace;"}),
+            "content": forms.Textarea(attrs={"rows": 10, "style": "width: 96%;"}),
+        }
+
+
+class ArticleBlockInline(admin.StackedInline):
+    model = ArticleBlock
+    form = ArticleBlockInlineForm
+    extra = 0
+    can_delete = False
+    ordering = ("order", "id")
+    readonly_fields = ("block_key", "prompt_used", "regeneration_count", "created_at", "updated_at")
+    fields = (
+        ("order", "block_key", "status"),
+        ("subquery_h2", "micro_intent"),
+        "keywords",
+        "prompt_used",
+        "content",
+        ("regeneration_count", "updated_at"),
+    )
+
+
+class ArticleBlockPromptTemplateAdminForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "prompt_template" in self.fields:
+            self.fields["prompt_template"].help_text = (
+                "Доступные переменные: "
+                "{{main_query}}, {{audience}}, {{context}}, {{h2_title}}, {{subquery}}, "
+                "{{intent}}, {{keywords}}, {{product_context}}. "
+                "Если данных для переменной нет — будет пусто."
+            )
+
+    class Meta:
+        model = Articles
+        fields = "__all__"
+        widgets = {
+            "prompt_template": forms.Textarea(attrs={"rows": 18, "style": "width: 96%; font-family: monospace;"}),
+        }
+
+
+@admin.register(Articles)
+class ArticlePromptTemplatesAdmin(admin.ModelAdmin):
+    list_display = ("block_key", "updated_at")
+    search_fields = ("block_key", "prompt_template")
+    ordering = ("block_key",)
+    form = ArticleBlockPromptTemplateAdminForm
+    readonly_fields = ("created_at", "updated_at")
+
+@admin.register(Article)
+class ArticleAdmin(admin.ModelAdmin):
+    list_display = ("id", "client", "wordstat", "status", "created_at", "updated_at")
+    list_select_related = ("client", "created_by")
+    list_filter = ("status", "client", "created_at", "updated_at")
+    search_fields = ("wordstat", "tripwire_product_name", "lead_product_name")
+    autocomplete_fields = ("client", "created_by")
+    date_hierarchy = "created_at"
+    inlines = (ArticleBlockInline,)
+    readonly_fields = ("created_at", "updated_at")
+
+    fieldsets = (
+        ("Основное", {"fields": ("client", "wordstat", "status", "audience")}),
+        ("Продукты", {"fields": ("tripwire_product_id", "tripwire_product_name", "lead_product_id", "lead_product_name")}),
+        ("Контекст (чекбоксы)", {"fields": ("selected_why_now", "selected_solution")}),
+        ("Опции (AI-ответы)", {"fields": ("options_why_now", "options_solution"), "classes": ("collapse",)}),
+        ("Структура", {"fields": ("outline_markdown",)}),
+        ("Blueprint SEO блоков (JSON)", {"fields": ("seo_blocks",), "classes": ("collapse",)}),
+        ("Система", {"fields": ("created_by", "created_at", "updated_at"), "classes": ("collapse",)}),
+    )
 
 
 @admin.register(Client)
@@ -2290,6 +2370,8 @@ CORE_ADMIN_MODEL_ORDER = {
     "Post": 3,
     "SEOKeywordSet": 4,
     "ProductTypeAdminProxy": 5,
+    "Article": 6,
+    "Articles": 7,
     "SystemSetting": 999,
 }
 

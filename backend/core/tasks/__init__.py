@@ -44,6 +44,9 @@ from .website_scan import (
     run_website_scan_task,
     maybe_schedule_next_website_scan_for_client,
 )
+from .competitors import (
+    analyze_competitor_site_task,
+)
 # Generation tasks (10)
 from .generation import (
     generate_post_from_trend,
@@ -66,6 +69,13 @@ from .generation import (
 from .seo import (
     generate_seo_keywords_for_client,
     generate_seo_keywords_for_topic,
+)
+
+# Products tasks (3)
+from .products import (
+    generate_client_product_for_type_task,
+    generate_core_product_task,
+    generate_related_product_task,
 )
 
 # Scheduling tasks (1)
@@ -96,6 +106,7 @@ __all__ = [
     'process_weekly_source',
     'run_website_scan_task',
     'maybe_schedule_next_website_scan_for_client',
+    'analyze_competitor_site_task',
 
     # Generation (10)
     'generate_post_from_trend',
@@ -116,6 +127,11 @@ __all__ = [
     # SEO (2)
     'generate_seo_keywords_for_client',
     'generate_seo_keywords_for_topic',
+
+    # Products (3)
+    'generate_client_product_for_type_task',
+    'generate_core_product_task',
+    'generate_related_product_task',
 
     # Scheduling (1)
     'auto_schedule_story_posts',

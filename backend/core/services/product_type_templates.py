@@ -12,6 +12,285 @@ def _normalize_name(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+_REQUIREMENTS_FIELDS: tuple[str, ...] = (
+    "requirements_name",
+    "requirements_packages",
+    "requirements_audience",
+    "requirements_transformation",
+    "requirements_metrics",
+    "requirements_method",
+    "requirements_lesson_format",
+    "requirements_program_modules",
+    "requirements_packaging",
+)
+
+
+def _default_product_type_requirements() -> dict[str, dict[str, str]]:
+    """
+    Default AI requirements for standard funnel product types.
+
+    Notes:
+    - `lesson_format` in the JSON structure is used by the UI as
+      "Формат взаимодействия с клиентом" (not "формат урока").
+    - Text is intentionally domain-agnostic and should be adapted by the model
+      to the niche using client avatar/pains/desires/objections and Wordstat.
+    """
+
+    common_lesson_format_rules = """
+Сгенерируй блок "lesson_format" как ФОРМАТ ВЗАИМОДЕЙСТВИЯ С КЛИЕНТОМ (customer journey / delivery), а не как "формат урока".
+Верни список этапов взаимодействия (3–8 шт.), где каждый этап:
+- короткое название (2–6 слов), отражающее реальный шаг/касание (онбординг, диагностика, выдача материала, сопровождение, проверка, Q&A, отчёт, апселл и т.п. — под нишу),
+- "percent" — доля усилий/времени со стороны команды/клиента на этот этап (0–100, можно null).
+Если уместно, сделай сумму процентов ≈ 100. Не используй слово "урок", если это не обучение.
+""".strip()
+
+    common_method_rules = """
+Сгенерируй блок "method" как универсальные компоненты реализации продукта (не только обучение).
+Компонент = элемент механики (например: Диагностика, Материалы, Практика/внедрение, Контроль качества, Поддержка, Комьюнити, Созвон, Личный кабинет, Автоматизация и т.п.).
+Для каждого компонента дай "template" — универсальный шаблон, как этот компонент выглядит в любой нише (1 короткое предложение).
+4–8 строк.
+""".strip()
+
+    common_program_rules = """
+Сгенерируй "program_modules" как логические модули/этапы результата (не обязательно "уроки").
+4–8 модулей. Для каждого: "module" (название) и "result" (измеримый результат/выход).
+""".strip()
+
+    common_packaging_rules = """
+Сгенерируй "packaging" как упаковку предложения:
+- name: короткое название оффера/программы,
+- slogan: 5–10 слов, эмоционально и конкретно,
+- promise: 1–2 предложения, обещание результата без необоснованных гарантий.
+""".strip()
+
+    common_audience_rules = """
+Сгенерируй "audience" (4–7 строк): параметры сегментации ЦА (кто, ситуация, уровень, контекст) и конкретные значения под нишу.
+""".strip()
+
+    common_transformation_rules = """
+Сгенерируй "transformation" (4–7 строк): "was" → "became" как понятные изменения для клиента (до/после), связанные с продуктом.
+""".strip()
+
+    common_metrics_rules = """
+Сгенерируй "metrics" (4–7 строк): метрика/критерий успеха и обещание по ней (реалистично, без точных гарантий если нельзя).
+""".strip()
+
+    return {
+        "lead": {
+            "requirements_name": """
+Сгенерируй name и short_description для продукта типа LEAD (лид-магнит).
+- Название: конкретное и полезное, без "вода", 3–9 слов.
+- short_description: обязательно начинается с "LEAD:" и описывает бесплатную/низкофрикционную ценность, ведущую к выявлению потребности.
+""".strip(),
+            "requirements_packages": """
+Сгенерируй packages для LEAD.
+- 1 пакет (обычно бесплатный) или 2 варианта (например, "Стандарт" и "Расширенный").
+- description: что человек получает и за сколько времени; под нишу.
+- price: null или 0.
+""".strip(),
+            "requirements_audience": common_audience_rules,
+            "requirements_transformation": common_transformation_rules,
+            "requirements_metrics": common_metrics_rules,
+            "requirements_method": common_method_rules,
+            "requirements_lesson_format": f"""{common_lesson_format_rules}
+Для LEAD сделай акцент на: выдача ценности → микро-результат → сегментация/опрос → приглашение на следующий шаг.
+""".strip(),
+            "requirements_program_modules": common_program_rules,
+            "requirements_packaging": common_packaging_rules,
+        },
+        "tripwire": {
+            "requirements_name": """
+Сгенерируй name и short_description для продукта типа TRIPWIRE.
+- Название: обещает быстрый ощутимый результат, 3–9 слов.
+- short_description: обязательно начинается с "TRIPWIRE:" и отражает первый платёж (низкий чек) + быстрый результат ≤ 7 дней.
+""".strip(),
+            "requirements_packages": """
+Сгенерируй packages для TRIPWIRE.
+- 1–2 пакета (например, "Базовый" и "С поддержкой").
+- description: конкретный результат и формат выдачи.
+- price: укажи приблизительно в диапазоне 1000–3000 (или null, если по нише цена неуместна).
+""".strip(),
+            "requirements_audience": common_audience_rules,
+            "requirements_transformation": common_transformation_rules,
+            "requirements_metrics": common_metrics_rules,
+            "requirements_method": common_method_rules,
+            "requirements_lesson_format": f"""{common_lesson_format_rules}
+Для TRIPWIRE сделай акцент на: оплата/доступ → быстрый план → выполнение → проверка/обратная связь → лёгкий апселл.
+""".strip(),
+            "requirements_program_modules": common_program_rules,
+            "requirements_packaging": common_packaging_rules,
+        },
+        "reactivation": {
+            "requirements_name": """
+Сгенерируй name и short_description для продукта типа REACTIVATION.
+- Название: фокус на "вернуться/дожать/снять барьер", 3–9 слов.
+- short_description: обязательно начинается с "REACTIVATION:" и описывает догрев "слетевших" после трипвайера (3–7 дней без покупки).
+""".strip(),
+            "requirements_packages": """
+Сгенерируй packages для REACTIVATION.
+- 1–2 пакета (например, "Возврат" и "Возврат + разбор").
+- price: может быть null/0 (как акция) или небольшая стоимость — под тип и нишу.
+""".strip(),
+            "requirements_audience": common_audience_rules,
+            "requirements_transformation": common_transformation_rules,
+            "requirements_metrics": common_metrics_rules,
+            "requirements_method": common_method_rules,
+            "requirements_lesson_format": f"""{common_lesson_format_rules}
+Для REACTIVATION сделай акцент на: контакт → выявление причины \"почему не купил\" → снятие возражений → короткое предложение/созвон → решение.
+""".strip(),
+            "requirements_program_modules": common_program_rules,
+            "requirements_packaging": common_packaging_rules,
+        },
+        "core": {
+            "requirements_name": """
+Сгенерируй name и short_description для продукта типа CORE (основной продукт).
+- Название: отражает главный результат/систему, 3–9 слов.
+- short_description: обязательно начинается с "CORE:" и обещает ключевую трансформацию (выручка/кейсы/NPS) без необоснованных гарантий.
+""".strip(),
+            "requirements_packages": """
+Сгенерируй packages для CORE.
+- 2–3 пакета (например, "Старт", "Стандарт", "Максимум") с понятными отличиями по поддержке/глубине/скорости.
+- price: можно оставить null, если цена не задана.
+""".strip(),
+            "requirements_audience": common_audience_rules,
+            "requirements_transformation": common_transformation_rules,
+            "requirements_metrics": common_metrics_rules,
+            "requirements_method": common_method_rules,
+            "requirements_lesson_format": f"""{common_lesson_format_rules}
+Для CORE сделай акцент на: онбординг → диагностика → основной цикл внедрения/оказания услуги → контроль качества → сопровождение/поддержка → итоговый отчёт/кейсы.
+""".strip(),
+            "requirements_program_modules": common_program_rules,
+            "requirements_packaging": common_packaging_rules,
+        },
+        "premium": {
+            "requirements_name": """
+Сгенерируй name и short_description для продукта типа PREMIUM.
+- Название: персонализация/эксклюзив/скорость результата, 3–9 слов.
+- short_description: обязательно начинается с "PREMIUM:" и отражает высокий чек + глубину/персональное сопровождение (рост LTV/маржинальности).
+""".strip(),
+            "requirements_packages": """
+Сгенерируй packages для PREMIUM.
+- 1–2 пакета (например, "1:1" и "1:1 + команда/доступы"), чётко различай объём личного участия.
+- price: можно оставить null (или high-ticket ориентир, если уместно).
+""".strip(),
+            "requirements_audience": common_audience_rules,
+            "requirements_transformation": common_transformation_rules,
+            "requirements_metrics": common_metrics_rules,
+            "requirements_method": common_method_rules,
+            "requirements_lesson_format": f"""{common_lesson_format_rules}
+Для PREMIUM сделай акцент на: стратегия → персональный план → регулярные 1:1 синки/ревью → совместная реализация → контроль метрик → принятие решений.
+""".strip(),
+            "requirements_program_modules": common_program_rules,
+            "requirements_packaging": common_packaging_rules,
+        },
+        "add-ons": {
+            "requirements_name": """
+Сгенерируй name и short_description для продукта типа ADD-ONS (доп. продажи).
+- Название: конкретный доп. результат/улучшение, 3–9 слов.
+- short_description: обязательно начинается с "ADD-ONS:" и описывает доп. ценность, увеличивающую ARPU (апселл/кросс-селл).
+""".strip(),
+            "requirements_packages": """
+Сгенерируй packages для ADD-ONS.
+- 2–4 пакета/позиции (как магазин доп. опций).
+- description: чётко \"что добавляем\" и какой эффект.
+- price: можно оставить null или указать ориентиры.
+""".strip(),
+            "requirements_audience": common_audience_rules,
+            "requirements_transformation": common_transformation_rules,
+            "requirements_metrics": common_metrics_rules,
+            "requirements_method": common_method_rules,
+            "requirements_lesson_format": f"""{common_lesson_format_rules}
+Для ADD-ONS сделай акцент на: выбор опции → оплата/доступ → быстрая доставка → внедрение/интеграция → саппорт/гарантия качества.
+""".strip(),
+            "requirements_program_modules": common_program_rules,
+            "requirements_packaging": common_packaging_rules,
+        },
+    }
+
+
+def _generic_product_type_requirements(type_name: str) -> dict[str, str]:
+    type_display = (type_name or "").strip() or "Тип продукта"
+
+    common_lesson_format_rules = """
+Сгенерируй блок "lesson_format" как ФОРМАТ ВЗАИМОДЕЙСТВИЯ С КЛИЕНТОМ (customer journey / delivery), а не как "формат урока".
+Верни список этапов взаимодействия (3–8 шт.), где каждый этап:
+- короткое название (2–6 слов), отражающее реальный шаг/касание (онбординг, диагностика, согласование, доставка, сопровождение, проверка, Q&A, отчёт и т.п. — под нишу),
+- "percent" — доля усилий/времени на этот этап (0–100, можно null).
+Если уместно, сделай сумму процентов ≈ 100. Не используй слово "урок", если это не обучение.
+""".strip()
+
+    return {
+        "requirements_name": f"""
+Сгенерируй name и short_description для продукта типа {type_display}.
+- Название: 3–9 слов, конкретно и по делу.
+- short_description: обязательно начинается с "{type_display}:" и объясняет ценность/результат без необоснованных гарантий.
+""".strip(),
+        "requirements_packages": f"""
+Сгенерируй packages для продукта типа {type_display}.
+- 1–3 пакета с понятными отличиями (по объёму/поддержке/скорости/доступам — под нишу).
+- description: что получает клиент, в каком формате и за какой срок.
+- price: число или null, если цена не задана.
+""".strip(),
+        "requirements_audience": """
+Сгенерируй "audience" (4–7 строк): параметры сегментации ЦА (кто, ситуация, уровень, контекст) и конкретные значения под нишу.
+""".strip(),
+        "requirements_transformation": """
+Сгенерируй "transformation" (4–7 строк): "was" → "became" как понятные изменения для клиента (до/после), связанные с продуктом.
+""".strip(),
+        "requirements_metrics": """
+Сгенерируй "metrics" (4–7 строк): метрика/критерий успеха и обещание по ней (реалистично, без точных гарантий если нельзя).
+""".strip(),
+        "requirements_method": """
+Сгенерируй "method" как универсальные компоненты реализации продукта (не только обучение).
+4–8 строк. Для каждого компонента дай "template" — универсальный шаблон, как он выглядит в любой нише (1 короткое предложение).
+""".strip(),
+        "requirements_lesson_format": common_lesson_format_rules,
+        "requirements_program_modules": """
+Сгенерируй "program_modules" как логические модули/этапы результата (не обязательно "уроки").
+4–8 модулей. Для каждого: "module" (название) и "result" (измеримый результат/выход).
+""".strip(),
+        "requirements_packaging": """
+Сгенерируй "packaging" как упаковку предложения:
+- name: короткое название оффера/программы,
+- slogan: 5–10 слов, эмоционально и конкретно,
+- promise: 1–2 предложения, обещание результата без необоснованных гарантий.
+""".strip(),
+    }
+
+
+def ensure_system_product_type_requirements() -> int:
+    """
+    Fill missing requirements_* fields for system (global) product types.
+
+    Returns the number of ProductType rows updated.
+    """
+
+    system_client = Client.get_system_client()
+    templates = _default_product_type_requirements()
+    updated = 0
+
+    for product_type in ProductType.objects.filter(owner=system_client).order_by("id"):
+        key = _normalize_name(product_type.name)
+        template = templates.get(key) or _generic_product_type_requirements(product_type.name)
+
+        changed_fields: list[str] = []
+        for field in _REQUIREMENTS_FIELDS:
+            current = getattr(product_type, field, None)
+            if isinstance(current, str) and current.strip():
+                continue
+            value = template.get(field)
+            if not value:
+                continue
+            setattr(product_type, field, value)
+            changed_fields.append(field)
+
+        if changed_fields:
+            product_type.save(update_fields=changed_fields)
+            updated += 1
+
+    return updated
+
+
 def get_fibonatty_client() -> Optional[Client]:
     slug = (getattr(settings, "FIBONATTY_TEMPLATE_CLIENT_SLUG", None) or "fibonatty").strip()
     if slug:
@@ -160,8 +439,9 @@ def ensure_system_product_type_templates() -> int:
 
     system_client = Client.get_system_client()
     source_client = get_fibonatty_client()
-    if not source_client:
-        return 0
-    if source_client.pk == system_client.pk:
-        return 0
-    return sync_product_types(source_client, system_client)
+    added = 0
+    if source_client and source_client.pk != system_client.pk:
+        added = sync_product_types(source_client, system_client)
+
+    ensure_system_product_type_requirements()
+    return added

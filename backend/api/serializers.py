@@ -5,6 +5,8 @@ from typing import Optional
 from rest_framework import serializers
 
 from core.models import (
+    Article,
+    ArticleBlock,
     ChannelAnalysis,
     Client,
     ClientProduct,
@@ -400,6 +402,60 @@ class StoryDetailSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "generated_by", "created_at", "updated_at"]
+
+
+class ArticleListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Article
+        fields = ["id", "wordstat", "status", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class ArticleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Article
+        fields = [
+            "id",
+            "wordstat",
+            "status",
+            "audience",
+            "options_why_now",
+            "options_solution",
+            "selected_why_now",
+            "selected_solution",
+            "tripwire_product_id",
+            "tripwire_product_name",
+            "lead_product_id",
+            "lead_product_name",
+            "seo_blocks",
+            "outline_markdown",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "status", "options_why_now", "options_solution", "created_at", "updated_at"]
+
+
+class ArticleBlockSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ArticleBlock
+        fields = [
+            "id",
+            "article",
+            "order",
+            "block_key",
+            "subquery_h2",
+            "micro_intent",
+            "keywords",
+            "prompt_template",
+            "prompt_is_custom",
+            "prompt_used",
+            "content",
+            "status",
+            "regeneration_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "article", "created_at", "updated_at"]
 
 
 class ContentTemplateSerializer(serializers.ModelSerializer):
@@ -1019,6 +1075,13 @@ class ClientProductSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     product_type_name = serializers.CharField(source="product_type.name", read_only=True)
+    product_type = serializers.SerializerMethodField()
+
+    def get_product_type(self, obj: ClientProduct):
+        product_type = getattr(obj, "product_type", None)
+        if not product_type:
+            return None
+        return ProductTypeSerializer(product_type).data
 
     class Meta:
         model = ClientProduct
@@ -1027,6 +1090,7 @@ class ClientProductSerializer(serializers.ModelSerializer):
             "name",
             "product_type_id",
             "product_type_name",
+            "product_type",
             "short_description",
             "packages",
             "structure",
@@ -1047,6 +1111,15 @@ class ProductTypeSerializer(serializers.ModelSerializer):
             "name",
             "value",
             "goal",
+            "requirements_name",
+            "requirements_packages",
+            "requirements_audience",
+            "requirements_transformation",
+            "requirements_metrics",
+            "requirements_method",
+            "requirements_lesson_format",
+            "requirements_program_modules",
+            "requirements_packaging",
             "owner_id",
             "created_at",
             "updated_at",

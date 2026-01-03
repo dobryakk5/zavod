@@ -1146,7 +1146,7 @@ seo_keywords = [ ... ]
     "transformation": "Требования к блоку transformation",
     "metrics": "Требования к блоку metrics",
     "method": "Требования к блоку method",
-    "lesson_format": "Требования к блоку lesson_format",
+    "lesson_format": "Требования к блоку lesson_format (формат взаимодействия с клиентом)",
     "program_modules": "Требования к блоку program_modules",
     "packaging": "Требования к блоку packaging"
   }
@@ -1177,7 +1177,7 @@ WORDSTAT (ИЗБРАННОЕ)
 Сгенерируй 9 требований: по одному требованию на каждый блок результата:
 1) name (вместе с short_description),
 2) packages,
-3–9) 7 частей структуры: audience, transformation, metrics, method, lesson_format, program_modules, packaging.
+3–9) 7 частей структуры: audience, transformation, metrics, method, lesson_format (формат взаимодействия), program_modules, packaging.
 
 ТРЕБОВАНИЯ К ТРЕБОВАНИЯМ
 - Пиши на {lang_name} языке.
@@ -1250,6 +1250,7 @@ WORDSTAT (избранное):
 {requirement_text}
 
 ДОПОЛНИТЕЛЬНО
+- Пиши на {lang_name} языке.
 - Верни список "phrases_used" (0–5 фраз), которые реально использовал(а) из Wordstat в этом блоке.
 
 ФОРМАТ ОТВЕТА: СТРОГО валидный JSON по схеме:
