@@ -302,7 +302,7 @@ def build_related_products_mind_map(client: Client, core_product: ClientProduct)
     other = sorted([p for p in related_products if p.id not in categorized_ids], key=lambda p: (p.name or "").strip().lower())
 
     title = f"Core: {(core_product.name or '').strip() or core_product.id} — сопутствующие"
-    description = f"Auto-generated related products map for Core #{core_product.id}"
+    description = f"Авто-генерация карты по Core #{core_product.id}"
 
     GAP_Y = 110.0
     GAP_X = 560.0
