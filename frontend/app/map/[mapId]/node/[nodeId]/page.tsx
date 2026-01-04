@@ -70,6 +70,17 @@ export default function EditNodePage() {
   const lastSavedNodeRef = useRef<{ title: string; typeLabel: string } | null>(null);
 
   const node = useMemo(() => mapData?.nodes.find((n) => String(n.id) === String(nodeId)), [mapData?.nodes, nodeId]);
+  const productId = useMemo(() => {
+    const meta = node?.meta && typeof node.meta === 'object' ? (node.meta as Record<string, unknown>) : null;
+    if (!meta || meta.entity !== 'product') return null;
+    const raw = meta.product_id;
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (typeof raw === 'string') {
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    return null;
+  }, [node?.meta]);
   const isWebsiteNode = useMemo(() => {
     const entity = node?.meta && typeof node.meta === 'object' ? (node.meta as Record<string, unknown>).entity : undefined;
     return entity === 'website';
@@ -429,7 +440,14 @@ export default function EditNodePage() {
             </div>
           </CardContent>
 
-          <CardFooter className="flex justify-end">
+          <CardFooter className="flex items-center justify-between">
+            {productId ? (
+              <Button asChild variant="link" size="sm" className="px-0 text-black">
+                <Link href={`/product/${productId}`}>Открыть продукт</Link>
+              </Button>
+            ) : (
+              <span />
+            )}
             <Button onClick={saveAll} disabled={saving || loading} className="bg-black text-white hover:bg-black/90">
               <Save className="mr-2 h-4 w-4" />
               {saving ? 'Сохранение...' : 'Сохранить'}

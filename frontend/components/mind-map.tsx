@@ -152,7 +152,6 @@ const ADD_NODE_GAP_PX = 180;
 const HEADER_HEIGHT_TITLE_ONLY = 57;
 // Plus `space-y-2` gap (8px) + `text-xs` line (~16px)
 const HEADER_HEIGHT_WITH_TYPE = 81;
-const BADGES_HEIGHT = 44;
 const PROPERTIES_PADDING_Y = 24;
 const PROPERTIES_ROW_GAP = 12;
 const PROPERTIES_ROW_HEIGHT_TITLE_ONLY = 24;
@@ -202,7 +201,6 @@ const attachHandlers = (
 
 const calculateNodeHeight = (node: MindMapNodeDatum) => {
   const hasType = !!node.data.typeLabel?.trim();
-  const hasBadges = !!node.data.color;
   const properties = [...(node.data.properties ?? [])]
     .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
     .filter((p) => (p.title ?? '').trim() || (p.value ?? '').trim() || (p.delta ?? '').trim());
@@ -210,7 +208,7 @@ const calculateNodeHeight = (node: MindMapNodeDatum) => {
 
   for (let i = 0; i < properties.length; i += 3) rows.push(properties.slice(i, i + 3));
 
-  let height = (hasType ? HEADER_HEIGHT_WITH_TYPE : HEADER_HEIGHT_TITLE_ONLY) + (hasBadges ? BADGES_HEIGHT : 0);
+  let height = hasType ? HEADER_HEIGHT_WITH_TYPE : HEADER_HEIGHT_TITLE_ONLY;
 
   if (rows.length > 0) {
     height += PROPERTIES_PADDING_Y;

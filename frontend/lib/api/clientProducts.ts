@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { ClientProduct } from '../types';
+import type { ClientProduct, MindMap } from '../types';
 
 export const clientProductsApi = {
   list: async (): Promise<ClientProduct[]> => {
@@ -44,6 +44,12 @@ export const clientProductsApi = {
     return apiFetch<ClientProduct>(`/products/list/${coreProductId}/create-related-ai/`, {
       method: 'POST',
       body: payload
+    });
+  },
+
+  createRelatedMap: async (coreProductId: string | number): Promise<MindMap> => {
+    return apiFetch<MindMap>(`/products/list/${coreProductId}/create-related-map/`, {
+      method: 'POST'
     });
   },
 

@@ -6,6 +6,12 @@ export const mindMapsApi = {
     return apiFetch<MindMap[]>('/map/mind-maps/');
   },
 
+  createProductsMap: async (): Promise<MindMap> => {
+    return apiFetch<MindMap>('/map/mind-maps/create-products-map/', {
+      method: 'POST'
+    });
+  },
+
   create: async (payload: { title: string; description?: string; is_public?: boolean }) => {
     return apiFetch<MindMap>('/map/mind-maps/', {
       method: 'POST',

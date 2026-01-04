@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import type { ClientProduct } from '@/lib/types';
 import { ApiError } from '@/lib/api';
 import { clientProductsApi } from '@/lib/api/clientProducts';
+import { mindMapsApi } from '@/lib/api/mindmaps';
 import { productTypesApi } from '@/lib/api/productTypes';
 import { Copy, Loader2, Trash2 } from 'lucide-react';
 
@@ -27,8 +29,11 @@ export function ClientProductsTab() {
   const [filterTypeId, setFilterTypeId] = useState<number | null>(null);
   const [creatingManual, setCreatingManual] = useState(false);
   const [creatingAuto, setCreatingAuto] = useState(false);
+  const [creatingProductsMap, setCreatingProductsMap] = useState(false);
 
   const [duplicatingId, setDuplicatingId] = useState<number | null>(null);
+  const [productToDelete, setProductToDelete] = useState<ClientProduct | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -116,6 +121,21 @@ export function ClientProductsTab() {
     }
   };
 
+  const handleCreateProductsMap = async () => {
+    if (creatingProductsMap) return;
+    setCreatingProductsMap(true);
+    setError(null);
+    try {
+      const created = await mindMapsApi.createProductsMap();
+      router.push(`/map/${created.id}`);
+    } catch (err) {
+      console.error('Failed to create products map', err);
+      setError('Не удалось создать карту всех продуктов.');
+    } finally {
+      setCreatingProductsMap(false);
+    }
+  };
+
   const handleDuplicate = async (product: ClientProduct) => {
     if (duplicatingId) return;
     if ((product.product_type_name ?? '').trim().toLowerCase() !== 'core') {
@@ -140,19 +160,23 @@ export function ClientProductsTab() {
     }
   };
 
-  const handleDelete = async (productId: number) => {
-    const ok = window.confirm('Удалить продукт? Это действие нельзя отменить.');
-    if (!ok) return;
-
+  const handleDeleteConfirm = async () => {
+    if (!productToDelete || deletingId) return;
+    const productId = productToDelete.id;
     setError(null);
+    setDeletingId(productId);
     const prev = products;
     setProducts((items) => items.filter((p) => p.id !== productId));
     try {
       await clientProductsApi.delete(productId);
+      setProductToDelete(null);
     } catch (err) {
       console.error('Failed to delete product', err);
       setError('Не удалось удалить продукт.');
       setProducts(prev);
+      setProductToDelete(null);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -163,6 +187,7 @@ export function ClientProductsTab() {
 
   const coreOnboarding = !loading && !error && products.length === 0;
   const canCreateCore = Boolean(createName.trim() && createShortDescription.trim());
+  const isDeleteDialogOpen = productToDelete != null;
 
   return (
     <div className="space-y-6">
@@ -181,52 +206,46 @@ export function ClientProductsTab() {
             className="w-full max-w-sm"
           />
           <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={() => void handleCreateCoreManual()} disabled={!canCreateCore || creatingManual || creatingAuto}>
-              {creatingManual ? 'Создание…' : 'Core вручную'}
-            </Button>
             <Button
-              variant="secondary"
               onClick={() => void handleCreateCoreAuto()}
               disabled={!canCreateCore || creatingAuto || creatingManual}
             >
               {creatingAuto ? (
                 <span className="inline-flex items-center gap-2">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Core автомат…
+                  Автопилот…
                 </span>
               ) : (
-                'Core автомат'
+                'Автопилот'
               )}
             </Button>
-            <div className="text-xs text-muted-foreground">В списке создаётся только Core</div>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="w-full max-w-sm">
-            <Select
-              value={filterTypeId == null ? 'all' : String(filterTypeId)}
-              onValueChange={(value) => setFilterTypeId(value === 'all' ? null : Number(value))}
-              disabled={loading}
+            <Button
+              variant="secondary"
+              onClick={() => void handleCreateCoreManual()}
+              disabled={!canCreateCore || creatingManual || creatingAuto}
             >
-              <SelectTrigger>
-                <SelectValue placeholder="Фильтр по типу" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Все типы</SelectItem>
-                {types.map((t) => (
-                  <SelectItem key={t.id} value={String(t.id)}>
-                    {t.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              {creatingManual ? 'Создание…' : 'Вручную'}
+            </Button>
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
           {coreOnboarding
-            ? 'Создайте основной продукт (Core): заполните название и описание, затем выберите «Core вручную» или «Core автомат».'
-            : 'Core создаётся из списка, а сопутствующие продукты — внутри Core.'}
+            ? 'Создайте основной продукт (Core): заполните название и описание, затем выберите «Вручную» или «Автопилот».'
+            : 'В общем списке создаем Core продукты. Внутри Core - всё остальное.'}
         </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="outline" onClick={() => void handleCreateProductsMap()} disabled={creatingProductsMap}>
+          {creatingProductsMap ? (
+            <span className="inline-flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Создание карты…
+            </span>
+          ) : (
+            'Создать карту всех продуктов'
+          )}
+        </Button>
       </div>
 
       {error && (
@@ -252,7 +271,25 @@ export function ClientProductsTab() {
             <TableHeader>
               <TableRow>
                 <TableHead>Название</TableHead>
-                <TableHead>Тип</TableHead>
+                <TableHead className="w-[180px]">
+                  <Select
+                    value={filterTypeId == null ? 'all' : String(filterTypeId)}
+                    onValueChange={(value) => setFilterTypeId(value === 'all' ? null : Number(value))}
+                    disabled={loading}
+                  >
+                    <SelectTrigger className="h-9 w-full">
+                      <SelectValue placeholder="Все типы" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Все типы</SelectItem>
+                      {types.map((t) => (
+                        <SelectItem key={t.id} value={String(t.id)}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </TableHead>
                 <TableHead>Краткое описание</TableHead>
                 <TableHead>Обновлено</TableHead>
                 <TableHead className="text-right">Действия</TableHead>
@@ -299,10 +336,10 @@ export function ClientProductsTab() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
-                        disabled={duplicatingId === product.id}
+                        disabled={duplicatingId === product.id || deletingId === product.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          void handleDelete(product.id);
+                          setProductToDelete(product);
                         }}
                         aria-label="Удалить"
                         title="Удалить"
@@ -317,6 +354,39 @@ export function ClientProductsTab() {
           </Table>
         </div>
       )}
+
+      <Dialog
+        open={isDeleteDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !deletingId) {
+            setProductToDelete(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Удалить продукт?</DialogTitle>
+            <DialogDescription>
+              {productToDelete
+                ? `Продукт «${productToDelete.name}» будет удален без возможности восстановления.`
+                : 'Продукт будет удален без возможности восстановления.'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setProductToDelete(null)}
+              disabled={Boolean(deletingId)}
+            >
+              Отмена
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void handleDeleteConfirm()} disabled={Boolean(deletingId)}>
+              {deletingId ? 'Удаление…' : 'Удалить'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

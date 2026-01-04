@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,6 +35,8 @@ export default function ProductsPage() {
   const [createDescription, setCreateDescription] = useState('');
   const [creating, setCreating] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState<number | null>(null);
+  const [mapToDelete, setMapToDelete] = useState<{ id: number; title: string } | null>(null);
+  const [deletingMapId, setDeletingMapId] = useState<number | null>(null);
 
   const [drafts, setDrafts] = useState<Record<number, MapDraft>>({});
   const draftsRef = useRef(drafts);
@@ -251,11 +254,11 @@ export default function ProductsPage() {
     }
   };
 
-  const handleDeleteMap = async (mapId: number) => {
-    const ok = window.confirm('Удалить карту? Это действие нельзя отменить.');
-    if (!ok) return;
-
+  const handleDeleteMapConfirm = async () => {
+    if (!mapToDelete || deletingMapId) return;
+    const mapId = mapToDelete.id;
     setError(null);
+    setDeletingMapId(mapId);
     const prevMaps = maps;
     const prevDrafts = draftsRef.current;
 
@@ -268,11 +271,15 @@ export default function ProductsPage() {
 
     try {
       await mindMapsApi.delete(mapId);
+      setMapToDelete(null);
     } catch (err) {
       console.error('Failed to delete map', err);
       setError('Не удалось удалить карту.');
       setMaps(prevMaps);
       setDrafts(prevDrafts);
+      setMapToDelete(null);
+    } finally {
+      setDeletingMapId(null);
     }
   };
 
@@ -312,6 +319,7 @@ export default function ProductsPage() {
       }),
     [drafts, maps]
   );
+  const isDeleteDialogOpen = mapToDelete != null;
 
   return (
     <div className="space-y-8">
@@ -372,7 +380,7 @@ export default function ProductsPage() {
           {loading && <div className="text-sm text-muted-foreground">Загрузка mind maps…</div>}
           {!loading && !error && maps.length === 0 && (
             <div className="rounded-lg border px-4 py-6 text-muted-foreground">
-              Пока нет карт. Создайте их через backend (таблицы map.mind_maps / map.mind_nodes / map.mind_edges).
+              Пока нет карт. 
             </div>
           )}
 
@@ -484,10 +492,10 @@ export default function ProductsPage() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
-                            disabled={duplicatingId === map.id}
+                            disabled={duplicatingId === map.id || deletingMapId === map.id}
                             onClick={(e) => {
                               e.stopPropagation();
-                              void handleDeleteMap(map.id);
+                              setMapToDelete({ id: map.id, title: title.trim() || 'Без названия' });
                             }}
                             aria-label="Удалить"
                             title="Удалить"
@@ -502,6 +510,44 @@ export default function ProductsPage() {
               </Table>
             </div>
           )}
+
+          <Dialog
+            open={isDeleteDialogOpen}
+            onOpenChange={(open) => {
+              if (!open && !deletingMapId) {
+                setMapToDelete(null);
+              }
+            }}
+          >
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Удалить карту?</DialogTitle>
+                <DialogDescription>
+                  {mapToDelete
+                    ? `Карта «${mapToDelete.title}» будет удалена без возможности восстановления.`
+                    : 'Карта будет удалена без возможности восстановления.'}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setMapToDelete(null)}
+                  disabled={Boolean(deletingMapId)}
+                >
+                  Отмена
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={() => void handleDeleteMapConfirm()}
+                  disabled={Boolean(deletingMapId)}
+                >
+                  {deletingMapId ? 'Удаление…' : 'Удалить'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
       </Tabs>
     </div>

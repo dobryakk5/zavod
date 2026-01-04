@@ -5,6 +5,7 @@ from django.test import SimpleTestCase, override_settings
 from .telegram_client import TelegramPublisher
 from .social_publishers import build_absolute_media_url
 from .tasks.publishing import _compose_post_text
+from .services.product_relations import merge_related_products, remove_related_product
 
 
 class TelegramPublisherSplitTests(SimpleTestCase):
@@ -66,3 +67,19 @@ class BuildAbsoluteMediaUrlTests(SimpleTestCase):
     @override_settings(WAGTAILADMIN_BASE_URL=None, PUBLIC_MEDIA_BASE_URL=None)
     def test_returns_none_without_base(self):
         self.assertIsNone(build_absolute_media_url("/media/photo.jpg"))
+
+
+class MergeRelatedProductsTests(SimpleTestCase):
+    def test_prepends_and_dedupes_dict_id(self):
+        existing = [{"id": 10, "name": "old"}, {"id": 11, "name": "keep"}]
+        new_ref = {"id": 10, "name": "new"}
+        self.assertEqual(merge_related_products(existing, new_ref), [new_ref, {"id": 11, "name": "keep"}])
+
+    def test_dedupes_int_and_string_forms(self):
+        existing = [10, "10", {"id": "10", "name": "old"}, {"id": 12}]
+        new_ref = {"id": 10, "name": "new"}
+        self.assertEqual(merge_related_products(existing, new_ref), [new_ref, {"id": 12}])
+
+    def test_remove_by_id(self):
+        existing = [{"id": "10", "name": "a"}, 11, {"id": 12, "name": "b"}]
+        self.assertEqual(remove_related_product(existing, 10), [11, {"id": 12, "name": "b"}])

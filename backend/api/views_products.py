@@ -5,7 +5,7 @@ import logging
 
 from config.celery import app as celery_app
 from core import tasks
-from django.db.models import Count, Prefetch
+from django.db.models import Count, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -28,6 +28,13 @@ from core.services.product_type_templates import (
     ensure_system_product_type_templates,
     ensure_system_product_type_requirements,
     migrate_client_product_types_to_system,
+)
+from core.services.product_mindmap import (
+    build_all_products_mind_map,
+    build_related_products_mind_map,
+    sync_core_related_for_edge_create,
+    sync_core_related_for_edge_delete,
+    sync_core_related_for_node_delete,
 )
 
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
@@ -329,6 +336,22 @@ class ClientProductViewSet(viewsets.ModelViewSet):
                     payload["product"] = ClientProductSerializer(product).data
         return Response(payload, status=status.HTTP_202_ACCEPTED)
 
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="create-related-map",
+        permission_classes=[IsTenantOwnerOrEditor],
+    )
+    def create_related_map(self, request, pk=None):
+        client = get_active_client(request.user)
+        core_product = get_object_or_404(ClientProduct.objects.select_related("product_type"), pk=pk, owner=client)
+        core_type_name = (getattr(core_product.product_type, "name", None) or "").strip().lower()
+        if core_type_name != "core":
+            raise ValidationError({"detail": "Карту сопутствующих можно создавать только для Core-продукта."})
+        created = build_related_products_mind_map(client, core_product)
+        serializer = MindMapSerializer(created, context=self.get_serializer_context())
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=["get"], url_path="generation-status", permission_classes=[IsTenantMember])
     def generation_status(self, request):
         """Вернуть состояние задачи генерации продукта по task_id."""
@@ -409,6 +432,13 @@ class MindMapViewSet(viewsets.ModelViewSet):
         client = get_active_client(self.request.user)
         serializer.save(owner=client)
 
+    @action(detail=False, methods=["post"], url_path="create-products-map", permission_classes=[IsTenantOwnerOrEditor])
+    def create_products_map(self, request):
+        client = get_active_client(request.user)
+        created = build_all_products_mind_map(client)
+        serializer = MindMapSerializer(created, context=self.get_serializer_context())
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=["post"], url_path="nodes", permission_classes=[IsTenantOwnerOrEditor])
     def create_node(self, request, pk=None):
         mind_map = self.get_object()
@@ -434,6 +464,11 @@ class MindMapViewSet(viewsets.ModelViewSet):
 
         edge = serializer.save(map=mind_map)
         _touch_mind_map(mind_map.id)
+        try:
+            client = get_active_client(request.user)
+            sync_core_related_for_edge_create(client, mind_map, str(edge.from_node_id), str(edge.to_node_id))
+        except Exception:
+            logger.exception("Failed to sync product relations after edge create (map=%s edge=%s)", mind_map.id, edge.id)
         return Response(MindEdgeSerializer(edge).data, status=status.HTTP_201_CREATED)
 
     @action(
@@ -447,10 +482,19 @@ class MindMapViewSet(viewsets.ModelViewSet):
         edge = get_object_or_404(MindEdge.objects.filter(map=mind_map), pk=edge_id)
 
         if request.method.upper() == "DELETE":
+            old_from = str(edge.from_node_id)
+            old_to = str(edge.to_node_id)
             edge.delete()
             _touch_mind_map(mind_map.id)
+            try:
+                client = get_active_client(request.user)
+                sync_core_related_for_edge_delete(client, mind_map, old_from, old_to)
+            except Exception:
+                logger.exception("Failed to sync product relations after edge delete (map=%s edge=%s)", mind_map.id, edge_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
 
+        old_from = str(edge.from_node_id)
+        old_to = str(edge.to_node_id)
         serializer = MindEdgeSerializer(edge, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
@@ -462,9 +506,18 @@ class MindMapViewSet(viewsets.ModelViewSet):
         if to_node and to_node.map_id != mind_map.id:
             return Response({"detail": "to_node_id не относится к этой карте"}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer.save()
+        updated_edge = serializer.save()
         _touch_mind_map(mind_map.id)
-        return Response(MindEdgeSerializer(edge).data, status=status.HTTP_200_OK)
+        try:
+            client = get_active_client(request.user)
+            new_from = str(updated_edge.from_node_id)
+            new_to = str(updated_edge.to_node_id)
+            if old_from != new_from or old_to != new_to:
+                sync_core_related_for_edge_delete(client, mind_map, old_from, old_to)
+                sync_core_related_for_edge_create(client, mind_map, new_from, new_to)
+        except Exception:
+            logger.exception("Failed to sync product relations after edge update (map=%s edge=%s)", mind_map.id, edge_id)
+        return Response(MindEdgeSerializer(updated_edge).data, status=status.HTTP_200_OK)
 
     @action(
         detail=True,
@@ -477,6 +530,14 @@ class MindMapViewSet(viewsets.ModelViewSet):
         node = get_object_or_404(MindNode.objects.filter(map=mind_map), pk=node_id)
 
         if request.method.upper() == "DELETE":
+            connected_edges = list(
+                MindEdge.objects.filter(map=mind_map).filter(Q(from_node_id=node.id) | Q(to_node_id=node.id))
+            )
+            try:
+                client = get_active_client(request.user)
+                sync_core_related_for_node_delete(client, mind_map, node, connected_edges)
+            except Exception:
+                logger.exception("Failed to sync product relations after node delete (map=%s node=%s)", mind_map.id, node.id)
             node.delete()
             _touch_mind_map(mind_map.id)
             return Response(status=status.HTTP_204_NO_CONTENT)

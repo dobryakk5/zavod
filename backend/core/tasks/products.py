@@ -10,9 +10,33 @@ from django.db import transaction
 
 from core.ai_generator import AIContentGenerator
 from core.models import Client, ClientProduct, ProductType, WordstatResult
+from core.services.product_relations import merge_related_products
 from core.services.product_type_templates import ensure_system_product_type_templates
 
 logger = logging.getLogger(__name__)
+
+
+def _attach_related_product_to_core_structure(core_product: ClientProduct, related_product: ClientProduct) -> None:
+    structure = core_product.structure if isinstance(core_product.structure, dict) else {}
+    raw_related = structure.get("related_products")
+    existing_items = raw_related if isinstance(raw_related, list) else []
+
+    related_id = getattr(related_product, "id", None)
+    if related_id is None:
+        return
+
+    product_type = getattr(related_product, "product_type", None)
+    ref: Dict[str, Any] = {
+        "id": related_id,
+        "name": str(getattr(related_product, "name", "") or "").strip(),
+        "product_type_id": getattr(product_type, "id", None),
+        "product_type_name": str(getattr(product_type, "name", "") or "").strip() or None,
+        "short_description": getattr(related_product, "short_description", None),
+    }
+
+    structure["related_products"] = merge_related_products(existing_items, ref)
+    core_product.structure = structure
+    core_product.save(update_fields=["structure"])
 
 
 def _collect_wordstat_favorites(client: Client) -> List[str]:
@@ -329,7 +353,8 @@ def generate_related_product_task(
             return f"{prefix} {cleaned}".strip()
 
         def _create_product():
-            return ClientProduct.objects.create(
+            core_for_update = ClientProduct.objects.select_for_update().get(pk=core_product_id, owner=client)
+            created_product = ClientProduct.objects.create(
                 owner=client,
                 product_type=product_type,
                 name=final_name,
@@ -337,6 +362,9 @@ def generate_related_product_task(
                 packages=product_data.get("packages") if isinstance(product_data.get("packages"), list) else [],
                 structure=product_data.get("structure") if isinstance(product_data.get("structure"), dict) else {},
             )
+            _attach_related_product_to_core_structure(core_for_update, created_product)
+            return created_product
+
         created = _create_client_product_with_sequence_retry(_create_product)
 
         return {"success": True, "product_id": created.id}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
@@ -51,6 +51,25 @@ type MethodRow = { component: string; template: string };
 type LessonFormatRow = { stage: string; percent: number | null };
 type ProgramModuleRow = { module: string; result: string };
 type RelatedProductRef = NonNullable<ProductStructure['related_products']>[number];
+type ProductPayload = {
+  name: string;
+  product_type_id: number | null;
+  short_description: string | null;
+  packages: Array<{ name: string; description?: string | null; price?: number | null }>;
+  structure: Record<string, unknown>;
+};
+type StructurePayloadInput = {
+  audience: AudienceRow[];
+  transformation: TransformationRow[];
+  metrics: MetricRow[];
+  method: MethodRow[];
+  lessonFormat: LessonFormatRow[];
+  programModules: ProgramModuleRow[];
+  packagingName: string;
+  packagingSlogan: string;
+  packagingPromise: string;
+  relatedProducts: RelatedProductRef[];
+};
 
 const toStr = (value: unknown) => (typeof value === 'string' ? value : value == null ? '' : String(value));
 
@@ -149,6 +168,80 @@ const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure =
   };
 };
 
+const serializeRelatedProducts = (items: RelatedProductRef[]) =>
+  items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    product_type_id: item.product_type_id ?? null,
+    product_type_name: item.product_type_name ?? null,
+    short_description: item.short_description ?? null
+  }));
+
+const buildStructurePayload = (input: StructurePayloadInput): ProductStructure => ({
+  audience: input.audience
+    .map((row) => ({ parameter: row.parameter.trim(), value: row.value.trim() }))
+    .filter((row) => row.parameter.length > 0 || row.value.length > 0),
+  transformation: input.transformation
+    .map((row) => ({ was: row.was.trim(), became: row.became.trim() }))
+    .filter((row) => row.was.length > 0 || row.became.length > 0),
+  metrics: input.metrics
+    .map((row) => ({ metric: row.metric.trim(), promise: row.promise.trim() }))
+    .filter((row) => row.metric.length > 0 || row.promise.length > 0),
+  method: input.method
+    .map((row) => ({ component: row.component.trim(), template: row.template.trim() }))
+    .filter((row) => row.component.length > 0 || row.template.length > 0),
+  lesson_format: input.lessonFormat
+    .map((row) => ({
+      stage: row.stage.trim(),
+      percent: typeof row.percent === 'number' && Number.isFinite(row.percent) ? row.percent : null
+    }))
+    .filter((row) => row.stage.length > 0 || row.percent !== null),
+  program_modules: input.programModules
+    .map((row) => ({ module: row.module.trim(), result: row.result.trim() }))
+    .filter((row) => row.module.length > 0 || row.result.length > 0),
+  packaging: {
+    name: input.packagingName.trim() ? input.packagingName.trim() : null,
+    slogan: input.packagingSlogan.trim() ? input.packagingSlogan.trim() : null,
+    promise: input.packagingPromise.trim() ? input.packagingPromise.trim() : null
+  },
+  related_products: serializeRelatedProducts(input.relatedProducts)
+});
+
+const buildPayloadFromProduct = (data: ClientProduct): ProductPayload | null => {
+  const nextName = (data.name ?? '').trim();
+  if (!nextName) return null;
+
+  const normalizedPackages = normalizePackages(data.packages)
+    .map((pkg) => ({
+      name: pkg.name.trim(),
+      description: (pkg.description ?? '').trim() || null,
+      price: typeof pkg.price === 'number' && Number.isFinite(pkg.price) ? pkg.price : null
+    }))
+    .filter((pkg) => pkg.name.length > 0);
+
+  const structure = normalizeStructure(data.structure);
+  const structurePayload = buildStructurePayload({
+    audience: structure.audience ?? [],
+    transformation: structure.transformation ?? [],
+    metrics: structure.metrics ?? [],
+    method: structure.method ?? [],
+    lessonFormat: structure.lesson_format ?? [],
+    programModules: structure.program_modules ?? [],
+    packagingName: structure.packaging?.name ?? '',
+    packagingSlogan: structure.packaging?.slogan ?? '',
+    packagingPromise: structure.packaging?.promise ?? '',
+    relatedProducts: structure.related_products ?? []
+  });
+
+  return {
+    name: nextName,
+    product_type_id: data.product_type_id ?? null,
+    short_description: (data.short_description ?? '').trim() ? (data.short_description ?? '').trim() : null,
+    packages: normalizedPackages,
+    structure: structurePayload as unknown as Record<string, unknown>
+  };
+};
+
 export default function ProductPage({ params }: ProductPageProps) {
   const router = useRouter();
   const { canEdit } = useRole();
@@ -157,6 +250,11 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [product, setProduct] = useState<ClientProduct | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const lastSavedHashRef = useRef<string>('');
+  const pendingPayloadRef = useRef<ProductPayload | null>(null);
+  const dirtyRef = useRef(false);
+  const autoSavingRef = useRef(false);
+  const lastEditAtRef = useRef(0);
 
   const [productName, setProductName] = useState('');
   const [productTypeId, setProductTypeId] = useState<number | null>(null);
@@ -178,6 +276,7 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [createRelatedTypeId, setCreateRelatedTypeId] = useState<number | null>(null);
   const [createRelatedShortDescription, setCreateRelatedShortDescription] = useState('');
   const [creatingRelated, setCreatingRelated] = useState(false);
+  const [creatingRelatedMap, setCreatingRelatedMap] = useState(false);
 
   const coreTypeId = useMemo(() => {
     const core = types.find((t) => t.name.trim().toLowerCase() === 'core');
@@ -238,6 +337,10 @@ export default function ProductPage({ params }: ProductPageProps) {
       setPackagingSlogan(structure.packaging?.slogan ?? '');
       setPackagingPromise(structure.packaging?.promise ?? '');
       setRelatedProducts(structure.related_products ?? []);
+      const payload = buildPayloadFromProduct(data);
+      pendingPayloadRef.current = payload;
+      lastSavedHashRef.current = payload ? JSON.stringify(payload) : '';
+      dirtyRef.current = false;
     } catch (err) {
       console.error('Failed to load product', err);
       toast.error('Не удалось загрузить продукт');
@@ -309,7 +412,7 @@ export default function ProductPage({ params }: ProductPageProps) {
       setCreateRelatedName('');
       setCreateRelatedTypeId(null);
       setCreateRelatedShortDescription('');
-      toast.success('Сопутствующий продукт создан и добавлен в список. Нажмите «Сохранить», чтобы привязка к Core сохранилась.');
+      toast.success('Сопутствующий продукт создан и добавлен в список. Привязка к Core сохранится автоматически после завершения создания.');
     } catch (err) {
       console.error('Failed to create related product', err);
       if (err instanceof ApiError) {
@@ -328,63 +431,150 @@ export default function ProductPage({ params }: ProductPageProps) {
     }
   };
 
-  const handleSave = async () => {
-    if (!canEdit || productId === null) return;
-    const nextName = productName.trim();
-    if (!nextName) return;
-
-    const normalizedPackages = packages
-      .map((pkg) => ({
-        name: pkg.name.trim(),
-        description: (pkg.description ?? '').trim() || null,
-        price: typeof pkg.price === 'number' && Number.isFinite(pkg.price) ? pkg.price : null
-      }))
-      .filter((pkg) => pkg.name.length > 0);
-
-    const structure: ProductStructure = {
-      audience: audience
-        .map((row) => ({ parameter: row.parameter.trim(), value: row.value.trim() }))
-        .filter((row) => row.parameter.length > 0 || row.value.length > 0),
-      transformation: transformation
-        .map((row) => ({ was: row.was.trim(), became: row.became.trim() }))
-        .filter((row) => row.was.length > 0 || row.became.length > 0),
-      metrics: metrics
-        .map((row) => ({ metric: row.metric.trim(), promise: row.promise.trim() }))
-        .filter((row) => row.metric.length > 0 || row.promise.length > 0),
-      method: method
-        .map((row) => ({ component: row.component.trim(), template: row.template.trim() }))
-        .filter((row) => row.component.length > 0 || row.template.length > 0),
-      lesson_format: lessonFormat
-        .map((row) => ({
-          stage: row.stage.trim(),
-          percent: typeof row.percent === 'number' && Number.isFinite(row.percent) ? row.percent : null
-        }))
-        .filter((row) => row.stage.length > 0 || row.percent !== null),
-      program_modules: programModules
-        .map((row) => ({ module: row.module.trim(), result: row.result.trim() }))
-        .filter((row) => row.module.length > 0 || row.result.length > 0),
-      packaging: {
-        name: packagingName.trim() ? packagingName.trim() : null,
-        slogan: packagingSlogan.trim() ? packagingSlogan.trim() : null,
-        promise: packagingPromise.trim() ? packagingPromise.trim() : null
-      },
-      related_products: relatedProducts.map((item) => ({
-        id: item.id,
-        name: item.name,
-        product_type_id: item.product_type_id ?? null,
-        product_type_name: item.product_type_name ?? null,
-        short_description: item.short_description ?? null
-      })),
-    };
-
-    setSaving(true);
+  const handleCreateRelatedMap = async () => {
+    if (!canEdit || creatingRelatedMap || productId == null) return;
+    setCreatingRelatedMap(true);
     try {
-      const updated = await clientProductsApi.update(productId, {
+      const created = await clientProductsApi.createRelatedMap(productId);
+      router.push(`/map/${created.id}`);
+    } catch (err) {
+      console.error('Failed to create related products map', err);
+      toast.error('Не удалось создать карту сопутствующих продуктов');
+    } finally {
+      setCreatingRelatedMap(false);
+    }
+  };
+
+  const buildProductPayload = useCallback(
+    (override?: { relatedProducts?: RelatedProductRef[] }): ProductPayload | null => {
+      const nextName = productName.trim();
+      if (!nextName) return null;
+
+      const normalizedPackages = packages
+        .map((pkg) => ({
+          name: pkg.name.trim(),
+          description: (pkg.description ?? '').trim() || null,
+          price: typeof pkg.price === 'number' && Number.isFinite(pkg.price) ? pkg.price : null
+        }))
+        .filter((pkg) => pkg.name.length > 0);
+
+      const structure = buildStructurePayload({
+        audience,
+        transformation,
+        metrics,
+        method,
+        lessonFormat,
+        programModules,
+        packagingName,
+        packagingSlogan,
+        packagingPromise,
+        relatedProducts: override?.relatedProducts ?? relatedProducts
+      });
+
+      return {
         name: nextName,
         product_type_id: productTypeId,
         short_description: shortDescription.trim() ? shortDescription.trim() : null,
         packages: normalizedPackages,
         structure: structure as unknown as Record<string, unknown>
+      };
+    },
+    [
+      productName,
+      productTypeId,
+      shortDescription,
+      packages,
+      audience,
+      transformation,
+      metrics,
+      method,
+      lessonFormat,
+      programModules,
+      packagingName,
+      packagingSlogan,
+      packagingPromise,
+      relatedProducts
+    ]
+  );
+
+  useEffect(() => {
+    if (productId === null) return;
+    const payload = buildProductPayload();
+    pendingPayloadRef.current = payload;
+    if (!payload) {
+      dirtyRef.current = false;
+      return;
+    }
+    const hash = JSON.stringify(payload);
+    dirtyRef.current = hash !== lastSavedHashRef.current;
+    lastEditAtRef.current = Date.now();
+  }, [buildProductPayload, productId]);
+
+  useEffect(() => {
+    if (productId === null || !canEdit) return;
+    const intervalId = window.setInterval(async () => {
+      if (saving || loading) return;
+      if (autoSavingRef.current) return;
+      if (!dirtyRef.current) return;
+      if (Date.now() - lastEditAtRef.current < 2000) return;
+      const payload = pendingPayloadRef.current;
+      if (!payload) return;
+      autoSavingRef.current = true;
+      try {
+        const updated = await clientProductsApi.update(productId, payload);
+        lastSavedHashRef.current = JSON.stringify(payload);
+        dirtyRef.current = false;
+        setProduct((prev) => (prev ? { ...prev, ...updated } : updated));
+      } catch (err) {
+        console.error('Failed to auto-save product', err);
+      } finally {
+        autoSavingRef.current = false;
+      }
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [productId, canEdit, saving, loading]);
+
+  const handleRemoveRelatedProduct = async (id: number) => {
+    if (!canEdit || saving || productId === null) return;
+    if (!confirm('Убрать продукт из сопутствующих?')) return;
+
+    const prevRelated = relatedProducts;
+    const nextRelated = relatedProducts.filter((p) => p.id !== id);
+    setRelatedProducts(nextRelated);
+    setSaving(true);
+    try {
+      const payload = buildProductPayload({ relatedProducts: nextRelated });
+      if (!payload) {
+        throw new Error('Product payload is empty');
+      }
+      const updated = await clientProductsApi.update(productId, payload);
+      setProduct((prev) => (prev ? { ...prev, structure: updated.structure } : prev));
+      const updatedStructure = normalizeStructure(updated.structure);
+      setRelatedProducts(updatedStructure.related_products ?? nextRelated);
+      lastSavedHashRef.current = JSON.stringify(payload);
+      dirtyRef.current = false;
+    } catch (err) {
+      console.error('Failed to remove related product', err);
+      toast.error('Не удалось удалить сопутствующий продукт');
+      setRelatedProducts(prevRelated);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!canEdit || productId === null) return;
+    const payload = buildProductPayload();
+    if (!payload) return;
+
+    setSaving(true);
+    try {
+      const updated = await clientProductsApi.update(productId, {
+        name: payload.name,
+        product_type_id: payload.product_type_id,
+        short_description: payload.short_description,
+        packages: payload.packages,
+        structure: payload.structure
       });
       setProduct(updated);
       setPackages(normalizePackages(updated.packages));
@@ -399,6 +589,9 @@ export default function ProductPage({ params }: ProductPageProps) {
       setPackagingSlogan(updatedStructure.packaging?.slogan ?? '');
       setPackagingPromise(updatedStructure.packaging?.promise ?? '');
       setRelatedProducts(updatedStructure.related_products ?? []);
+      lastSavedHashRef.current = JSON.stringify(payload);
+      pendingPayloadRef.current = payload;
+      dirtyRef.current = false;
       toast.success('Продукт сохранён');
     } catch (err) {
       console.error('Failed to update product', err);
@@ -512,7 +705,7 @@ export default function ProductPage({ params }: ProductPageProps) {
           <div className="space-y-1">
             <div className="text-sm font-medium">Сопутствующие продукты</div>
             <div className="text-xs text-muted-foreground">
-              Создавайте продукты других типов из Core. После добавления нажмите «Сохранить», чтобы привязка сохранилась.
+              Создавайте продукты других типов из Core. Привязка к Core сохраняется автоматически после создания.
             </div>
           </div>
 
@@ -612,8 +805,7 @@ export default function ProductPage({ params }: ProductPageProps) {
                                 className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (!confirm('Убрать продукт из сопутствующих?')) return;
-                                  setRelatedProducts((prev) => prev.filter((p) => p.id !== item.id));
+                                  void handleRemoveRelatedProduct(item.id);
                                 }}
                                 disabled={saving}
                                 aria-label="Убрать из сопутствующих"
@@ -629,6 +821,17 @@ export default function ProductPage({ params }: ProductPageProps) {
                   })}
                 </TableBody>
               </Table>
+            </div>
+          )}
+          {canEdit && (
+            <div className="flex justify-start">
+              <Button
+                onClick={() => void handleCreateRelatedMap()}
+                disabled={creatingRelatedMap}
+                className="bg-black text-white hover:bg-black/90"
+              >
+                {creatingRelatedMap ? 'Создание карты…' : 'Создать карту сопутствующих'}
+              </Button>
             </div>
           )}
         </div>
