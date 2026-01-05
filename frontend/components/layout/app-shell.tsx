@@ -82,7 +82,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Button>
           </SheetTrigger>
           <SheetContent side="left" className="flex w-72 flex-col gap-4 p-4">
-            <div className="text-xl font-bold">Контент-завод</div>
+            <div className="text-xl font-bold">ИИ маркетинг</div>
             <nav className="flex flex-col gap-1">
               {navItems.map((item) => {
                 const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -116,7 +116,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </header>
 
       <aside className="hidden w-64 flex-col gap-4 border-r bg-muted/30 p-4 md:flex">
-        <div className="text-xl font-bold">Контент-завод</div>
+        <div className="text-xl font-bold">Fibonatty</div>
         <nav className="flex flex-col gap-1">{navLinks}</nav>
         <div className="mt-auto">
           <Button variant="outline" className="w-full" onClick={onLogout}>

@@ -1,16 +1,36 @@
 import { apiFetch } from '../api';
-import type { Post, PostDetail, TaskResponse, GenerateVideoRequest, QuickPublishRequest } from '../types';
+import type {
+  PaginatedResponse,
+  Post,
+  PostDetail,
+  TaskResponse,
+  GenerateVideoRequest,
+  QuickPublishRequest,
+} from '../types';
 
 export const postsApi = {
   /**
-   * List all posts for the current client
+   * List posts for the current client (paginated)
    */
-  list: async (filters?: { status?: string; platform?: string }): Promise<Post[]> => {
+  list: async (filters?: { status?: string; platform?: string; page?: number; pageSize?: number }): Promise<PaginatedResponse<Post>> => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.platform) params.set('platform', filters.platform);
+    if (filters?.page) params.set('page', filters.page.toString());
+    if (filters?.pageSize) params.set('page_size', filters.pageSize.toString());
+    const query = params.toString();
+    return apiFetch<PaginatedResponse<Post>>(`/posts/${query ? `?${query}` : ''}`);
+  },
+
+  /**
+   * List posts without pagination (legacy endpoint)
+   */
+  listAll: async (filters?: { status?: string; platform?: string }): Promise<Post[]> => {
     const params = new URLSearchParams();
     if (filters?.status) params.set('status', filters.status);
     if (filters?.platform) params.set('platform', filters.platform);
     const query = params.toString();
-    return apiFetch<Post[]>(`/posts/${query ? `?${query}` : ''}`);
+    return apiFetch<Post[]>(`/posts-list/${query ? `?${query}` : ''}`);
   },
 
   /**

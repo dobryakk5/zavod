@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from config.celery import app as celery_app
@@ -24,6 +25,13 @@ logger = logging.getLogger(__name__)
 
 MAX_WEEKLY_POSTS = 21
 MEDIA_GENERATION_COOLDOWN = timedelta(hours=1)
+POSTS_PAGE_SIZE = 25
+
+
+class PostsPagination(PageNumberPagination):
+    page_size = POSTS_PAGE_SIZE
+    page_size_query_param = "page_size"
+    max_page_size = POSTS_PAGE_SIZE
 
 
 def _cooldown_remaining(last_triggered_at):
@@ -79,6 +87,7 @@ class PostViewSet(viewsets.ModelViewSet):
     """
 
     permission_classes = [IsTenantMember]
+    pagination_class = PostsPagination
 
     def get_permissions(self):
         """Different permissions for different actions"""
@@ -94,7 +103,7 @@ class PostViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
-        return (
+        queryset = (
             Post.objects.filter(client=client)
             .annotate(
                 images_count=Count("images", distinct=True),
@@ -103,6 +112,16 @@ class PostViewSet(viewsets.ModelViewSet):
             .prefetch_related("schedules__social_account")
             .order_by("-created_at")
         )
+
+        status_param = self.request.query_params.get("status")
+        platform_param = self.request.query_params.get("platform")
+
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        if platform_param:
+            queryset = queryset.filter(schedules__social_account__platform=platform_param)
+
+        return queryset.distinct()
 
     def perform_create(self, serializer):
         """Automatically set client when creating post"""
@@ -432,4 +451,3 @@ class PostToneViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(client=None)
-

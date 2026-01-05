@@ -278,6 +278,10 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
   const zoomTransform = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const dragOffset = useRef(new Map<string, { dx: number; dy: number }>());
+  const dragGroupRef = useRef<{
+    ids: Set<string>;
+    positions: Map<string, { x: number; y: number }>;
+  } | null>(null);
   const draggingLinkRef = useRef<DraggingLink>(null);
   const tempToServerNodeIdRef = useRef(new Map<string, string>());
   const flushTimerRef = useRef<number | null>(null);
@@ -1683,6 +1687,36 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
     };
   }, [hoverLockedNodeId]);
 
+  const childrenBySource = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const edge of edges) {
+      const list = map.get(edge.source) ?? [];
+      list.push(edge.target);
+      map.set(edge.source, list);
+    }
+    return map;
+  }, [edges]);
+
+  const collectDescendants = useCallback(
+    (rootId: string) => {
+      const visited = new Set<string>();
+      const stack = [rootId];
+      while (stack.length) {
+        const current = stack.pop();
+        if (!current || visited.has(current)) continue;
+        visited.add(current);
+        const children = childrenBySource.get(current);
+        if (children) {
+          for (const child of children) {
+            if (!visited.has(child)) stack.push(child);
+          }
+        }
+      }
+      return visited;
+    },
+    [childrenBySource]
+  );
+
   useEffect(() => {
     if (!innerRef.current || !svgRef.current) return;
 
@@ -1694,6 +1728,15 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
         const [sx, sy] = d3.pointer(event.sourceEvent ?? event, svgEl);
         const [x, y] = zoomTransform.current.invert([sx, sy]);
         dragOffset.current.set(d.id, { dx: x - d.x, dy: y - d.y });
+        const groupIds = collectDescendants(d.id);
+        const basePositions = new Map(nodesWithSize.map((node) => [node.id, { x: node.x, y: node.y }]));
+        const positions = new Map<string, { x: number; y: number }>();
+        for (const id of groupIds) {
+          const base = basePositions.get(id);
+          if (base) positions.set(id, base);
+        }
+        if (!positions.has(d.id)) positions.set(d.id, { x: d.x, y: d.y });
+        dragGroupRef.current = { ids: groupIds, positions };
         d3.select(this).style('cursor', 'grabbing');
       })
       .on('drag', function (event, d) {
@@ -1703,7 +1746,22 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
         const offset = dragOffset.current.get(d.id) ?? { dx: 0, dy: 0 };
         const nextX = x - offset.dx;
         const nextY = y - offset.dy;
-        setNodes((prev) => prev.map((node) => (node.id === d.id ? { ...node, x: nextX, y: nextY } : node)));
+        const group = dragGroupRef.current;
+        if (!group) {
+          setNodes((prev) => prev.map((node) => (node.id === d.id ? { ...node, x: nextX, y: nextY } : node)));
+          return;
+        }
+        const base = group.positions.get(d.id) ?? { x: d.x, y: d.y };
+        const deltaX = nextX - base.x;
+        const deltaY = nextY - base.y;
+        setNodes((prev) =>
+          prev.map((node) => {
+            if (!group.ids.has(node.id)) return node;
+            const origin = group.positions.get(node.id);
+            if (!origin) return node;
+            return { ...node, x: origin.x + deltaX, y: origin.y + deltaY };
+          })
+        );
       })
       .on('end', function (event, d) {
         event.sourceEvent?.stopPropagation();
@@ -1714,8 +1772,30 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
         const nextY = y - offset.dy;
         dragOffset.current.delete(d.id);
         console.debug('Node position changed', d.id, { x: nextX, y: nextY, mapId });
-        setNodes((prev) => prev.map((node) => (node.id === d.id ? { ...node, x: nextX, y: nextY } : node)));
-        queuePosition(d.id, nextX, nextY);
+        const group = dragGroupRef.current;
+        if (!group) {
+          setNodes((prev) => prev.map((node) => (node.id === d.id ? { ...node, x: nextX, y: nextY } : node)));
+          queuePosition(d.id, nextX, nextY);
+          d3.select(this).style('cursor', 'grab');
+          return;
+        }
+        const base = group.positions.get(d.id) ?? { x: d.x, y: d.y };
+        const deltaX = nextX - base.x;
+        const deltaY = nextY - base.y;
+        setNodes((prev) =>
+          prev.map((node) => {
+            if (!group.ids.has(node.id)) return node;
+            const origin = group.positions.get(node.id);
+            if (!origin) return node;
+            return { ...node, x: origin.x + deltaX, y: origin.y + deltaY };
+          })
+        );
+        for (const id of group.ids) {
+          const origin = group.positions.get(id);
+          if (!origin) continue;
+          queuePosition(id, origin.x + deltaX, origin.y + deltaY);
+        }
+        dragGroupRef.current = null;
         d3.select(this).style('cursor', 'grab');
       });
 
@@ -1730,7 +1810,7 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
     return () => {
       selection.on('.drag', null);
     };
-  }, [nodesWithSize, mapId, queuePosition]);
+  }, [collectDescendants, nodesWithSize, mapId, queuePosition]);
 
   const isDraggingLink = draggingLink !== null;
 

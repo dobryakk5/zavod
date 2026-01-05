@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState, type MouseEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   analyticsApi,
   type ChannelAnalysisRecord,
@@ -323,7 +323,6 @@ function WeeklySourcesTab() {
 function WebsiteTab() {
   const { canEdit } = useRole();
   const router = useRouter();
-  const [hydrated, setHydrated] = useState(false);
   const [baseUrl, setBaseUrl] = useState('');
   const [maxDepth, setMaxDepth] = useState(3);
   const [maxPages, setMaxPages] = useState(100);
@@ -332,10 +331,6 @@ function WebsiteTab() {
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [rerunId, setRerunId] = useState<number | null>(null);
-
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
 
   const loadHistory = async (options?: { silent?: boolean }) => {
     if (!options?.silent) setLoading(true);
@@ -396,6 +391,11 @@ function WebsiteTab() {
     router.push(`/map/${scan.mind_map_id}`);
   };
 
+  const handleOpenList = (scanId: number) => {
+    if (typeof window === 'undefined') return;
+    window.open(`/analytics/website/${scanId}/list`, '_blank', 'noopener,noreferrer');
+  };
+
   const handleDelete = async (scanId: number) => {
     if (!canEdit || deletingId === scanId) return;
     const confirmed =
@@ -433,30 +433,30 @@ function WebsiteTab() {
   };
 
   const formatScanProgress = (scan: WebsiteScan) => {
-    const total = typeof scan.pages_total === 'number' && scan.pages_total > 0 ? scan.pages_total : null;
+    const total =
+      typeof scan.pages_total === 'number' && scan.pages_total > 0
+        ? scan.pages_total
+        : typeof scan.max_pages === 'number' && scan.max_pages > 0
+          ? scan.max_pages
+          : null;
     const done = typeof scan.pages_count === 'number' && scan.pages_count >= 0 ? scan.pages_count : 0;
-    const startedAt = scan.started_at || scan.created_at;
 
-    if (!total) return { label: `${scan.progress}%`, percent: scan.progress };
+    if (!total) return { label: `${done}`, percent: scan.progress };
 
     const percent =
       scan.status === 'completed'
         ? 100
         : Math.min(99, Math.max(0, Math.round((done / Math.max(1, total)) * 100)));
 
-    let etaSeconds: number | null = null;
-    if (hydrated && scan.status === 'in_progress') {
-      const elapsedSeconds = Math.max(0, (Date.now() - new Date(startedAt).getTime()) / 1000);
-      if (done < 2) {
-        etaSeconds = Math.round(total * 2);
-      } else {
-        const avg = elapsedSeconds / Math.max(1, done);
-        etaSeconds = Math.max(0, Math.round(avg * Math.max(0, total - done)));
-      }
+    let etaMinutes: number | null = null;
+    if (scan.status === 'in_progress') {
+      const remainingPages = Math.max(0, total - done);
+      const remainingSeconds = remainingPages * 3;
+      etaMinutes = Math.max(0, Math.ceil(remainingSeconds / 60));
     }
 
     const baseLabel = `${done}/${total}`;
-    if (etaSeconds !== null) return { label: `${baseLabel} • Осталось секунд: ~${etaSeconds}`, percent };
+    if (etaMinutes !== null) return { label: `${baseLabel} • Осталось минут: ~${etaMinutes}`, percent };
     return { label: baseLabel, percent };
   };
 
@@ -539,10 +539,10 @@ function WebsiteTab() {
               <TableHeader>
                 <TableRow className="bg-gray-50">
                   <TableHead>Сайт</TableHead>
-                  <TableHead className="hidden md:table-cell">Страниц</TableHead>
-                  <TableHead className="hidden md:table-cell">Прогресс</TableHead>
+                  <TableHead className="w-40">Открыть</TableHead>
+                  <TableHead className="hidden md:table-cell w-40">Прогресс</TableHead>
                   <TableHead>Создан</TableHead>
-                  <TableHead className="w-40 text-right">Действия</TableHead>
+                  <TableHead className="w-28 text-right">Действия</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -550,11 +550,7 @@ function WebsiteTab() {
                   (() => {
                     const progressInfo = formatScanProgress(item);
                     return (
-                  <TableRow
-                    key={item.id}
-                    className={item.status === 'completed' && item.mind_map_id ? 'cursor-pointer' : ''}
-                    onClick={() => handleOpenMindMap(item)}
-                  >
+                  <TableRow key={item.id}>
                     <TableCell className="space-y-1">
                       <div className="font-medium text-gray-900">{item.base_url}</div>
                       {item.status === 'failed' && item.error?.trim() ? (
@@ -563,27 +559,8 @@ function WebsiteTab() {
                         <div className="text-xs text-gray-500">{websiteScanStatusLabels[item.status]}</div>
                       )}
                     </TableCell>
-                    <TableCell className="hidden md:table-cell text-sm text-gray-600">
-                      {item.pages_total ? `${item.pages_count ?? 0}/${item.pages_total}` : item.pages_count ?? '—'}
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell">
-                      {item.status === 'failed' ? (
-                        <div className="flex flex-col gap-1">
-                          <Progress value={0} intent="error" />
-                          <span className="text-xs text-gray-500">&nbsp;</span>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col gap-1">
-                          <Progress value={progressInfo.percent} intent="default" />
-                          <span className="text-xs text-gray-500">
-                            {progressInfo.label}
-                          </span>
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm text-gray-600">{new Date(item.created_at).toLocaleString('ru-RU')}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
+                    <TableCell>
+                      <div className="flex items-center gap-2">
                         <Button
                           variant="outline"
                           size="sm"
@@ -593,8 +570,39 @@ function WebsiteTab() {
                             handleOpenMindMap(item);
                           }}
                         >
-                          Открыть
+                          Карта
                         </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={item.status !== 'completed'}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenList(item.id);
+                          }}
+                        >
+                          Список
+                        </Button>
+                      </div>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell w-40">
+                      {item.status === 'failed' ? (
+                        <div className="flex max-w-[160px] flex-col gap-1">
+                          <Progress value={0} intent="error" />
+                          <span className="text-xs text-gray-500">&nbsp;</span>
+                        </div>
+                      ) : (
+                        <div className="flex max-w-[160px] flex-col gap-1">
+                          <Progress value={progressInfo.percent} intent="default" />
+                          <span className="text-xs text-gray-500">
+                            {progressInfo.label}
+                          </span>
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-sm text-gray-600">{new Date(item.created_at).toLocaleDateString('ru-RU')}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
                         <Button
                           variant="ghost"
                           size="icon"
@@ -645,8 +653,18 @@ export default function AnalyticsPage() {
   const [history, setHistory] = useState<ChannelAnalysisRecord[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<'single' | 'weekly' | 'website'>('single');
+  const searchParams = useSearchParams();
+  const initialTab = useMemo(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'single' || tab === 'weekly' || tab === 'website') return tab;
+    return 'single';
+  }, [searchParams]);
+  const [activeTab, setActiveTab] = useState<'single' | 'weekly' | 'website'>(initialTab);
   const router = useRouter();
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   useEffect(() => {
     if (activeTab !== 'single') return;

@@ -401,6 +401,10 @@ class WebsiteScanPage(models.Model):
     meta_description = models.TextField(blank=True)
     headings = models.JSONField(default=dict, blank=True)
     wordstats = models.JSONField(default=list, blank=True)
+    cluster_level_1 = models.CharField(max_length=255, blank=True, default="")
+    cluster_level_2 = models.CharField(max_length=255, blank=True, default="")
+    cluster_level_3 = models.CharField(max_length=255, blank=True, default="")
+    cluster_source = models.CharField(max_length=32, blank=True, default="")
     can_fetch_all = models.BooleanField(default=True)
     can_fetch_googlebot = models.BooleanField(default=True)
     is_helper = models.BooleanField(default=False)
@@ -1154,9 +1158,11 @@ class ArticleBlock(models.Model):
     order = models.PositiveIntegerField(default=0)
     block_key = models.CharField(max_length=120, help_text="Системный ключ блока (например: Блок «Типичные ошибки»)")
 
-    subquery_h2 = models.CharField(max_length=300, blank=True)
+    h2_title = models.CharField(max_length=300, blank=True)
+    subquery = models.CharField(max_length=300, blank=True)
     micro_intent = models.CharField(max_length=300, blank=True)
     keywords = models.JSONField(default=list, blank=True)
+    key_points = models.TextField(blank=True)
 
     prompt_template = models.TextField(
         blank=True,

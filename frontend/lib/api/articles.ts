@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { Article, ArticleBlock } from '../types';
+import type { Article, ArticleBlock, TaskResponse } from '../types';
 
 export const articlesApi = {
   list: async (): Promise<Article[]> => {
@@ -72,8 +72,15 @@ export const articlesApi = {
     });
   },
 
-  generateSeoBlocks: async (id: number): Promise<Article> => {
-    return apiFetch<Article>(`/articles/${id}/generate_seo_blocks/`, {
+  generateSeoBlocks: async (id: number): Promise<TaskResponse> => {
+    return apiFetch<TaskResponse>(`/articles/${id}/generate_seo_blocks/`, {
+      method: 'POST',
+      body: {},
+    });
+  },
+
+  generateBlocks: async (id: number): Promise<TaskResponse> => {
+    return apiFetch<TaskResponse>(`/articles/${id}/generate_blocks/`, {
       method: 'POST',
       body: {},
     });
@@ -94,9 +101,11 @@ export const articlesApi = {
     articleId: number,
     payload: {
       block_id: number;
-      subquery_h2?: string;
+      h2_title?: string;
+      subquery?: string;
       micro_intent?: string;
       keywords?: string[];
+      key_points?: string;
       content?: string;
       prompt_template?: string;
     }
@@ -107,10 +116,14 @@ export const articlesApi = {
     });
   },
 
-  generateBlock: async (articleId: number, blockId: number): Promise<ArticleBlock> => {
-    return apiFetch<ArticleBlock>(`/articles/${articleId}/blocks_generate/`, {
+  generateBlock: async (articleId: number, blockId: number): Promise<TaskResponse> => {
+    return apiFetch<TaskResponse>(`/articles/${articleId}/blocks_generate/`, {
       method: 'POST',
       body: { block_id: blockId },
     });
+  },
+
+  generationStatus: async (taskId: string): Promise<TaskResponse> => {
+    return apiFetch<TaskResponse>(`/articles/generation-status/?task_id=${encodeURIComponent(taskId)}`);
   },
 };

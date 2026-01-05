@@ -41,7 +41,7 @@ from config.celery import app as celery_app
 
 from core.audience_profiles import merge_audience_profiles
 from core.ai_generator import AIContentGenerator
-from core.article_prompt_templates import ARTICLE_BLOCK_PROMPTS
+from core.services.article_blocks import get_system_block_prompt_template, sync_blocks_from_seo_blocks
 from core.models import (
     Article,
     ArticleBlock,
@@ -1358,23 +1358,37 @@ def _build_article_outline(
         entry = level3.get(block_title)
         if not isinstance(entry, dict):
             return False
-        subquery = str(entry.get("subquery_h2") or "").strip()
-        if subquery:
+        h2_title = str(entry.get("h2_title") or entry.get("subquery_h2") or "").strip()
+        subquery = str(entry.get("subquery") or "").strip()
+        if h2_title:
+            lines.append(f"## {h2_title}")
+        elif subquery:
             lines.append(f"## {subquery}")
         keywords = entry.get("keywords") if isinstance(entry.get("keywords"), list) else []
         keyword_values = [str(item).strip() for item in keywords if str(item).strip()]
         if keyword_values:
             lines.append(f"- ключи: {', '.join(keyword_values)}")
-        micro_intent = str(entry.get("micro_intent") or "").strip()
+        if subquery:
+            lines.append(f"- подзапрос: {subquery}")
+        micro_intent = str(entry.get("intent") or entry.get("micro_intent") or "").strip()
         if micro_intent:
-            lines.append(f"- микро-интент: {micro_intent}")
+            lines.append(f"- интент: {micro_intent}")
+        raw_key_points = entry.get("key_points")
+        if isinstance(raw_key_points, list):
+            key_points = [str(item).strip() for item in raw_key_points if str(item).strip()]
+            if key_points:
+                lines.append(f"- ключевые смыслы: {', '.join(key_points)}")
+        elif isinstance(raw_key_points, str) and raw_key_points.strip():
+            lines.append(f"- ключевые смыслы: {raw_key_points.strip()}")
         lines.append(f"- ответ: {answer_hint}")
         return True
 
     def _append_level3_placeholder(answer_hint: str):
-        lines.append("## (подзапрос)")
+        lines.append("## (H2 заголовок)")
+        lines.append("- подзапрос: (конкретный вопрос пользователя)")
         lines.append("- ключи: (1–2 ключа из Wordstat избранного)")
-        lines.append("- микро-интент: (какой микро-интент закрываем)")
+        lines.append("- интент: (какой когнитивный запрос закрываем)")
+        lines.append("- ключевые смыслы: (3–6 пунктов)")
         lines.append(f"- ответ: {answer_hint}")
 
     lines.append("## Блок «Почему проблема возникает»")
@@ -1439,6 +1453,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
             "save_choices",
             "save_seo_blocks",
             "generate_seo_blocks",
+            "generate_blocks",
             "update_outline",
             "update_wordstat",
             "update_audience",
@@ -1462,82 +1477,10 @@ class ArticleViewSet(viewsets.ModelViewSet):
         Системный промпт для блока (общий для всех клиентов/статей).
         Редактируется в Django Admin в модели ArticleBlockPromptTemplate.
         """
-        from core.models import ArticleBlockPromptTemplate
-
-        row = ArticleBlockPromptTemplate.objects.filter(block_key=block_key).only("prompt_template").first()
-        if row and (row.prompt_template or "").strip():
-            return row.prompt_template
-        return ARTICLE_BLOCK_PROMPTS.get(block_key, "")
+        return get_system_block_prompt_template(block_key)
 
     def _sync_blocks_from_seo_blocks(self, article: Article):
-        block_titles = [
-            "Вступление",
-            "Блок «Почему проблема возникает»",
-            "Блок «Типичные ошибки»",
-            "Блок «Правильная логика / система»",
-            "Блок «Пошаговая модель»",
-            "Блок «Пример / кейс / сценарий»",
-            "Блок «Что делать дальше»",
-            "Мягкий переход к продукту:",
-            "Закрывающее утверждение",
-        ]
-        level3 = article.seo_blocks if isinstance(article.seo_blocks, dict) else {}
-
-        for order, block_key in enumerate(block_titles, start=1):
-            entry = level3.get(block_key) if isinstance(level3, dict) else None
-            if not isinstance(entry, dict):
-                entry = {}
-            subquery_h2 = str(entry.get("subquery_h2") or "")[:300]
-            micro_intent = str(entry.get("micro_intent") or "")[:300]
-            keywords = entry.get("keywords") if isinstance(entry.get("keywords"), list) else []
-            keywords_norm = [str(item).strip() for item in keywords if str(item).strip()][:2]
-
-            block, created = ArticleBlock.objects.get_or_create(
-                article=article,
-                block_key=block_key,
-                defaults={
-                    "order": order,
-                    "subquery_h2": subquery_h2,
-                    "micro_intent": micro_intent,
-                    "keywords": keywords_norm,
-                    "prompt_template": "",
-                    "status": "blueprint_ready" if subquery_h2 or micro_intent or keywords_norm else "draft",
-                },
-            )
-            if created:
-                continue
-
-            changed = False
-            if block.order != order:
-                block.order = order
-                changed = True
-            if block.subquery_h2 != subquery_h2:
-                block.subquery_h2 = subquery_h2
-                changed = True
-            if block.micro_intent != micro_intent:
-                block.micro_intent = micro_intent
-                changed = True
-            if (block.keywords or []) != keywords_norm:
-                block.keywords = keywords_norm
-                changed = True
-
-            if not block.content.strip() and block.status != "failed":
-                desired_status = "blueprint_ready" if subquery_h2 or micro_intent or keywords_norm else "draft"
-                if block.status != desired_status:
-                    block.status = desired_status
-                    changed = True
-
-            if changed:
-                block.save(
-                    update_fields=[
-                        "order",
-                        "subquery_h2",
-                        "micro_intent",
-                        "keywords",
-                        "status",
-                        "updated_at",
-                    ]
-                )
+        sync_blocks_from_seo_blocks(article)
 
     @action(detail=True, methods=["get"])
     def blocks(self, request, pk=None):
@@ -1557,16 +1500,24 @@ class ArticleViewSet(viewsets.ModelViewSet):
 
         block = get_object_or_404(ArticleBlock, id=block_id_int, article=article)
 
-        if "subquery_h2" in request.data:
-            block.subquery_h2 = str(request.data.get("subquery_h2") or "")[:300]
-        if "micro_intent" in request.data:
-            block.micro_intent = str(request.data.get("micro_intent") or "")[:300]
+        if "h2_title" in request.data:
+            block.h2_title = str(request.data.get("h2_title") or "")[:300]
+        if "subquery" in request.data:
+            block.subquery = str(request.data.get("subquery") or "")[:300]
+        if "micro_intent" in request.data or "intent" in request.data:
+            block.micro_intent = str(request.data.get("micro_intent") or request.data.get("intent") or "")[:300]
         if "keywords" in request.data:
             raw_keywords = request.data.get("keywords")
             if isinstance(raw_keywords, list):
                 block.keywords = [str(item).strip() for item in raw_keywords if str(item).strip()][:2]
             else:
                 return Response({"error": "keywords должен быть массивом"}, status=status.HTTP_400_BAD_REQUEST)
+        if "key_points" in request.data:
+            raw_key_points = request.data.get("key_points")
+            if isinstance(raw_key_points, list):
+                block.key_points = "\n".join([str(item).strip() for item in raw_key_points if str(item).strip()])[:1500]
+            else:
+                block.key_points = str(raw_key_points or "")[:1500]
         if "prompt_is_custom" in request.data:
             block.prompt_is_custom = bool(request.data.get("prompt_is_custom"))
         if "content" in request.data:
@@ -1581,9 +1532,11 @@ class ArticleViewSet(viewsets.ModelViewSet):
 
         block.save(
             update_fields=[
-                "subquery_h2",
+                "h2_title",
+                "subquery",
                 "micro_intent",
                 "keywords",
+                "key_points",
                 "prompt_template",
                 "prompt_is_custom",
                 "content",
@@ -1602,88 +1555,16 @@ class ArticleViewSet(viewsets.ModelViewSet):
             block_id_int = int(str(block_id))
         except (TypeError, ValueError):
             return Response({"error": "block_id обязателен"}, status=status.HTTP_400_BAD_REQUEST)
+        get_object_or_404(ArticleBlock, id=block_id_int, article=article)
 
-        block = get_object_or_404(ArticleBlock, id=block_id_int, article=article)
-
-        try:
-            generator = AIContentGenerator()
-        except Exception:
-            block.status = "failed"
-            block.save(update_fields=["status", "updated_at"])
-            return Response(
-                {"error": "AI генератор не настроен (нет ключа/доступа)"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        def _format_context() -> str:
-            parts: list[str] = []
-            if article.selected_why_now:
-                parts.append("Почему ищет сейчас:")
-                parts.extend([f"- {item}" for item in article.selected_why_now])
-            if article.selected_solution:
-                parts.append("К какому решению ведём:")
-                parts.extend([f"- {item}" for item in article.selected_solution])
-            return "\n".join(parts).strip()
-
-        def _format_product_context() -> str:
-            parts: list[str] = []
-            if article.lead_product_name:
-                parts.append(f"Lead: {article.lead_product_name}")
-            if article.tripwire_product_name:
-                parts.append(f"Tripwire: {article.tripwire_product_name}")
-            return "\n".join(parts).strip()
-
-        variables = {
-            "main_query": article.wordstat,
-            "audience": (article.audience or "").strip(),
-            "context": _format_context(),
-            "h2_title": (block.subquery_h2 or "").strip(),
-            "subquery": (block.subquery_h2 or "").strip(),
-            "intent": (block.micro_intent or "").strip(),
-            "product_context": _format_product_context(),
-        }
-
-        keywords = [str(k).strip() for k in (block.keywords or []) if str(k).strip()][:2]
-        if not keywords:
-            keywords = [article.wordstat]
-        variables["keywords"] = ", ".join(keywords)
-
-        base_template = self._get_system_block_prompt_template(block.block_key).strip()
-        if not base_template:
-            base_template = "Контекст статьи: {{context}}\n\nЗадача: Напиши блок по теме {{main_query}}."
-        correction = (block.prompt_template or "").strip()
-        if correction:
-            template = f"{base_template}\n\nКорректировка (учти при написании):\n{correction}"
-        else:
-            template = base_template
-
-        prompt_used = template
-        for key, value in variables.items():
-            prompt_used = prompt_used.replace(f"{{{{{key}}}}}", value)
-
-        if block.block_key not in {"Закрывающее утверждение"}:
-            prompt_used = (
-                prompt_used
-                + "\n\nSEO требования:\n"
-                + f"- Используй 1–2 ключа: {', '.join(keywords)}\n"
-                + "- Держи фокус: 1 подзапрос = 1 смысл, не смешивай интенты.\n"
-            )
-
-        block.prompt_used = prompt_used
-
-        ai_text = generator.get_ai_response(prompt_used, max_tokens=850, temperature=0.35)
-        if not ai_text:
-            block.status = "failed"
-            block.save(update_fields=["prompt_used", "status", "updated_at"])
-            return Response({"error": "Не удалось сгенерировать блок"}, status=status.HTTP_502_BAD_GATEWAY)
-
-        block.content = ai_text.strip()
-        block.status = "ready"
-        block.regeneration_count = (block.regeneration_count or 0) + 1
-        block.save(update_fields=["prompt_used", "content", "status", "regeneration_count", "updated_at"])
-
-        serializer = ArticleBlockSerializer(block)
-        return Response(serializer.data)
+        task = tasks.generate_article_block_task.delay(article.id, block_id_int)
+        return Response(
+            {
+                "success": True,
+                "message": "Генерация блока запущена",
+                "task_id": task.id,
+            }
+        )
 
     @action(detail=False, methods=["post"])
     def start(self, request):
@@ -1857,115 +1738,53 @@ class ArticleViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def generate_seo_blocks(self, request, pk=None):
         article = self.get_object()
-
-        favorite_rows = (
-            WordstatResult.objects.filter(query__client=article.client, result_type="favorite")
-            .order_by("-count", "phrase")
-            .values("phrase", "count")
+        task = tasks.generate_article_blueprint_task.delay(article.id)
+        return Response(
+            {
+                "success": True,
+                "message": "Генерация blueprint запущена",
+                "task_id": task.id,
+            }
         )
-        favorites: list[dict[str, object]] = []
-        seen_fav: set[str] = set()
-        for row in favorite_rows:
-            phrase = str(row.get("phrase") or "").strip()
-            if not phrase:
-                continue
-            key = phrase.lower()
-            if key in seen_fav:
-                continue
-            seen_fav.add(key)
-            favorites.append({"phrase": phrase, "count": int(row.get("count") or 0)})
-            if len(favorites) >= 60:
-                break
 
-        block_titles = [
-            "Блок «Почему проблема возникает»",
-            "Блок «Типичные ошибки»",
-            "Блок «Правильная логика / система»",
-            "Блок «Пошаговая модель»",
-            "Блок «Пример / кейс / сценарий»",
-            "Блок «Что делать дальше»",
-            "Мягкий переход к продукту:",
-        ]
+    @action(detail=True, methods=["post"])
+    def generate_blocks(self, request, pk=None):
+        article = self.get_object()
+        task = tasks.generate_article_blocks_task.delay(article.id)
+        return Response(
+            {
+                "success": True,
+                "message": "Генерация всех блоков запущена",
+                "task_id": task.id,
+            }
+        )
 
-        allowed_keyword_map = {str(item["phrase"]).strip().lower(): str(item["phrase"]).strip() for item in favorites if item.get("phrase")}
+    @action(detail=False, methods=["get"], url_path="generation-status")
+    def generation_status(self, request):
+        """Вернуть состояние задачи генерации статьи по task_id."""
+        task_id = request.query_params.get("task_id")
+        if not task_id:
+            return Response({"success": False, "error": "task_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        def _normalize_keywords(raw_value):
-            keywords: list[str] = []
-            if isinstance(raw_value, list):
-                for item in raw_value:
-                    candidate = str(item).strip()
-                    if not candidate:
-                        continue
-                    canonical = allowed_keyword_map.get(candidate.lower())
-                    if canonical and canonical not in keywords:
-                        keywords.append(canonical)
-                    if len(keywords) >= 2:
-                        break
-            if not keywords:
-                first_phrase = str(favorites[0].get("phrase") or "").strip() if favorites else ""
-                keywords = [first_phrase] if first_phrase else [article.wordstat]
-            return keywords
-
-        level3: dict[str, dict[str, object]] = {}
         try:
-            generator = AIContentGenerator()
-            prompt = f"""
-Сделай УРОВЕНЬ 3 SEO-логики для структуры статьи по запросу: "{article.wordstat}".
-
-Условия для КАЖДОГО блока:
-- придумай 1 подзапрос (короткий, как отдельный H2; 4–12 слов, без кавычек)
-- выбери 1–2 ключа СТРОГО из Wordstat избранного ниже (используй поле phrase)
-- сформулируй 1 микро-интент (что именно читатель хочет понять/решить)
-
-Wordstat избранное (ключи для выбора):
-{json.dumps(favorites, ensure_ascii=False)}
-
-Блоки (используй названия как есть):
-{json.dumps(block_titles, ensure_ascii=False)}
-
-Верни строго JSON:
-{{
-  "blocks": [
-    {{
-      "block": "<одно из названий блока выше>",
-      "subquery_h2": "<подзапрос>",
-      "keywords": ["<ключ1>", "<ключ2>"],
-      "micro_intent": "<микро-интент>"
-    }}
-  ]
-}}
-
-НЕ пиши контент статьи, только эти поля.
-"""
-            ai_raw = generator.get_ai_response(
-                prompt,
-                max_tokens=1200,
-                temperature=0.4,
-                response_format={"type": "json_object"},
+            async_result = celery_app.AsyncResult(task_id)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to fetch generation status for %s: %s", task_id, exc, exc_info=True)
+            return Response(
+                {"success": False, "error": "Не удалось получить статус задачи"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-            parsed = _parse_ai_json_object(ai_raw or "")
-            blocks = parsed.get("blocks") if isinstance(parsed, dict) else None
-            if isinstance(blocks, list):
-                for item in blocks:
-                    if not isinstance(item, dict):
-                        continue
-                    block = str(item.get("block") or "").strip()
-                    if block not in block_titles:
-                        continue
-                    subquery = str(item.get("subquery_h2") or "").strip()
-                    micro_intent = str(item.get("micro_intent") or "").strip()
-                    keywords = _normalize_keywords(item.get("keywords"))
-                    level3[block] = {"subquery_h2": subquery, "keywords": keywords, "micro_intent": micro_intent}
-        except Exception:
-            logger.exception("Failed to generate level3 SEO structure for article %s", article.id)
 
-        article.seo_blocks = level3
-        if article.status == "draft":
-            article.status = "options_ready"
-        article.save(update_fields=["seo_blocks", "status", "updated_at"])
-        self._sync_blocks_from_seo_blocks(article)
-        serializer = self.get_serializer(article)
-        return Response(serializer.data)
+        state = (async_result.state or "").lower()
+        payload = {"success": state == "success", "status": state, "task_id": task_id}
+
+        if state == "success" and isinstance(async_result.result, dict):
+            payload["result"] = async_result.result
+        elif state in ("failure", "revoked"):
+            error_info = getattr(async_result, "info", None)
+            payload["error"] = str(error_info) if error_info else "Задача завершилась с ошибкой"
+
+        return Response(payload)
 
     @action(detail=True, methods=["post"])
     def generate_outline(self, request, pk=None):
@@ -1991,6 +1810,7 @@ Wordstat избранное (ключи для выбора):
         article.tripwire_product_name = str(tripwire_product_name)[:255]
 
         block_titles = [
+            "Вступление",
             "Блок «Почему проблема возникает»",
             "Блок «Типичные ошибки»",
             "Блок «Правильная логика / система»",

@@ -18,7 +18,7 @@ export default function LoginPage() {
           Войти через Telegram
         </Button>
         <p className="text-xs text-muted-foreground">
-          Если у вас нет доступа, напишите менеджеру Контент-завода, чтобы получить приглашение.
+          Если у вас нет доступа, напишите в https://t.me/fibonatty_bot, чтобы получить приглашение.
         </p>
       </div>
 

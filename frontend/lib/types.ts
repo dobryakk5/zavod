@@ -25,6 +25,13 @@ export type TrendSource =
 
 export type UserRole = 'owner' | 'editor' | 'viewer';
 
+export interface PaginatedResponse<T> {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: T[];
+}
+
 export interface Post {
   id: number;
   title: string;
@@ -54,9 +61,11 @@ export interface Article {
   seo_blocks?: Record<
     string,
     {
-      subquery_h2?: string;
+      h2_title?: string;
+      subquery?: string;
       keywords?: string[];
       micro_intent?: string;
+      key_points?: string[] | string;
     }
   >;
   outline_markdown?: string;
@@ -70,9 +79,11 @@ export interface ArticleBlock {
   id: number;
   order: number;
   block_key: string;
-  subquery_h2: string;
+  h2_title: string;
+  subquery: string;
   micro_intent: string;
   keywords: string[];
+  key_points: string;
   prompt_template: string;
   prompt_used?: string | null;
   content: string;

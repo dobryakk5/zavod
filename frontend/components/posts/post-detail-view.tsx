@@ -181,7 +181,7 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
 
   const loadAdjacentPosts = useCallback(async () => {
     try {
-      const posts = await postsApi.list();
+      const posts = await postsApi.listAll();
       if (!Array.isArray(posts)) {
         return;
       }

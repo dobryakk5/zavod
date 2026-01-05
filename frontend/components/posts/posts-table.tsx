@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ApiError, apiFetch } from '@/lib/api';
+import type { PaginatedResponse } from '@/lib/types';
+import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatTemplateDisplayName } from '@/lib/utils';
@@ -28,6 +30,8 @@ type PostPlaceholder = {
   createdAt: string;
 };
 
+const PAGE_SIZE = 25;
+
 const STATUS_OPTIONS = [
   { value: '', label: 'Все статусы' },
   { value: 'draft', label: 'Черновики' },
@@ -48,6 +52,7 @@ export function PostsTable() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [posts, setPosts] = useState<Post[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [placeholders, setPlaceholders] = useState<PostPlaceholder[]>([]);
@@ -55,6 +60,9 @@ export function PostsTable() {
 
   const status = searchParams.get('status') || '';
   const platform = searchParams.get('platform') || '';
+  const pageParam = searchParams.get('page');
+  const parsedPage = pageParam ? Number(pageParam) : 1;
+  const currentPage = Number.isFinite(parsedPage) && parsedPage > 0 ? Math.floor(parsedPage) : 1;
 
   const loadPosts = useCallback(
     async ({ showLoading = true }: { showLoading?: boolean } = {}) => {
@@ -66,23 +74,28 @@ export function PostsTable() {
         const params = new URLSearchParams();
         if (status) params.set('status', status);
         if (platform) params.set('platform', platform);
+        params.set('page', currentPage.toString());
+        params.set('page_size', PAGE_SIZE.toString());
 
         const query = params.toString();
-        const data = await apiFetch<Post[]>(`/posts/${query ? `?${query}` : ''}`);
-        const previousIds = new Set(lastPostIdsRef.current);
-        setPosts(data);
+        const data = await apiFetch<PaginatedResponse<Post>>(`/posts/${query ? `?${query}` : ''}`);
+        setTotalCount(data.count);
+        setPosts(data.results);
 
-        const newPostCount = data.filter((post) => !previousIds.has(post.id)).length;
-        lastPostIdsRef.current = new Set(data.map((post) => post.id));
+        if (currentPage === 1) {
+          const previousIds = new Set(lastPostIdsRef.current);
+          const newPostCount = data.results.filter((post) => !previousIds.has(post.id)).length;
+          lastPostIdsRef.current = new Set(data.results.map((post) => post.id));
 
-        if (newPostCount > 0) {
-          setPlaceholders((prev) => {
-            if (prev.length === 0) {
-              return prev;
-            }
-            const removeCount = Math.min(prev.length, newPostCount);
-            return prev.slice(removeCount);
-          });
+          if (newPostCount > 0) {
+            setPlaceholders((prev) => {
+              if (prev.length === 0) {
+                return prev;
+              }
+              const removeCount = Math.min(prev.length, newPostCount);
+              return prev.slice(removeCount);
+            });
+          }
         }
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
@@ -96,7 +109,7 @@ export function PostsTable() {
         }
       }
     },
-    [platform, router, status]
+    [currentPage, platform, router, status]
   );
 
   useEffect(() => {
@@ -121,7 +134,7 @@ export function PostsTable() {
   }, []);
 
   useEffect(() => {
-    if (placeholders.length === 0) {
+    if (placeholders.length === 0 || currentPage !== 1) {
       return;
     }
 
@@ -133,23 +146,47 @@ export function PostsTable() {
     return () => {
       clearInterval(intervalId);
     };
-  }, [placeholders.length, loadPosts]);
+  }, [currentPage, placeholders.length, loadPosts]);
 
-  const updateQuery = (key: string, value: string) => {
+  const updateQuery = useCallback((key: string, value: string, options?: { resetPage?: boolean }) => {
     const params = new URLSearchParams(searchParams.toString());
     if (value) {
       params.set(key, value);
     } else {
       params.delete(key);
     }
+    if (options?.resetPage) {
+      params.delete('page');
+    }
+    if (key === 'page' && value === '1') {
+      params.delete('page');
+    }
     const query = params.toString();
     router.push(`/posts${query ? `?${query}` : ''}`);
-  };
+  }, [router, searchParams]);
+
+  useEffect(() => {
+    if (!totalCount) {
+      return;
+    }
+    const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+    if (currentPage > totalPages) {
+      updateQuery('page', totalPages.toString());
+    }
+  }, [currentPage, totalCount, updateQuery]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const rangeStart = totalCount === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const rangeEnd = totalCount === 0 ? 0 : Math.min(currentPage * PAGE_SIZE, totalCount);
+  const visiblePlaceholders = currentPage === 1 ? placeholders : [];
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
-        <Select value={status || 'all'} onValueChange={(v) => updateQuery('status', v === 'all' ? '' : v)}>
+        <Select
+          value={status || 'all'}
+          onValueChange={(v) => updateQuery('status', v === 'all' ? '' : v, { resetPage: true })}
+        >
           <SelectTrigger className="w-48">
             <SelectValue placeholder="Статус" />
           </SelectTrigger>
@@ -162,7 +199,10 @@ export function PostsTable() {
           </SelectContent>
         </Select>
 
-        <Select value={platform || 'all'} onValueChange={(v) => updateQuery('platform', v === 'all' ? '' : v)}>
+        <Select
+          value={platform || 'all'}
+          onValueChange={(v) => updateQuery('platform', v === 'all' ? '' : v, { resetPage: true })}
+        >
           <SelectTrigger className="w-48">
             <SelectValue placeholder="Платформа" />
           </SelectTrigger>
@@ -179,11 +219,11 @@ export function PostsTable() {
       {error && <div className="text-sm text-destructive">{error}</div>}
       {loading && <div>Загрузка...</div>}
 
-      {!loading && posts.length === 0 && placeholders.length === 0 && (
+      {!loading && posts.length === 0 && visiblePlaceholders.length === 0 && (
         <div className="text-sm text-muted-foreground">Постов пока нет.</div>
       )}
 
-      {!loading && (posts.length > 0 || placeholders.length > 0) && (
+      {!loading && (posts.length > 0 || visiblePlaceholders.length > 0) && (
         <Table>
           <TableHeader>
             <TableRow>
@@ -193,7 +233,7 @@ export function PostsTable() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {placeholders.map((placeholder) => (
+            {visiblePlaceholders.map((placeholder) => (
               <TableRow key={placeholder.id}>
                 <TableCell className="font-medium">
                   <div className="flex items-center gap-2 text-muted-foreground">
@@ -263,6 +303,35 @@ export function PostsTable() {
             })}
           </TableBody>
         </Table>
+      )}
+
+      {totalPages > 1 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+          <div className="text-muted-foreground">
+            Показано {rangeStart}-{rangeEnd} из {totalCount}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage <= 1}
+              onClick={() => updateQuery('page', (currentPage - 1).toString())}
+            >
+              Назад
+            </Button>
+            <span className="text-muted-foreground">
+              Страница {currentPage} из {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= totalPages}
+              onClick={() => updateQuery('page', (currentPage + 1).toString())}
+            >
+              Вперед
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   );

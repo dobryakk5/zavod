@@ -100,6 +100,7 @@ class ArticleBlockInlineForm(forms.ModelForm):
         fields = "__all__"
         widgets = {
             "keywords": forms.Textarea(attrs={"rows": 2, "style": "width: 96%; font-family: monospace;"}),
+            "key_points": forms.Textarea(attrs={"rows": 4, "style": "width: 96%;"}),
             "prompt_used": forms.Textarea(attrs={"rows": 10, "style": "width: 96%; font-family: monospace;"}),
             "content": forms.Textarea(attrs={"rows": 10, "style": "width: 96%;"}),
         }
@@ -114,7 +115,9 @@ class ArticleBlockInline(admin.StackedInline):
     readonly_fields = ("block_key", "prompt_used", "regeneration_count", "created_at", "updated_at")
     fields = (
         ("order", "block_key", "status"),
-        ("subquery_h2", "micro_intent"),
+        ("h2_title", "subquery"),
+        "micro_intent",
+        "key_points",
         "keywords",
         "prompt_used",
         "content",
@@ -129,7 +132,7 @@ class ArticleBlockPromptTemplateAdminForm(forms.ModelForm):
             self.fields["prompt_template"].help_text = (
                 "Доступные переменные: "
                 "{{main_query}}, {{audience}}, {{context}}, {{h2_title}}, {{subquery}}, "
-                "{{intent}}, {{keywords}}, {{product_context}}. "
+                "{{intent}}, {{key_points}}, {{wordstat2}}, {{keywords}}, {{product_context}}. "
                 "Если данных для переменной нет — будет пусто."
             )
 

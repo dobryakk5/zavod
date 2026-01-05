@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import Counter, defaultdict, deque
@@ -10,7 +11,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 import gzip
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from lxml import etree
 from functools import lru_cache
 
@@ -272,6 +273,26 @@ class RobotsRule:
 class RobotsGroup:
     user_agents: list[str]
     rules: list[RobotsRule]
+
+
+@dataclass(frozen=True)
+class _BreadcrumbItem:
+    title: str
+    href: str | None
+
+
+@dataclass(frozen=True)
+class _MenuItem:
+    title: str
+    url: str
+    parent_url: str | None
+
+
+@dataclass(frozen=True)
+class _HierarchyItem:
+    path: str
+    name: str
+    source: str
 
 
 class RobotsPolicy:
@@ -686,7 +707,18 @@ def _fetch_sitemap_urls(
 def _extract_page_metadata(html_text: str) -> tuple[str, str, dict]:
     soup = BeautifulSoup(html_text, "lxml")
 
-    title = (soup.title.string or "").strip() if soup.title and soup.title.string else ""
+    def _texts(selector: str) -> list[str]:
+        items: list[str] = []
+        for tag in soup.select(selector):
+            text = tag.get_text(" ", strip=True)
+            if text:
+                items.append(text)
+        return items
+
+    h1_list = _texts("h1")[:10]
+    title = h1_list[0].strip() if h1_list else ""
+    if not title:
+        title = (soup.title.string or "").strip() if soup.title and soup.title.string else ""
 
     meta_description = ""
     meta_tag = soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
@@ -698,16 +730,8 @@ def _extract_page_metadata(html_text: str) -> tuple[str, str, dict]:
     if keywords_tag and keywords_tag.get("content"):
         meta_keywords = str(keywords_tag.get("content") or "").strip()
 
-    def _texts(selector: str) -> list[str]:
-        items: list[str] = []
-        for tag in soup.select(selector):
-            text = tag.get_text(" ", strip=True)
-            if text:
-                items.append(text)
-        return items
-
     headings = {
-        "h1": _texts("h1")[:10],
+        "h1": h1_list,
         "h2": _texts("h2")[:20],
         "h3": _texts("h3")[:20],
         "meta_keywords": meta_keywords,
@@ -910,6 +934,610 @@ def _extract_links(html_text: str, base_url: str) -> list[str]:
     return urls
 
 
+def _extract_anchor_texts(html_text: str, base_url: str) -> list[tuple[str, str]]:
+    soup = BeautifulSoup(html_text, "lxml")
+    items: list[tuple[str, str]] = []
+    for a in soup.find_all("a"):
+        href = a.get("href")
+        if not href:
+            continue
+        resolved = _canonicalize_url(base_url, href)
+        if not resolved:
+            continue
+        resolved = _force_base_origin(base_url, resolved)
+        if not _is_same_origin(base_url, resolved):
+            continue
+        if not _looks_like_html_page(resolved):
+            continue
+        label = _normalize_label(a.get_text(" ", strip=True))
+        if not label or _is_separator_label(label):
+            continue
+        items.append((_path_key(resolved), label))
+    return items
+
+
+def _safe_page_content_html(page: WebsiteScanPage) -> str:
+    try:
+        content = page.content
+    except WebsiteScanPageContent.DoesNotExist:
+        return ""
+    if not content or not content.content_html:
+        return ""
+    return content.content_html
+
+
+def _normalize_label(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip())
+
+
+def _is_separator_label(value: str) -> bool:
+    return value in {"/", "\\", ">", "»", "·", "|", "→", "←"}
+
+
+def _is_home_label(value: str) -> bool:
+    lowered = value.lower()
+    return lowered in {"home", "главная", "главная страница", "main", "index"}
+
+
+_GENERIC_ANCHOR_LABELS = {
+    "подробнее",
+    "читать",
+    "читать далее",
+    "читать дальше",
+    "подробнее тут",
+    "читать полностью",
+    "перейти",
+    "открыть",
+    "узнать больше",
+    "more",
+    "read more",
+    "details",
+}
+
+
+def _best_anchor_label(counter: Counter[str] | None) -> str | None:
+    if not counter:
+        return None
+    for label, _count in counter.most_common():
+        if len(label) < 2:
+            continue
+        lowered = label.lower()
+        if lowered in _GENERIC_ANCHOR_LABELS:
+            continue
+        tokens = _TOKEN_RE.findall(lowered)
+        if tokens and all(token in _STOP_WORDS for token in tokens):
+            continue
+        return label
+    return None
+
+
+def _best_cluster_source(counter: Counter[str], *, priority: dict[str, int]) -> str | None:
+    if not counter:
+        return None
+    best = sorted(counter.items(), key=lambda item: (item[1], priority.get(item[0], 0)), reverse=True)[0][0]
+    return best
+
+
+def _extract_breadcrumbs_from_container(
+    container: BeautifulSoup,
+    *,
+    base_url: str,
+) -> list[_BreadcrumbItem]:
+    items: list[_BreadcrumbItem] = []
+    li_nodes = container.find_all("li")
+    nodes = li_nodes if li_nodes else container.find_all(["a", "span"], recursive=True)
+    for node in nodes:
+        title = ""
+        href = None
+        if node.name == "li":
+            anchor = node.find("a", href=True)
+            if anchor:
+                title = anchor.get_text(strip=True)
+                href = anchor.get("href")
+            else:
+                span = node.find("span")
+                title = (span.get_text(strip=True) if span else node.get_text(strip=True))
+        else:
+            title = node.get_text(strip=True)
+            if node.name == "a":
+                href = node.get("href")
+        title = _normalize_label(title)
+        if not title or _is_separator_label(title):
+            continue
+        if href:
+            href = _canonicalize_url(base_url, href)
+        items.append(_BreadcrumbItem(title=title, href=href))
+
+    deduped: list[_BreadcrumbItem] = []
+    prev_key: tuple[str, str | None] | None = None
+    for item in items:
+        key = (item.title.lower(), item.href)
+        if key == prev_key:
+            continue
+        deduped.append(item)
+        prev_key = key
+    return deduped
+
+
+def _find_nav_near_h1(soup: BeautifulSoup) -> BeautifulSoup | None:
+    h1 = soup.find("h1")
+    if not h1:
+        return None
+    parent = h1.parent
+    if isinstance(parent, Tag):
+        nav = parent.find("nav")
+        if isinstance(nav, Tag):
+            return nav
+
+    def _scan_siblings(iterator) -> BeautifulSoup | None:
+        count = 0
+        for sibling in iterator:
+            if count >= 3:
+                break
+            count += 1
+            if isinstance(sibling, Tag) and sibling.name == "nav":
+                return sibling
+            if isinstance(sibling, Tag):
+                nav = sibling.find("nav")
+                if isinstance(nav, Tag):
+                    return nav
+        return None
+
+    nav = _scan_siblings(h1.previous_siblings)
+    if nav:
+        return nav
+    return _scan_siblings(h1.next_siblings)
+
+
+def _extract_breadcrumbs_json_ld(
+    soup: BeautifulSoup,
+    *,
+    base_url: str,
+) -> list[_BreadcrumbItem]:
+    def _items_from_payload(payload: object) -> list[_BreadcrumbItem]:
+        items: list[_BreadcrumbItem] = []
+        if isinstance(payload, list):
+            for entry in payload:
+                items.extend(_items_from_payload(entry))
+            return items
+        if not isinstance(payload, dict):
+            return items
+
+        graph = payload.get("@graph")
+        if graph:
+            items.extend(_items_from_payload(graph))
+            return items
+
+        type_value = payload.get("@type")
+        if isinstance(type_value, list):
+            types = [str(entry or "").lower() for entry in type_value]
+        else:
+            types = [str(type_value or "").lower()]
+        if "breadcrumblist" not in types:
+            return items
+
+        raw_items = payload.get("itemListElement") or []
+        ordered: list[tuple[int, _BreadcrumbItem]] = []
+        for idx, entry in enumerate(raw_items):
+            if not isinstance(entry, dict):
+                continue
+            name = _normalize_label(str(entry.get("name") or ""))
+            href: str | None = None
+            item = entry.get("item")
+            if isinstance(item, dict):
+                href = item.get("@id") or item.get("url")
+            elif isinstance(item, str):
+                href = item
+            if href:
+                href = _canonicalize_url(base_url, href)
+            if not name:
+                continue
+            position = entry.get("position")
+            try:
+                position_idx = int(position)
+            except (TypeError, ValueError):
+                position_idx = idx + 1
+            ordered.append((position_idx, _BreadcrumbItem(title=name, href=href)))
+        ordered.sort(key=lambda item: item[0])
+        return [item for _, item in ordered]
+
+    items: list[_BreadcrumbItem] = []
+    for script in soup.find_all("script", type="application/ld+json"):
+        raw = script.string or script.get_text()
+        if not raw:
+            continue
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        items.extend(_items_from_payload(payload))
+    return items
+
+
+def _extract_breadcrumbs(html_text: str, base_url: str) -> list[_BreadcrumbItem]:
+    soup = BeautifulSoup(html_text, "lxml")
+
+    container = soup.select_one('[itemtype*="Breadcrumb"]')
+    if container:
+        items = _extract_breadcrumbs_from_container(container, base_url=base_url)
+        if len(items) >= 2:
+            return items
+
+    for selector in (".breadcrumb", ".breadcrumbs", ".crumbs"):
+        container = soup.select_one(selector)
+        if not container:
+            continue
+        items = _extract_breadcrumbs_from_container(container, base_url=base_url)
+        if len(items) >= 2:
+            return items
+
+    nav = _find_nav_near_h1(soup)
+    if isinstance(nav, Tag):
+        items = _extract_breadcrumbs_from_container(nav, base_url=base_url)
+        if 1 < len(items) <= 8:
+            return items
+
+    items = _extract_breadcrumbs_json_ld(soup, base_url=base_url)
+    if len(items) >= 2:
+        return items
+
+    return []
+
+
+_MENU_SKIP_KEYWORDS = {
+    "breadcrumb",
+    "breadcrumbs",
+    "crumb",
+    "crumbs",
+    "footer",
+    "mobile",
+    "burger",
+    "drawer",
+    "offcanvas",
+    "sidebar",
+    "bottom",
+}
+
+
+def _has_keyword(value: str | None, keywords: set[str]) -> bool:
+    if not value:
+        return False
+    lowered = value.lower()
+    return any(keyword in lowered for keyword in keywords)
+
+
+def _should_skip_menu_element(element: BeautifulSoup) -> bool:
+    current = element
+    for _ in range(5):
+        if not current or not hasattr(current, "get"):
+            break
+        if current.name == "footer":
+            return True
+        class_value = " ".join(current.get("class", []))
+        if _has_keyword(class_value, _MENU_SKIP_KEYWORDS):
+            return True
+        if _has_keyword(current.get("id"), _MENU_SKIP_KEYWORDS):
+            return True
+        label = current.get("aria-label")
+        if _has_keyword(label, _MENU_SKIP_KEYWORDS):
+            return True
+        current = current.parent
+    return False
+
+
+def _parse_menu_ul(ul: BeautifulSoup, *, base_url: str, parent_url: str | None = None) -> list[_MenuItem]:
+    items: list[_MenuItem] = []
+    for li in ul.find_all("li", recursive=False):
+        anchors = [a for a in li.find_all("a", href=True) if a.find_parent("li") is li]
+        anchor = anchors[0] if anchors else None
+        parent_for_children = parent_url
+        if anchor:
+            title = _normalize_label(anchor.get_text(" ", strip=True))
+            href = (anchor.get("href") or "").strip()
+            if href and not href.startswith("#"):
+                url = _canonicalize_url(base_url, href)
+                if url:
+                    url = _force_base_origin(base_url, url)
+                if url and _is_same_origin(base_url, url) and _looks_like_html_page(url) and title:
+                    items.append(_MenuItem(title=title, url=url, parent_url=parent_url))
+                    parent_for_children = url
+
+        submenus = [sub for sub in li.find_all("ul") if sub.find_parent("li") is li]
+        for sub in submenus:
+            items.extend(_parse_menu_ul(sub, base_url=base_url, parent_url=parent_for_children))
+    return items
+
+
+def _extract_menu_items(html_text: str, base_url: str) -> list[_MenuItem]:
+    soup = BeautifulSoup(html_text, "lxml")
+    selectors = (
+        "nav ul",
+        ".menu ul",
+        ".main-menu ul",
+        ".header-menu ul",
+        ".navbar ul",
+    )
+    candidates: list[tuple[int, int, int, BeautifulSoup]] = []
+    for selector in selectors:
+        for ul in soup.select(selector):
+            if _should_skip_menu_element(ul):
+                continue
+            top_items = ul.find_all("li", recursive=False)
+            link_count = len([li for li in top_items if li.find("a", href=True)])
+            if link_count < 2:
+                continue
+            class_value = " ".join(ul.get("class", []))
+            score = link_count
+            if ul.find_parent("nav"):
+                score += 2
+            if ul.find_parent("header"):
+                score += 2
+            if _has_keyword(class_value, {"menu", "main", "nav", "navbar"}):
+                score += 2
+            nested = len([child for child in ul.find_all("ul") if child.find_parent("ul") is ul])
+            ul_depth = len(ul.find_parents("ul"))
+            candidates.append((ul_depth, score, nested, ul))
+
+    if not candidates:
+        return []
+
+    min_depth = min(entry[0] for entry in candidates)
+    candidates = [entry for entry in candidates if entry[0] == min_depth]
+    candidates.sort(key=lambda entry: (entry[1], entry[2]), reverse=True)
+    _, _, _, chosen = candidates[0]
+    items = _parse_menu_ul(chosen, base_url=base_url, parent_url=None)
+
+    seen: set[str] = set()
+    deduped: list[_MenuItem] = []
+    for item in items:
+        path = _path_key(item.url)
+        if path in seen:
+            continue
+        seen.add(path)
+        deduped.append(item)
+    return deduped
+
+
+def _path_depth(path: str) -> int:
+    normalized = path.strip("/")
+    if not normalized:
+        return 0
+    return len([seg for seg in normalized.split("/") if seg])
+
+
+def _segment_from_path(path: str) -> str:
+    normalized = path.strip("/")
+    if not normalized:
+        return "/"
+    return normalized.split("/")[-1]
+
+
+def _breadcrumb_chain_for_page(
+    page_url: str,
+    *,
+    breadcrumbs: list[_BreadcrumbItem],
+    max_depth: int,
+) -> list[_HierarchyItem]:
+    if not breadcrumbs:
+        return []
+
+    page_path = _path_key(page_url)
+    segments = [seg for seg in page_path.strip("/").split("/") if seg]
+
+    start_index = 0
+    if breadcrumbs and (
+        (breadcrumbs[0].href and _path_key(breadcrumbs[0].href) == "/")
+        or _is_home_label(breadcrumbs[0].title)
+    ):
+        start_index = 1
+
+    crumb_count = max(0, len(breadcrumbs) - start_index)
+    chain: list[_HierarchyItem] = []
+    sliced = breadcrumbs[start_index:]
+    last_index = max(0, len(sliced) - 1)
+    for idx, item in enumerate(sliced):
+        path = None
+        if item.href:
+            path = _path_key(item.href)
+        if not path:
+            if idx == last_index:
+                path = page_path
+            else:
+                if segments:
+                    if crumb_count <= len(segments):
+                        if idx < len(segments):
+                            path = "/" + "/".join(segments[: idx + 1])
+                    else:
+                        depth_from_end = crumb_count - 1 - idx
+                        prefix_len = len(segments) - depth_from_end
+                        if prefix_len > 0:
+                            path = "/" + "/".join(segments[:prefix_len])
+        if not path:
+            path = page_path
+        if path == "/":
+            continue
+        if _path_depth(path) > max_depth:
+            break
+        chain.append(_HierarchyItem(path=path, name=item.title, source="breadcrumbs"))
+
+    return chain
+
+
+def _menu_chain_for_page(
+    page_url: str,
+    *,
+    menu_parent_by_path: dict[str, str | None],
+    menu_title_by_path: dict[str, str],
+    menu_paths_by_depth: list[str],
+    max_depth: int,
+) -> list[_HierarchyItem]:
+    if not menu_paths_by_depth:
+        return []
+
+    page_path = _path_key(page_url)
+    match_path: str | None = None
+    if page_path in menu_title_by_path:
+        match_path = page_path
+    else:
+        for candidate in menu_paths_by_depth:
+            if candidate == "/":
+                continue
+            if page_path == candidate or page_path.startswith(candidate.rstrip("/") + "/"):
+                match_path = candidate
+                break
+
+    if not match_path:
+        return []
+
+    chain_paths: list[str] = []
+    current = match_path
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        chain_paths.append(current)
+        current = menu_parent_by_path.get(current)
+
+    chain_paths.reverse()
+    chain: list[_HierarchyItem] = []
+    for path in chain_paths:
+        if path == "/":
+            continue
+        if _path_depth(path) > max_depth:
+            break
+        chain.append(_HierarchyItem(path=path, name=menu_title_by_path.get(path, _segment_from_path(path)), source="menu"))
+
+    if match_path and page_path != match_path:
+        base_segments = [seg for seg in match_path.strip("/").split("/") if seg]
+        full_segments = [seg for seg in page_path.strip("/").split("/") if seg]
+        for idx in range(len(base_segments) + 1, len(full_segments) + 1):
+            path = "/" + "/".join(full_segments[:idx])
+            if _path_depth(path) > max_depth:
+                break
+            chain.append(_HierarchyItem(path=path, name=_segment_from_path(path), source="menu"))
+
+    return chain
+
+
+def _url_chain_for_page(page_url: str, *, max_depth: int) -> list[_HierarchyItem]:
+    page_path = _path_key(page_url)
+    segments = [seg for seg in page_path.strip("/").split("/") if seg]
+    chain: list[_HierarchyItem] = []
+    for idx, _ in enumerate(segments[: max_depth]):
+        path = "/" + "/".join(segments[: idx + 1])
+        chain.append(_HierarchyItem(path=path, name=_segment_from_path(path), source="url"))
+    return chain
+
+
+def _preferred_page_label(page: WebsiteScanPage) -> str | None:
+    headings = page.headings or {}
+    h1 = headings.get("h1")
+    label = ""
+    if isinstance(h1, list) and h1:
+        label = str(h1[0] or "")
+    elif isinstance(h1, str):
+        label = h1
+    if not label:
+        label = str(page.title or "")
+    label = _normalize_label(label)
+    return label or None
+
+
+def _label_for_path(
+    path: str,
+    *,
+    page_by_path: dict[str, WebsiteScanPage],
+    anchor_texts_by_path: dict[str, Counter[str]],
+) -> str:
+    label = _best_anchor_label(anchor_texts_by_path.get(path))
+    if not label:
+        page = page_by_path.get(path)
+        if page:
+            label = _preferred_page_label(page)
+    return label or _segment_from_path(path)
+
+
+def _link_chain_for_page(
+    page_url: str,
+    *,
+    incoming_sources_by_path: dict[str, Counter[str]],
+    incoming_counts_by_path: Counter[str],
+    page_by_path: dict[str, WebsiteScanPage],
+    anchor_texts_by_path: dict[str, Counter[str]],
+    max_depth: int,
+) -> list[_HierarchyItem]:
+    page_path = _path_key(page_url)
+    sources = incoming_sources_by_path.get(page_path)
+    if not sources:
+        return []
+    best_parent: str | None = None
+    best_score: tuple[int, int, int] | None = None
+    for source_path, count in sources.items():
+        if source_path == page_path:
+            continue
+        incoming_score = incoming_counts_by_path.get(source_path, 0)
+        depth_score = -_path_depth(source_path)
+        score = (count, incoming_score, depth_score)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_parent = source_path
+    if not best_parent or best_parent == "/":
+        return []
+    if _path_depth(best_parent) > max_depth:
+        return []
+    chain: list[_HierarchyItem] = [
+        _HierarchyItem(
+            path=best_parent,
+            name=_label_for_path(best_parent, page_by_path=page_by_path, anchor_texts_by_path=anchor_texts_by_path),
+            source="links",
+        ),
+        _HierarchyItem(
+            path=page_path,
+            name=_label_for_path(page_path, page_by_path=page_by_path, anchor_texts_by_path=anchor_texts_by_path),
+            source="links",
+        ),
+    ]
+    return chain
+
+
+def _build_hierarchy_tree(chains: Iterable[list[_HierarchyItem]], *, max_depth: int) -> _TreeNode:
+    root = _TreeNode(name="/", path="/", depth=0)
+    node_by_path: dict[str, _TreeNode] = {"/": root}
+    parent_by_path: dict[str, str | None] = {"/": None}
+
+    for chain in chains:
+        root.count += 1
+        parent = root
+        for item in chain:
+            if item.path == "/":
+                continue
+            if _path_depth(item.path) > max_depth:
+                break
+            node = node_by_path.get(item.path)
+            if node is None:
+                node = _TreeNode(name=item.name or _segment_from_path(item.path), path=item.path, depth=_path_depth(item.path))
+                node_by_path[item.path] = node
+                parent_by_path[item.path] = parent.path
+                parent.children[item.path] = node
+            else:
+                existing_parent = parent_by_path.get(item.path)
+                if existing_parent is None:
+                    parent_by_path[item.path] = parent.path
+                    parent.children[item.path] = node
+                elif existing_parent == parent.path:
+                    parent.children[item.path] = node
+                if item.name and node.name == _segment_from_path(node.path):
+                    node.name = item.name
+            node.count += 1
+            parent = node
+
+    return root
+
+
+
+
 def _page_label(url: str, title: str) -> str:
     if title.strip():
         return title.strip()[:80]
@@ -948,9 +1576,9 @@ def _build_url_tree(urls: Iterable[str], *, max_depth: int) -> _TreeNode:
         current_path = ""
         for i, seg in enumerate(segments[: max_depth]):
             current_path += "/" + seg
-            if seg not in node.children:
-                node.children[seg] = _TreeNode(name=seg, path=current_path, depth=i + 1)
-            node = node.children[seg]
+            if current_path not in node.children:
+                node.children[current_path] = _TreeNode(name=seg, path=current_path, depth=i + 1)
+            node = node.children[current_path]
             node.count += 1
 
     return root
@@ -958,8 +1586,8 @@ def _build_url_tree(urls: Iterable[str], *, max_depth: int) -> _TreeNode:
 
 def _iter_tree(node: _TreeNode) -> Iterator[_TreeNode]:
     yield node
-    for key in sorted(node.children.keys()):
-        yield from _iter_tree(node.children[key])
+    for child in sorted(node.children.values(), key=lambda item: item.name):
+        yield from _iter_tree(child)
 
 
 def _compute_tree_layout_positions(
@@ -1010,10 +1638,182 @@ def _build_mind_map_for_scan(scan: WebsiteScan) -> int:
     base_url = scan.base_url
     netloc = urlparse(base_url).netloc
 
-    primary_rows = WebsiteScanPage.objects.filter(scan=scan, is_helper=False).values_list("url", flat=True).order_by("id")
-    urls = [u for u in primary_rows if u]
-    tree = _build_url_tree(urls, max_depth=int(scan.max_depth or 3))
-    page_rows = WebsiteScanPage.objects.filter(scan=scan).values("url", "title", "status_code", "wordstats", "is_helper").order_by("id")
+    max_depth = int(scan.max_depth or 3)
+    pages = list(WebsiteScanPage.objects.filter(scan=scan).select_related("content").order_by("id"))
+    primary_pages = [page for page in pages if not page.is_helper and page.url]
+    urls = [page.url for page in primary_pages if page.url]
+
+    menu_items: list[_MenuItem] = []
+    menu_parent_by_path: dict[str, str | None] = {}
+    menu_title_by_path: dict[str, str] = {}
+    menu_paths_by_depth: list[str] = []
+    anchor_texts_by_path: dict[str, Counter[str]] = defaultdict(Counter)
+    incoming_sources_by_path: dict[str, Counter[str]] = defaultdict(Counter)
+    incoming_counts_by_path: Counter[str] = Counter()
+    page_by_path_obj: dict[str, WebsiteScanPage] = {}
+
+    menu_candidates: list[tuple[int, list[_MenuItem]]] = []
+    menu_pages: list[WebsiteScanPage] = []
+    home_page = next((page for page in pages if page.url and _path_key(page.url) == "/"), None)
+    if home_page:
+        menu_pages.append(home_page)
+    menu_pages.extend([page for page in pages if page is not home_page])
+    for page in menu_pages:
+        if not page.url:
+            continue
+        html = _safe_page_content_html(page)
+        if not html:
+            continue
+        items = _extract_menu_items(html, base_url)
+        if items:
+            menu_candidates.append((len(items), items))
+        if len(menu_candidates) >= 5:
+            break
+    if menu_candidates:
+        menu_candidates.sort(key=lambda entry: entry[0], reverse=True)
+        menu_items = menu_candidates[0][1]
+
+    if menu_items:
+        for item in menu_items:
+            path = _path_key(item.url)
+            parent_path = _path_key(item.parent_url) if item.parent_url else None
+            if path not in menu_title_by_path:
+                menu_title_by_path[path] = item.title
+            if parent_path:
+                menu_parent_by_path[path] = parent_path
+        if menu_title_by_path:
+            for path in sorted(menu_title_by_path.keys(), key=_path_depth):
+                if path in menu_parent_by_path or path == "/":
+                    continue
+                segments = path.strip("/").split("/")
+                while len(segments) > 1:
+                    segments = segments[:-1]
+                    candidate = "/" + "/".join(segments)
+                    if candidate in menu_title_by_path:
+                        menu_parent_by_path[path] = candidate
+                        break
+            menu_paths_by_depth = sorted(menu_title_by_path.keys(), key=_path_depth, reverse=True)
+    if menu_title_by_path:
+        max_menu_depth = max(_path_depth(path) for path in menu_title_by_path)
+        logger.info("WebsiteScan menu items: id=%s items=%s max_depth=%s", scan.id, len(menu_title_by_path), max_menu_depth)
+    else:
+        logger.info("WebsiteScan menu items: id=%s items=0", scan.id)
+
+    for page in pages:
+        if page.url:
+            path_key = _path_key(page.url)
+            if path_key and (path_key not in page_by_path_obj or (page_by_path_obj[path_key].is_helper and not page.is_helper)):
+                page_by_path_obj[path_key] = page
+
+    for page in pages:
+        html_text = _safe_page_content_html(page)
+        if not html_text or not page.url:
+            continue
+        for path, label in _extract_anchor_texts(html_text, base_url):
+            anchor_texts_by_path[path][label] += 1
+        page_path = _path_key(page.url)
+        for link in _extract_links(html_text, base_url):
+            link = _force_base_origin(base_url, link)
+            if not _is_same_origin(base_url, link):
+                continue
+            if not _looks_like_html_page(link):
+                continue
+            target_path = _path_key(link)
+            if not target_path or target_path == page_path:
+                continue
+            incoming_sources_by_path[target_path][page_path] += 1
+            incoming_counts_by_path[target_path] += 1
+
+    source_counts: Counter[str] = Counter()
+    node_source_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    chains: list[list[_HierarchyItem]] = []
+    page_chain_by_id: dict[int, list[_HierarchyItem]] = {}
+    page_source_by_id: dict[int, str] = {}
+
+    for page in pages:
+        if not page.url:
+            page_chain_by_id[page.id] = []
+            page_source_by_id[page.id] = ""
+            continue
+        chain: list[_HierarchyItem] = []
+        source = ""
+        html_text = _safe_page_content_html(page)
+        if html_text:
+            breadcrumbs = _extract_breadcrumbs(html_text, base_url)
+            chain = _breadcrumb_chain_for_page(page.url, breadcrumbs=breadcrumbs, max_depth=max_depth)
+            if chain:
+                source = "breadcrumbs"
+        if not chain and menu_paths_by_depth:
+            chain = _menu_chain_for_page(
+                page.url,
+                menu_parent_by_path=menu_parent_by_path,
+                menu_title_by_path=menu_title_by_path,
+                menu_paths_by_depth=menu_paths_by_depth,
+                max_depth=max_depth,
+            )
+            if chain:
+                source = "menu"
+        if not chain and incoming_sources_by_path:
+            chain = _link_chain_for_page(
+                page.url,
+                incoming_sources_by_path=incoming_sources_by_path,
+                incoming_counts_by_path=incoming_counts_by_path,
+                page_by_path=page_by_path_obj,
+                anchor_texts_by_path=anchor_texts_by_path,
+                max_depth=max_depth,
+            )
+            if chain:
+                source = "links"
+        if not chain:
+            chain = _url_chain_for_page(page.url, max_depth=max_depth)
+            source = "url"
+        page_chain_by_id[page.id] = chain
+        page_source_by_id[page.id] = source
+
+        if not page.is_helper:
+            if chain:
+                source_counts[source] += 1
+                for item in chain:
+                    node_source_counts[item.path][source] += 1
+            chains.append(chain)
+
+    if pages:
+        now = timezone.now()
+        for page in pages:
+            chain = page_chain_by_id.get(page.id, [])
+            levels = [item.name for item in chain[:3]]
+            page.cluster_level_1 = levels[0] if len(levels) > 0 else ""
+            page.cluster_level_2 = levels[1] if len(levels) > 1 else ""
+            page.cluster_level_3 = levels[2] if len(levels) > 2 else ""
+            page.cluster_source = page_source_by_id.get(page.id, "")
+            page.updated_at = now
+        WebsiteScanPage.objects.bulk_update(
+            pages,
+            ["cluster_level_1", "cluster_level_2", "cluster_level_3", "cluster_source", "updated_at"],
+        )
+
+    source_priority = {"breadcrumbs": 3, "menu": 2, "links": 1, "url": 0}
+    tree = _build_hierarchy_tree(chains, max_depth=max_depth) if chains else _build_url_tree(urls, max_depth=max_depth)
+    if source_counts:
+        logger.info(
+            "WebsiteScan UI hierarchy sources: id=%s breadcrumbs=%s menu=%s links=%s url=%s",
+            scan.id,
+            source_counts.get("breadcrumbs", 0),
+            source_counts.get("menu", 0),
+            source_counts.get("links", 0),
+            source_counts.get("url", 0),
+        )
+    page_rows = [
+        {
+            "url": page.url,
+            "title": page.title,
+            "status_code": page.status_code,
+            "wordstats": page.wordstats,
+            "is_helper": page.is_helper,
+        }
+        for page in pages
+        if page.url
+    ]
     page_by_path: dict[str, dict] = {}
     for row in page_rows:
         url = row.get("url")
@@ -1051,8 +1851,8 @@ def _build_mind_map_for_scan(scan: WebsiteScan) -> int:
             mind_map.save(update_fields=["title", "description", "type", "updated_at"])
             _reset_mind_map(mind_map.id)
 
-        GAP_Y = 220.0
-        GAP_X = 560.0
+        GAP_Y = 44.0
+        GAP_X = 112.0
         positions = _compute_tree_layout_positions(tree, gap_x=GAP_X, gap_y=GAP_Y)
 
         mind_node_by_path: dict[str, MindNode] = {}
@@ -1061,7 +1861,10 @@ def _build_mind_map_for_scan(scan: WebsiteScan) -> int:
             page_url = base_url.rstrip("/") + node.path if node.path != "/" else base_url
             matched_page = page_by_path.get(node.path)
             page_title = (str(matched_page.get("title") or "").strip() if matched_page else "")
-            display_name = netloc if node.depth == 0 else (page_title or node.name)
+            node_label = _normalize_label(node.name)
+            display_name = netloc if node.depth == 0 else (node_label or page_title or node.name)
+            if len(display_name) > 80:
+                display_name = display_name[:77].rstrip() + "..."
             meta = {
                 "entity": "website",
                 "metric_type": (str(matched_page.get("url") or page_url) if matched_page else page_url),
@@ -1071,6 +1874,12 @@ def _build_mind_map_for_scan(scan: WebsiteScan) -> int:
                 "count": node.count,
                 "is_root": node.depth == 0,
             }
+            source_counts_for_node = node_source_counts.get(node.path)
+            if source_counts_for_node:
+                meta["cluster_sources"] = dict(source_counts_for_node)
+                best_source = _best_cluster_source(source_counts_for_node, priority=source_priority)
+                if best_source:
+                    meta["cluster_source"] = best_source
             if matched_page:
                 meta.update(
                     {
@@ -1221,8 +2030,8 @@ def run_website_scan(scan_id: int) -> None:
         def _maybe_update_progress() -> None:
             nonlocal last_progress_update
             now = monotonic()
-            # Update at most every ~2 seconds to reduce DB writes.
-            if now - last_progress_update < 5.0 and pages_done % 3 != 0:
+            # Update at most every ~10 seconds to reduce DB writes.
+            if now - last_progress_update < 10.0:
                 return
             last_progress_update = now
             denominator = int(scan.pages_total or 0) or max_pages

@@ -39,6 +39,10 @@ export interface WebsiteScanPage {
   meta_description?: string;
   headings?: Record<string, unknown>;
   wordstats?: Array<{ word: string; count: number }>;
+  cluster_level_1?: string;
+  cluster_level_2?: string;
+  cluster_level_3?: string;
+  cluster_source?: string;
   can_fetch_all?: boolean;
   can_fetch_googlebot?: boolean;
   fetched_at?: string | null;

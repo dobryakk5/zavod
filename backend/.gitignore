@@ -4,3 +4,4 @@
 /media
 telegram_sessions
 /logs
+/api/__pycache__

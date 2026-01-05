@@ -8,6 +8,7 @@ Celery tasks для Content Factory (Zavod).
 - aggregation.py   - сбор трендов из различных источников (12 задач)
 - generation.py    - генерация контента с помощью AI (10 задач)
 - seo.py          - генерация SEO ключевых слов (2 задачи)
+- articles.py     - генерация блоков статей и blueprint (3 задачи)
 - scheduling.py    - автоматическое планирование публикаций (1 задача)
 """
 
@@ -63,6 +64,13 @@ from .generation import (
     generate_posts_from_story,
     regenerate_post_text,
     generate_weekly_posts_from_template,
+)
+
+# Article tasks (3)
+from .articles import (
+    generate_article_blueprint_task,
+    generate_article_blocks_task,
+    generate_article_block_task,
 )
 
 # SEO tasks (2)
@@ -123,6 +131,11 @@ __all__ = [
     'generate_posts_from_story',
     'regenerate_post_text',
     'generate_weekly_posts_from_template',
+
+    # Articles (3)
+    'generate_article_blueprint_task',
+    'generate_article_blocks_task',
+    'generate_article_block_task',
 
     # SEO (2)
     'generate_seo_keywords_for_client',
