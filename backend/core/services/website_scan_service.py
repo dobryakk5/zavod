@@ -1200,6 +1200,9 @@ _MENU_SKIP_KEYWORDS = {
     "sidebar",
     "bottom",
 }
+_MENU_ROOT_PATH = "/__menu"
+_MENU_ROOT_LABEL = "menu"
+_MENU_HOME_TOKEN = "__home"
 
 
 def _has_keyword(value: str | None, keywords: set[str]) -> bool:
@@ -1228,6 +1231,111 @@ def _should_skip_menu_element(element: BeautifulSoup) -> bool:
     return False
 
 
+def _first_menu_link(li: BeautifulSoup, *, preferred_class: str | None = None) -> Tag | None:
+    if preferred_class:
+        for anchor in li.find_all("a", href=True, class_=preferred_class):
+            if anchor.find_parent("li") is li:
+                return anchor
+    for anchor in li.find_all("a", href=True):
+        if anchor.find_parent("li") is li:
+            return anchor
+    return None
+
+
+def _first_menu_span(li: BeautifulSoup) -> Tag | None:
+    for span in li.find_all("span"):
+        if span.find_parent("li") is li:
+            return span
+    return None
+
+
+def _parse_main_menu_ul(ul: BeautifulSoup, *, base_url: str, parent_url: str | None = None) -> list[_MenuItem]:
+    items: list[_MenuItem] = []
+    for li in ul.find_all("li", class_="main-menu__item", recursive=False):
+        parent_for_children = parent_url
+        title = ""
+        href = ""
+
+        link = _first_menu_link(li, preferred_class="main-menu__link")
+        if link:
+            title = _normalize_label(link.get_text(" ", strip=True))
+            href = (link.get("href") or "").strip()
+        else:
+            span = _first_menu_span(li)
+            if span:
+                title = _normalize_label(span.get_text(" ", strip=True))
+                href = (
+                    (span.get("data-href") or "")
+                    or (span.get("data-url") or "")
+                    or (span.get("data-link") or "")
+                ).strip()
+            if not href:
+                href = (
+                    (li.get("data-href") or "")
+                    or (li.get("data-url") or "")
+                    or (li.get("data-link") or "")
+                ).strip()
+
+        if title and href and not href.startswith("#"):
+            url = _canonicalize_url(base_url, href)
+            if url:
+                url = _force_base_origin(base_url, url)
+            if url and _is_same_origin(base_url, url) and _looks_like_html_page(url):
+                items.append(_MenuItem(title=title, url=url, parent_url=parent_url))
+                parent_for_children = url
+
+        submenus = [sub for sub in li.find_all("ul") if sub.find_parent("li") is li]
+        for sub in submenus:
+            if sub.find("li", class_="main-menu__item"):
+                items.extend(_parse_main_menu_ul(sub, base_url=base_url, parent_url=parent_for_children))
+            else:
+                items.extend(_parse_menu_ul(sub, base_url=base_url, parent_url=parent_for_children))
+    return items
+
+
+def _extract_main_menu_items(soup: BeautifulSoup, base_url: str) -> list[_MenuItem]:
+    selectors = (
+        ".page-nav__menu nav.main-menu",
+        "nav.main-menu",
+        ".page-nav__menu .main-menu",
+        ".main-menu",
+    )
+    candidates: list[tuple[int, int, list[_MenuItem]]] = []
+    for selector in selectors:
+        for nav in soup.select(selector):
+            uls = [nav] if getattr(nav, "name", None) == "ul" else nav.find_all("ul")
+            for ul in uls:
+                if _should_skip_menu_element(ul):
+                    continue
+                if not ul.find("li", class_="main-menu__item"):
+                    continue
+                items = _parse_main_menu_ul(ul, base_url=base_url, parent_url=None)
+                if not items:
+                    continue
+                ul_depth = len(ul.find_parents("ul"))
+                candidates.append((ul_depth, len(items), items))
+
+    if not candidates:
+        for ul in soup.select("ul.main-menu__list, ul[class*='main-menu__list--']"):
+            if _should_skip_menu_element(ul):
+                continue
+            if not ul.find("li", class_="main-menu__item"):
+                continue
+            items = _parse_main_menu_ul(ul, base_url=base_url, parent_url=None)
+            if not items:
+                continue
+            ul_depth = len(ul.find_parents("ul"))
+            candidates.append((ul_depth, len(items), items))
+
+    if not candidates:
+        return []
+
+    min_depth = min(entry[0] for entry in candidates)
+    candidates = [entry for entry in candidates if entry[0] == min_depth]
+    candidates.sort(key=lambda entry: entry[1], reverse=True)
+    return candidates[0][2]
+
+
 def _parse_menu_ul(ul: BeautifulSoup, *, base_url: str, parent_url: str | None = None) -> list[_MenuItem]:
     items: list[_MenuItem] = []
     for li in ul.find_all("li", recursive=False):
@@ -1251,8 +1359,7 @@ def _parse_menu_ul(ul: BeautifulSoup, *, base_url: str, parent_url: str | None =
     return items
 
 
-def _extract_menu_items(html_text: str, base_url: str) -> list[_MenuItem]:
-    soup = BeautifulSoup(html_text, "lxml")
+def _extract_menu_items_generic(soup: BeautifulSoup, base_url: str) -> list[_MenuItem]:
     selectors = (
         "nav ul",
         ".menu ul",
@@ -1260,7 +1367,7 @@ def _extract_menu_items(html_text: str, base_url: str) -> list[_MenuItem]:
         ".header-menu ul",
         ".navbar ul",
     )
-    candidates: list[tuple[int, int, int, BeautifulSoup]] = []
+    candidates: list[tuple[int, int, int, BeautifulSoup, bool]] = []
     for selector in selectors:
         for ul in soup.select(selector):
             if _should_skip_menu_element(ul):
@@ -1279,16 +1386,36 @@ def _extract_menu_items(html_text: str, base_url: str) -> list[_MenuItem]:
                 score += 2
             nested = len([child for child in ul.find_all("ul") if child.find_parent("ul") is ul])
             ul_depth = len(ul.find_parents("ul"))
-            candidates.append((ul_depth, score, nested, ul))
+            prefers_main_menu = bool(ul.find("li", class_="main-menu__item"))
+            candidates.append((ul_depth, score, nested, ul, prefers_main_menu))
 
     if not candidates:
         return []
 
     min_depth = min(entry[0] for entry in candidates)
     candidates = [entry for entry in candidates if entry[0] == min_depth]
-    candidates.sort(key=lambda entry: (entry[1], entry[2]), reverse=True)
-    _, _, _, chosen = candidates[0]
-    items = _parse_menu_ul(chosen, base_url=base_url, parent_url=None)
+    candidates.sort(key=lambda entry: (entry[1], entry[2], entry[4]), reverse=True)
+    _, _, _, chosen, prefers_main_menu = candidates[0]
+    if prefers_main_menu:
+        return _parse_main_menu_ul(chosen, base_url=base_url, parent_url=None)
+    return _parse_menu_ul(chosen, base_url=base_url, parent_url=None)
+
+
+def _extract_menu_items(html_text: str, base_url: str) -> list[_MenuItem]:
+    soup = BeautifulSoup(html_text, "lxml")
+    variants: list[tuple[int, list[_MenuItem]]] = []
+    main_items = _extract_main_menu_items(soup, base_url=base_url)
+    if main_items:
+        variants.append((len(main_items) + 2, main_items))
+    generic_items = _extract_menu_items_generic(soup, base_url=base_url)
+    if generic_items:
+        variants.append((len(generic_items), generic_items))
+
+    if not variants:
+        return []
+
+    variants.sort(key=lambda entry: entry[0], reverse=True)
+    items = variants[0][1]
 
     seen: set[str] = set()
     deduped: list[_MenuItem] = []
@@ -1313,6 +1440,22 @@ def _segment_from_path(path: str) -> str:
     if not normalized:
         return "/"
     return normalized.split("/")[-1]
+
+
+def _menu_synthetic_path(path: str) -> str:
+    normalized = _path_key(path)
+    if normalized == "/":
+        return f"{_MENU_ROOT_PATH}/{_MENU_HOME_TOKEN}"
+    return f"{_MENU_ROOT_PATH}{normalized}"
+
+
+def _menu_parent_path(path: str | None) -> str:
+    if not path:
+        return _MENU_ROOT_PATH
+    normalized = _path_key(path)
+    if not normalized or normalized == "/":
+        return _MENU_ROOT_PATH
+    return _menu_synthetic_path(normalized)
 
 
 def _breadcrumb_chain_for_page(
@@ -1647,6 +1790,7 @@ def _build_mind_map_for_scan(scan: WebsiteScan) -> int:
     menu_parent_by_path: dict[str, str | None] = {}
     menu_title_by_path: dict[str, str] = {}
     menu_paths_by_depth: list[str] = []
+    menu_target_by_path: dict[str, str] = {}
     anchor_texts_by_path: dict[str, Counter[str]] = defaultdict(Counter)
     incoming_sources_by_path: dict[str, Counter[str]] = defaultdict(Counter)
     incoming_counts_by_path: Counter[str] = Counter()
@@ -1794,6 +1938,40 @@ def _build_mind_map_for_scan(scan: WebsiteScan) -> int:
 
     source_priority = {"breadcrumbs": 3, "menu": 2, "links": 1, "url": 0}
     tree = _build_hierarchy_tree(chains, max_depth=max_depth) if chains else _build_url_tree(urls, max_depth=max_depth)
+    if menu_title_by_path:
+        menu_root = tree.children.get(_MENU_ROOT_PATH)
+        if menu_root is None:
+            menu_root = _TreeNode(name=_MENU_ROOT_LABEL, path=_MENU_ROOT_PATH, depth=1)
+            tree.children[_MENU_ROOT_PATH] = menu_root
+        else:
+            menu_root.name = _MENU_ROOT_LABEL
+        menu_nodes: dict[str, _TreeNode] = {_MENU_ROOT_PATH: menu_root}
+        for path in sorted(menu_title_by_path.keys(), key=_path_depth):
+            normalized = _path_key(path)
+            if not normalized:
+                continue
+            synthetic_path = _menu_synthetic_path(normalized)
+            parent_synthetic = _menu_parent_path(menu_parent_by_path.get(normalized))
+            parent_node = menu_nodes.get(parent_synthetic) or menu_root
+            node = menu_nodes.get(synthetic_path)
+            if node is None:
+                title = menu_title_by_path.get(normalized) or _segment_from_path(normalized)
+                node = _TreeNode(name=title, path=synthetic_path, depth=parent_node.depth + 1)
+                menu_nodes[synthetic_path] = node
+            parent_node.children[synthetic_path] = node
+            menu_target_by_path[synthetic_path] = normalized
+
+        def _recount_menu(node: _TreeNode) -> int:
+            if not node.children:
+                node.count = max(node.count, 1)
+                return node.count
+            total = 0
+            for child in node.children.values():
+                total += _recount_menu(child)
+            node.count = max(node.count, total)
+            return node.count
+
+        _recount_menu(menu_root)
     if source_counts:
         logger.info(
             "WebsiteScan UI hierarchy sources: id=%s breadcrumbs=%s menu=%s links=%s url=%s",
@@ -1858,8 +2036,12 @@ def _build_mind_map_for_scan(scan: WebsiteScan) -> int:
         mind_node_by_path: dict[str, MindNode] = {}
 
         for node in _iter_tree(tree):
-            page_url = base_url.rstrip("/") + node.path if node.path != "/" else base_url
-            matched_page = page_by_path.get(node.path)
+            menu_target_path = menu_target_by_path.get(node.path)
+            menu_page_url = None
+            if menu_target_path:
+                menu_page_url = base_url.rstrip("/") + menu_target_path if menu_target_path != "/" else base_url
+            page_url = menu_page_url or (base_url.rstrip("/") + node.path if node.path != "/" else base_url)
+            matched_page = page_by_path.get(menu_target_path) if menu_target_path else page_by_path.get(node.path)
             page_title = (str(matched_page.get("title") or "").strip() if matched_page else "")
             node_label = _normalize_label(node.name)
             display_name = netloc if node.depth == 0 else (node_label or page_title or node.name)
@@ -1874,6 +2056,13 @@ def _build_mind_map_for_scan(scan: WebsiteScan) -> int:
                 "count": node.count,
                 "is_root": node.depth == 0,
             }
+            if menu_target_path:
+                meta["menu_path"] = menu_target_path
+                if menu_page_url:
+                    meta["menu_url"] = menu_page_url
+                meta["is_menu"] = True
+            if node.path == _MENU_ROOT_PATH:
+                meta["is_menu_root"] = True
             source_counts_for_node = node_source_counts.get(node.path)
             if source_counts_for_node:
                 meta["cluster_sources"] = dict(source_counts_for_node)
