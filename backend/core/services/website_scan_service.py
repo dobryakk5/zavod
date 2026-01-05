@@ -1574,6 +1574,41 @@ def _url_chain_for_page(page_url: str, *, max_depth: int) -> list[_HierarchyItem
     return chain
 
 
+def _filter_chain_to_pages(
+    chain: list[_HierarchyItem],
+    *,
+    page_url: str,
+    page_by_path: dict[str, WebsiteScanPage],
+    max_depth: int,
+) -> list[_HierarchyItem]:
+    if not chain:
+        return []
+    if not page_by_path:
+        return chain
+    allowed = set(page_by_path.keys())
+    label_by_path = {item.path: item.name for item in chain if item.name}
+    filtered: list[_HierarchyItem] = []
+    seen: set[str] = set()
+    for item in chain:
+        if item.path not in allowed:
+            continue
+        if item.path in seen:
+            continue
+        if _path_depth(item.path) > max_depth:
+            continue
+        name = item.name or label_by_path.get(item.path) or _segment_from_path(item.path)
+        filtered.append(_HierarchyItem(path=item.path, name=name, source=item.source))
+        seen.add(item.path)
+
+    page_path = _path_key(page_url)
+    if page_path in allowed and page_path not in seen and _path_depth(page_path) <= max_depth:
+        name = label_by_path.get(page_path) or _segment_from_path(page_path)
+        source = chain[-1].source if chain else "url"
+        filtered.append(_HierarchyItem(path=page_path, name=name, source=source))
+
+    return filtered
+
+
 def _preferred_page_label(page: WebsiteScanPage) -> str | None:
     headings = page.headings or {}
     h1 = headings.get("h1")
@@ -1911,6 +1946,21 @@ def _build_mind_map_for_scan(scan: WebsiteScan) -> int:
         if not chain:
             chain = _url_chain_for_page(page.url, max_depth=max_depth)
             source = "url"
+        if chain:
+            chain = _filter_chain_to_pages(
+                chain,
+                page_url=page.url,
+                page_by_path=page_by_path_obj,
+                max_depth=max_depth,
+            )
+            if not chain:
+                chain = _filter_chain_to_pages(
+                    _url_chain_for_page(page.url, max_depth=max_depth),
+                    page_url=page.url,
+                    page_by_path=page_by_path_obj,
+                    max_depth=max_depth,
+                )
+                source = "url"
         page_chain_by_id[page.id] = chain
         page_source_by_id[page.id] = source
 
