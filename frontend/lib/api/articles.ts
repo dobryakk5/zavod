@@ -17,6 +17,13 @@ export const articlesApi = {
     });
   },
 
+  generateContext: async (id: number, payload: { force?: boolean } = {}): Promise<Article> => {
+    return apiFetch<Article>(`/articles/${id}/generate_context/`, {
+      method: 'POST',
+      body: payload,
+    });
+  },
+
   generateOutline: async (
     id: number,
     payload: {

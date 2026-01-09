@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { WordstatQuery, WordstatResultType } from '../types';
+import type { WordstatCluster, WordstatQuery, WordstatResultType } from '../types';
 
 type WordstatRequestPayload = {
   phrase?: string;
@@ -13,6 +13,10 @@ type WordstatRequestPayload = {
 export const wordstatApi = {
   list: async (): Promise<WordstatQuery[]> => {
     return apiFetch<WordstatQuery[]>('/wordstat/');
+  },
+
+  listClusters: async (): Promise<WordstatCluster[]> => {
+    return apiFetch<WordstatCluster[]>('/wordstat-clusters/');
   },
 
   get: async (id: number | string): Promise<WordstatQuery> => {
@@ -50,6 +54,19 @@ export const wordstatApi = {
     await apiFetch<void>(`/wordstat-results/${resultId}/`, {
       method: 'PATCH',
       body: { result_type },
+    });
+  },
+
+  updateCluster: async (resultId: number, cluster: number | null): Promise<void> => {
+    await apiFetch<void>(`/wordstat-results/${resultId}/`, {
+      method: 'PATCH',
+      body: { cluster },
+    });
+  },
+
+  clusterFavorites: async (): Promise<{ success: boolean; clusters: WordstatCluster[] }> => {
+    return apiFetch<{ success: boolean; clusters: WordstatCluster[] }>('/wordstat-results/cluster-favorites/', {
+      method: 'POST',
     });
   },
 };

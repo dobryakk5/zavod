@@ -34,6 +34,7 @@ from core.models import (
     WebsiteScanPage,
     WordstatQuery,
     WordstatResult,
+    WordstatCluster,
     WeeklySourceReport,
     WeeklySourceBatch,
 )
@@ -538,10 +539,21 @@ class SEOKeywordSetSerializer(serializers.ModelSerializer):
 
 
 class WordstatResultSerializer(serializers.ModelSerializer):
+    cluster_name = serializers.CharField(source="cluster.name", read_only=True)
+
     class Meta:
         model = WordstatResult
-        fields = ["id", "phrase", "count", "result_type", "used_in_post"]
-        read_only_fields = ["id", "phrase", "count", "used_in_post"]
+        fields = ["id", "phrase", "count", "result_type", "used_in_post", "cluster", "cluster_name"]
+        read_only_fields = ["id", "phrase", "count", "used_in_post", "cluster_name"]
+
+
+class WordstatClusterSerializer(serializers.ModelSerializer):
+    phrases_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = WordstatCluster
+        fields = ["id", "name", "phrases_count", "created_at"]
+        read_only_fields = ["id", "phrases_count", "created_at"]
 
 
 class WordstatQuerySerializer(serializers.ModelSerializer):

@@ -1,107 +1,151 @@
 "use client";
 
-import React, { useState } from "react";
-import Link from "next/link";
-import { ArrowRight, Search, MessageCircle, CheckCircle } from "lucide-react";
+import React from "react";
+import { useRouter } from "next/navigation";
+import {
+  Search,
+  UserCheck,
+  ListChecks,
+  GitBranch,
+  FileText,
+  TrendingUp,
+} from "lucide-react";
+import { motion, type Variants } from "framer-motion";
 
-// LoggedInLanding — страница, которая показывается пользователю после логина.
-// Включает пошаговый план и формы ввода для анализа Telegram-канала.
-// Меняйте обработчик onSubmit, чтобы интегрировать с вашими API-эндпоинтами.
+const fadeUp: Variants = {
+  hidden: { opacity: 0, y: 20 },
+  visible: (i: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: {
+      delay: i * 0.3,
+      duration: 0.4,
+      ease: "easeOut",
+    },
+  }),
+};
 
 export default function LoggedInLanding() {
-  const [channel, setChannel] = useState("");
-  const [name, setName] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState("");
-
-  function normalizeChannel(input: string): string {
-    if (!input) return "";
-    return input.replace(/^https?:\/\//, "").replace(/\/$/, "");
-  }
-
-  async function handleSubmit(e: React.FormEvent): Promise<void> {
-    e.preventDefault();
-    setError("");
-    const cleaned = normalizeChannel(channel).trim();
-    if (!cleaned) {
-      setError("Введите ссылку или @username канала");
-      return;
-    }
-
-    setLoading(true);
-    setResult(null);
-
-    try {
-      // Пример вызова API. Замените на реальный роут и логику.
-      const res = await fetch(`/api/analyze?channel=${encodeURIComponent(cleaned)}`);
-      if (!res.ok) throw new Error("Ошибка на сервере");
-      const data = await res.json();
-      setResult(data);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Не удалось выполнить анализ");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const router = useRouter();
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-12">
-      <div className="mb-8">
-        <h1 className="text-3xl font-extrabold text-slate-900">Добро пожаловать — план действий</h1>
-        <p className="mt-2 text-slate-600">Пройдите три простых шага — мы поможем с аналитикой, узнаваемостью и контент-планом.</p>
+    <div className="mx-auto max-w-3xl px-6 py-12">
+      <motion.div
+        initial={{ opacity: 0, y: 15 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="mb-10 text-center"
+      >
+        <h1 className="text-3xl font-extrabold text-slate-900">
+          Добро пожаловать в управляемый маркетинг
+        </h1>
+        <p className="mt-3 text-slate-600 text-lg">
+          Пройди 6 шагов — и получи аналитику, SEO-ключи, продуктовую линейку,
+          контент и рост охватов.
+        </p>
+      </motion.div>
+
+      <div className="space-y-6">
+        {[
+          {
+            step: 1,
+            title: "AI-аналитика",
+            icon: Search,
+            color: "indigo",
+            bg: "bg-indigo-50",
+            href: "/analytics",
+            text: "Анализ сайта, Telegram-канала (своего или конкурента), одного канала или подборки. ИИ собирает метрики, выявляет слабые и сильные зоны.",
+          },
+          {
+            step: 2,
+            title: "Коррекция позиционирования",
+            icon: UserCheck,
+            color: "amber",
+            bg: "bg-amber-50",
+            href: "/settings",
+            text: "ИИ помогает переформулировать сильное позиционирование, выгоды, болевые зоны и портреты целевой аудитории.",
+          },
+          {
+            step: 3,
+            title: "SEO-ключи и кластеры",
+            icon: ListChecks,
+            color: "sky",
+            bg: "bg-sky-50",
+            href: "/seo",
+            text: "Получение Wordstat-запросов с автоматической кластеризацией и ранжированием по приоритетам.",
+          },
+          {
+            step: 4,
+            title: "Продуктовая линейка + Mind Map",
+            icon: GitBranch,
+            color: "purple",
+            bg: "bg-purple-50",
+            href: "/mindmap",
+            text: "ИИ строит продуктовую линейку из Wordstat-запросов и контекста проекта. Отображает её как ментальную карту.",
+          },
+          {
+            step: 5,
+            title: "Генерация контента",
+            icon: FileText,
+            color: "green",
+            bg: "bg-green-50",
+            href: "/posts",
+            text: "ИИ создаёт SEO-статьи, посты, сценарии видео и карусели с изображениями — по кластерам и ЦА.",
+          },
+          {
+            step: 6,
+            title: "Аналитика и рост",
+            icon: TrendingUp,
+            color: "emerald",
+            bg: "bg-emerald-50",
+            href: "/dashboard",
+            text: "Мониторинг охватов, трафика, динамики постов, вовлечённости и точек монетизации.",
+          },
+        ].map((block, i) => {
+          const Icon = block.icon;
+          return (
+            <motion.div
+              key={block.step}
+              custom={i}
+              initial="hidden"
+              animate="visible"
+              variants={fadeUp}
+            >
+              <motion.div
+                onClick={() => router.push(block.href)}
+                whileHover={{
+                  scale: 1.015,
+                  transition: { duration: 0.15 },
+                }}
+                whileTap={{
+                  scale: 0.98,
+                  transition: { duration: 0.1 },
+                }}
+                className="rounded-2xl border p-6 bg-white shadow-sm cursor-pointer select-none"
+              >
+                <div className="flex items-start gap-4">
+                  <div className={`rounded-xl ${block.bg} p-3`}>
+                    <Icon className={`h-6 w-6 text-${block.color}-600`} />
+                  </div>
+                  <div>
+                    <div
+                      className={`text-sm font-semibold text-${block.color}-600`}
+                    >
+                      Шаг {block.step}
+                    </div>
+                    <h2 className="mt-1 text-xl font-bold text-slate-900">
+                      {block.title}
+                    </h2>
+                    <p className="mt-2 text-slate-600 text-sm leading-relaxed">
+                      {block.text}
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          );
+        })}
       </div>
-
-      <div className="grid gap-6 md:grid-cols-3">
-        <div className="rounded-2xl border p-6 bg-white shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm text-indigo-600 font-semibold">Шаг 1</div>
-              <div className="mt-2 text-lg font-semibold text-slate-900">AI-аналитика</div>
-            </div>
-            <div className="text-indigo-100 rounded-full bg-indigo-50 p-2">
-              <Search className="h-5 w-5 text-indigo-600" />
-            </div>
-          </div>
-          <p className="mt-4 text-sm text-slate-600">Мы проанализируем канал и дадим метрики: вовлечение, охват, наиболее сильный контент.</p>
-          <div className="mt-4">
-            <Link href="/analytics" className="inline-flex items-center gap-2 text-sm font-medium text-indigo-600 hover:underline">Начать анализ <ArrowRight className="h-4 w-4"/></Link>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border p-6 bg-white shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm text-amber-600 font-semibold">Шаг 2</div>
-              <div className="mt-2 text-lg font-semibold text-slate-900">Как стать известной компанией</div>
-            </div>
-            <div className="text-amber-100 rounded-full bg-amber-50 p-2">
-              <MessageCircle className="h-5 w-5 text-amber-600" />
-            </div>
-          </div>
-          <p className="mt-4 text-sm text-slate-600">Конкретные рекомендации по позиционированию и SEO.</p>
-          <div className="mt-4">
-            <Link href="/seo" className="inline-flex items-center gap-2 text-sm font-medium text-amber-600 hover:underline">Получить рекомендации <ArrowRight className="h-4 w-4"/></Link>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border p-6 bg-white shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm text-emerald-600 font-semibold">Шаг 3</div>
-              <div className="mt-2 text-lg font-semibold text-slate-900">Контент-план</div>
-            </div>
-            <div className="text-emerald-100 rounded-full bg-emerald-50 p-2">
-              <CheckCircle className="h-5 w-5 text-emerald-600" />
-            </div>
-          </div>
-          <p className="mt-4 text-sm text-slate-600">Готовый план постов с темами, подтемами и CTA — можно сразу копировать.</p>
-          <div className="mt-4">
-            <Link href="/posts" className="inline-flex items-center gap-2 text-sm font-medium text-emerald-600 hover:underline">Сгенерировать план <ArrowRight className="h-4 w-4"/></Link>
-          </div>
-        </div>
-      </div>
-
     </div>
   );
 }

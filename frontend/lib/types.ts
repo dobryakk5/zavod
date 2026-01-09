@@ -446,6 +446,15 @@ export interface WordstatResult {
   count: number;
   result_type: WordstatResultType;
   used_in_post: number;
+  cluster?: number | null;
+  cluster_name?: string | null;
+}
+
+export interface WordstatCluster {
+  id: number;
+  name: string;
+  phrases_count?: number;
+  created_at?: string;
 }
 
 export interface WordstatQuery {

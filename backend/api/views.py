@@ -34,6 +34,7 @@ from .views_misc import (  # noqa: F401
     WeeklySourceBatchViewSet,
     WeeklySourceReportViewSet,
     WeeklySourceRunView,
+    WordstatClusterViewSet,
     WordstatQueryViewSet,
     WordstatResultViewSet,
 )

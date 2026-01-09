@@ -91,6 +91,30 @@ export default function ArticlesPageClient() {
     setStarting(true);
     try {
       const created = await articlesApi.start(phrases[0]);
+      try {
+        await articlesApi.generateContext(created.id);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          router.push('/login');
+          return;
+        }
+        let messageShown = false;
+        if (error instanceof ApiError) {
+          try {
+            const parsed = JSON.parse(error.body || '{}') as { error?: string };
+            if (parsed.error) {
+              toast.error(parsed.error);
+              messageShown = true;
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+        console.error('Failed to generate article context', error);
+        if (!messageShown) {
+          toast.error('Не удалось сгенерировать контекст');
+        }
+      }
       router.push(`/articles/${created.id}`);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {

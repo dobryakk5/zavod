@@ -39,6 +39,7 @@ from .views import (
     WeeklySourceRunView,
     WeeklySourceBatchViewSet,
     WordstatQueryViewSet,
+    WordstatClusterViewSet,
     WordstatResultViewSet,
     WebsiteScanViewSet,
     GoogleCSESearchView,
@@ -66,6 +67,7 @@ router.register(r'post-types', PostTypeViewSet, basename='post-type')
 router.register(r'post-tones', PostToneViewSet, basename='post-tone')
 router.register(r'seo-keywords', SEOKeywordSetViewSet, basename='seo-keyword')
 router.register(r'wordstat', WordstatQueryViewSet, basename='wordstat')
+router.register(r'wordstat-clusters', WordstatClusterViewSet, basename='wordstat-cluster')
 router.register(r'wordstat-results', WordstatResultViewSet, basename='wordstat-result')
 router.register(r'channel-analyses', ChannelAnalysisViewSet, basename='channel-analysis')
 router.register(r'vk/integrations', VkIntegrationViewSet, basename='vk-integration')

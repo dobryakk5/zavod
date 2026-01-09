@@ -41,6 +41,7 @@ from config.celery import app as celery_app
 
 from core.audience_profiles import merge_audience_profiles
 from core.ai_generator import AIContentGenerator
+from core.ai_generator_seo import cluster_wordstat_phrases, normalize_phrase
 from core.services.article_blocks import get_system_block_prompt_template, sync_blocks_from_seo_blocks
 from core.models import (
     Article,
@@ -66,6 +67,7 @@ from core.models import (
     VkIntegration,
     WordstatQuery,
     WordstatResult,
+    WordstatCluster,
 )
 from core import tasks
 from core.telegram_client import normalize_telegram_channel_identifier
@@ -111,6 +113,7 @@ from .serializers import (
     WeeklySourceBatchListSerializer,
     WordstatQuerySerializer,
     WordstatResultSerializer,
+    WordstatClusterSerializer,
 )
 from .utils import get_active_client
 
@@ -1450,6 +1453,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in {
             "start",
+            "generate_context",
             "save_choices",
             "save_seo_blocks",
             "generate_seo_blocks",
@@ -1481,6 +1485,59 @@ class ArticleViewSet(viewsets.ModelViewSet):
 
     def _sync_blocks_from_seo_blocks(self, article: Article):
         sync_blocks_from_seo_blocks(article)
+
+    def _generate_context_options(self, article: Article, force: bool = False):
+        has_options = bool(article.options_why_now) and bool(article.options_solution)
+        if has_options and not force:
+            if article.status in {"draft", "failed"}:
+                article.status = "options_ready"
+                article.save(update_fields=["status", "updated_at"])
+            return True, None, None
+
+        try:
+            generator = AIContentGenerator()
+        except Exception:
+            article.status = "failed"
+            article.save(update_fields=["status", "updated_at"])
+            return False, "AI генератор не настроен (нет ключа/доступа)", status.HTTP_503_SERVICE_UNAVAILABLE
+
+        prompt = f"""
+Ты помощник редактора. По поисковому запросу (Wordstat) нужно сгенерировать варианты для двух списков.
+
+Запрос: "{article.wordstat}"
+
+1) Почему пользователь это ищет именно сейчас?
+2) К какому решению его можно подвести?
+
+Требования:
+- Верни строго JSON-объект.
+- Ключи: "why_now" и "solution".
+- Значения: массивы строк (каждая строка 4-12 слов), по 6-10 вариантов.
+- Не пиши статьи и объяснения, только варианты.
+"""
+
+        ai_raw = generator.get_ai_response(
+            prompt,
+            max_tokens=700,
+            temperature=0.6,
+            response_format={"type": "json_object"},
+        )
+        parsed = _parse_ai_json_object(ai_raw or "")
+        why_now = parsed.get("why_now") if isinstance(parsed, dict) else None
+        solution = parsed.get("solution") if isinstance(parsed, dict) else None
+
+        if not isinstance(why_now, list) or not isinstance(solution, list):
+            article.status = "failed"
+            article.save(update_fields=["status", "updated_at"])
+            return False, "Не удалось получить варианты от AI", status.HTTP_502_BAD_GATEWAY
+
+        article.options_why_now = [str(item).strip() for item in why_now if str(item).strip()]
+        article.options_solution = [str(item).strip() for item in solution if str(item).strip()]
+        if article.status in {"draft", "failed"}:
+            article.status = "options_ready"
+        article.save(update_fields=["options_why_now", "options_solution", "status", "updated_at"])
+
+        return True, None, None
 
     @action(detail=True, methods=["get"])
     def blocks(self, request, pk=None):
@@ -1582,53 +1639,26 @@ class ArticleViewSet(viewsets.ModelViewSet):
         )
         self._sync_blocks_from_seo_blocks(article)
 
-        try:
-            generator = AIContentGenerator()
-        except Exception:
-            article.status = "failed"
-            article.save(update_fields=["status", "updated_at"])
-            return Response(
-                {"error": "AI генератор не настроен (нет ключа/доступа)"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+        ok, error, status_code = self._generate_context_options(article)
+        if not ok:
+            return Response({"error": error}, status=status_code)
 
-        prompt = f"""
-Ты помощник редактора. По поисковому запросу (Wordstat) нужно сгенерировать варианты для двух списков.
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
 
-Запрос: "{phrase}"
+    @action(detail=True, methods=["post"])
+    def generate_context(self, request, pk=None):
+        article = self.get_object()
+        raw_force = request.data.get("force")
+        force = False
+        if isinstance(raw_force, bool):
+            force = raw_force
+        elif raw_force is not None:
+            force = str(raw_force).strip().lower() in {"1", "true", "yes", "y", "on"}
 
-1) Почему пользователь это ищет именно сейчас?
-2) К какому решению его можно подвести?
-
-Требования:
-- Верни строго JSON-объект.
-- Ключи: "why_now" и "solution".
-- Значения: массивы строк (каждая строка 4-12 слов), по 6-10 вариантов.
-- Не пиши статьи и объяснения, только варианты.
-"""
-
-        ai_raw = generator.get_ai_response(
-            prompt,
-            max_tokens=700,
-            temperature=0.6,
-            response_format={"type": "json_object"},
-        )
-        parsed = _parse_ai_json_object(ai_raw or "")
-        why_now = parsed.get("why_now") if isinstance(parsed, dict) else None
-        solution = parsed.get("solution") if isinstance(parsed, dict) else None
-
-        if not isinstance(why_now, list) or not isinstance(solution, list):
-            article.status = "failed"
-            article.save(update_fields=["status", "updated_at"])
-            return Response(
-                {"error": "Не удалось получить варианты от AI"},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        article.options_why_now = [str(item).strip() for item in why_now if str(item).strip()]
-        article.options_solution = [str(item).strip() for item in solution if str(item).strip()]
-        article.status = "options_ready"
-        article.save(update_fields=["options_why_now", "options_solution", "status", "updated_at"])
+        ok, error, status_code = self._generate_context_options(article, force=force)
+        if not ok:
+            return Response({"error": error}, status=status_code)
 
         serializer = self.get_serializer(article)
         return Response(serializer.data)
@@ -2881,13 +2911,140 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+class WordstatClusterViewSet(viewsets.ReadOnlyModelViewSet):
+    """Список кластеров Wordstat для клиента."""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = WordstatClusterSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return (
+            WordstatCluster.objects.filter(client=client)
+            .annotate(phrases_count=Count("results", filter=Q(results__result_type="favorite")))
+            .order_by("name", "id")
+        )
+
+
 class WordstatResultViewSet(mixins.UpdateModelMixin, viewsets.GenericViewSet):
     """Обновление отдельных строк Wordstat (например, смена метки)."""
 
     permission_classes = [IsTenantOwnerOrEditor]
     serializer_class = WordstatResultSerializer
-    http_method_names = ["patch", "put", "head", "options"]
+    http_method_names = ["patch", "put", "post", "head", "options"]
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
         return WordstatResult.objects.filter(query__client=client)
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+
+        if "cluster" in data:
+            client = get_active_client(request.user)
+            raw_cluster = data.get("cluster")
+            if raw_cluster in (None, "", "null"):
+                data["cluster"] = None
+            else:
+                try:
+                    cluster_id = int(raw_cluster)
+                except (TypeError, ValueError):
+                    return Response({"error": "Некорректный кластер"}, status=status.HTTP_400_BAD_REQUEST)
+                if not WordstatCluster.objects.filter(client=client, id=cluster_id).exists():
+                    return Response({"error": "Кластер не найден"}, status=status.HTTP_400_BAD_REQUEST)
+                data["cluster"] = cluster_id
+
+        serializer = self.get_serializer(instance, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["post"], url_path="cluster-favorites")
+    def cluster_favorites(self, request):
+        client = get_active_client(request.user)
+        favorites = list(
+            WordstatResult.objects.filter(query__client=client, result_type="favorite")
+        )
+        if not favorites:
+            return Response({"error": "Нет избранных фраз для кластеризации"}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing_clusters = list(
+            WordstatCluster.objects.filter(client=client).order_by("name", "id")
+        )
+        existing_names = [cluster.name for cluster in existing_clusters]
+
+        unclustered_rows = [item for item in favorites if item.phrase and not item.cluster_id]
+        phrases = [item.phrase for item in unclustered_rows if item.phrase]
+
+        if not phrases:
+            clusters = (
+                WordstatCluster.objects.filter(client=client)
+                .annotate(phrases_count=Count("results", filter=Q(results__result_type="favorite")))
+                .order_by("name", "id")
+            )
+            serializer = WordstatClusterSerializer(clusters, many=True)
+            return Response(
+                {
+                    "success": True,
+                    "message": "Нет фраз без кластера",
+                    "clusters": serializer.data,
+                }
+            )
+
+        clustering_result = cluster_wordstat_phrases(phrases, existing_clusters=existing_names)
+        if not clustering_result.get("success"):
+            return Response(
+                {"error": "Не удалось кластеризовать фразы", "details": clustering_result.get("error")},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        phrase_to_cluster = clustering_result.get("phrase_to_cluster")
+        if not isinstance(phrase_to_cluster, dict):
+            phrase_to_cluster = {}
+
+        clusters_payload = clustering_result.get("clusters")
+        if not isinstance(clusters_payload, list):
+            clusters_payload = []
+
+        cluster_names: list[str] = []
+        for cluster in clusters_payload:
+            if not isinstance(cluster, dict):
+                continue
+            name = str(cluster.get("name") or "").strip()
+            if name and name not in cluster_names:
+                cluster_names.append(name)
+
+        with transaction.atomic():
+            clusters_by_name: dict[str, WordstatCluster] = {c.name: c for c in existing_clusters}
+            for name in cluster_names:
+                if name in clusters_by_name:
+                    continue
+                clusters_by_name[name] = WordstatCluster.objects.create(
+                    client=client,
+                    name=name[:255],
+                )
+
+            to_update: list[WordstatResult] = []
+            for row in unclustered_rows:
+                normalized = normalize_phrase(row.phrase)
+                cluster_name = phrase_to_cluster.get(normalized)
+                if not cluster_name:
+                    continue
+                cluster = clusters_by_name.get(cluster_name)
+                if not cluster:
+                    continue
+                row.cluster = cluster
+                to_update.append(row)
+
+            if to_update:
+                WordstatResult.objects.bulk_update(to_update, ["cluster"])
+
+        clusters = (
+            WordstatCluster.objects.filter(client=client)
+            .annotate(phrases_count=Count("results", filter=Q(results__result_type="favorite")))
+            .order_by("name", "id")
+        )
+        serializer = WordstatClusterSerializer(clusters, many=True)
+        return Response({"success": True, "clusters": serializer.data})

@@ -1624,6 +1624,27 @@ class WordstatQuery(models.Model):
         return f"[{self.client.slug}] Wordstat '{self.request_phrase}' ({self.total_count})"
 
 
+class WordstatCluster(models.Model):
+    """Кластеры для избранных Wordstat-фраз."""
+
+    id = models.SmallAutoField(primary_key=True)
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="wordstat_clusters")
+    name = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("name", "id")
+        indexes = [
+            models.Index(fields=["client", "name"], name="ws_cluster_client_name_idx"),
+        ]
+        verbose_name = "Wordstat Cluster"
+        verbose_name_plural = "Wordstat Clusters"
+
+    def __str__(self):
+        return f"[{self.client.slug}] {self.name}"
+
+
 class WordstatResult(models.Model):
     """Отдельная фраза из выдачи Wordstat с частотностью."""
 
@@ -1635,6 +1656,13 @@ class WordstatResult(models.Model):
     )
 
     query = models.ForeignKey(WordstatQuery, on_delete=models.CASCADE, related_name="results")
+    cluster = models.ForeignKey(
+        WordstatCluster,
+        on_delete=models.SET_NULL,
+        related_name="results",
+        blank=True,
+        null=True,
+    )
     phrase = models.TextField()
     count = models.PositiveIntegerField(default=0)
     result_type = models.CharField(max_length=20, choices=RESULT_TYPE_CHOICES, default="top_request")
