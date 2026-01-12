@@ -9,6 +9,7 @@ import {
   type ChannelAnalysisDetail,
   type ChannelAnalysisRecord,
   type ChannelAnalysisResult,
+  type AuthorInfluenceAnalysis,
 } from '@/lib/api/analytics';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -27,6 +28,7 @@ type AnalyticsDetailPageProps = {
 };
 
 type AudienceProfile = NonNullable<ChannelAnalysisResult['audience_profile']>;
+type AuthorInfluence = NonNullable<ChannelAnalysisResult['author_influence_analysis']>;
 
 const AUDIENCE_FIELDS: Array<{ label: string; key: keyof AudienceProfile }> = [
   { label: 'Аватар клиента', key: 'avatar' },
@@ -58,6 +60,17 @@ const DAY_NAMES_RU: Record<string, string> = {
   Saturday: 'Суббота',
   Sunday: 'Воскресенье',
 };
+
+const hasText = (value?: string | null) => !!value && value.trim().length > 0;
+
+const isStructuredInfluence = (value: AuthorInfluence | null | undefined): value is AuthorInfluenceAnalysis =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+const renderLabelValue = (label: string, value?: string, key?: string) => (
+  <li key={key || label} className="text-sm text-gray-900">
+    <span className="font-semibold text-gray-900">{label}:</span> {value?.trim() || '—'}
+  </li>
+);
 
 export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps) {
   const resolvedParams =
@@ -338,6 +351,17 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
               </CardContent>
             </Card>
           </section>
+
+          <section>
+            <Card>
+              <CardHeader>
+                <CardTitle>Анализ ценностей и стиля влияния автора</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <AuthorInfluenceSection value={result.author_influence_analysis} />
+              </CardContent>
+            </Card>
+          </section>
         </>
       ) : (
         <Card>
@@ -377,3 +401,172 @@ const TagList = ({ label, items }: TagListProps) => (
     )}
   </div>
 );
+
+type AuthorInfluenceSectionProps = {
+  value?: AuthorInfluence | null;
+};
+
+const AuthorInfluenceSection = ({ value }: AuthorInfluenceSectionProps) => {
+  if (typeof value === 'string') {
+    return hasText(value) ? (
+      <div className="text-sm text-gray-900 whitespace-pre-line">{value.trim()}</div>
+    ) : (
+      <p className="text-sm text-gray-500">Данные ещё не собраны. Запустите анализ канала повторно, чтобы получить этот блок.</p>
+    );
+  }
+
+  if (!isStructuredInfluence(value)) {
+    return <p className="text-sm text-gray-500">Данные ещё не собраны. Запустите анализ канала повторно, чтобы получить этот блок.</p>;
+  }
+
+  const hasContent =
+    hasText(value.short_overview) ||
+    (value.core_value_drivers?.length ?? 0) > 0 ||
+    (value.risk_signals?.length ?? 0) > 0 ||
+    (value.executive_summary?.length ?? 0) > 0 ||
+    hasText(value.influence_style?.persuasion_method) ||
+    hasText(value.influence_style?.tone) ||
+    hasText(value.influence_style?.audience_relationship) ||
+    hasText(value.influence_style?.content_posture) ||
+    hasText(value.marketing_playbook?.best_approach?.angle) ||
+    hasText(value.marketing_playbook?.best_approach?.message_framing) ||
+    hasText(value.marketing_playbook?.best_approach?.tone) ||
+    hasText(value.marketing_playbook?.best_approach?.cta_style) ||
+    hasText(value.marketing_playbook?.avoid?.message_types) ||
+    hasText(value.marketing_playbook?.avoid?.promises) ||
+    hasText(value.marketing_playbook?.avoid?.wording_styles);
+
+  if (!hasContent) {
+    return <p className="text-sm text-gray-500">Данные ещё не собраны. Запустите анализ канала повторно, чтобы получить этот блок.</p>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <p className="text-sm font-semibold text-gray-900">Краткий обзор автора</p>
+        <p className="text-sm text-gray-900 whitespace-pre-line">{value.short_overview?.trim() || '—'}</p>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-sm font-semibold text-gray-900">Ключевые драйверы ценностей</p>
+        {value.core_value_drivers && value.core_value_drivers.length > 0 ? (
+          <ul className="list-disc space-y-3 pl-5 text-sm text-gray-900">
+            {value.core_value_drivers.map((driver, index) => (
+              <li key={`${driver.driver || 'driver'}-${index}`} className="space-y-1">
+                <p className="font-semibold text-gray-900">{driver.driver?.trim() || `Драйвер ${index + 1}`}</p>
+                {hasText(driver.evidence) && (
+                  <p className="text-sm text-gray-700">
+                    <span className="font-medium text-gray-900">Доказательства:</span> {driver.evidence?.trim()}
+                  </p>
+                )}
+                {hasText(driver.marketing_use) && (
+                  <p className="text-sm text-gray-700">
+                    <span className="font-medium text-gray-900">В маркетинге:</span> {driver.marketing_use?.trim()}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-gray-500">—</p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-sm font-semibold text-gray-900">Стиль влияния и коммуникации</p>
+        {(() => {
+          const influenceItems = [
+            { label: 'Метод убеждения', value: value.influence_style?.persuasion_method },
+            { label: 'Тон', value: value.influence_style?.tone },
+            { label: 'Отношение к аудитории', value: value.influence_style?.audience_relationship },
+            { label: 'Позиция в контенте', value: value.influence_style?.content_posture },
+          ].filter((item) => hasText(item.value));
+
+          return influenceItems.length > 0 ? (
+            <ul className="list-disc space-y-1 pl-5 text-sm text-gray-900">
+              {influenceItems.map((item) => renderLabelValue(item.label, item.value))}
+            </ul>
+          ) : (
+            <p className="text-sm text-gray-500">—</p>
+          );
+        })()}
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-sm font-semibold text-gray-900">Риски партнерства и интеграций</p>
+        {value.risk_signals && value.risk_signals.length > 0 ? (
+          <ul className="list-disc space-y-3 pl-5 text-sm text-gray-900">
+            {value.risk_signals.map((risk, index) => (
+              <li key={`${risk.risk || 'risk'}-${index}`} className="space-y-1">
+                <p className="font-semibold text-gray-900">{risk.risk?.trim() || `Риск ${index + 1}`}</p>
+                {hasText(risk.why) && (
+                  <p className="text-sm text-gray-700">
+                    <span className="font-medium text-gray-900">Почему:</span> {risk.why?.trim()}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-gray-500">—</p>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        <p className="text-sm font-semibold text-gray-900">Playbook взаимодействия в маркетинге</p>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <p className="text-sm font-semibold text-gray-900">Лучший подход</p>
+            {(() => {
+              const bestItems = [
+                { label: 'Угол атаки', value: value.marketing_playbook?.best_approach?.angle },
+                { label: 'Фрейминг сообщения', value: value.marketing_playbook?.best_approach?.message_framing },
+                { label: 'Тон', value: value.marketing_playbook?.best_approach?.tone },
+                { label: 'Стиль CTA', value: value.marketing_playbook?.best_approach?.cta_style },
+              ].filter((item) => hasText(item.value));
+
+              return bestItems.length > 0 ? (
+                <ul className="list-disc space-y-1 pl-5 text-sm text-gray-900">
+                  {bestItems.map((item) => renderLabelValue(item.label, item.value))}
+                </ul>
+              ) : (
+                <p className="text-sm text-gray-500">—</p>
+              );
+            })()}
+          </div>
+          <div className="space-y-2">
+            <p className="text-sm font-semibold text-gray-900">Избегать</p>
+            {(() => {
+              const avoidItems = [
+                { label: 'Типы сообщений', value: value.marketing_playbook?.avoid?.message_types },
+                { label: 'Обещания', value: value.marketing_playbook?.avoid?.promises },
+                { label: 'Формулировки', value: value.marketing_playbook?.avoid?.wording_styles },
+              ].filter((item) => hasText(item.value));
+
+              return avoidItems.length > 0 ? (
+                <ul className="list-disc space-y-1 pl-5 text-sm text-gray-900">
+                  {avoidItems.map((item) => renderLabelValue(item.label, item.value))}
+                </ul>
+              ) : (
+                <p className="text-sm text-gray-500">—</p>
+              );
+            })()}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-sm font-semibold text-gray-900">Резюме для принятия решений</p>
+        {value.executive_summary && value.executive_summary.length > 0 ? (
+          <ul className="list-disc space-y-1 pl-5 text-sm text-gray-900">
+            {value.executive_summary.map((item, index) => (
+              <li key={`${item}-${index}`}>{item}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-gray-500">—</p>
+        )}
+      </div>
+    </div>
+  );
+};

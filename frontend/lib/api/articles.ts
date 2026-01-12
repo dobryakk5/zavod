@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { Article, ArticleBlock, TaskResponse } from '../types';
+import type { Article, ArticleBlock, ArticleSeoEvaluationResponse, TaskResponse } from '../types';
 
 export const articlesApi = {
   list: async (): Promise<Article[]> => {
@@ -132,5 +132,17 @@ export const articlesApi = {
 
   generationStatus: async (taskId: string): Promise<TaskResponse> => {
     return apiFetch<TaskResponse>(`/articles/generation-status/?task_id=${encodeURIComponent(taskId)}`);
+  },
+
+  evaluate: async (payload: {
+    text?: string;
+    url?: string;
+    wordstat?: string;
+    action?: 'analyze' | 'recommend' | 'rewrite';
+  }): Promise<ArticleSeoEvaluationResponse> => {
+    return apiFetch<ArticleSeoEvaluationResponse>('/articles/evaluate/', {
+      method: 'POST',
+      body: payload,
+    });
   },
 };

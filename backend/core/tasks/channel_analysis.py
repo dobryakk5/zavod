@@ -60,13 +60,30 @@ def _get_youtube_api_key(client) -> Optional[str]:
     return client.youtube_api_key or getattr(settings, "YOUTUBE_API_KEY", None)
 
 
-def _prepare_posts_text(messages: List[Dict], limit: int = 12) -> str:
+def _prepare_posts_text(
+    messages: List[Dict],
+    limit: int = 12,
+    *,
+    max_chars: int = 12000,
+    per_post_limit: Optional[int] = None,
+) -> str:
     """Сформировать текст из нескольких постов для AI анализа."""
-    texts = [msg.get("text", "").strip() for msg in messages if msg.get("text")]
+    texts: List[str] = []
+    for msg in messages:
+        text = (msg.get("text") or "").strip()
+        if not text:
+            continue
+        if per_post_limit and len(text) > per_post_limit:
+            text = text[:per_post_limit].rstrip()
+        texts.append(text)
+        if len(texts) >= limit:
+            break
     if not texts:
         return ""
-    sample = "\n\n---ПОСТ---\n\n".join(texts[:limit])
-    return sample[:12000]
+    sample = "\n\n---ПОСТ---\n\n".join(texts)
+    if max_chars and len(sample) > max_chars:
+        return sample[:max_chars]
+    return sample
 
 
 def _parse_ai_json_payload(raw_response: Optional[str]) -> Tuple[Optional[Dict], Optional[str]]:
@@ -224,6 +241,8 @@ def _extract_audience_profile(messages: List[Dict], analysis: Optional[ChannelAn
 3) desires — желания и цели
 4) objections — страхи и возражения, мешающие купить или попробовать
 
+Пиши ответы одним абзацем без списков и без пустых строк.
+
 Посты:
 {posts_text}
 
@@ -260,6 +279,193 @@ def _extract_audience_profile(messages: List[Dict], analysis: Optional[ChannelAn
         "desires": clean("desires"),
         "objections": clean("objections"),
     }
+
+
+def _extract_author_influence_analysis(
+    messages: List[Dict],
+    analysis: Optional[ChannelAnalysis] = None,
+) -> Dict:
+    """Получить анализ ценностей и стиля влияния автора."""
+    def build_prompt(posts_text: str) -> str:
+        return f"""SYSTEM ROLE:
+You are an AI marketing analyst specializing in behavioral pattern analysis,
+influence modeling, and value-based marketing.
+You do NOT perform psychological diagnostics or personality typing.
+
+INPUT:
+A set of the latest Telegram posts from a single channel author (20-30 posts).
+Treat the content as a behavioral trace, not as answers to a questionnaire.
+
+POSTS:
+{posts_text}
+
+GOAL:
+Produce a marketing-oriented profile that helps:
+- increase ad integration conversion
+- adapt offers to the author
+- reduce partnership and integration risks
+
+IMPORTANT CONSTRAINTS:
+- Do NOT assign personality types or diagnoses
+- Do NOT reference psychological tests (Hogan, Big5, Enneagram, etc.)
+- All conclusions must be phrased as hypotheses and observable patterns
+- Focus ONLY on marketing, sales, and influence
+
+---
+
+ANALYSIS TASKS:
+
+1. Identify dominant VALUE DRIVERS reflected in the content
+   (e.g. control, status, autonomy, knowledge, usefulness, freedom, meaning).
+
+2. Describe the AUTHOR'S INFLUENCE STYLE in communication:
+   - logic vs emotion vs authority
+   - dominant vs cooperative
+   - teaching, leading, confronting, supporting
+
+3. Describe the NORMAL BEHAVIORAL PATTERN:
+   - how the author positions themselves
+   - how they argue
+   - how they influence their audience
+
+4. Identify POTENTIAL RISKS under stress or disagreement:
+   - criticism patterns
+   - rigidity
+   - devaluation
+   - resistance to control or instructions
+
+5. Form a MOTIVATIONAL PATTERN HYPOTHESIS
+   (describe 1-2 dominant motivational tendencies, not a "type").
+
+6. Translate all findings into CLEAR MARKETING RECOMMENDATIONS.
+
+---
+
+OUTPUT FORMAT (STRICT, RUSSIAN HEADINGS ONLY):
+
+### 1. Краткий обзор автора (5-7 предложений)
+Краткое и нейтральное описание того, как автор действует и влияет.
+
+### 2. Ключевые драйверы ценностей
+Перечень 4-6 драйверов по силе влияния.
+Для каждого:
+- Название драйвера
+- Доказательства из контента
+- Как использовать в маркетинговой коммуникации
+
+### 3. Стиль влияния и коммуникации
+Буллеты:
+- метод убеждения
+- тон
+- отношение к аудитории
+- позиция в контенте (эксперт / лидер / партнер / челленджер)
+
+### 4. Риски партнерства и интеграций
+Список конкретных рисков с пояснениями.
+Пример:
+- Риск: сопротивление жестким скриптам
+- Почему: частые акценты на автономии и личном суждении
+
+### 5. Playbook взаимодействия в маркетинге
+**Лучший подход:**
+- угол атаки
+- фрейминг сообщения
+- тон
+- стиль CTA
+
+**Избегать:**
+- типы сообщений
+- обещания
+- формулировки, которые вероятнее не сработают
+
+### 6. Резюме для принятия решений
+3-5 буллетов:
+- Подходит ли автор для интеграций?
+- Какие продукты лучше всего подходят?
+- Как максимизировать конверсию?
+
+---
+
+FINAL CHECK:
+If any conclusion is weakly supported by the text, mark it explicitly as
+"low confidence hypothesis".
+
+OUTPUT LANGUAGE:
+- Produce the final report in Russian.
+- Preserve marketing terminology in a professional business style.
+
+OUTPUT FORMAT:
+Return ONLY valid JSON. Do NOT use markdown, headings, or extra text.
+Schema:
+{{
+  "short_overview": "5-7 sentences",
+  "core_value_drivers": [
+    {{
+      "driver": "Название драйвера",
+      "evidence": "Доказательства из контента",
+      "marketing_use": "Как использовать в коммуникации"
+    }}
+  ],
+  "influence_style": {{
+    "persuasion_method": "logic/emotion/authority mix",
+    "tone": "тон общения",
+    "audience_relationship": "роль и дистанция",
+    "content_posture": "эксперт/лидер/партнер/челленджер"
+  }},
+  "risk_signals": [
+    {{
+      "risk": "Короткая формулировка риска",
+      "why": "Почему это риск по тексту"
+    }}
+  ],
+  "marketing_playbook": {{
+    "best_approach": {{
+      "angle": "угол атаки",
+      "message_framing": "фрейминг сообщения",
+      "tone": "тон",
+      "cta_style": "стиль CTA"
+    }},
+    "avoid": {{
+      "message_types": "тип сообщений",
+      "promises": "обещания",
+      "wording_styles": "формулировки"
+    }}
+  }},
+  "executive_summary": [
+    "буллет 1",
+    "буллет 2"
+  ]
+}}
+"""
+    generator = AIContentGenerator()
+
+    attempts = [
+        {"limit": 30},
+        {"limit": 20},
+    ]
+
+    for attempt in attempts:
+        posts_text = _prepare_posts_text(
+            messages,
+            limit=attempt["limit"],
+            max_chars=0,
+        )
+        if not posts_text:
+            continue
+        prompt = build_prompt(posts_text)
+        data = _request_ai_json(
+            prompt,
+            max_tokens=2200,
+            temperature=0.4,
+            generator=generator,
+            context="при анализе ценностей и стиля влияния автора",
+            analysis=analysis,
+        )
+        if isinstance(data, dict):
+            return data
+
+    _notify_ai_failure("при анализе ценностей и стиля влияния автора", ["empty response"], analysis)
+    return {}
 
 
 def _build_schedule(messages: List[Dict]) -> List[Dict]:
@@ -373,6 +579,7 @@ def _analyze_telegram_channel(analysis: ChannelAnalysis) -> Dict:
     schedule = _build_schedule(messages)
     insights = _extract_ai_topics(messages, analysis)
     audience_profile = _extract_audience_profile(messages, analysis)
+    author_influence_analysis = _extract_author_influence_analysis(messages, analysis)
     _update_analysis(analysis, progress=75)
 
     channel_title = (channel_info or {}).get("title") or channel_identifier
@@ -393,6 +600,7 @@ def _analyze_telegram_channel(analysis: ChannelAnalysis) -> Dict:
         "content_types": insights["content_types"],
         "posting_schedule": schedule,
         "audience_profile": audience_profile,
+        "author_influence_analysis": author_influence_analysis,
     }
 
 
@@ -415,6 +623,7 @@ def _analyze_instagram_channel(analysis: ChannelAnalysis) -> Dict:
     schedule = _build_schedule(posts)
     insights = _extract_ai_topics(posts, analysis)
     audience_profile = _extract_audience_profile(posts, analysis)
+    author_influence_analysis = _extract_author_influence_analysis(posts, analysis)
     _update_analysis(analysis, progress=75)
 
     channel_title = profile.get("full_name") or profile.get("username") or username
@@ -438,6 +647,7 @@ def _analyze_instagram_channel(analysis: ChannelAnalysis) -> Dict:
         "content_types": insights["content_types"],
         "posting_schedule": schedule,
         "audience_profile": audience_profile,
+        "author_influence_analysis": author_influence_analysis,
     }
 
 
@@ -465,6 +675,7 @@ def _analyze_youtube_channel(analysis: ChannelAnalysis) -> Dict:
     schedule = _build_schedule(videos)
     insights = _extract_ai_topics(videos, analysis)
     audience_profile = _extract_audience_profile(videos, analysis)
+    author_influence_analysis = _extract_author_influence_analysis(videos, analysis)
     _update_analysis(analysis, progress=75)
 
     channel_title = profile.get("title") or identifier
@@ -493,6 +704,7 @@ def _analyze_youtube_channel(analysis: ChannelAnalysis) -> Dict:
         "content_types": insights["content_types"],
         "posting_schedule": schedule,
         "audience_profile": audience_profile,
+        "author_influence_analysis": author_influence_analysis,
     }
 
 

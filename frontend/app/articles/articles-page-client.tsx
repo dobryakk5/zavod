@@ -4,13 +4,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import type { Article, ArticleStatus } from '@/lib/types';
+import type { Article, ArticleSeoEvaluationResponse, ArticleStatus } from '@/lib/types';
 import { ApiError } from '@/lib/api';
 import { articlesApi } from '@/lib/api/articles';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 const STATUS_LABELS: Record<ArticleStatus, string> = {
   draft: 'Черновик',
@@ -58,10 +60,17 @@ function StatusBadge({ status }: { status: ArticleStatus }) {
 
 export default function ArticlesPageClient() {
   const router = useRouter();
+  const [activeTab, setActiveTab] = useState<'create' | 'evaluate'>('create');
   const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [wordstatRaw, setWordstatRaw] = useState('');
+  const [evaluateType, setEvaluateType] = useState<'url' | 'text'>('url');
+  const [evaluateUrl, setEvaluateUrl] = useState('');
+  const [evaluateText, setEvaluateText] = useState('');
+  const [evaluateWordstat, setEvaluateWordstat] = useState('');
+  const [evaluateResult, setEvaluateResult] = useState<ArticleSeoEvaluationResponse | null>(null);
+  const [evaluatingAction, setEvaluatingAction] = useState<'analyze' | 'recommend' | 'rewrite' | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -81,6 +90,10 @@ export default function ArticlesPageClient() {
   }, []);
 
   const firstPhrase = useMemo(() => parsePhrases(wordstatRaw)[0] || '', [wordstatRaw]);
+  const evaluationInput = useMemo(
+    () => (evaluateType === 'url' ? evaluateUrl.trim() : evaluateText.trim()),
+    [evaluateType, evaluateUrl, evaluateText]
+  );
 
   const onStart = async () => {
     const phrases = parsePhrases(wordstatRaw);
@@ -139,64 +152,374 @@ export default function ArticlesPageClient() {
     }
   };
 
+  const onEvaluate = async (action: 'analyze' | 'recommend' | 'rewrite') => {
+    if (!evaluationInput) {
+      toast.error('Введите ссылку или текст для анализа');
+      return;
+    }
+    setEvaluatingAction(action);
+    try {
+      const response = await articlesApi.evaluate({
+        url: evaluateType === 'url' ? evaluateUrl.trim() : undefined,
+        text: evaluateType === 'text' ? evaluateText.trim() : undefined,
+        wordstat: evaluateWordstat.trim() || undefined,
+        action,
+      });
+      setEvaluateResult(response);
+      if (action === 'analyze') {
+        toast.success('Аналитика готова');
+      } else if (action === 'recommend') {
+        toast.success('Рекомендации готовы');
+      } else {
+        toast.success('SEO план готов');
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        router.push('/login');
+        return;
+      }
+      if (error instanceof ApiError) {
+        try {
+          const parsed = JSON.parse(error.body || '{}') as { error?: string };
+          if (parsed.error) {
+            toast.error(parsed.error);
+            return;
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+      console.error('Failed to evaluate article', error);
+      toast.error('Не удалось выполнить анализ');
+    } finally {
+      setEvaluatingAction(null);
+    }
+  };
+
+  const analysis = evaluateResult?.analysis;
+  const aiResult = evaluateResult?.ai;
+  const isEvaluating = evaluatingAction !== null;
+  const foundKeywords = analysis?.found_keywords ?? [];
+  const missingKeywords = analysis?.missing_keywords ?? [];
+  const clusterCoverage = analysis?.cluster_coverage ?? [];
+  const visibleFound = foundKeywords.slice(0, 20);
+  const visibleMissing = missingKeywords.slice(0, 20);
+
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Статьи</h1>
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="create">Создать</TabsTrigger>
+          <TabsTrigger value="evaluate">Оценить</TabsTrigger>
+        </TabsList>
 
-      <div className="space-y-2">
-        <Textarea
-          value={wordstatRaw}
-          onChange={(e) => setWordstatRaw(e.target.value)}
-          placeholder="Wordstat фразы (одна строка — одна фраза)"
-          className="min-h-28"
-        />
-        <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={onStart} disabled={starting || !firstPhrase}>
-            {starting ? 'Генерируем варианты…' : 'Начать'}
-          </Button>
-          <Button variant="outline" onClick={() => void load()} disabled={loading}>
-            Обновить
-          </Button>
-          {parsePhrases(wordstatRaw).length > 1 ? (
-            <div className="text-sm text-muted-foreground">
-              Сейчас запускается только первая фраза из списка.
+        <TabsContent value="create" className="space-y-4">
+          <div className="space-y-2">
+            <Textarea
+              value={wordstatRaw}
+              onChange={(e) => setWordstatRaw(e.target.value)}
+              placeholder="Wordstat фразы (одна строка — одна фраза)"
+              className="min-h-28"
+            />
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={onStart} disabled={starting || !firstPhrase}>
+                {starting ? 'Генерируем варианты…' : 'Начать'}
+              </Button>
+              <Button variant="outline" onClick={() => void load()} disabled={loading}>
+                Обновить
+              </Button>
+              {parsePhrases(wordstatRaw).length > 1 ? (
+                <div className="text-sm text-muted-foreground">
+                  Сейчас запускается только первая фраза из списка.
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          {loading ? <div>Загрузка…</div> : null}
+
+          {!loading && articles.length === 0 ? (
+            <div className="text-sm text-muted-foreground">Статей пока нет.</div>
+          ) : null}
+
+          {!loading && articles.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Wordstat</TableHead>
+                  <TableHead className="w-44">Дата</TableHead>
+                  <TableHead className="w-44">Статус</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {articles.map((article) => (
+                  <TableRow key={article.id}>
+                    <TableCell className="font-medium">
+                      <Link href={`/articles/${article.id}`} className="text-primary hover:underline">
+                        {article.wordstat}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{formatDate(article.created_at)}</TableCell>
+                    <TableCell>
+                      <StatusBadge status={article.status} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="evaluate" className="space-y-4">
+          <div className="space-y-2">
+            <div className="text-sm font-semibold">Основной запрос</div>
+            <Input
+              value={evaluateWordstat}
+              onChange={(e) => setEvaluateWordstat(e.target.value)}
+              placeholder="Wordstat запрос (необязательно)"
+            />
+          </div>
+
+          <Tabs value={evaluateType} onValueChange={(value) => setEvaluateType(value as typeof evaluateType)}>
+            <TabsList>
+              <TabsTrigger value="url">Ссылка</TabsTrigger>
+              <TabsTrigger value="text">Текст</TabsTrigger>
+            </TabsList>
+            <TabsContent value="url" className="space-y-2">
+              <Input
+                value={evaluateUrl}
+                onChange={(e) => setEvaluateUrl(e.target.value)}
+                placeholder="https://example.com/article"
+              />
+            </TabsContent>
+            <TabsContent value="text" className="space-y-2">
+              <Textarea
+                value={evaluateText}
+                onChange={(e) => setEvaluateText(e.target.value)}
+                placeholder="Вставьте готовую статью для анализа"
+                className="min-h-32"
+              />
+            </TabsContent>
+          </Tabs>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onClick={() => void onEvaluate('analyze')} disabled={isEvaluating || !evaluationInput}>
+              {evaluatingAction === 'analyze' ? 'Анализируем…' : '1) Аналитика'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void onEvaluate('recommend')}
+              disabled={isEvaluating || !evaluationInput}
+            >
+              {evaluatingAction === 'recommend' ? 'Собираем…' : '2) Рекомендации'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void onEvaluate('rewrite')}
+              disabled={isEvaluating || !evaluationInput}
+            >
+              {evaluatingAction === 'rewrite' ? 'Готовим…' : '3) Работа ИИ'}
+            </Button>
+          </div>
+
+          {analysis ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-md border bg-background p-3">
+                  <div className="text-xs text-muted-foreground">Покрытие Wordstat</div>
+                  <div className="text-xl font-semibold">{analysis.coverage_percent}%</div>
+                  <div className="text-xs text-muted-foreground">
+                    {foundKeywords.length}/{analysis.total_keywords} ключей
+                  </div>
+                </div>
+                <div className="rounded-md border bg-background p-3">
+                  <div className="text-xs text-muted-foreground">Слова (леммы)</div>
+                  <div className="text-xl font-semibold">{analysis.word_count}</div>
+                </div>
+                {evaluateResult?.source?.title ? (
+                  <div className="rounded-md border bg-background p-3">
+                    <div className="text-xs text-muted-foreground">Заголовок страницы</div>
+                    <div className="text-sm font-medium">{evaluateResult.source.title}</div>
+                  </div>
+                ) : null}
+              </div>
+
+              {clusterCoverage.length ? (
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold">Покрытие кластеров</div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Кластер</TableHead>
+                        <TableHead className="w-32 text-right">Покрытие</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {clusterCoverage.map((cluster) => (
+                        <TableRow key={cluster.cluster}>
+                          <TableCell className="text-sm">{cluster.cluster}</TableCell>
+                          <TableCell className="text-right text-sm text-muted-foreground">
+                            {cluster.found}/{cluster.total}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold">Найденные ключи</div>
+                  {visibleFound.length ? (
+                    <div className="space-y-1">
+                      {visibleFound.map((item) => (
+                        <div key={`${item.phrase}-${item.cluster || ''}`} className="text-sm">
+                          <span>{item.phrase}</span>
+                          {typeof item.count === 'number' ? (
+                            <span className="ml-2 text-xs text-muted-foreground">×{item.count}</span>
+                          ) : null}
+                          {item.cluster ? (
+                            <span className="ml-2 text-xs text-muted-foreground">• {item.cluster}</span>
+                          ) : null}
+                        </div>
+                      ))}
+                      {foundKeywords.length > visibleFound.length ? (
+                        <div className="text-xs text-muted-foreground">
+                          И ещё {foundKeywords.length - visibleFound.length}.
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">Ничего не найдено.</div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold">Пропущенные ключи</div>
+                  {visibleMissing.length ? (
+                    <div className="space-y-1">
+                      {visibleMissing.map((item) => (
+                        <div key={`${item.phrase}-${item.cluster || ''}`} className="text-sm">
+                          <span>{item.phrase}</span>
+                          {item.cluster ? (
+                            <span className="ml-2 text-xs text-muted-foreground">• {item.cluster}</span>
+                          ) : null}
+                        </div>
+                      ))}
+                      {missingKeywords.length > visibleMissing.length ? (
+                        <div className="text-xs text-muted-foreground">
+                          И ещё {missingKeywords.length - visibleMissing.length}.
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">Все ключи покрыты.</div>
+                  )}
+                </div>
+              </div>
             </div>
           ) : null}
-        </div>
-      </div>
 
-      {loading ? <div>Загрузка…</div> : null}
+          {aiResult ? (
+            <div className="space-y-4 rounded-md border bg-background p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-sm font-semibold">AI выводы</div>
+                {aiResult.intent ? (
+                  <Badge className="bg-slate-100 text-slate-700">Интент: {aiResult.intent}</Badge>
+                ) : null}
+              </div>
 
-      {!loading && articles.length === 0 ? (
-        <div className="text-sm text-muted-foreground">Статей пока нет.</div>
-      ) : null}
+              {aiResult.strengths?.length ? (
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">Сильные стороны</div>
+                  <div className="text-sm text-muted-foreground">{aiResult.strengths.join(' • ')}</div>
+                </div>
+              ) : null}
 
-      {!loading && articles.length > 0 ? (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Wordstat</TableHead>
-              <TableHead className="w-44">Дата</TableHead>
-              <TableHead className="w-44">Статус</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {articles.map((article) => (
-              <TableRow key={article.id}>
-                <TableCell className="font-medium">
-                  <Link href={`/articles/${article.id}`} className="text-primary hover:underline">
-                    {article.wordstat}
-                  </Link>
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground">{formatDate(article.created_at)}</TableCell>
-                <TableCell>
-                  <StatusBadge status={article.status} />
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      ) : null}
+              {aiResult.gaps?.length ? (
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">Слабые места</div>
+                  <div className="text-sm text-muted-foreground">{aiResult.gaps.join(' • ')}</div>
+                </div>
+              ) : null}
+
+              {aiResult.recommendations?.length ? (
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">Рекомендации</div>
+                  <div className="text-sm text-muted-foreground">{aiResult.recommendations.join(' • ')}</div>
+                </div>
+              ) : null}
+
+              {aiResult.keyword_advice ? (
+                <div className="grid gap-3 md:grid-cols-3">
+                  {aiResult.keyword_advice.include?.length ? (
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold">Включить</div>
+                      <div className="text-xs text-muted-foreground">
+                        {aiResult.keyword_advice.include.join(', ')}
+                      </div>
+                    </div>
+                  ) : null}
+                  {aiResult.keyword_advice.exclude?.length ? (
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold">Не использовать</div>
+                      <div className="text-xs text-muted-foreground">
+                        {aiResult.keyword_advice.exclude.join(', ')}
+                      </div>
+                    </div>
+                  ) : null}
+                  {aiResult.keyword_advice.separate_article?.length ? (
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold">Отдельная статья</div>
+                      <div className="text-xs text-muted-foreground">
+                        {aiResult.keyword_advice.separate_article.join(', ')}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {aiResult.rewrite_plan ? (
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold">SEO-план</div>
+                  {aiResult.rewrite_plan.h1 ? (
+                    <div className="text-sm">
+                      <span className="text-xs text-muted-foreground">H1: </span>
+                      {aiResult.rewrite_plan.h1}
+                    </div>
+                  ) : null}
+                  {aiResult.rewrite_plan.h2?.length ? (
+                    <div className="text-sm text-muted-foreground">
+                      H2: {aiResult.rewrite_plan.h2.join(' • ')}
+                    </div>
+                  ) : null}
+                  {aiResult.rewrite_plan.h3?.length ? (
+                    <div className="text-sm text-muted-foreground">
+                      H3: {aiResult.rewrite_plan.h3.join(' • ')}
+                    </div>
+                  ) : null}
+                  {aiResult.rewrite_plan.add_blocks?.length ? (
+                    <div className="text-sm text-muted-foreground">
+                      Добавить: {aiResult.rewrite_plan.add_blocks.join(' • ')}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {aiResult.rewrite_text ? (
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold">Короткий rewrite</div>
+                  <pre className="whitespace-pre-wrap rounded-md border bg-muted/20 p-3 text-xs leading-5">
+                    {aiResult.rewrite_text}
+                  </pre>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

@@ -93,6 +93,61 @@ export interface ArticleBlock {
   updated_at?: string;
 }
 
+export type ArticleSeoKeywordStat = {
+  phrase: string;
+  count?: number;
+  freq?: number;
+  cluster?: string | null;
+};
+
+export type ArticleSeoClusterCoverage = {
+  cluster: string;
+  found: number;
+  total: number;
+};
+
+export type ArticleSeoAnalysis = {
+  coverage_percent: number;
+  total_keywords: number;
+  found_keywords: ArticleSeoKeywordStat[];
+  missing_keywords: ArticleSeoKeywordStat[];
+  cluster_coverage: ArticleSeoClusterCoverage[];
+  word_count: number;
+};
+
+export type ArticleSeoAiResult = {
+  intent?: string;
+  strengths?: string[];
+  gaps?: string[];
+  recommendations?: string[];
+  keyword_advice?: {
+    include?: string[];
+    exclude?: string[];
+    separate_article?: string[];
+  };
+  rewrite_plan?: {
+    h1?: string;
+    h2?: string[];
+    h3?: string[];
+    add_blocks?: string[];
+    notes?: string[];
+  };
+  rewrite_text?: string;
+};
+
+export type ArticleSeoEvaluationResponse = {
+  success: boolean;
+  analysis: ArticleSeoAnalysis;
+  source?: {
+    url?: string;
+    title?: string;
+    meta_description?: string;
+    headings?: Record<string, unknown>;
+  };
+  main_query?: string;
+  ai?: ArticleSeoAiResult;
+};
+
 export interface PostMediaImage {
   id: number;
   image: string;

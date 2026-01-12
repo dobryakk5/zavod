@@ -41,8 +41,9 @@ from config.celery import app as celery_app
 
 from core.audience_profiles import merge_audience_profiles
 from core.ai_generator import AIContentGenerator
-from core.ai_generator_seo import cluster_wordstat_phrases, normalize_phrase
+from core.ai_generator_seo import analyze_seo_text, cluster_wordstat_phrases, normalize_phrase
 from core.services.article_blocks import get_system_block_prompt_template, sync_blocks_from_seo_blocks
+from core.services.seo_article_analysis import analyze_text_against_wordstat, extract_text_from_url
 from core.models import (
     Article,
     ArticleBlock,
@@ -1464,6 +1465,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
             "generate_outline",
             "blocks_update",
             "blocks_generate",
+            "evaluate",
         }:
             return [IsTenantOwnerOrEditor()]
         return super().get_permissions()
@@ -1788,6 +1790,71 @@ class ArticleViewSet(viewsets.ModelViewSet):
                 "task_id": task.id,
             }
         )
+
+    @action(detail=False, methods=["post"])
+    def evaluate(self, request):
+        client = get_active_client(request.user)
+        raw_text = request.data.get("text")
+        raw_url = request.data.get("url")
+        main_query = request.data.get("wordstat") or request.data.get("query") or ""
+        action_name = str(request.data.get("action") or "analyze").strip().lower()
+
+        if action_name not in {"analyze", "recommend", "rewrite"}:
+            return Response({"error": "Некорректный action"}, status=status.HTTP_400_BAD_REQUEST)
+
+        source: dict[str, object] = {}
+        if raw_text:
+            text = str(raw_text)
+            if raw_url:
+                source["url"] = str(raw_url).strip()
+        elif raw_url:
+            try:
+                text, source = extract_text_from_url(str(raw_url))
+            except ValueError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"error": "Передайте text или url"}, status=status.HTTP_400_BAD_REQUEST)
+
+        text = (text or "").strip()
+        if not text:
+            return Response({"error": "Пустой текст"}, status=status.HTTP_400_BAD_REQUEST)
+
+        results = list(
+            WordstatResult.objects.filter(query__client=client, result_type="favorite")
+            .select_related("cluster")
+            .order_by("-count", "phrase")[:250]
+        )
+        if not results:
+            return Response(
+                {"error": "Нет избранных фраз Wordstat для анализа"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        analysis = analyze_text_against_wordstat(text, results, max_ngram=3)
+
+        payload: dict[str, object] = {"success": True, "analysis": analysis}
+        if source:
+            payload["source"] = source
+        if main_query:
+            payload["main_query"] = str(main_query).strip()
+
+        if action_name in {"recommend", "rewrite"}:
+            ai_result = analyze_seo_text(
+                text=text,
+                main_query=str(main_query).strip() or None,
+                found_keywords=analysis.get("found_keywords") if isinstance(analysis, dict) else None,
+                missing_keywords=analysis.get("missing_keywords") if isinstance(analysis, dict) else None,
+                cluster_coverage=analysis.get("cluster_coverage") if isinstance(analysis, dict) else None,
+                include_rewrite=action_name == "rewrite",
+            )
+            if not ai_result.get("success"):
+                error_payload = {"error": ai_result.get("error") or "ai_error"}
+                if ai_result.get("raw_response"):
+                    error_payload["raw_response"] = ai_result.get("raw_response")
+                return Response(error_payload, status=status.HTTP_502_BAD_GATEWAY)
+            payload["ai"] = ai_result.get("result")
+
+        return Response(payload)
 
     @action(detail=False, methods=["get"], url_path="generation-status")
     def generation_status(self, request):

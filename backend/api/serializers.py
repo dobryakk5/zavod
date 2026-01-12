@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from rest_framework import serializers
@@ -812,7 +813,9 @@ class ChannelAnalysisDetailSerializer(ChannelAnalysisListSerializer):
 
         def clean_text(value):
             if isinstance(value, str):
-                return value.strip()
+                collapsed = re.sub(r"[ \t]+", " ", value)
+                collapsed = re.sub(r"\n{2,}", "\n", collapsed)
+                return collapsed.strip()
             if isinstance(value, list):
                 parts = [clean_text(item) for item in value]
                 return "\n".join(part for part in parts if part)
@@ -823,20 +826,12 @@ class ChannelAnalysisDetailSerializer(ChannelAnalysisListSerializer):
                 return ""
             return str(value).strip()
 
-        client = getattr(obj, "client", None)
-        client_profile = {
-            "avatar": clean_text(getattr(client, "avatar", "")) if client else "",
-            "pains": clean_text(getattr(client, "pains", "")) if client else "",
-            "desires": clean_text(getattr(client, "desires", "")) if client else "",
-            "objections": clean_text(getattr(client, "objections", "")) if client else "",
-        }
-
         normalized_profile = {}
         if isinstance(profile, dict):
             for key in ("avatar", "pains", "desires", "objections"):
-                normalized_profile[key] = clean_text(profile.get(key)) or client_profile[key]
+                normalized_profile[key] = clean_text(profile.get(key))
         else:
-            normalized_profile = client_profile
+            normalized_profile = {key: "" for key in ("avatar", "pains", "desires", "objections")}
 
         normalized["audience_profile"] = normalized_profile
 

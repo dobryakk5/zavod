@@ -34,6 +34,40 @@ export type ChannelAnalysisResult = {
     desires: string;
     objections: string;
   };
+  author_influence_analysis?: AuthorInfluenceAnalysis | string;
+};
+
+export type AuthorInfluenceAnalysis = {
+  short_overview?: string;
+  core_value_drivers?: Array<{
+    driver?: string;
+    evidence?: string;
+    marketing_use?: string;
+  }>;
+  influence_style?: {
+    persuasion_method?: string;
+    tone?: string;
+    audience_relationship?: string;
+    content_posture?: string;
+  };
+  risk_signals?: Array<{
+    risk?: string;
+    why?: string;
+  }>;
+  marketing_playbook?: {
+    best_approach?: {
+      angle?: string;
+      message_framing?: string;
+      tone?: string;
+      cta_style?: string;
+    };
+    avoid?: {
+      message_types?: string;
+      promises?: string;
+      wording_styles?: string;
+    };
+  };
+  executive_summary?: string[];
 };
 
 export interface ChannelAnalysisResponse {

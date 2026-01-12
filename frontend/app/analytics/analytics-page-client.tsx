@@ -727,9 +727,6 @@ export default function AnalyticsPageClient() {
   const handleDeleteAnalysis = async (analysisId: number, event?: MouseEvent) => {
     event?.stopPropagation();
     if (deletingId === analysisId) return;
-    const confirmed =
-      typeof window !== 'undefined' ? window.confirm('Удалить запись из истории аналитики?') : true;
-    if (!confirmed) return;
 
     setDeletingId(analysisId);
     try {

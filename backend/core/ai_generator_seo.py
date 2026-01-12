@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from .ai_generator import AIContentGenerator
 from .ai_generator_base import logger
@@ -151,4 +151,149 @@ def cluster_wordstat_phrases(
     }
 
 
-__all__ = ["cluster_wordstat_phrases", "normalize_phrase"]
+def analyze_seo_text(
+    *,
+    text: str,
+    main_query: str | None = None,
+    found_keywords: list[dict[str, Any]] | None = None,
+    missing_keywords: list[dict[str, Any]] | None = None,
+    cluster_coverage: list[dict[str, Any]] | None = None,
+    language: str = "ru",
+    include_rewrite: bool = False,
+) -> Dict[str, object]:
+    cleaned_text = (text or "").strip()
+    if not cleaned_text:
+        return {"success": False, "error": "text_required"}
+
+    try:
+        generator = AIContentGenerator()
+    except Exception as exc:
+        logger.error("Failed to init AI generator for SEO analysis: %s", exc, exc_info=True)
+        return {"success": False, "error": "ai_init_error"}
+
+    truncated_text = cleaned_text[:8000] + ("…" if len(cleaned_text) > 8000 else "")
+
+    found_payload = [
+        {
+            "phrase": str(item.get("phrase") or ""),
+            "count": int(item.get("count") or 0),
+            "cluster": item.get("cluster"),
+        }
+        for item in (found_keywords or [])[:80]
+    ]
+    missing_payload = [
+        {
+            "phrase": str(item.get("phrase") or ""),
+            "cluster": item.get("cluster"),
+        }
+        for item in (missing_keywords or [])[:80]
+    ]
+    clusters_payload = [
+        {
+            "cluster": str(item.get("cluster") or ""),
+            "found": int(item.get("found") or 0),
+            "total": int(item.get("total") or 0),
+        }
+        for item in (cluster_coverage or [])
+    ]
+
+    language_note = "Пиши на русском языке." if language.lower().startswith("ru") else "Пиши на языке текста."
+    rewrite_note = (
+        "Заполни rewrite_plan и короткий rewrite_text (до 1500 символов)."
+        if include_rewrite
+        else "rewrite_plan оставь пустым, rewrite_text оставь пустым."
+    )
+
+    prompt = f"""Ты SEO-редактор. Проанализируй текст и дай рекомендации по улучшению.
+
+{language_note}
+
+Основной запрос: {main_query or "не задан"}
+
+Найденные ключи:
+{json.dumps(found_payload, ensure_ascii=False)}
+
+Отсутствующие ключи:
+{json.dumps(missing_payload, ensure_ascii=False)}
+
+Покрытие кластеров:
+{json.dumps(clusters_payload, ensure_ascii=False)}
+
+Текст (фрагмент):
+<<<{truncated_text}>>>
+
+Верни строго JSON:
+{{
+  "intent": "информационный|коммерческий|навигационный|смешанный",
+  "strengths": ["..."],
+  "gaps": ["..."],
+  "recommendations": ["..."],
+  "keyword_advice": {{
+    "include": ["..."],
+    "exclude": ["..."],
+    "separate_article": ["..."]
+  }},
+  "rewrite_plan": {{
+    "h1": "...",
+    "h2": ["..."],
+    "h3": ["..."],
+    "add_blocks": ["..."],
+    "notes": ["..."]
+  }},
+  "rewrite_text": "..."
+}}
+
+{rewrite_note}
+"""
+
+    ai_response = generator.get_ai_response(
+        prompt=prompt,
+        max_tokens=1200,
+        temperature=0.3,
+        response_format={"type": "json_object"},
+    )
+    if not ai_response:
+        return {"success": False, "error": "ai_no_response"}
+
+    parsed, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+    if parse_error or not isinstance(parsed, dict):
+        repaired = generator._repair_json_structure(
+            normalized_text,
+            schema_hint="""
+{
+  "intent": "string",
+  "strengths": ["string"],
+  "gaps": ["string"],
+  "recommendations": ["string"],
+  "keyword_advice": {
+    "include": ["string"],
+    "exclude": ["string"],
+    "separate_article": ["string"]
+  },
+  "rewrite_plan": {
+    "h1": "string",
+    "h2": ["string"],
+    "h3": ["string"],
+    "add_blocks": ["string"],
+    "notes": ["string"]
+  },
+  "rewrite_text": "string"
+}
+""",
+        )
+        if repaired and isinstance(repaired, dict):
+            parsed = repaired
+            parse_error = None
+
+    if parse_error or not isinstance(parsed, dict):
+        logger.error("SEO analysis JSON parse failed: %s", parse_error)
+        return {
+            "success": False,
+            "error": "ai_json_parse_failed",
+            "raw_response": normalized_text,
+        }
+
+    return {"success": True, "result": parsed}
+
+
+__all__ = ["cluster_wordstat_phrases", "normalize_phrase", "analyze_seo_text"]
