@@ -1,11 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   analyticsApi,
   type ChannelAnalysisRecord,
   type WeeklySourceBatch,
+  type ProjectChannelAnalysisDetail,
+  type ProjectChannelAnalysisChannel,
+  type ProjectChannelTimeseriesResponse,
+  type ProjectChannelTimeseriesChannel,
 } from '@/lib/api/analytics';
 import { websitesApi, type WebsiteScan, type WebsiteScanStatus } from '@/lib/api/websites';
 import { clientApi } from '@/lib/api/client';
@@ -61,6 +65,29 @@ const channelHints: Record<'telegram' | 'instagram' | 'youtube', string> = {
   youtube: 'Подойдут ссылка на канал, @handle или ID вида UCxxxxxxxx.',
 };
 
+type MetricKey = 'subscribers' | 'views' | 'reactions' | 'comments';
+
+type MetricOption = {
+  key: MetricKey;
+  label: string;
+  dash: string;
+  linecap?: 'butt' | 'round' | 'square';
+};
+
+const METRIC_OPTIONS: readonly MetricOption[] = [
+  { key: 'subscribers', label: 'Подписчики', dash: '' },
+  { key: 'views', label: 'Просмотры', dash: '6 4 1 4' },
+  { key: 'reactions', label: 'Реакции', dash: '1 6', linecap: 'round' },
+  { key: 'comments', label: 'Комментарии', dash: '6 4' },
+];
+
+const CHART_COLORS = ['#2563eb', '#16a34a', '#f97316', '#ef4444', '#0ea5e9', '#9333ea', '#84cc16', '#f59e0b', '#14b8a6'];
+
+type ProjectChannelFields = Pick<
+  ClientSettings,
+  'project_telegram_channel' | 'project_instagram_channel' | 'project_youtube_channel'
+>;
+
 type SourceFields = Pick<
   ClientSettings,
   | 'telegram_source_channels'
@@ -69,6 +96,28 @@ type SourceFields = Pick<
   | 'instagram_source_accounts'
   | 'vkontakte_source_groups'
 >;
+
+const PROJECT_CHANNEL_CONFIG: Array<{
+  key: keyof ProjectChannelFields;
+  label: string;
+  placeholder: string;
+}> = [
+  {
+    key: 'project_telegram_channel',
+    label: 'Telegram',
+    placeholder: channelPlaceholders.telegram,
+  },
+  {
+    key: 'project_instagram_channel',
+    label: 'Instagram',
+    placeholder: channelPlaceholders.instagram,
+  },
+  {
+    key: 'project_youtube_channel',
+    label: 'YouTube',
+    placeholder: channelPlaceholders.youtube,
+  },
+];
 
 const SOURCE_FIELD_CONFIG: Array<{
   key: keyof SourceFields;
@@ -109,6 +158,705 @@ const SOURCE_FIELD_CONFIG: Array<{
     fullWidth: true,
   },
 ];
+
+function MyProjectTab() {
+  const { canEdit } = useRole();
+  const [channels, setChannels] = useState<ProjectChannelFields>({
+    project_telegram_channel: '',
+    project_instagram_channel: '',
+    project_youtube_channel: '',
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [analysis, setAnalysis] = useState<ProjectChannelAnalysisDetail | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [analysisLaunching, setAnalysisLaunching] = useState(false);
+  const [displayedProgress, setDisplayedProgress] = useState<number | null>(null);
+  const [timeseries, setTimeseries] = useState<ProjectChannelTimeseriesResponse | null>(null);
+  const [timeseriesLoading, setTimeseriesLoading] = useState(true);
+  const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
+  const [selectedMetrics, setSelectedMetrics] = useState<MetricKey[]>([
+    'subscribers',
+    'views',
+    'reactions',
+    'comments',
+  ]);
+
+  const formatDelta = (value: number) => {
+    if (!value) return '0';
+    return value > 0 ? `+${value}` : `${value}`;
+  };
+
+  const getDeltaClass = (value: number) => {
+    if (value > 0) return 'text-green-600';
+    if (value < 0) return 'text-red-600';
+    return 'text-gray-400';
+  };
+
+  const loadTimeseries = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setTimeseriesLoading(true);
+    }
+    try {
+      const data = await analyticsApi.getProjectChannelTimeseries();
+      setTimeseries(data);
+    } catch (error) {
+      toast.error('Не удалось загрузить временные ряды');
+    } finally {
+      if (!options?.silent) {
+        setTimeseriesLoading(false);
+      }
+    }
+  }, []);
+
+  const loadChannels = async () => {
+    setLoading(true);
+    try {
+      const data = await clientApi.getSettings();
+      setChannels({
+        project_telegram_channel: data.project_telegram_channel || '',
+        project_instagram_channel: data.project_instagram_channel || '',
+        project_youtube_channel: data.project_youtube_channel || '',
+      });
+    } catch (error) {
+      toast.error('Не удалось загрузить каналы проекта');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadLatestAnalysis = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setAnalysisLoading(true);
+    }
+    try {
+      const data = await analyticsApi.getLatestProjectChannelAnalysis();
+      setAnalysis(data);
+    } catch (error) {
+      toast.error('Не удалось загрузить анализ проекта');
+    } finally {
+      if (!options?.silent) {
+        setAnalysisLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadChannels();
+    void loadLatestAnalysis();
+    void loadTimeseries();
+  }, []);
+
+  useEffect(() => {
+    const shouldPoll = analysis?.status === 'pending' || analysis?.status === 'in_progress';
+    if (!shouldPoll) return;
+
+    const intervalId = setInterval(() => {
+      void loadLatestAnalysis({ silent: true });
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [analysis?.status, loadLatestAnalysis]);
+
+  useEffect(() => {
+    if (!analysis) {
+      setDisplayedProgress(null);
+      return;
+    }
+    if (analysis.status === 'completed' || analysis.status === 'failed') {
+      setDisplayedProgress(analysis.progress);
+      return;
+    }
+    setDisplayedProgress((prev) => {
+      const current = analysis.progress ?? 0;
+      if (prev === null) return current;
+      if (current > prev) return current;
+      return Math.min(prev + 5, 95);
+    });
+  }, [analysis]);
+
+  useEffect(() => {
+    if (analysis?.status === 'completed') {
+      void loadTimeseries({ silent: true });
+    }
+  }, [analysis?.status, loadTimeseries]);
+
+  const handleChange = (key: keyof ProjectChannelFields, value: string) => {
+    setChannels((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleRunAnalysis = async () => {
+    if (!canEdit || analysisLaunching) return;
+    setAnalysisLaunching(true);
+    try {
+      await clientApi.updateSettings({
+        project_telegram_channel: channels.project_telegram_channel,
+        project_instagram_channel: channels.project_instagram_channel,
+        project_youtube_channel: channels.project_youtube_channel,
+      });
+      const response = await analyticsApi.runProjectChannelAnalysis();
+      if (response.success) {
+        toast.success('Анализ проекта запущен');
+        await loadLatestAnalysis({ silent: true });
+      } else {
+        toast.error(response.error || 'Не удалось запустить анализ проекта');
+      }
+    } catch (error) {
+      toast.error('Не удалось запустить анализ проекта');
+    } finally {
+      setAnalysisLaunching(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!canEdit) return;
+    setSaving(true);
+    try {
+      await clientApi.updateSettings({
+        project_telegram_channel: channels.project_telegram_channel,
+        project_instagram_channel: channels.project_instagram_channel,
+        project_youtube_channel: channels.project_youtube_channel,
+      });
+      toast.success('Каналы проекта сохранены');
+    } catch (error) {
+      toast.error('Не удалось сохранить каналы проекта');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasChannels = Object.values(channels).some((value) => value.trim());
+  const analysisChannels = analysis?.result?.channels ?? [];
+  const availableTimeseriesChannels = timeseries?.channels ?? [];
+  const runs = timeseries?.runs ?? [];
+
+  useEffect(() => {
+    if (availableTimeseriesChannels.length === 0) {
+      if (selectedChannels.length !== 0) {
+        setSelectedChannels([]);
+      }
+      return;
+    }
+    setSelectedChannels((prev) => {
+      if (prev.length) return prev;
+      return availableTimeseriesChannels.map((channel) => channel.key);
+    });
+  }, [availableTimeseriesChannels, selectedChannels.length]);
+
+  const channelMetaMap = useMemo(() => {
+    const map = new Map<string, ProjectChannelTimeseriesChannel>();
+    availableTimeseriesChannels.forEach((channel) => {
+      map.set(channel.key, channel);
+    });
+    return map;
+  }, [availableTimeseriesChannels]);
+
+  const runChannelTotals = useMemo(() => {
+    const runMap = new Map<
+      number,
+      Map<string, { views: number; reactions: number; comments: number; subscribers: number }>
+    >();
+    runs.forEach((run) => {
+      const channelMap = new Map<string, { views: number; reactions: number; comments: number; subscribers: number }>();
+      run.channels.forEach((channel) => {
+        channelMap.set(channel.key, {
+          views: channel.totals.views,
+          reactions: channel.totals.reactions,
+          comments: channel.totals.comments,
+          subscribers: channel.totals.subscribers,
+        });
+      });
+      runMap.set(run.run_id, channelMap);
+    });
+    return runMap;
+  }, [runs]);
+
+  const series = useMemo(() => {
+    return selectedChannels.flatMap((channelKey) =>
+      selectedMetrics.map((metric) => ({
+        channelKey,
+        metric,
+        id: `${channelKey}:${metric}`,
+      })),
+    );
+  }, [selectedChannels, selectedMetrics]);
+
+  const maxValue = useMemo(() => {
+    let max = 0;
+    runs.forEach((run) => {
+      const channelMap = runChannelTotals.get(run.run_id);
+      if (!channelMap) return;
+      selectedChannels.forEach((channelKey) => {
+        const totals = channelMap.get(channelKey);
+        if (!totals) return;
+        selectedMetrics.forEach((metric) => {
+          const value = totals[metric] ?? 0;
+          if (value > max) max = value;
+        });
+      });
+    });
+    return max || 1;
+  }, [runs, runChannelTotals, selectedChannels, selectedMetrics]);
+
+  const buildPath = (points: Array<{ x: number; y: number | null }>) => {
+    let path = '';
+    let started = false;
+    points.forEach((point) => {
+      if (point.y === null) {
+        started = false;
+        return;
+      }
+      const cmd = started ? 'L' : 'M';
+      path += `${cmd}${point.x},${point.y} `;
+      started = true;
+    });
+    return path.trim();
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-1">
+        <p className="text-sm text-muted-foreground">
+          Укажите ваши каналы (имя или ссылку). Для анализа конкурентов используйте вкладку «Один канал».
+        </p>
+      </div>
+
+      <div className="max-w-xl rounded-lg border bg-white p-6 shadow-sm">
+        {loading ? (
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Загружаем каналы
+          </div>
+        ) : (
+          <>
+            <div className="grid gap-3">
+              {PROJECT_CHANNEL_CONFIG.map((field) => (
+                <div key={field.key} className="flex items-center gap-3">
+                  <Label htmlFor={field.key} className="w-24 text-sm text-gray-600">
+                    {field.label}
+                  </Label>
+                  <Input
+                    id={field.key}
+                    placeholder={field.placeholder}
+                    value={channels[field.key] || ''}
+                    onChange={(e) => handleChange(field.key, e.target.value)}
+                    disabled={!canEdit}
+                    className="flex-1"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 flex items-center gap-3">
+              <Button onClick={handleSave} disabled={saving || !canEdit}>
+                {saving ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Сохраняем...
+                  </>
+                ) : (
+                  'Сохранить каналы'
+                )}
+              </Button>
+              {!canEdit && (
+                <p className="text-sm text-muted-foreground">
+                  Только владелец или редактор могут сохранять изменения.
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="rounded-lg border bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold">Анализ проекта</h3>
+            <p className="text-sm text-muted-foreground">
+              Снимок метрик по вашим каналам и дельта к прошлому запуску.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={handleRunAnalysis}
+              disabled={!canEdit || analysisLaunching || !hasChannels}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {analysisLaunching ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Запускаем...
+                </>
+              ) : (
+                'Запустить анализ'
+              )}
+            </Button>
+            {!hasChannels && (
+              <p className="text-sm text-muted-foreground">Заполните хотя бы один канал.</p>
+            )}
+          </div>
+        </div>
+
+        {analysisLoading ? (
+          <div className="mt-6 flex items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Загружаем анализ
+          </div>
+        ) : !analysis ? (
+          <p className="mt-6 text-sm text-muted-foreground">Пока нет запусков анализа.</p>
+        ) : (
+          <div className="mt-6 space-y-6">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <span>Статус:</span>
+              <span className="font-medium text-gray-900">
+                {statusLabels[analysis.status as WeeklySourceBatch['status']] || analysis.status}
+              </span>
+              <span className="text-gray-300">•</span>
+              <span>{(displayedProgress ?? analysis.progress).toLocaleString('ru-RU')}%</span>
+              {analysis.status === 'failed' && analysis.error?.trim() && (
+                <span className="text-red-600">{analysis.error}</span>
+              )}
+            </div>
+
+            {analysis.status === 'completed' && analysisChannels.length === 0 && (
+              <p className="text-sm text-muted-foreground">Нет данных по каналам.</p>
+            )}
+
+            {analysisChannels.map((channel: ProjectChannelAnalysisChannel) => {
+              const summary = channel.summary;
+              const channelTitle = summary?.channel_name || channel.channel_url;
+              const channelLink = summary?.profile_url || channel.channel_url;
+
+              return (
+                <div key={`${channel.channel_type}-${channel.channel_identifier}`} className="rounded-lg border p-4">
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      {channelTypeLabels[channel.channel_type]}
+                    </p>
+                    <p className="text-lg font-semibold text-gray-900">{channelTitle}</p>
+                    {channelLink && (
+                      <a
+                        href={channelLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-600 hover:underline break-all"
+                      >
+                        {channelLink}
+                      </a>
+                    )}
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-5">
+                    {[
+                      { label: 'Подписчики', value: summary.subscribers },
+                      { label: 'Средние просмотры', value: summary.avg_views },
+                      { label: 'Вовлеченность', value: `${summary.avg_engagement}%` },
+                      { label: 'Средние реакции', value: summary.avg_reactions },
+                      { label: 'Средние комментарии', value: summary.avg_comments },
+                    ].map((metric) => (
+                      <div key={metric.label} className="rounded border border-slate-100 p-3">
+                        <p className="text-xs text-muted-foreground">{metric.label}</p>
+                        <p className="text-lg font-semibold text-gray-900">
+                          {typeof metric.value === 'number'
+                            ? metric.value.toLocaleString('ru-RU')
+                            : metric.value}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-4">
+                    {[
+                      { label: 'Постов', value: channel.totals.posts_count, delta: channel.delta.posts_count },
+                      { label: 'Просмотры', value: channel.totals.views, delta: channel.delta.views },
+                      { label: 'Реакции', value: channel.totals.reactions, delta: channel.delta.reactions },
+                      { label: 'Комментарии', value: channel.totals.comments, delta: channel.delta.comments },
+                    ].map((metric) => (
+                      <div key={metric.label} className="rounded border border-slate-100 p-3">
+                        <p className="text-xs text-muted-foreground">{metric.label}</p>
+                        <p className="text-lg font-semibold text-gray-900">
+                          {metric.value.toLocaleString('ru-RU')}
+                        </p>
+                        <p className={`text-xs ${getDeltaClass(metric.delta)}`}>
+                          {formatDelta(metric.delta)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-6">
+                    <h4 className="text-sm font-semibold text-gray-700">Посты</h4>
+                    {channel.posts.length === 0 ? (
+                      <p className="mt-3 text-sm text-muted-foreground">Нет данных по постам.</p>
+                    ) : (
+                      <div className="mt-3 rounded-lg border bg-white">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="bg-gray-50">
+                              <TableHead>Пост</TableHead>
+                              <TableHead>Просмотры</TableHead>
+                              <TableHead>Реакции</TableHead>
+                              <TableHead>Комментарии</TableHead>
+                              <TableHead className="w-32">Дата</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {channel.posts.map((post) => (
+                              <TableRow key={post.external_id}>
+                                <TableCell className="space-y-1">
+                                  <div className="font-medium text-gray-900">
+                                    {post.title || post.url || `Пост ${post.external_id}`}
+                                  </div>
+                                  {post.url && (
+                                    <a
+                                      href={post.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-xs text-blue-600 hover:underline break-all"
+                                    >
+                                      {post.url}
+                                    </a>
+                                  )}
+                                  {post.is_new && (
+                                    <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+                                      Новый
+                                    </span>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  <div className="text-sm text-gray-900">
+                                    {post.views.toLocaleString('ru-RU')}
+                                  </div>
+                                  <div className={`text-xs ${getDeltaClass(post.delta_views)}`}>
+                                    {formatDelta(post.delta_views)}
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <div className="text-sm text-gray-900">
+                                    {post.reactions.toLocaleString('ru-RU')}
+                                  </div>
+                                  <div className={`text-xs ${getDeltaClass(post.delta_reactions)}`}>
+                                    {formatDelta(post.delta_reactions)}
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <div className="text-sm text-gray-900">
+                                    {post.comments.toLocaleString('ru-RU')}
+                                  </div>
+                                  <div className={`text-xs ${getDeltaClass(post.delta_comments)}`}>
+                                    {formatDelta(post.delta_comments)}
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-sm text-gray-600">
+                                  {post.published_at ? new Date(post.published_at).toLocaleDateString('ru-RU') : '—'}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold">Динамика показателей</h3>
+            <p className="text-sm text-muted-foreground">
+              Выберите каналы и метрики — линии отобразятся на одном графике.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => void loadTimeseries()} disabled={timeseriesLoading}>
+            {timeseriesLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Обновить'}
+          </Button>
+        </div>
+
+        {timeseriesLoading ? (
+          <div className="mt-6 flex items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Загружаем ряды
+          </div>
+        ) : availableTimeseriesChannels.length === 0 ? (
+          <p className="mt-6 text-sm text-muted-foreground">Нет данных для построения графика.</p>
+        ) : (
+          <div className="mt-6 space-y-6">
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="space-y-3">
+                <p className="text-sm font-semibold text-gray-700">Каналы</p>
+                <div className="flex flex-wrap gap-3">
+                  {availableTimeseriesChannels.map((channel, index) => {
+                    const checked = selectedChannels.includes(channel.key);
+                    const label = channel.channel_label || channel.channel_identifier;
+                    return (
+                      <label key={channel.key} className="flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={checked}
+                          onChange={() => {
+                            setSelectedChannels((prev) =>
+                              checked ? prev.filter((item) => item !== channel.key) : [...prev, channel.key],
+                            );
+                          }}
+                        />
+                        <span className="inline-flex items-center gap-2">
+                          <span
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
+                          />
+                          {label}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-sm font-semibold text-gray-700">Метрики</p>
+                <div className="flex flex-wrap gap-3">
+                  {METRIC_OPTIONS.map((metric) => {
+                    const checked = selectedMetrics.includes(metric.key);
+                    return (
+                      <label key={metric.key} className="flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={checked}
+                          onChange={() => {
+                            setSelectedMetrics((prev) =>
+                              checked ? prev.filter((item) => item !== metric.key) : [...prev, metric.key],
+                            );
+                          }}
+                        />
+                        {metric.label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {series.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Выберите хотя бы один канал и метрику.</p>
+            ) : (
+              <div className="space-y-3">
+                <div className="w-full overflow-x-auto">
+                  <svg viewBox="0 0 860 320" className="min-w-[600px] w-full">
+                    <rect x="0" y="0" width="860" height="320" fill="white" />
+                    {(() => {
+                      const padding = { left: 60, right: 20, top: 20, bottom: 40 };
+                      const plotWidth = 860 - padding.left - padding.right;
+                      const plotHeight = 320 - padding.top - padding.bottom;
+                      const xStep = runs.length > 1 ? plotWidth / (runs.length - 1) : 0;
+                      const yScale = plotHeight / maxValue;
+                      const yTicks = 4;
+                      const xTicks = Math.min(runs.length, 6);
+                      const xStepTicks = runs.length > 1 ? Math.floor((runs.length - 1) / (xTicks - 1 || 1)) : 1;
+
+                      return (
+                        <>
+                          {Array.from({ length: yTicks + 1 }).map((_, idx) => {
+                            const value = Math.round((maxValue / yTicks) * idx);
+                            const y = padding.top + plotHeight - value * yScale;
+                            return (
+                              <g key={`y-${idx}`}>
+                                <line x1={padding.left} y1={y} x2={860 - padding.right} y2={y} stroke="#e5e7eb" strokeDasharray="4 4" />
+                                <text x={padding.left - 8} y={y + 4} textAnchor="end" className="fill-gray-400 text-[10px]">
+                                  {value.toLocaleString('ru-RU')}
+                                </text>
+                              </g>
+                            );
+                          })}
+
+                          {runs.map((run, index) => {
+                            if (runs.length > 1 && index % xStepTicks !== 0) return null;
+                            const x = padding.left + xStep * index;
+                            return (
+                              <g key={`x-${run.run_id}`}>
+                                <line x1={x} y1={padding.top} x2={x} y2={padding.top + plotHeight} stroke="#f3f4f6" />
+                                <text x={x} y={padding.top + plotHeight + 18} textAnchor="middle" className="fill-gray-400 text-[10px]">
+                                  {new Date(run.created_at).toLocaleDateString('ru-RU')}
+                                </text>
+                              </g>
+                            );
+                          })}
+
+                          {series.map((item) => {
+                            const channelIndex = availableTimeseriesChannels.findIndex((channel) => channel.key === item.channelKey);
+                            const color = CHART_COLORS[(channelIndex >= 0 ? channelIndex : 0) % CHART_COLORS.length];
+                            const metricMeta = METRIC_OPTIONS.find((metric) => metric.key === item.metric);
+                            const points = runs.map((run, index) => {
+                              const channelMap = runChannelTotals.get(run.run_id);
+                              const totals = channelMap?.get(item.channelKey);
+                              if (!totals) {
+                                return { x: padding.left + xStep * index, y: null };
+                              }
+                              const value = totals[item.metric] ?? 0;
+                              const y = padding.top + plotHeight - value * yScale;
+                              return { x: padding.left + xStep * index, y };
+                            });
+                            const path = buildPath(points);
+                            if (!path) return null;
+                            return (
+                              <path
+                                key={item.id}
+                                d={path}
+                                fill="none"
+                                stroke={color}
+                                strokeWidth={2}
+                                strokeDasharray={metricMeta?.dash || ''}
+                                strokeLinecap={metricMeta?.linecap || 'round'}
+                              />
+                            );
+                          })}
+                        </>
+                      );
+                    })()}
+                  </svg>
+                </div>
+
+                <div className="flex flex-wrap gap-3 text-xs text-gray-600">
+                  {series.map((item) => {
+                    const channel = channelMetaMap.get(item.channelKey);
+                    const channelIndex = availableTimeseriesChannels.findIndex((entry) => entry.key === channel?.key);
+                    const color = CHART_COLORS[(channelIndex >= 0 ? channelIndex : 0) % CHART_COLORS.length];
+                    const metricMeta = METRIC_OPTIONS.find((metric) => metric.key === item.metric);
+                    return (
+                      <div key={item.id} className="inline-flex items-center gap-2 rounded-full border px-3 py-1">
+                        <svg width="28" height="8" viewBox="0 0 28 8" aria-hidden="true">
+                          <line
+                            x1="2"
+                            y1="4"
+                            x2="26"
+                            y2="4"
+                            stroke={color}
+                            strokeWidth="2"
+                            strokeDasharray={metricMeta?.dash || ''}
+                            strokeLinecap={metricMeta?.linecap || 'round'}
+                          />
+                        </svg>
+                        <span>
+                          {channel?.channel_label || channel?.channel_identifier || item.channelKey} · {metricMeta?.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function WeeklySourcesTab() {
   const { canEdit } = useRole();
@@ -656,10 +1404,10 @@ export default function AnalyticsPageClient() {
   const searchParams = useSearchParams();
   const initialTab = useMemo(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'single' || tab === 'weekly' || tab === 'website') return tab;
+    if (tab === 'single' || tab === 'project' || tab === 'weekly' || tab === 'website') return tab;
     return 'single';
   }, [searchParams]);
-  const [activeTab, setActiveTab] = useState<'single' | 'weekly' | 'website'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'single' | 'project' | 'weekly' | 'website'>(initialTab);
   const router = useRouter();
 
   useEffect(() => {
@@ -744,18 +1492,23 @@ export default function AnalyticsPageClient() {
     <div className="container mx-auto py-8 space-y-6">
       <div className="mb-4">
         <h1 className="text-3xl font-bold">Аналитика</h1>
-        <p className="text-gray-500 mt-2">Один канал, подборка за неделю или Website</p>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'single' | 'weekly' | 'website')} className="space-y-6">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as 'single' | 'project' | 'weekly' | 'website')}
+        className="space-y-6"
+      >
         <TabsList>
           <TabsTrigger value="single">Один канал</TabsTrigger>
+          <TabsTrigger value="project">Мой проект</TabsTrigger>
           <TabsTrigger value="weekly">Подборка за неделю</TabsTrigger>
           <TabsTrigger value="website">Website</TabsTrigger>
         </TabsList>
 
         <TabsContent value="single" className="space-y-8">
           <div className="space-y-4 max-w-md">
+            <p className="text-sm text-muted-foreground">Используйте для анализа каналов конкурентов.</p>
             <div className="space-y-2">
               <Label htmlFor="channelType">Тип канала</Label>
               <Select value={channelType} onValueChange={(value) => setChannelType(value as ChannelAnalysisRecord['channel_type'])}>
@@ -877,6 +1630,10 @@ export default function AnalyticsPageClient() {
               </div>
             )}
           </div>
+        </TabsContent>
+
+        <TabsContent value="project">
+          <MyProjectTab />
         </TabsContent>
 
         <TabsContent value="weekly">

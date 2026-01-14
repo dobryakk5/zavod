@@ -221,20 +221,25 @@ export function ProductTypesTab() {
     }
   };
 
-  const handleDelete = async (typeId: number) => {
+  const handleDelete = async (type: ProductType) => {
+    if (type.is_deletable === false) {
+      setError('Системные типы продуктов нельзя удалять.');
+      return;
+    }
+
     const ok = window.confirm('Удалить тип продукта? Это действие нельзя отменить.');
     if (!ok) return;
 
     setError(null);
     const prev = types;
-    setTypes((items) => items.filter((t) => t.id !== typeId));
+    setTypes((items) => items.filter((t) => t.id !== type.id));
     setDrafts((prevDrafts) => {
       const next = { ...prevDrafts };
-      delete next[typeId];
+      delete next[type.id];
       return next;
     });
     try {
-      await productTypesApi.delete(typeId);
+      await productTypesApi.delete(type.id);
     } catch (err) {
       console.error('Failed to delete product type', err);
       setError('Не удалось удалить тип продукта.');
@@ -278,6 +283,7 @@ export function ProductTypesTab() {
           name: draft?.name ?? type.name ?? '',
           value: draft?.value ?? type.value ?? '',
           goal: draft?.goal ?? type.goal ?? '',
+          deletable: type.is_deletable ?? true,
           saving: draft?.saving ?? false,
           error: draft?.error ?? null
         };
@@ -340,7 +346,7 @@ export function ProductTypesTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map(({ type, name, value, goal, saving, error: rowError }) => (
+              {rows.map(({ type, name, value, goal, saving, deletable, error: rowError }) => (
                 <TableRow
                   key={type.id}
                 >
@@ -477,13 +483,13 @@ export function ProductTypesTab() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
-                        disabled={duplicatingId === type.id || generatingId === type.id}
+                        disabled={duplicatingId === type.id || generatingId === type.id || !deletable}
                         onClick={(e) => {
                           e.stopPropagation();
-                          void handleDelete(type.id);
+                          void handleDelete(type);
                         }}
                         aria-label="Удалить"
-                        title="Удалить"
+                        title={deletable ? 'Удалить' : 'Системный тип нельзя удалить'}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

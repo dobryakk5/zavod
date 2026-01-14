@@ -169,6 +169,7 @@ class ArticleAdmin(admin.ModelAdmin):
         ("Контекст (чекбоксы)", {"fields": ("selected_why_now", "selected_solution")}),
         ("Опции (AI-ответы)", {"fields": ("options_why_now", "options_solution"), "classes": ("collapse",)}),
         ("Структура", {"fields": ("outline_markdown",)}),
+        ("Результат", {"fields": ("result_html",), "classes": ("collapse",)}),
         ("Blueprint SEO блоков (JSON)", {"fields": ("seo_blocks",), "classes": ("collapse",)}),
         ("Система", {"fields": ("created_by", "created_at", "updated_at"), "classes": ("collapse",)}),
     )

@@ -41,7 +41,7 @@ export function highlightPhrasesInHtml(html: string, phrases?: string[] | null) 
       }
 
       const mark = doc.createElement('mark');
-      mark.className = 'rounded bg-yellow-200/50 px-0.5 py-0.5';
+      mark.className = 'rounded bg-yellow-200/25 px-0.5 py-0.5';
       mark.textContent = value;
       fragment.appendChild(mark);
 
@@ -57,4 +57,3 @@ export function highlightPhrasesInHtml(html: string, phrases?: string[] | null) 
 
   return doc.body.innerHTML;
 }
-

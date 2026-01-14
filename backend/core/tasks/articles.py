@@ -272,8 +272,7 @@ Wordstat избранное (ключи для выбора):
 
     with transaction.atomic():
         article.seo_blocks = level3
-        if article.status == "draft":
-            article.status = "options_ready"
+        article.status = "outline_ready"
         article.save(update_fields=["seo_blocks", "status", "updated_at"])
         sync_blocks_from_seo_blocks(article)
 
@@ -321,5 +320,8 @@ def generate_article_blocks_task(article_id: int) -> dict:
             generated.append(block.id)
         except Exception as exc:
             logger.exception("Failed to generate block %s in phase 2: %s", block.id, exc)
+
+    article.status = "article_ready"
+    article.save(update_fields=["status", "updated_at"])
 
     return {"article_id": article.id, "generated_blocks": generated}

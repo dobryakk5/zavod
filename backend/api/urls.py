@@ -17,6 +17,8 @@ from .views import (
     PostViewSet,
     DzenRSSFeedView,
     RefreshTokenView,
+    ProjectChannelAnalysisRunView,
+    ProjectChannelAnalysisRunViewSet,
     ScheduleListView,
     ScheduleViewSet,
     SocialAccountViewSet,
@@ -70,6 +72,7 @@ router.register(r'wordstat', WordstatQueryViewSet, basename='wordstat')
 router.register(r'wordstat-clusters', WordstatClusterViewSet, basename='wordstat-cluster')
 router.register(r'wordstat-results', WordstatResultViewSet, basename='wordstat-result')
 router.register(r'channel-analyses', ChannelAnalysisViewSet, basename='channel-analysis')
+router.register(r'project-analyses', ProjectChannelAnalysisRunViewSet, basename='project-analysis')
 router.register(r'vk/integrations', VkIntegrationViewSet, basename='vk-integration')
 router.register(r'weekly-sources', WeeklySourceReportViewSet, basename='weekly-sources')
 router.register(r'weekly-batches', WeeklySourceBatchViewSet, basename='weekly-batches')
@@ -95,6 +98,7 @@ urlpatterns = [
     path('client/settings/', ClientSettingsView.as_view(), name='client-settings'),
     path('client/expert-books/', ClientExpertBooksView.as_view(), name='client-expert-books'),
     path('weekly-sources/run/', WeeklySourceRunView.as_view(), name='weekly-sources-run'),
+    path('project-analyses/run/', ProjectChannelAnalysisRunView.as_view(), name='project-analyses-run'),
 
     # Google
     path('google/cse-search/', GoogleCSESearchView.as_view(), name='google-cse-search'),

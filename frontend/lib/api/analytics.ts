@@ -102,6 +102,102 @@ export interface ChannelAnalysisDetail extends ChannelAnalysisRecord {
   error?: string;
 }
 
+export type ProjectChannelPostStat = {
+  external_id: string;
+  title: string;
+  url: string;
+  published_at?: string | null;
+  views: number;
+  reactions: number;
+  comments: number;
+  delta_views: number;
+  delta_reactions: number;
+  delta_comments: number;
+  is_new: boolean;
+};
+
+export type ProjectChannelSummary = ChannelAnalysisResult & {
+  channel_username?: string;
+  profile_url?: string;
+  bio?: string;
+};
+
+export type ProjectChannelAnalysisChannel = {
+  channel_type: 'telegram' | 'instagram' | 'youtube';
+  channel_url: string;
+  channel_identifier: string;
+  summary: ProjectChannelSummary;
+  totals: {
+    posts_count: number;
+    views: number;
+    reactions: number;
+    comments: number;
+  };
+  delta: {
+    posts_count: number;
+    views: number;
+    reactions: number;
+    comments: number;
+  };
+  previous_run_id?: number | null;
+  posts: ProjectChannelPostStat[];
+};
+
+export interface ProjectChannelAnalysisResult {
+  channels: ProjectChannelAnalysisChannel[];
+  generated_at?: string;
+}
+
+export interface ProjectChannelAnalysisRun {
+  id: number;
+  task_id?: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  progress: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectChannelAnalysisDetail extends ProjectChannelAnalysisRun {
+  result: ProjectChannelAnalysisResult | null;
+  error?: string;
+}
+
+export interface ProjectChannelAnalysisRunResponse {
+  success: boolean;
+  task_id?: string;
+  run_id?: number;
+  error?: string;
+}
+
+export interface ProjectChannelTimeseriesChannel {
+  key: string;
+  channel_type: 'telegram' | 'instagram' | 'youtube';
+  channel_identifier: string;
+  channel_label: string;
+  channel_url?: string;
+}
+
+export interface ProjectChannelTimeseriesRun {
+  run_id: number;
+  created_at: string;
+  channels: Array<
+    ProjectChannelTimeseriesChannel & {
+      totals: {
+        posts_count: number;
+        views: number;
+        reactions: number;
+        comments: number;
+        subscribers: number;
+      };
+    }
+  >;
+}
+
+export interface ProjectChannelTimeseriesResponse {
+  runs: ProjectChannelTimeseriesRun[];
+  channels: ProjectChannelTimeseriesChannel[];
+}
+
 export interface MergeAudienceResponse {
   success: boolean;
   message: string;
@@ -213,6 +309,44 @@ export const analyticsApi = {
     return apiFetch<{ success: boolean; task_id?: string; week_start?: string }>('/weekly-sources/run/', {
       method: 'POST',
     });
+  },
+
+  /**
+   * Запуск анализа каналов проекта
+   */
+  runProjectChannelAnalysis: async (): Promise<ProjectChannelAnalysisRunResponse> => {
+    return apiFetch<ProjectChannelAnalysisRunResponse>('/project-analyses/run/', {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * История запусков анализа проекта
+   */
+  listProjectChannelAnalyses: async (): Promise<ProjectChannelAnalysisRun[]> => {
+    return apiFetch<ProjectChannelAnalysisRun[]>('/project-analyses/');
+  },
+
+  /**
+   * Детали запуска анализа проекта
+   */
+  getProjectChannelAnalysisDetail: async (id: number | string): Promise<ProjectChannelAnalysisDetail> => {
+    return apiFetch<ProjectChannelAnalysisDetail>(`/project-analyses/${id}/`);
+  },
+
+  /**
+   * Последний запуск анализа проекта
+   */
+  getLatestProjectChannelAnalysis: async (): Promise<ProjectChannelAnalysisDetail | null> => {
+    const response = await apiFetch<ProjectChannelAnalysisDetail | undefined>('/project-analyses/latest/');
+    return response ?? null;
+  },
+
+  /**
+   * Временные ряды для графика по каналам проекта
+   */
+  getProjectChannelTimeseries: async (): Promise<ProjectChannelTimeseriesResponse> => {
+    return apiFetch<ProjectChannelTimeseriesResponse>('/project-analyses/timeseries/');
   },
 
   /**

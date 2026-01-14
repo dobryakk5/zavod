@@ -12,7 +12,7 @@ export default function SettingsPage() {
       <div className="mb-8">
         <h1 className="text-3xl font-bold">Настройки</h1>
         <p className="text-gray-500 mt-2">
-          Управляйте настройками клиента и подключенными социальными аккаунтами
+          Управляйте настройками проекта и социальными аккаунтами
         </p>
       </div>
 

@@ -5,6 +5,7 @@ Celery задачи для AI анализа каналов.
 import json
 import logging
 import re
+from datetime import datetime
 from collections import defaultdict
 from statistics import mean
 from typing import Dict, List, Optional, Tuple
@@ -17,7 +18,7 @@ from django.utils import timezone
 
 from ..ai_generator import AIContentGenerator
 from ..instagram_client import fetch_instagram_profile, normalize_instagram_username
-from ..models import ChannelAnalysis
+from ..models import ChannelAnalysis, ProjectChannelAnalysisRun, ProjectChannelPostStat
 from ..telegram_client import (
     TelegramContentCollector,
     normalize_telegram_channel_identifier,
@@ -708,6 +709,128 @@ def _analyze_youtube_channel(analysis: ChannelAnalysis) -> Dict:
     }
 
 
+def _update_project_run(run: ProjectChannelAnalysisRun, **fields) -> None:
+    """Сохранить изменения состояния анализа проекта."""
+    for attr, value in fields.items():
+        setattr(run, attr, value)
+    update_fields = list(fields.keys())
+    if "updated_at" not in update_fields:
+        update_fields.append("updated_at")
+    run.save(update_fields=update_fields)
+
+
+def _coerce_datetime(value) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _format_datetime(value) -> Optional[str]:
+    dt = _coerce_datetime(value)
+    return dt.isoformat() if dt else None
+
+
+def _extract_post_title(post: Dict) -> str:
+    text = (post.get("title") or post.get("text") or "").strip()
+    if not text:
+        return ""
+    return text.split("\n")[0][:140]
+
+
+def _get_previous_project_stats(
+    client,
+    channel_type: str,
+    channel_identifier: str,
+    run_id: int,
+) -> Tuple[Optional[int], Dict[str, ProjectChannelPostStat], Dict[str, int]]:
+    previous_run_id = (
+        ProjectChannelPostStat.objects.filter(
+            client=client,
+            channel_type=channel_type,
+            channel_identifier=channel_identifier,
+            run__status=ProjectChannelAnalysisRun.STATUS_COMPLETED,
+        )
+        .exclude(run_id=run_id)
+        .order_by("-run__created_at")
+        .values_list("run_id", flat=True)
+        .first()
+    )
+
+    if not previous_run_id:
+        return None, {}, {"posts_count": 0, "views": 0, "reactions": 0, "comments": 0}
+
+    previous_stats = list(
+        ProjectChannelPostStat.objects.filter(
+            run_id=previous_run_id,
+            channel_type=channel_type,
+            channel_identifier=channel_identifier,
+        )
+    )
+    stats_map = {stat.external_id: stat for stat in previous_stats}
+    totals = {
+        "posts_count": len(previous_stats),
+        "views": sum(stat.views for stat in previous_stats),
+        "reactions": sum(stat.reactions for stat in previous_stats),
+        "comments": sum(stat.comments for stat in previous_stats),
+    }
+    return previous_run_id, stats_map, totals
+
+
+def _collect_project_telegram_data(client, channel_url: str) -> Tuple[str, Dict, List[Dict]]:
+    api_id, api_hash, session_name = _get_telegram_credentials(client)
+    if not api_id or not api_hash:
+        raise RuntimeError("Не настроены Telegram API ID/API Hash для анализа каналов")
+
+    channel_identifier = normalize_telegram_channel_identifier(channel_url)
+    if not channel_identifier:
+        raise ValueError("Не удалось распознать Telegram канал из URL")
+
+    collector = TelegramContentCollector(api_id=api_id, api_hash=api_hash, session_name=session_name)
+
+    async def fetch_data():
+        await collector.connect()
+        try:
+            info = await collector.get_channel_info(channel_identifier)
+            messages = await collector.get_channel_messages(channel_identifier, limit=50)
+            return info, messages
+        finally:
+            await collector.disconnect()
+
+    channel_info, messages = run_async_task(fetch_data())
+    if not messages:
+        raise RuntimeError("Не удалось получить посты из Telegram канала.")
+
+    return channel_identifier, channel_info, messages
+
+
+def _collect_project_instagram_data(channel_url: str) -> Tuple[str, Dict, List[Dict]]:
+    username = normalize_instagram_username(channel_url)
+    if not username:
+        raise ValueError("Не удалось распознать Instagram аккаунт из ссылки")
+    profile, posts = fetch_instagram_profile(username, limit=50)
+    if not posts:
+        raise RuntimeError("Не удалось получить посты из Instagram аккаунта.")
+    return username, profile, posts
+
+
+def _collect_project_youtube_data(client, channel_url: str) -> Tuple[str, Dict, List[Dict]]:
+    api_key = _get_youtube_api_key(client)
+    if not api_key:
+        raise RuntimeError("Не настроен YouTube API ключ для анализа каналов")
+    identifier = normalize_youtube_identifier(channel_url)
+    if not identifier:
+        raise ValueError("Не удалось распознать YouTube канал из URL")
+    profile, videos = fetch_youtube_channel(api_key, identifier, max_videos=50)
+    if not videos:
+        raise RuntimeError("Не удалось получить видео из YouTube канала.")
+    return identifier, profile, videos
+
+
 @shared_task(bind=True, max_retries=0)
 def analyze_channel_task(self, analysis_id: int):
     """Celery задача для анализа канала."""
@@ -752,6 +875,252 @@ def analyze_channel_task(self, analysis_id: int):
             analysis,
             status=ChannelAnalysis.STATUS_FAILED,
             progress=analysis.progress or 0,
+            error=str(exc),
+        )
+        raise
+
+
+@shared_task(bind=True, max_retries=0)
+def analyze_project_channels_task(self, run_id: int):
+    """Celery задача для анализа каналов проекта клиента."""
+    try:
+        run = ProjectChannelAnalysisRun.objects.select_related("client").get(id=run_id)
+    except ProjectChannelAnalysisRun.DoesNotExist:
+        logger.error("ProjectChannelAnalysisRun %s не найден", run_id)
+        return
+
+    if run.status in {ProjectChannelAnalysisRun.STATUS_COMPLETED, ProjectChannelAnalysisRun.STATUS_IN_PROGRESS}:
+        return run.result
+
+    _update_project_run(
+        run,
+        status=ProjectChannelAnalysisRun.STATUS_IN_PROGRESS,
+        progress=5,
+        error="",
+    )
+
+    client = run.client
+    channels = [
+        ("telegram", client.project_telegram_channel or ""),
+        ("instagram", client.project_instagram_channel or ""),
+        ("youtube", client.project_youtube_channel or ""),
+    ]
+    channels = [(ctype, value.strip()) for ctype, value in channels if value and value.strip()]
+    if not channels:
+        _update_project_run(
+            run,
+            status=ProjectChannelAnalysisRun.STATUS_FAILED,
+            progress=run.progress or 0,
+            error="Не указаны каналы проекта для анализа.",
+        )
+        return
+
+    results: List[Dict] = []
+    progress_step = max(1, int(80 / max(1, len(channels))))
+
+    try:
+        for index, (channel_type, channel_url) in enumerate(channels, start=1):
+            if channel_type == "telegram":
+                channel_identifier, channel_info, posts = _collect_project_telegram_data(client, channel_url)
+                subscribers = int((channel_info or {}).get("subscribers") or 0)
+                stats = _summarize_posts(posts)
+                schedule = _build_schedule(posts)
+                insights = _extract_ai_topics(posts)
+                audience_profile = _extract_audience_profile(posts)
+                author_influence_analysis = _extract_author_influence_analysis(posts)
+                channel_title = (channel_info or {}).get("title") or channel_identifier
+                summary = {
+                    "channel_name": channel_title,
+                    "subscribers": subscribers,
+                    "avg_views": stats["avg_views"],
+                    "avg_engagement": stats["avg_engagement"],
+                    "avg_reactions": stats["avg_reactions"],
+                    "avg_comments": stats["avg_comments"],
+                    "top_posts": stats["top_posts"],
+                    "keywords": insights["keywords"],
+                    "topics": insights["topics"],
+                    "content_types": insights["content_types"],
+                    "posting_schedule": schedule,
+                    "audience_profile": audience_profile,
+                    "author_influence_analysis": author_influence_analysis,
+                }
+            elif channel_type == "instagram":
+                channel_identifier, profile, posts = _collect_project_instagram_data(channel_url)
+                subscribers = int(profile.get("followers_count") or 0)
+                stats = _summarize_posts(posts, audience_size=subscribers or None)
+                schedule = _build_schedule(posts)
+                insights = _extract_ai_topics(posts)
+                audience_profile = _extract_audience_profile(posts)
+                author_influence_analysis = _extract_author_influence_analysis(posts)
+                channel_title = profile.get("full_name") or profile.get("username") or channel_identifier
+                summary = {
+                    "channel_name": channel_title,
+                    "channel_username": profile.get("username") or channel_identifier,
+                    "profile_url": f"https://www.instagram.com/{profile.get('username') or channel_identifier}/",
+                    "bio": profile.get("biography") or "",
+                    "subscribers": subscribers,
+                    "avg_views": stats["avg_views"],
+                    "avg_engagement": stats["avg_engagement"],
+                    "avg_reactions": stats["avg_reactions"],
+                    "avg_comments": stats["avg_comments"],
+                    "top_posts": stats["top_posts"],
+                    "keywords": insights["keywords"],
+                    "topics": insights["topics"],
+                    "content_types": insights["content_types"],
+                    "posting_schedule": schedule,
+                    "audience_profile": audience_profile,
+                    "author_influence_analysis": author_influence_analysis,
+                }
+            elif channel_type == "youtube":
+                channel_identifier, profile, posts = _collect_project_youtube_data(client, channel_url)
+                subscribers = int(profile.get("subscriber_count") or 0)
+                stats = _summarize_posts(posts, audience_size=subscribers or None)
+                schedule = _build_schedule(posts)
+                insights = _extract_ai_topics(posts)
+                audience_profile = _extract_audience_profile(posts)
+                author_influence_analysis = _extract_author_influence_analysis(posts)
+                channel_title = profile.get("title") or channel_identifier
+                channel_username = profile.get("custom_url") or ""
+                profile_url = ""
+                if channel_username:
+                    profile_url = f"https://www.youtube.com/{channel_username.lstrip('/')}"
+                elif profile.get("channel_id"):
+                    profile_url = f"https://www.youtube.com/channel/{profile.get('channel_id')}"
+                summary = {
+                    "channel_name": channel_title,
+                    "channel_username": channel_username,
+                    "profile_url": profile_url,
+                    "bio": profile.get("description") or "",
+                    "subscribers": subscribers,
+                    "avg_views": stats["avg_views"],
+                    "avg_engagement": stats["avg_engagement"],
+                    "avg_reactions": stats["avg_reactions"],
+                    "avg_comments": stats["avg_comments"],
+                    "top_posts": stats["top_posts"],
+                    "keywords": insights["keywords"],
+                    "topics": insights["topics"],
+                    "content_types": insights["content_types"],
+                    "posting_schedule": schedule,
+                    "audience_profile": audience_profile,
+                    "author_influence_analysis": author_influence_analysis,
+                }
+            else:
+                raise ValueError("Анализ для этого типа канала пока не поддерживается")
+
+            ProjectChannelPostStat.objects.filter(
+                run=run,
+                channel_type=channel_type,
+                channel_identifier=channel_identifier,
+            ).delete()
+
+            previous_run_id, previous_stats, previous_totals = _get_previous_project_stats(
+                client,
+                channel_type,
+                channel_identifier,
+                run.id,
+            )
+
+            post_rows: List[ProjectChannelPostStat] = []
+            post_outputs: List[Dict] = []
+            total_views = 0
+            total_reactions = 0
+            total_comments = 0
+
+            for post in posts:
+                external_id = str(post.get("id") or "").strip()
+                if not external_id:
+                    continue
+                views = int(post.get("views") or 0)
+                reactions = int(post.get("reactions") or 0)
+                comments = int(post.get("comments") or 0)
+                total_views += views
+                total_reactions += reactions
+                total_comments += comments
+
+                published_at = _coerce_datetime(post.get("date"))
+                post_rows.append(
+                    ProjectChannelPostStat(
+                        run=run,
+                        client=client,
+                        channel_type=channel_type,
+                        channel_identifier=channel_identifier,
+                        external_id=external_id,
+                        title=_extract_post_title(post),
+                        url=str(post.get("url") or ""),
+                        published_at=published_at,
+                        views=views,
+                        reactions=reactions,
+                        comments=comments,
+                    )
+                )
+
+                prev_stat = previous_stats.get(external_id)
+                delta_views = views - prev_stat.views if prev_stat else views
+                delta_reactions = reactions - prev_stat.reactions if prev_stat else reactions
+                delta_comments = comments - prev_stat.comments if prev_stat else comments
+
+                post_outputs.append(
+                    {
+                        "external_id": external_id,
+                        "title": _extract_post_title(post),
+                        "url": str(post.get("url") or ""),
+                        "published_at": _format_datetime(published_at),
+                        "views": views,
+                        "reactions": reactions,
+                        "comments": comments,
+                        "delta_views": delta_views,
+                        "delta_reactions": delta_reactions,
+                        "delta_comments": delta_comments,
+                        "is_new": prev_stat is None,
+                    }
+                )
+
+            if post_rows:
+                ProjectChannelPostStat.objects.bulk_create(post_rows)
+
+            totals = {
+                "posts_count": len(post_outputs),
+                "views": total_views,
+                "reactions": total_reactions,
+                "comments": total_comments,
+            }
+            delta_totals = {
+                "posts_count": totals["posts_count"] - previous_totals["posts_count"],
+                "views": totals["views"] - previous_totals["views"],
+                "reactions": totals["reactions"] - previous_totals["reactions"],
+                "comments": totals["comments"] - previous_totals["comments"],
+            }
+
+            results.append(
+                {
+                    "channel_type": channel_type,
+                    "channel_url": channel_url,
+                    "channel_identifier": channel_identifier,
+                    "summary": summary,
+                    "totals": totals,
+                    "delta": delta_totals,
+                    "previous_run_id": previous_run_id,
+                    "posts": post_outputs,
+                }
+            )
+
+            _update_project_run(run, progress=min(90, 5 + progress_step * index))
+
+        _update_project_run(
+            run,
+            status=ProjectChannelAnalysisRun.STATUS_COMPLETED,
+            progress=100,
+            result={"channels": results, "generated_at": timezone.now().isoformat()},
+            error="",
+        )
+        return run.result
+
+    except Exception as exc:
+        logger.error("Ошибка анализа каналов проекта %s: %s", run.id, exc, exc_info=True)
+        _update_project_run(
+            run,
+            status=ProjectChannelAnalysisRun.STATUS_FAILED,
+            progress=run.progress or 0,
             error=str(exc),
         )
         raise

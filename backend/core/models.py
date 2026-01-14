@@ -38,6 +38,24 @@ class Client(models.Model):
         verbose_name="Тип канала",
         help_text="Тип канала для анализа (например: telegram, instagram, youtube)"
     )
+    project_telegram_channel = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Telegram проекта",
+        help_text="Ссылка или @username Telegram канала проекта"
+    )
+    project_instagram_channel = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Instagram проекта",
+        help_text="Ссылка или @username Instagram аккаунта проекта"
+    )
+    project_youtube_channel = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="YouTube проекта",
+        help_text="Ссылка или ID YouTube канала проекта"
+    )
 
     # Business description
     avatar = models.TextField(
@@ -305,6 +323,61 @@ class ChannelAnalysis(models.Model):
 
     def __str__(self):
         return f"{self.client.name} – {self.channel_type} analysis ({self.status})"
+
+
+class ProjectChannelAnalysisRun(models.Model):
+    STATUS_PENDING = ChannelAnalysis.STATUS_PENDING
+    STATUS_IN_PROGRESS = ChannelAnalysis.STATUS_IN_PROGRESS
+    STATUS_COMPLETED = ChannelAnalysis.STATUS_COMPLETED
+    STATUS_FAILED = ChannelAnalysis.STATUS_FAILED
+
+    STATUS_CHOICES = ChannelAnalysis.STATUS_CHOICES
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="project_channel_runs")
+    task_id = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    progress = models.PositiveIntegerField(default=0)
+    result = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["client", "status", "-created_at"], name="pcr_client_status_created_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.client.name} – project channel run ({self.status})"
+
+
+class ProjectChannelPostStat(models.Model):
+    run = models.ForeignKey(ProjectChannelAnalysisRun, on_delete=models.CASCADE, related_name="post_stats")
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="project_channel_post_stats")
+    channel_type = models.CharField(max_length=50)
+    channel_identifier = models.CharField(max_length=255)
+    external_id = models.CharField(max_length=255)
+    title = models.CharField(max_length=255, blank=True)
+    url = models.CharField(max_length=500, blank=True)
+    published_at = models.DateTimeField(blank=True, null=True)
+    views = models.PositiveIntegerField(default=0)
+    reactions = models.PositiveIntegerField(default=0)
+    comments = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("run", "channel_type", "channel_identifier", "external_id")
+        indexes = [
+            models.Index(
+                fields=["client", "channel_type", "channel_identifier", "external_id"],
+                name="pcps_client_channel_post_idx",
+            ),
+            models.Index(fields=["run"], name="pcps_run_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.client.name} – {self.channel_type} post {self.external_id}"
 
 
 class WebsiteScan(models.Model):
@@ -1097,9 +1170,12 @@ class Article(models.Model):
     """Статья: скелет/структура для SEO-статьи по Wordstat запросу."""
 
     STATUS_CHOICES = (
-        ("draft", "Draft"),
-        ("options_ready", "Options Ready"),
+        ("wordstat", "Wordstat"),
+        ("context_suggested", "Context Suggested"),
+        ("context_selected", "Context Selected"),
         ("outline_ready", "Outline Ready"),
+        ("article_ready", "Article Ready"),
+        ("result_edited", "Result Edited"),
         ("failed", "Failed"),
     )
 
@@ -1119,8 +1195,9 @@ class Article(models.Model):
     seo_blocks = models.JSONField(default=dict, blank=True)
 
     outline_markdown = models.TextField(blank=True, help_text="Markdown-структура статьи без контента")
+    result_html = models.TextField(blank=True, help_text="Итоговый HTML-текст статьи")
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="wordstat")
 
     audience = models.TextField(blank=True, help_text="Целевая аудитория для промптов статьи")
 

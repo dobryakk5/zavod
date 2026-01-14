@@ -208,6 +208,15 @@ def _default_product_type_requirements() -> dict[str, dict[str, str]]:
     }
 
 
+_DEFAULT_PRODUCT_TYPE_KEYS = frozenset(_default_product_type_requirements().keys())
+
+
+def is_system_product_type_name(value: str | None) -> bool:
+    if not value:
+        return False
+    return _normalize_name(value) in _DEFAULT_PRODUCT_TYPE_KEYS
+
+
 def _generic_product_type_requirements(type_name: str) -> dict[str, str]:
     type_display = (type_name or "").strip() or "Тип продукта"
 

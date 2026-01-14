@@ -38,7 +38,9 @@ from core.models import (
     WordstatCluster,
     WeeklySourceReport,
     WeeklySourceBatch,
+    ProjectChannelAnalysisRun,
 )
+from core.services.product_type_templates import is_system_product_type_name
 from core.telegram_client import normalize_telegram_channel_identifier
 from core.social_accounts import ensure_telegram_account_metadata
 from core.social_accounts import sync_client_default_telegram_account
@@ -431,6 +433,7 @@ class ArticleSerializer(serializers.ModelSerializer):
             "lead_product_name",
             "seo_blocks",
             "outline_markdown",
+            "result_html",
             "created_at",
             "updated_at",
         ]
@@ -699,6 +702,9 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "telegram_client_channel",
             "ai_analysis_channel_url",
             "ai_analysis_channel_type",
+            "project_telegram_channel",
+            "project_instagram_channel",
+            "project_youtube_channel",
             "telegram_source_channels",
             "rss_source_feeds",
             "youtube_source_channels",
@@ -836,6 +842,38 @@ class ChannelAnalysisDetailSerializer(ChannelAnalysisListSerializer):
         normalized["audience_profile"] = normalized_profile
 
         return normalized
+
+
+class ProjectChannelAnalysisRunListSerializer(serializers.ModelSerializer):
+    """Short serializer for project channel analysis runs."""
+
+    class Meta:
+        model = ProjectChannelAnalysisRun
+        fields = [
+            "id",
+            "task_id",
+            "status",
+            "progress",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class ProjectChannelAnalysisRunDetailSerializer(ProjectChannelAnalysisRunListSerializer):
+    """Detailed serializer for project channel analysis runs with payload."""
+
+    result = serializers.SerializerMethodField()
+    error = serializers.CharField(allow_blank=True)
+
+    class Meta(ProjectChannelAnalysisRunListSerializer.Meta):
+        fields = ProjectChannelAnalysisRunListSerializer.Meta.fields + ["result", "error"]
+        read_only_fields = fields
+
+    def get_result(self, obj: ProjectChannelAnalysisRun):
+        if obj.status != ProjectChannelAnalysisRun.STATUS_COMPLETED:
+            return None
+        return obj.result
 
 
 class WebsiteScanCreateSerializer(serializers.Serializer):
@@ -1116,6 +1154,10 @@ class ClientProductSerializer(serializers.ModelSerializer):
 
 class ProductTypeSerializer(serializers.ModelSerializer):
     owner_id = serializers.IntegerField(read_only=True)
+    is_deletable = serializers.SerializerMethodField()
+
+    def get_is_deletable(self, obj: ProductType) -> bool:
+        return not is_system_product_type_name(getattr(obj, "name", None))
 
     class Meta:
         model = ProductType
@@ -1134,7 +1176,8 @@ class ProductTypeSerializer(serializers.ModelSerializer):
             "requirements_program_modules",
             "requirements_packaging",
             "owner_id",
+            "is_deletable",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "owner_id", "created_at", "updated_at"]
+        read_only_fields = ["id", "owner_id", "is_deletable", "created_at", "updated_at"]

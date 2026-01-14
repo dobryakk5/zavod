@@ -27,6 +27,7 @@ from core.models import (
 from core.services.product_type_templates import (
     ensure_system_product_type_templates,
     ensure_system_product_type_requirements,
+    is_system_product_type_name,
     migrate_client_product_types_to_system,
 )
 from core.services.product_mindmap import (
@@ -82,6 +83,12 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         system_client = Client.get_system_client()
         serializer.save(owner=system_client)
+
+    def destroy(self, request, *args, **kwargs):
+        product_type = self.get_object()
+        if is_system_product_type_name(getattr(product_type, "name", None)):
+            raise ValidationError({"detail": "Системные типы продуктов нельзя удалять."})
+        return super().destroy(request, *args, **kwargs)
 
     @action(
         detail=False,

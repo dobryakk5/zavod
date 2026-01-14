@@ -21,7 +21,7 @@ import requests
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Count, F, Q, Prefetch
+from django.db.models import Count, F, Q, Prefetch, Sum
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
@@ -62,6 +62,8 @@ from core.models import (
     Topic,
     TrendItem,
     ChannelAnalysis,
+    ProjectChannelPostStat,
+    ProjectChannelAnalysisRun,
     WeeklySourceReport,
     WeeklySourceBatch,
     SEOKeywordSet,
@@ -90,6 +92,8 @@ from .serializers import (
     ArticleBlockSerializer,
     ChannelAnalysisDetailSerializer,
     ChannelAnalysisListSerializer,
+    ProjectChannelAnalysisRunDetailSerializer,
+    ProjectChannelAnalysisRunListSerializer,
     ClientProductSerializer,
     ProductTypeSerializer,
     ClientSettingsSerializer,
@@ -1466,6 +1470,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
             "blocks_update",
             "blocks_generate",
             "evaluate",
+            "update_result",
         }:
             return [IsTenantOwnerOrEditor()]
         return super().get_permissions()
@@ -1491,8 +1496,8 @@ class ArticleViewSet(viewsets.ModelViewSet):
     def _generate_context_options(self, article: Article, force: bool = False):
         has_options = bool(article.options_why_now) and bool(article.options_solution)
         if has_options and not force:
-            if article.status in {"draft", "failed"}:
-                article.status = "options_ready"
+            if article.status in {"wordstat", "failed"}:
+                article.status = "context_suggested"
                 article.save(update_fields=["status", "updated_at"])
             return True, None, None
 
@@ -1535,8 +1540,8 @@ class ArticleViewSet(viewsets.ModelViewSet):
 
         article.options_why_now = [str(item).strip() for item in why_now if str(item).strip()]
         article.options_solution = [str(item).strip() for item in solution if str(item).strip()]
-        if article.status in {"draft", "failed"}:
-            article.status = "options_ready"
+        if article.status in {"wordstat", "failed"}:
+            article.status = "context_suggested"
         article.save(update_fields=["options_why_now", "options_solution", "status", "updated_at"])
 
         return True, None, None
@@ -1636,7 +1641,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
         article = Article.objects.create(
             client=client,
             wordstat=phrase[:500],
-            status="draft",
+            status="wordstat",
             created_by=request.user,
         )
         self._sync_blocks_from_seo_blocks(article)
@@ -1688,8 +1693,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
         article.tripwire_product_id = _parse_optional_positive_int(tripwire_product_id)
         article.tripwire_product_name = str(tripwire_product_name)[:255]
 
-        if article.status == "draft":
-            article.status = "options_ready"
+        article.status = "context_selected"
 
         article.save(
             update_fields=[
@@ -1729,6 +1733,16 @@ class ArticleViewSet(viewsets.ModelViewSet):
                     article.outline_markdown = "\n".join(lines)
 
         article.save(update_fields=["wordstat", "audience", "outline_markdown", "updated_at"])
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def update_result(self, request, pk=None):
+        article = self.get_object()
+        result_html = str(request.data.get("result_html") or "").strip()
+        article.result_html = result_html
+        article.status = "result_edited"
+        article.save(update_fields=["result_html", "status", "updated_at"])
         serializer = self.get_serializer(article)
         return Response(serializer.data)
 
@@ -2569,6 +2583,159 @@ class ChannelAnalysisViewSet(mixins.DestroyModelMixin, viewsets.ReadOnlyModelVie
                 "client_profile": merged_profile,
             }
         )
+
+
+class ProjectChannelAnalysisRunView(APIView):
+    """Запуск анализа каналов проекта клиента."""
+
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+
+        channels = [
+            ("telegram", client.project_telegram_channel or ""),
+            ("instagram", client.project_instagram_channel or ""),
+            ("youtube", client.project_youtube_channel or ""),
+        ]
+        has_any = any(value.strip() for _, value in channels)
+        if not has_any:
+            return Response(
+                {"success": False, "error": "Добавьте хотя бы один канал проекта перед запуском анализа."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        run = ProjectChannelAnalysisRun.objects.create(
+            client=client,
+            status=ProjectChannelAnalysisRun.STATUS_PENDING,
+        )
+        task = tasks.analyze_project_channels_task.delay(run.id)
+        run.task_id = task.id
+        run.save(update_fields=["task_id", "updated_at"])
+        return Response({"success": True, "task_id": task.id, "run_id": run.id})
+
+
+class ProjectChannelAnalysisRunViewSet(viewsets.ReadOnlyModelViewSet):
+    """Просмотр запусков анализа каналов проекта."""
+
+    permission_classes = [IsTenantMember]
+    pagination_class = None
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return ProjectChannelAnalysisRun.objects.filter(client=client).order_by("-created_at")
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ProjectChannelAnalysisRunListSerializer
+        return ProjectChannelAnalysisRunDetailSerializer
+
+    @action(detail=False, methods=["get"], url_path="timeseries")
+    def timeseries(self, request):
+        client = get_active_client(request.user)
+        runs = list(
+            ProjectChannelAnalysisRun.objects.filter(
+                client=client,
+                status=ProjectChannelAnalysisRun.STATUS_COMPLETED,
+            ).order_by("created_at")
+        )
+        if not runs:
+            return Response({"runs": [], "channels": []})
+
+        run_map = {run.id: run for run in runs}
+        stats_rows = (
+            ProjectChannelPostStat.objects.filter(run_id__in=run_map.keys())
+            .values("run_id", "channel_type", "channel_identifier", "run__created_at")
+            .annotate(
+                posts_count=Count("id"),
+                views=Sum("views"),
+                reactions=Sum("reactions"),
+                comments=Sum("comments"),
+            )
+            .order_by("run__created_at")
+        )
+
+        def resolve_channel_meta(run, channel_type: str, channel_identifier: str):
+            result = run.result if isinstance(run.result, dict) else {}
+            channels = result.get("channels") if isinstance(result.get("channels"), list) else []
+            for channel in channels:
+                if not isinstance(channel, dict):
+                    continue
+                if (
+                    channel.get("channel_type") == channel_type
+                    and channel.get("channel_identifier") == channel_identifier
+                ):
+                    summary = channel.get("summary") if isinstance(channel.get("summary"), dict) else {}
+                    label = (
+                        (summary or {}).get("channel_name")
+                        or channel.get("channel_url")
+                        or channel_identifier
+                    )
+                    url = (summary or {}).get("profile_url") or channel.get("channel_url") or ""
+                    subscribers = summary.get("subscribers")
+                    return label, url, int(subscribers or 0)
+            return channel_identifier, "", 0
+
+        runs_payload = {
+            run.id: {
+                "run_id": run.id,
+                "created_at": run.created_at.isoformat(),
+                "channels": [],
+            }
+            for run in runs
+        }
+        channel_meta_map = {}
+
+        for row in stats_rows:
+            run = run_map.get(row["run_id"])
+            if not run:
+                continue
+            channel_type = row["channel_type"]
+            channel_identifier = row["channel_identifier"]
+            key = f"{channel_type}:{channel_identifier}"
+            label, url, subscribers = resolve_channel_meta(run, channel_type, channel_identifier)
+            channel_meta_map.setdefault(
+                key,
+                {
+                    "key": key,
+                    "channel_type": channel_type,
+                    "channel_identifier": channel_identifier,
+                    "channel_label": label,
+                    "channel_url": url,
+                },
+            )
+            runs_payload[row["run_id"]]["channels"].append(
+                {
+                    "key": key,
+                    "channel_type": channel_type,
+                    "channel_identifier": channel_identifier,
+                    "channel_label": label,
+                    "channel_url": url,
+                    "totals": {
+                        "posts_count": int(row["posts_count"] or 0),
+                        "views": int(row["views"] or 0),
+                        "reactions": int(row["reactions"] or 0),
+                        "comments": int(row["comments"] or 0),
+                        "subscribers": subscribers,
+                    },
+                }
+            )
+
+        ordered_runs = [runs_payload[run.id] for run in runs]
+        return Response({"runs": ordered_runs, "channels": list(channel_meta_map.values())})
+
+    @action(detail=False, methods=["get"], url_path="latest")
+    def latest(self, request):
+        client = get_active_client(request.user)
+        latest_run = (
+            ProjectChannelAnalysisRun.objects.filter(client=client)
+            .order_by("-created_at")
+            .first()
+        )
+        if not latest_run:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = ProjectChannelAnalysisRunDetailSerializer(latest_run)
+        return Response(serializer.data)
 
 
 class WeeklySourceReportViewSet(viewsets.ReadOnlyModelViewSet):

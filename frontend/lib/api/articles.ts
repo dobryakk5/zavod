@@ -79,6 +79,13 @@ export const articlesApi = {
     });
   },
 
+  updateResult: async (id: number, result_html: string): Promise<Article> => {
+    return apiFetch<Article>(`/articles/${id}/update_result/`, {
+      method: 'POST',
+      body: { result_html },
+    });
+  },
+
   generateSeoBlocks: async (id: number): Promise<TaskResponse> => {
     return apiFetch<TaskResponse>(`/articles/${id}/generate_seo_blocks/`, {
       method: 'POST',

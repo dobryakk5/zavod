@@ -13,20 +13,29 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { RichTextEditor } from '@/components/ui/rich-text-editor';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import { productTypesApi } from '@/lib/api/productTypes';
+import { sanitizeRichText } from '@/lib/sanitize-html';
+import { highlightPhrasesInHtml } from '@/lib/highlight-html';
 
 const STATUS_LABELS: Record<ArticleStatus, string> = {
-  draft: 'Черновик',
-  options_ready: 'Выбор вариантов',
+  wordstat: 'Wordstat',
+  context_suggested: 'Контекст предложен',
+  context_selected: 'Контекст выбран',
   outline_ready: 'Скелет готов',
+  article_ready: 'Статья составлена',
+  result_edited: 'Правки внесены',
   failed: 'Ошибка',
 };
 
 const STATUS_STYLES: Record<ArticleStatus, string> = {
-  draft: 'bg-slate-100 text-slate-700',
-  options_ready: 'bg-blue-100 text-blue-800',
+  wordstat: 'bg-slate-100 text-slate-700',
+  context_suggested: 'bg-blue-100 text-blue-800',
+  context_selected: 'bg-cyan-100 text-cyan-800',
   outline_ready: 'bg-emerald-100 text-emerald-800',
+  article_ready: 'bg-amber-100 text-amber-800',
+  result_edited: 'bg-teal-100 text-teal-800',
   failed: 'bg-red-100 text-red-800',
 };
 
@@ -56,6 +65,142 @@ function parseKeywordsCsv(raw: string): string[] {
     .filter(Boolean)
     .slice(0, 2);
 }
+
+const escapeHtml = (value: string) =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const extractPlainText = (html: string) => {
+  if (!html) return '';
+  if (typeof DOMParser === 'undefined') return html;
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  return doc.body.textContent || '';
+};
+
+const countPhraseMatches = (text: string, phrase: string) => {
+  if (!text || !phrase) return 0;
+  const regex = new RegExp(escapeRegExp(phrase), 'gi');
+  return text.match(regex)?.length ?? 0;
+};
+
+const looksLikeHtml = (value: string) => /<\/?[a-z][\s\S]*>/i.test(value);
+
+const applyInlineMarkdown = (value: string) => {
+  let escaped = escapeHtml(value);
+  escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  escaped = escaped.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  escaped = escaped.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  escaped = escaped.replace(/_(.+?)_/g, '<em>$1</em>');
+  return escaped;
+};
+
+const renderMarkdownBlocks = (raw: string) => {
+  const lines = (raw || '').replace(/\r/g, '').split('\n');
+  const parts: string[] = [];
+  let paragraph: string[] = [];
+  let listType: 'ul' | 'ol' | null = null;
+  let listItems: string[] = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const html = paragraph.map((line) => applyInlineMarkdown(line.trim())).join('<br />');
+    parts.push(`<p>${html}</p>`);
+    paragraph = [];
+  };
+
+  const flushList = () => {
+    if (!listType || !listItems.length) {
+      listType = null;
+      listItems = [];
+      return;
+    }
+    const itemsHtml = listItems.map((item) => `<li>${applyInlineMarkdown(item)}</li>`).join('');
+    parts.push(`<${listType}>${itemsHtml}</${listType}>`);
+    listType = null;
+    listItems = [];
+  };
+
+  const pushHeading = (level: number, text: string) => {
+    if (parts.length) {
+      parts.push('<hr />');
+    }
+    parts.push(`<h${level}>${applyInlineMarkdown(text)}</h${level}>`);
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,3})\s+(.*)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      pushHeading(headingMatch[1].length, headingMatch[2]);
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.*)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      if (listType !== 'ol') {
+        flushList();
+        listType = 'ol';
+      }
+      listItems.push(orderedMatch[1]);
+      continue;
+    }
+
+    const unorderedMatch = trimmed.match(/^[-*•]\s+(.*)$/);
+    if (unorderedMatch) {
+      flushParagraph();
+      if (listType !== 'ul') {
+        flushList();
+        listType = 'ul';
+      }
+      listItems.push(unorderedMatch[1]);
+      continue;
+    }
+
+    flushList();
+    paragraph.push(trimmed);
+  }
+
+  flushParagraph();
+  flushList();
+  return parts.join('');
+};
+
+const normalizeMarkdownToHtml = (raw: string) => {
+  if (!raw) return '';
+  if (looksLikeHtml(raw)) return raw;
+  return renderMarkdownBlocks(raw);
+};
+
+const buildResultHtml = (items: ArticleBlock[]) => {
+  const parts: string[] = [];
+  for (const block of items) {
+    const title = (block.h2_title || block.block_key || '').trim();
+    const content = (block.content || '').trim();
+    if (!title && !content) continue;
+    if (title) {
+      if (parts.length) {
+        parts.push('<hr />');
+      }
+      parts.push(`<h2>${applyInlineMarkdown(title)}</h2>`);
+    }
+    if (content) {
+      parts.push(renderMarkdownBlocks(content));
+    }
+  }
+  return parts.join('');
+};
 
 function ToggleList({
   title,
@@ -104,11 +249,15 @@ export default function ArticleDetailPageClient() {
   const [loading, setLoading] = useState(true);
   const [article, setArticle] = useState<Article | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'wordstat' | 'context' | 'seo'>('context');
+  const [activeTab, setActiveTab] = useState<'wordstat' | 'context' | 'seo' | 'result'>('context');
   const initialTabSetRef = useRef(false);
 
   const [wordstatDraft, setWordstatDraft] = useState('');
   const [savingWordstat, setSavingWordstat] = useState(false);
+  const [resultDraft, setResultDraft] = useState('');
+  const [savingResult, setSavingResult] = useState(false);
+  const [resultTouched, setResultTouched] = useState(false);
+  const [resultMode, setResultMode] = useState<'edit' | 'preview'>('edit');
 
   const [blocksLoading, setBlocksLoading] = useState(false);
   const [blocks, setBlocks] = useState<ArticleBlock[]>([]);
@@ -132,10 +281,41 @@ export default function ArticleDetailPageClient() {
 
   const saveTimerRef = useRef<number | null>(null);
   const hydratedRef = useRef(false);
+  const resultAutoRef = useRef<string | null>(null);
+  const resultTabRef = useRef<HTMLDivElement | null>(null);
 
   const whyNowOptions = useMemo(() => ensureArray(article?.options_why_now), [article?.options_why_now]);
   const solutionOptions = useMemo(() => ensureArray(article?.options_solution), [article?.options_solution]);
   const orderedBlocks = useMemo(() => [...blocks].sort((a, b) => a.order - b.order), [blocks]);
+  const wordstatPhrases = useMemo(() => {
+    const phrases = new Set<string>();
+    if (article?.wordstat) {
+      phrases.add(article.wordstat);
+    }
+    for (const block of orderedBlocks) {
+      for (const keyword of block.keywords || []) {
+        if (keyword && keyword.trim()) {
+          phrases.add(keyword.trim());
+        }
+      }
+    }
+    return Array.from(phrases);
+  }, [article?.wordstat, orderedBlocks]);
+  const normalizedResult = useMemo(() => normalizeMarkdownToHtml(resultDraft || ''), [resultDraft]);
+  const sanitizedResult = useMemo(() => sanitizeRichText(normalizedResult), [normalizedResult]);
+  const resultPreviewHtml = useMemo(
+    () => highlightPhrasesInHtml(sanitizedResult, wordstatPhrases),
+    [sanitizedResult, wordstatPhrases]
+  );
+  const resultSeoStats = useMemo(() => {
+    const plainText = extractPlainText(sanitizedResult);
+    return wordstatPhrases
+      .map((phrase) => ({
+        phrase,
+        count: countPhraseMatches(plainText, phrase),
+      }))
+      .sort((a, b) => b.count - a.count || a.phrase.localeCompare(b.phrase, 'ru'));
+  }, [sanitizedResult, wordstatPhrases]);
   const blockTaskActive = blockTaskId !== null;
   const phaseBusy = generatingBlueprint || generatingPhase2 || blockTaskActive;
   const phase2ActiveBlockId = useMemo(() => {
@@ -193,13 +373,18 @@ export default function ArticleDetailPageClient() {
         const data = await articlesApi.get(articleId);
         setArticle(data);
         setWordstatDraft(data.wordstat || '');
+        setResultDraft(normalizeMarkdownToHtml(data.result_html || ''));
+        setResultTouched(false);
+        setResultMode('edit');
+        resultAutoRef.current = null;
         setWhyNowSelected(new Set(ensureArray(data.selected_why_now)));
         setSolutionSelected(new Set(ensureArray(data.selected_solution)));
         setLeadProductId(typeof data.lead_product_id === 'number' ? data.lead_product_id : null);
         setTripwireProductId(typeof data.tripwire_product_id === 'number' ? data.tripwire_product_id : null);
         if (!initialTabSetRef.current) {
           const hasSeoBlocks = Boolean(data.seo_blocks && Object.keys(data.seo_blocks).length > 0);
-          setActiveTab(hasSeoBlocks ? 'seo' : 'context');
+          const hasResult = Boolean(data.result_html && data.result_html.trim());
+          setActiveTab(hasResult ? 'result' : hasSeoBlocks ? 'seo' : 'context');
           initialTabSetRef.current = true;
         }
       } catch (error) {
@@ -234,6 +419,18 @@ export default function ArticleDetailPageClient() {
     };
     void loadBlocks();
   }, [articleId]);
+
+  useEffect(() => {
+    if (resultTouched) return;
+    const hasContent = orderedBlocks.some((block) => block.content?.trim());
+    if (!hasContent) return;
+    const nextAuto = buildResultHtml(orderedBlocks);
+    if (!nextAuto.trim()) return;
+    if (!resultDraft.trim() || resultDraft === resultAutoRef.current) {
+      setResultDraft(nextAuto);
+      resultAutoRef.current = nextAuto;
+    }
+  }, [orderedBlocks, resultDraft, resultTouched]);
 
   const reloadBlocks = async () => {
     try {
@@ -289,6 +486,13 @@ export default function ArticleDetailPageClient() {
           setPhase2TaskId(null);
           setGeneratingPhase2(false);
           await reloadBlocks();
+          if (status.status === 'success') {
+            const updated = await articlesApi.get(articleId);
+            setArticle(updated);
+          }
+          if (status.status === 'success') {
+            scrollToResult();
+          }
           if (status.status !== 'success') {
             toast.error(status.error || 'Генерация блоков завершилась с ошибкой');
           }
@@ -387,6 +591,13 @@ export default function ArticleDetailPageClient() {
     }, 500);
   };
 
+  const scrollToResult = () => {
+    setActiveTab('result');
+    window.requestAnimationFrame(() => {
+      resultTabRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
+
   useEffect(() => {
     if (!hydratedRef.current) return;
     scheduleSave();
@@ -464,6 +675,26 @@ export default function ArticleDetailPageClient() {
     }
   };
 
+  const onSaveResult = async () => {
+    if (!article) return;
+    setSavingResult(true);
+    try {
+      const normalized = sanitizeRichText(normalizeMarkdownToHtml(resultDraft || ''));
+      const updated = await articlesApi.updateResult(articleId, normalized);
+      setArticle(updated);
+      setResultDraft(updated.result_html || normalized);
+      setResultTouched(false);
+      resultAutoRef.current = null;
+      setResultMode('edit');
+      toast.success('Результат сохранён');
+    } catch (error) {
+      console.error('Failed to update result', error);
+      toast.error('Не удалось сохранить результат');
+    } finally {
+      setSavingResult(false);
+    }
+  };
+
   const onCompleteContext = async () => {
     if (!article) return;
     if (saveTimerRef.current) {
@@ -498,11 +729,21 @@ export default function ArticleDetailPageClient() {
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => {
+          const next = v as typeof activeTab;
+          setActiveTab(next);
+          if (next === 'result') {
+            setResultMode('edit');
+          }
+        }}
+      >
         <TabsList className="flex flex-wrap">
           <TabsTrigger value="wordstat">1) wordstat</TabsTrigger>
           <TabsTrigger value="context">2) Контекст</TabsTrigger>
           <TabsTrigger value="seo">3) SEO блоки</TabsTrigger>
+          <TabsTrigger value="result">4) Результат</TabsTrigger>
         </TabsList>
 
         <TabsContent value="wordstat" className="space-y-3">
@@ -780,9 +1021,76 @@ export default function ArticleDetailPageClient() {
             </div>
           )}
         </TabsContent>
+
+        <TabsContent value="result" className="space-y-4" ref={resultTabRef}>
+          {resultMode === 'edit' ? (
+            <>
+              <div className="space-y-2">
+                <div className="text-sm font-semibold">Редактирование</div>
+                <RichTextEditor
+                  value={resultDraft}
+                  onChange={(value) => {
+                    setResultDraft(value);
+                    setResultTouched(true);
+                    resultAutoRef.current = null;
+                  }}
+                  placeholder="Соберите результат статьи и выделяйте важное"
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <Button onClick={() => void onSaveResult()} disabled={savingResult}>
+                  {savingResult ? 'Сохраняем…' : 'Сохранить результат'}
+                </Button>
+                <Button variant="outline" onClick={() => setResultMode('preview')}>
+                  Просмотр SEO
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <div className="text-sm font-semibold">Просмотр SEO</div>
+                {resultPreviewHtml ? (
+                  <div
+                    className="prose max-w-none whitespace-pre-wrap break-words rounded-md border bg-background p-4 text-gray-900"
+                    dangerouslySetInnerHTML={{ __html: resultPreviewHtml }}
+                  />
+                ) : (
+                  <div className="text-sm text-muted-foreground">
+                    Пока нет текста. Сгенерируйте блоки или заполните результат вручную.
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-sm font-semibold">Статистика SEO</div>
+                {resultSeoStats.length ? (
+                  <div className="space-y-2">
+                    {resultSeoStats.map((item) => (
+                      <div key={item.phrase} className="flex items-center justify-between rounded-md border px-3 py-2">
+                        <div className="text-sm">{item.phrase}</div>
+                        <div className="text-sm font-semibold">{item.count}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">Нет фраз для подсчёта.</div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <Button variant="outline" onClick={() => setResultMode('edit')}>
+                  Вернуться к редактированию
+                </Button>
+              </div>
+            </>
+          )}
+        </TabsContent>
       </Tabs>
 
       <div className="flex flex-wrap gap-3">
+        <Button onClick={scrollToResult}>К результату</Button>
         <Button variant="outline" onClick={() => router.push('/articles')}>
           Назад к списку
         </Button>

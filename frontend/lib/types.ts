@@ -4,7 +4,14 @@ export type PostStatus = 'draft' | 'ready' | 'approved' | 'scheduled' | 'publish
 export type ScheduleStatus = 'pending' | 'in_progress' | 'published' | 'failed';
 export type StoryStatus = 'draft' | 'ready' | 'approved' | 'generating_posts' | 'completed';
 export type SEOStatus = 'pending' | 'generating' | 'completed' | 'failed';
-export type ArticleStatus = 'draft' | 'options_ready' | 'outline_ready' | 'failed';
+export type ArticleStatus =
+  | 'wordstat'
+  | 'context_suggested'
+  | 'context_selected'
+  | 'outline_ready'
+  | 'article_ready'
+  | 'result_edited'
+  | 'failed';
 
 export type Platform = 'instagram' | 'telegram' | 'youtube' | 'vkontakte' | 'rss_zen';
 export type ContentType = string; // Now supports custom types
@@ -69,6 +76,7 @@ export interface Article {
     }
   >;
   outline_markdown?: string;
+  result_html?: string;
   created_at: string;
   updated_at?: string;
 }
@@ -342,6 +350,7 @@ export interface ProductType {
   requirements_program_modules?: string | null;
   requirements_packaging?: string | null;
   owner_id?: number;
+  is_deletable?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -439,6 +448,9 @@ export interface ClientSettings {
   website?: string;
   ai_analysis_channel_url?: string;
   ai_analysis_channel_type?: string;
+  project_telegram_channel?: string;
+  project_instagram_channel?: string;
+  project_youtube_channel?: string;
   telegram_source_channels?: string;
   rss_source_feeds?: string;
   youtube_source_channels?: string;

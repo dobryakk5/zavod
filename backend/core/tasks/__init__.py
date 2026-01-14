@@ -36,6 +36,7 @@ from .aggregation import (
 
 from .channel_analysis import (
     analyze_channel_task,
+    analyze_project_channels_task,
 )
 from .weekly_sources import (
     run_weekly_sources_for_client,
@@ -110,6 +111,7 @@ __all__ = [
     'discover_trends_for_topic_with_telegram',
     'analyze_telegram_channel_task',
     'analyze_channel_task',
+    'analyze_project_channels_task',
     'run_weekly_sources_for_client',
     'process_weekly_source',
     'run_website_scan_task',

@@ -15,7 +15,8 @@ const ALLOWED_TAGS = new Set([
   'ul',
   'ol',
   'li',
-  'blockquote'
+  'blockquote',
+  'hr',
 ]);
 
 export function sanitizeRichText(html: string) {

@@ -15,16 +15,22 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 const STATUS_LABELS: Record<ArticleStatus, string> = {
-  draft: 'Черновик',
-  options_ready: 'Выбор вариантов',
+  wordstat: 'Wordstat',
+  context_suggested: 'Контекст предложен',
+  context_selected: 'Контекст выбран',
   outline_ready: 'Скелет готов',
+  article_ready: 'Статья составлена',
+  result_edited: 'Правки внесены',
   failed: 'Ошибка',
 };
 
 const STATUS_STYLES: Record<ArticleStatus, string> = {
-  draft: 'bg-slate-100 text-slate-700',
-  options_ready: 'bg-blue-100 text-blue-800',
+  wordstat: 'bg-slate-100 text-slate-700',
+  context_suggested: 'bg-blue-100 text-blue-800',
+  context_selected: 'bg-cyan-100 text-cyan-800',
   outline_ready: 'bg-emerald-100 text-emerald-800',
+  article_ready: 'bg-amber-100 text-amber-800',
+  result_edited: 'bg-teal-100 text-teal-800',
   failed: 'bg-red-100 text-red-800',
 };
 
