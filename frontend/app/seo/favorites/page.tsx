@@ -188,31 +188,7 @@ export default function WordstatFavoritesPage() {
     if (!q) return;
     setCreatingArticle(q);
     try {
-      const created = await articlesApi.start(q);
-      try {
-        await articlesApi.generateContext(created.id);
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 401) {
-          router.push('/login');
-          return;
-        }
-        let messageShown = false;
-        if (error instanceof ApiError) {
-          try {
-            const parsed = JSON.parse(error.body || '{}') as { error?: string };
-            if (parsed.error) {
-              toast.error(parsed.error);
-              messageShown = true;
-            }
-          } catch {
-            // ignore parse errors
-          }
-        }
-        console.error('Failed to generate article context', error);
-        if (!messageShown) {
-          toast.error('Не удалось сгенерировать контекст');
-        }
-      }
+      const created = await articlesApi.start({ phrase: q });
       router.push(`/articles/${created.id}`);
     } catch (error) {
       console.error('Failed to create article from favorite phrase', error);

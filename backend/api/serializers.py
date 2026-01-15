@@ -421,6 +421,7 @@ class ArticleSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "wordstat",
+            "wordstat_phrases",
             "status",
             "audience",
             "options_why_now",
@@ -437,7 +438,15 @@ class ArticleSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "status", "options_why_now", "options_solution", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "wordstat_phrases",
+            "status",
+            "options_why_now",
+            "options_solution",
+            "created_at",
+            "updated_at",
+        ]
 
 
 class ArticleBlockSerializer(serializers.ModelSerializer):

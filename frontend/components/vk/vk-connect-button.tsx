@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { getVkConnectUrl } from '@/lib/api/vk';
 
 interface VkConnectButtonProps {
+  groupId?: string | number;
   onConnected?: () => void;
   disabled?: boolean;
   className?: string;
@@ -18,6 +19,7 @@ interface VkConnectButtonProps {
  * Opens VK OAuth flow in a popup window and triggers onConnected once it closes.
  */
 export function VkConnectButton({
+  groupId,
   onConnected,
   disabled,
   className,
@@ -27,6 +29,8 @@ export function VkConnectButton({
 }: VkConnectButtonProps) {
   const [connecting, setConnecting] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const normalizedGroupId =
+    typeof groupId === 'number' ? String(groupId) : (groupId ?? '').trim();
 
   const cleanupTimer = useCallback(() => {
     if (timerRef.current) {
@@ -46,8 +50,13 @@ export function VkConnectButton({
       return;
     }
 
+    if (!normalizedGroupId) {
+      toast.error('Укажите группу VK для подключения');
+      return;
+    }
+
     const popup = window.open(
-      getVkConnectUrl(),
+      getVkConnectUrl({ groupId: normalizedGroupId }),
       'vk-connect',
       'width=600,height=720,resizable=yes,scrollbars=yes,status=yes',
     );

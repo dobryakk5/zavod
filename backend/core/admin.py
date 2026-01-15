@@ -30,6 +30,7 @@ from .models import (
     PostType,
     PostTone,
     SystemSetting,
+    PaymentPlan,
     ProductType,
     Article,
     Articles,
@@ -370,6 +371,20 @@ class SystemSettingAdmin(admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         invalidate_system_settings_cache()
+
+
+@admin.register(PaymentPlan)
+class PaymentPlanAdmin(admin.ModelAdmin):
+    list_display = ("name", "code", "amount", "currency", "period", "is_active", "sort_order", "updated_at")
+    list_filter = ("is_active", "currency", "period")
+    search_fields = ("name", "code")
+    ordering = ("sort_order", "name")
+    readonly_fields = ("created_at", "updated_at")
+    fieldsets = (
+        ("Основное", {"fields": ("name", "code", "amount", "currency", "period", "is_active", "sort_order")}),
+        ("Описание", {"fields": ("description",)}),
+        ("Служебное", {"fields": ("created_at", "updated_at")}),
+    )
 
 
 @admin.register(UserTenantRole)

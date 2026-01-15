@@ -51,6 +51,10 @@ from .views import (
     GoogleCompetitorsResolveView,
     GoogleCompetitorsMarkView,
     GoogleCompetitorsCachedView,
+    YooKassaCreatePaymentView,
+    YooKassaPaymentStatusView,
+    PaymentPlanListView,
+    YooKassaWebhookView,
 )
 
 app_name = 'api'
@@ -108,6 +112,12 @@ urlpatterns = [
     path('google/competitors/resolve/', GoogleCompetitorsResolveView.as_view(), name='google-competitors-resolve'),
     path('google/competitors/cached/', GoogleCompetitorsCachedView.as_view(), name='google-competitors-cached'),
     path('google/competitors/mark/', GoogleCompetitorsMarkView.as_view(), name='google-competitors-mark'),
+
+    # Payments
+    path('payments/create/', YooKassaCreatePaymentView.as_view(), name='yookassa-create-payment'),
+    path('payments/status/<str:payment_id>/', YooKassaPaymentStatusView.as_view(), name='yookassa-payment-status'),
+    path('payments/plans/', PaymentPlanListView.as_view(), name='payment-plans'),
+    path('payments/webhook/', YooKassaWebhookView.as_view(), name='yookassa-webhook'),
 
     # Legacy list views (kept for backward compatibility)
     path('posts-list/', PostsListView.as_view(), name='posts-list'),

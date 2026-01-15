@@ -46,7 +46,7 @@ def sync_blocks_from_seo_blocks(article: Article) -> None:
         micro_intent = str(entry.get("intent") or entry.get("micro_intent") or "")[:300]
         key_points = _normalize_key_points(entry.get("key_points"))
         keywords = entry.get("keywords") if isinstance(entry.get("keywords"), list) else []
-        keywords_norm = [str(item).strip() for item in keywords if str(item).strip()][:2]
+        keywords_norm = [str(item).strip() for item in keywords if str(item).strip()]
 
         block, created = ArticleBlock.objects.get_or_create(
             article=article,

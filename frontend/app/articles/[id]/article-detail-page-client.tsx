@@ -66,6 +66,14 @@ function parseKeywordsCsv(raw: string): string[] {
     .slice(0, 2);
 }
 
+function parsePhrases(raw: string): string[] {
+  return (raw || '')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 const escapeHtml = (value: string) =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -254,6 +262,7 @@ export default function ArticleDetailPageClient() {
 
   const [wordstatDraft, setWordstatDraft] = useState('');
   const [savingWordstat, setSavingWordstat] = useState(false);
+  const [generatingContext, setGeneratingContext] = useState(false);
   const [resultDraft, setResultDraft] = useState('');
   const [savingResult, setSavingResult] = useState(false);
   const [resultTouched, setResultTouched] = useState(false);
@@ -289,6 +298,11 @@ export default function ArticleDetailPageClient() {
   const orderedBlocks = useMemo(() => [...blocks].sort((a, b) => a.order - b.order), [blocks]);
   const wordstatPhrases = useMemo(() => {
     const phrases = new Set<string>();
+    for (const phrase of article?.wordstat_phrases || []) {
+      if (phrase && phrase.trim()) {
+        phrases.add(phrase.trim());
+      }
+    }
     if (article?.wordstat) {
       phrases.add(article.wordstat);
     }
@@ -300,13 +314,28 @@ export default function ArticleDetailPageClient() {
       }
     }
     return Array.from(phrases);
-  }, [article?.wordstat, orderedBlocks]);
+  }, [article?.wordstat, article?.wordstat_phrases, orderedBlocks]);
   const normalizedResult = useMemo(() => normalizeMarkdownToHtml(resultDraft || ''), [resultDraft]);
   const sanitizedResult = useMemo(() => sanitizeRichText(normalizedResult), [normalizedResult]);
   const resultPreviewHtml = useMemo(
     () => highlightPhrasesInHtml(sanitizedResult, wordstatPhrases),
     [sanitizedResult, wordstatPhrases]
   );
+  const wordstatClusterPhrases = useMemo(() => {
+    const source = article?.wordstat_phrases?.length
+      ? article.wordstat_phrases
+      : parsePhrases(wordstatDraft);
+    const seen = new Set<string>();
+    return source
+      .map((phrase) => phrase.trim())
+      .filter((phrase) => {
+        if (!phrase) return false;
+        const key = phrase.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [article?.wordstat_phrases, wordstatDraft]);
   const resultSeoStats = useMemo(() => {
     const plainText = extractPlainText(sanitizedResult);
     return wordstatPhrases
@@ -384,7 +413,13 @@ export default function ArticleDetailPageClient() {
         if (!initialTabSetRef.current) {
           const hasSeoBlocks = Boolean(data.seo_blocks && Object.keys(data.seo_blocks).length > 0);
           const hasResult = Boolean(data.result_html && data.result_html.trim());
-          setActiveTab(hasResult ? 'result' : hasSeoBlocks ? 'seo' : 'context');
+          const hasContextOptions = Boolean(
+            (data.options_why_now && data.options_why_now.length > 0) ||
+              (data.options_solution && data.options_solution.length > 0)
+          );
+          setActiveTab(
+            hasResult ? 'result' : hasSeoBlocks ? 'seo' : data.status === 'wordstat' && !hasContextOptions ? 'wordstat' : 'context'
+          );
           initialTabSetRef.current = true;
         }
       } catch (error) {
@@ -456,7 +491,7 @@ export default function ArticleDetailPageClient() {
           const updated = await articlesApi.get(articleId);
           setArticle(updated);
           if (status.status !== 'success') {
-            toast.error(status.error || 'Генерация blueprint завершилась с ошибкой');
+            toast.error(status.error || 'Создание структуры завершилось с ошибкой');
           }
         }
       } catch (error) {
@@ -620,15 +655,15 @@ export default function ArticleDetailPageClient() {
       const response = await articlesApi.generateSeoBlocks(articleId);
       if (!response.task_id) {
         setGeneratingBlueprint(false);
-        toast.error(response.error || 'Не удалось запустить генерацию blueprint');
+        toast.error(response.error || 'Не удалось запустить создание структуры');
         return;
       }
       setBlueprintTaskId(response.task_id);
-      toast.success(response.message || 'Генерация blueprint запущена');
+      toast.success('Создание структуры');
     } catch (error) {
       console.error('Failed to generate blueprint', error);
       setGeneratingBlueprint(false);
-      toast.error('Не удалось сгенерировать blueprint');
+      toast.error('Не удалось создать структуру');
     }
   };
 
@@ -672,6 +707,29 @@ export default function ArticleDetailPageClient() {
       toast.error('Не удалось сохранить wordstat');
     } finally {
       setSavingWordstat(false);
+    }
+  };
+
+  const onCreateContext = async () => {
+    if (!article) return;
+    const nextWordstat = wordstatDraft.trim();
+    if (!nextWordstat) return;
+    setGeneratingContext(true);
+    try {
+      if (nextWordstat !== (article.wordstat || '').trim()) {
+        const updatedWordstat = await articlesApi.updateWordstat(articleId, nextWordstat);
+        setArticle(updatedWordstat);
+        setWordstatDraft(updatedWordstat.wordstat || nextWordstat);
+      }
+      const updated = await articlesApi.generateContext(articleId);
+      setArticle(updated);
+      toast.success('Контекст создан');
+      setActiveTab('context');
+    } catch (error) {
+      console.error('Failed to generate context', error);
+      toast.error('Не удалось создать контекст');
+    } finally {
+      setGeneratingContext(false);
     }
   };
 
@@ -751,9 +809,32 @@ export default function ArticleDetailPageClient() {
             <div className="text-sm font-semibold">Wordstat</div>
             <Input value={wordstatDraft} onChange={(e) => setWordstatDraft(e.target.value)} />
           </div>
+          <div className="space-y-2 rounded-md border bg-background p-4">
+            <div className="text-sm font-semibold">Найденный кластер</div>
+            {wordstatClusterPhrases.length > 1 ? (
+              <div className="flex flex-wrap gap-2">
+                {wordstatClusterPhrases.map((phrase) => (
+                  <Badge key={phrase} className="bg-slate-100 text-slate-700">
+                    {phrase}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                Кластер не найден — используем основной запрос.
+              </div>
+            )}
+          </div>
           <div className="flex flex-wrap gap-3">
             <Button onClick={() => void onSaveWordstat()} disabled={savingWordstat || !wordstatDraft.trim()}>
               {savingWordstat ? 'Сохраняем…' : 'Сохранить'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void onCreateContext()}
+              disabled={generatingContext || savingWordstat || !wordstatDraft.trim()}
+            >
+              {generatingContext ? 'Создаём контекст…' : 'Создать контекст'}
             </Button>
           </div>
         </TabsContent>
@@ -827,7 +908,7 @@ export default function ArticleDetailPageClient() {
               onClick={() => void onCompleteContext()}
               disabled={savingChoices || generatingBlueprint}
             >
-              {generatingBlueprint ? 'Генерируем blueprint…' : 'Дальше: SEO и blueprint'}
+              {generatingBlueprint ? 'Создаём структуру…' : 'Дальше: Создать структуру'}
             </Button>
           </div>
         </TabsContent>
@@ -836,10 +917,10 @@ export default function ArticleDetailPageClient() {
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-3">
               <Button onClick={() => void onGenerateBlueprint()} disabled={phaseBusy}>
-                Фаза 1
+                Фаза 1: структура
               </Button>
               <div className="text-sm text-muted-foreground">
-                AI генерирует для каждого блока подзапрос (H2), микро-интент и 1–2 ключа. Текст блоков не пишется.
+                AI генерирует для каждого блока подзапрос (H2), микро-интент и ключевые фразы. Текст блоков не пишется.
               </div>
               {blocksLoading ? <div className="text-sm text-muted-foreground">Загрузка блоков…</div> : null}
             </div>
@@ -853,7 +934,7 @@ export default function ArticleDetailPageClient() {
 
           {blocks.length === 0 ? (
             <div className="text-sm text-muted-foreground">
-              Пока нет SEO-блоков. Заполните контекст и нажмите «Дальше: SEO и blueprint».
+              Пока нет SEO-блоков. Заполните контекст и нажмите «Дальше: Создать структуру».
             </div>
           ) : (
             <div className="space-y-4">

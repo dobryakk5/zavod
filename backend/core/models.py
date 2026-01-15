@@ -1181,6 +1181,7 @@ class Article(models.Model):
 
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="articles")
     wordstat = models.CharField(max_length=500, help_text="Wordstat фраза / поисковый запрос")
+    wordstat_phrases = models.JSONField(default=list, blank=True)
 
     options_why_now = models.JSONField(default=list, blank=True)
     options_solution = models.JSONField(default=list, blank=True)
@@ -1865,6 +1866,40 @@ class SystemSetting(models.Model):
             },
         )
         return obj
+
+
+# ============================================================================
+# Payment plans
+# ============================================================================
+
+class PaymentPlan(models.Model):
+    PERIOD_WEEK = "week"
+    PERIOD_MONTH = "month"
+    PERIOD_YEAR = "year"
+    PERIOD_CHOICES = [
+        (PERIOD_WEEK, "Неделя"),
+        (PERIOD_MONTH, "Месяц"),
+        (PERIOD_YEAR, "Год"),
+    ]
+
+    code = models.SlugField(unique=True)
+    name = models.CharField(max_length=150)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3, default="RUB")
+    period = models.CharField(max_length=8, choices=PERIOD_CHOICES, default=PERIOD_MONTH)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Payment Plan"
+        verbose_name_plural = "Payment Plans"
+        ordering = ("sort_order", "name")
+
+    def __str__(self):
+        return f"{self.name} ({self.amount} {self.currency})"
 
 
 # ============================================================================

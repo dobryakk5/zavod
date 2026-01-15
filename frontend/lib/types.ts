@@ -55,6 +55,7 @@ export interface Post {
 export interface Article {
   id: number;
   wordstat: string;
+  wordstat_phrases?: string[];
   status: ArticleStatus;
   audience?: string | null;
   options_why_now?: string[];

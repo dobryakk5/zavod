@@ -10,10 +10,10 @@ export const articlesApi = {
     return apiFetch<Article>(`/articles/${id}/`);
   },
 
-  start: async (phrase: string): Promise<Article> => {
+  start: async (payload: { phrase?: string; phrases?: string[] }): Promise<Article> => {
     return apiFetch<Article>('/articles/start/', {
       method: 'POST',
-      body: { phrase },
+      body: payload,
     });
   },
 

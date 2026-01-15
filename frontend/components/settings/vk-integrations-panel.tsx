@@ -5,6 +5,8 @@ import { VkConnectButton } from '@/components/vk/vk-connect-button';
 import { VkPublishDialog } from '@/components/vk/vk-publish-dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Table,
   TableBody,
@@ -56,6 +58,8 @@ export function VkIntegrationsPanel() {
   const { canEdit } = useRole();
   const [integrations, setIntegrations] = useState<VkIntegration[]>([]);
   const [loading, setLoading] = useState(false);
+  const [targetGroup, setTargetGroup] = useState('');
+  const trimmedTargetGroup = targetGroup.trim();
 
   useEffect(() => {
     loadIntegrations();
@@ -101,24 +105,43 @@ export function VkIntegrationsPanel() {
           <p className="text-sm text-muted-foreground max-w-2xl">
             Подключите сообщества VK для публикации постов напрямую через Zavod.
             Добавление происходит через официальный OAuth VK — токены хранятся только на
-            сервере.
+            сервере. Для каждого клиента подключение выполняется отдельно через аккаунт
+            администратора его группы.
           </p>
         </div>
         {canEdit && (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={loadIntegrations}
-              disabled={loading}
-            >
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Обновить список
-            </Button>
-            <VkConnectButton onConnected={handleConnectCompleted}>
-              Подключить группу VK
-            </VkConnectButton>
+          <div className="flex flex-col gap-3 w-full md:w-auto">
+            <div className="space-y-1">
+              <Label htmlFor="vk-target-group">Группа для подключения</Label>
+              <Input
+                id="vk-target-group"
+                value={targetGroup}
+                onChange={(event) => setTargetGroup(event.target.value)}
+                placeholder="https://vk.com/club123 или 123"
+              />
+              <p className="text-xs text-muted-foreground">
+                Укажите ссылку или ID группы. Подключение привяжется только к этой группе.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={loadIntegrations}
+                disabled={loading}
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Обновить список
+              </Button>
+              <VkConnectButton
+                onConnected={handleConnectCompleted}
+                disabled={!trimmedTargetGroup}
+                groupId={trimmedTargetGroup}
+              >
+                Подключить группу VK
+              </VkConnectButton>
+            </div>
           </div>
         )}
       </div>

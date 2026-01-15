@@ -30,6 +30,11 @@ DEBUG = os.getenv("DEBUG", "True") == "True"
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 GOOGLE_API_KEY = os.getenv("Google_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID") or os.getenv("CSE_ID") or os.getenv("GOOGLE_CX", "")
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
+YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "")
+YOOKASSA_API_URL = os.getenv("YOOKASSA_API_URL", "https://api.yookassa.ru/v3/payments")
+YOOKASSA_WEBHOOK_SECRET = os.getenv("YOOKASSA_WEBHOOK_SECRET", "")
 
 DEFAULT_ALLOWED_HOSTS = [
     "localhost",
@@ -247,6 +252,16 @@ TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID", "")
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_ALERT_USER_ID = os.getenv("TELEGRAM_ALERT_USER_ID", "")
+
+# Email (SMTP)
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False") == "True"
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "support@fibonatty.ru")
 
 LOGGING = {
     "version": 1,

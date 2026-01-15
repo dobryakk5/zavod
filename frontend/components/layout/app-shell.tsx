@@ -21,8 +21,8 @@ const navItems = [
   { href: '/schedule', label: 'Расписание' },
   { href: '/seo', label: 'SEO' },
   { href: '/articles', label: 'Статьи' },
-  { href: '/settings', label: 'Настройки' },
-  { href: '/products', label: 'Продукты' }
+  { href: '/products', label: 'Продукты' },
+  { href: '/settings', label: 'Настройки' }
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {

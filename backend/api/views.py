@@ -61,3 +61,9 @@ from .views_google import (  # noqa: F401
     GoogleCompetitorsMarkView,
     GoogleCompetitorsCachedView,
 )
+from .views_payments import (  # noqa: F401
+    YooKassaCreatePaymentView,
+    YooKassaPaymentStatusView,
+    PaymentPlanListView,
+    YooKassaWebhookView,
+)

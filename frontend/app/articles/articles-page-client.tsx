@@ -71,7 +71,6 @@ export default function ArticlesPageClient() {
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [wordstatRaw, setWordstatRaw] = useState('');
-  const [evaluateType, setEvaluateType] = useState<'url' | 'text'>('url');
   const [evaluateUrl, setEvaluateUrl] = useState('');
   const [evaluateText, setEvaluateText] = useState('');
   const [evaluateWordstat, setEvaluateWordstat] = useState('');
@@ -97,8 +96,8 @@ export default function ArticlesPageClient() {
 
   const firstPhrase = useMemo(() => parsePhrases(wordstatRaw)[0] || '', [wordstatRaw]);
   const evaluationInput = useMemo(
-    () => (evaluateType === 'url' ? evaluateUrl.trim() : evaluateText.trim()),
-    [evaluateType, evaluateUrl, evaluateText]
+    () => evaluateUrl.trim() || evaluateText.trim(),
+    [evaluateUrl, evaluateText]
   );
 
   const onStart = async () => {
@@ -109,31 +108,7 @@ export default function ArticlesPageClient() {
     }
     setStarting(true);
     try {
-      const created = await articlesApi.start(phrases[0]);
-      try {
-        await articlesApi.generateContext(created.id);
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 401) {
-          router.push('/login');
-          return;
-        }
-        let messageShown = false;
-        if (error instanceof ApiError) {
-          try {
-            const parsed = JSON.parse(error.body || '{}') as { error?: string };
-            if (parsed.error) {
-              toast.error(parsed.error);
-              messageShown = true;
-            }
-          } catch {
-            // ignore parse errors
-          }
-        }
-        console.error('Failed to generate article context', error);
-        if (!messageShown) {
-          toast.error('Не удалось сгенерировать контекст');
-        }
-      }
+      const created = await articlesApi.start({ phrases });
       router.push(`/articles/${created.id}`);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -159,6 +134,8 @@ export default function ArticlesPageClient() {
   };
 
   const onEvaluate = async (action: 'analyze' | 'recommend' | 'rewrite') => {
+    const trimmedUrl = evaluateUrl.trim();
+    const trimmedText = evaluateText.trim();
     if (!evaluationInput) {
       toast.error('Введите ссылку или текст для анализа');
       return;
@@ -166,8 +143,8 @@ export default function ArticlesPageClient() {
     setEvaluatingAction(action);
     try {
       const response = await articlesApi.evaluate({
-        url: evaluateType === 'url' ? evaluateUrl.trim() : undefined,
-        text: evaluateType === 'text' ? evaluateText.trim() : undefined,
+        url: trimmedUrl || undefined,
+        text: trimmedText || undefined,
         wordstat: evaluateWordstat.trim() || undefined,
         action,
       });
@@ -237,7 +214,7 @@ export default function ArticlesPageClient() {
               </Button>
               {parsePhrases(wordstatRaw).length > 1 ? (
                 <div className="text-sm text-muted-foreground">
-                  Сейчас запускается только первая фраза из списка.
+                  Будут использованы все фразы из группы или найденного кластера.
                 </div>
               ) : null}
             </div>
@@ -287,27 +264,19 @@ export default function ArticlesPageClient() {
             />
           </div>
 
-          <Tabs value={evaluateType} onValueChange={(value) => setEvaluateType(value as typeof evaluateType)}>
-            <TabsList>
-              <TabsTrigger value="url">Ссылка</TabsTrigger>
-              <TabsTrigger value="text">Текст</TabsTrigger>
-            </TabsList>
-            <TabsContent value="url" className="space-y-2">
-              <Input
-                value={evaluateUrl}
-                onChange={(e) => setEvaluateUrl(e.target.value)}
-                placeholder="https://example.com/article"
-              />
-            </TabsContent>
-            <TabsContent value="text" className="space-y-2">
-              <Textarea
-                value={evaluateText}
-                onChange={(e) => setEvaluateText(e.target.value)}
-                placeholder="Вставьте готовую статью для анализа"
-                className="min-h-32"
-              />
-            </TabsContent>
-          </Tabs>
+          <div className="space-y-2">
+            <Input
+              value={evaluateUrl}
+              onChange={(e) => setEvaluateUrl(e.target.value)}
+              placeholder="https://example.com/article"
+            />
+            <Textarea
+              value={evaluateText}
+              onChange={(e) => setEvaluateText(e.target.value)}
+              placeholder="Вставьте готовую статью для анализа"
+              className="min-h-32"
+            />
+          </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <Button onClick={() => void onEvaluate('analyze')} disabled={isEvaluating || !evaluationInput}>
