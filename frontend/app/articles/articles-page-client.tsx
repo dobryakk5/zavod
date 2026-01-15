@@ -56,6 +56,10 @@ function parsePhrases(raw: string): string[] {
     .filter(Boolean);
 }
 
+function normalizePhrase(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 function StatusBadge({ status }: { status: ArticleStatus }) {
   return (
     <Badge className={`${STATUS_STYLES[status] ?? ''} text-xs font-medium`}>
@@ -67,6 +71,7 @@ function StatusBadge({ status }: { status: ArticleStatus }) {
 export default function ArticlesPageClient() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'create' | 'evaluate'>('create');
+  const [evaluateTab, setEvaluateTab] = useState<'analyze' | 'recommend' | 'rewrite'>('analyze');
   const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -182,11 +187,39 @@ export default function ArticlesPageClient() {
   const analysis = evaluateResult?.analysis;
   const aiResult = evaluateResult?.ai;
   const isEvaluating = evaluatingAction !== null;
+  const canEvaluate = Boolean(evaluationInput);
   const foundKeywords = analysis?.found_keywords ?? [];
   const missingKeywords = analysis?.missing_keywords ?? [];
   const clusterCoverage = analysis?.cluster_coverage ?? [];
+  const visibleClusterCoverage = clusterCoverage.filter((cluster) => cluster.found > 0);
   const visibleFound = foundKeywords.slice(0, 20);
-  const visibleMissing = missingKeywords.slice(0, 20);
+  const normalizedMainQuery = normalizePhrase(evaluateWordstat);
+  const allKeywords = [...foundKeywords, ...missingKeywords];
+  const mainClusterMatch = normalizedMainQuery
+    ? allKeywords.find((item) => normalizePhrase(item.phrase) === normalizedMainQuery)
+    : undefined;
+  const mainClusterFromQuery = mainClusterMatch ? mainClusterMatch.cluster ?? 'Без кластера' : null;
+  const mainClusterBySize = clusterCoverage.reduce<(typeof clusterCoverage)[number] | null>(
+    (best, cluster) => {
+      if (!best) return cluster;
+      if (cluster.total !== best.total) {
+        return cluster.total > best.total ? cluster : best;
+      }
+      if (cluster.found !== best.found) {
+        return cluster.found > best.found ? cluster : best;
+      }
+      return cluster.cluster.localeCompare(best.cluster, 'ru') < 0 ? cluster : best;
+    },
+    null
+  );
+  const mainCluster = mainClusterFromQuery ?? mainClusterBySize?.cluster ?? null;
+  const mainClusterCoverage = mainCluster
+    ? clusterCoverage.find((cluster) => cluster.cluster === mainCluster)
+    : null;
+  const mainClusterMissing = mainCluster
+    ? missingKeywords.filter((item) => (item.cluster ?? 'Без кластера') === mainCluster)
+    : [];
+  const visibleMainClusterMissing = mainClusterMissing.slice(0, 20);
 
   return (
     <div className="space-y-4">
@@ -278,221 +311,259 @@ export default function ArticlesPageClient() {
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={() => void onEvaluate('analyze')} disabled={isEvaluating || !evaluationInput}>
-              {evaluatingAction === 'analyze' ? 'Анализируем…' : '1) Аналитика'}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => void onEvaluate('recommend')}
-              disabled={isEvaluating || !evaluationInput}
-            >
-              {evaluatingAction === 'recommend' ? 'Собираем…' : '2) Рекомендации'}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => void onEvaluate('rewrite')}
-              disabled={isEvaluating || !evaluationInput}
-            >
-              {evaluatingAction === 'rewrite' ? 'Готовим…' : '3) Работа ИИ'}
-            </Button>
-          </div>
+          <Tabs
+            value={evaluateTab}
+            onValueChange={(value) => setEvaluateTab(value as typeof evaluateTab)}
+            className="space-y-4"
+          >
+            <TabsList>
+              <TabsTrigger
+                value="analyze"
+                onClick={() => void onEvaluate('analyze')}
+                disabled={isEvaluating || !canEvaluate}
+              >
+                {evaluatingAction === 'analyze' ? 'Анализируем…' : 'Аналитика'}
+              </TabsTrigger>
+              <TabsTrigger
+                value="recommend"
+                onClick={() => void onEvaluate('recommend')}
+                disabled={isEvaluating || !canEvaluate}
+              >
+                {evaluatingAction === 'recommend' ? 'Собираем…' : 'Рекомендации'}
+              </TabsTrigger>
+              <TabsTrigger
+                value="rewrite"
+                onClick={() => void onEvaluate('rewrite')}
+                disabled={isEvaluating || !canEvaluate}
+              >
+                {evaluatingAction === 'rewrite' ? 'Готовим…' : 'Работа ИИ'}
+              </TabsTrigger>
+            </TabsList>
 
-          {analysis ? (
-            <div className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className="rounded-md border bg-background p-3">
-                  <div className="text-xs text-muted-foreground">Покрытие Wordstat</div>
-                  <div className="text-xl font-semibold">{analysis.coverage_percent}%</div>
-                  <div className="text-xs text-muted-foreground">
-                    {foundKeywords.length}/{analysis.total_keywords} ключей
+            <TabsContent value="analyze" className="space-y-4">
+              {analysis ? (
+                <div className="space-y-4">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="rounded-md border bg-background p-3">
+                      <div className="text-xs text-muted-foreground">Покрытие Wordstat</div>
+                      <div className="text-xl font-semibold">{analysis.coverage_percent}%</div>
+                      <div className="text-xs text-muted-foreground">
+                        {foundKeywords.length}/{analysis.total_keywords} ключей
+                      </div>
+                    </div>
+                    <div className="rounded-md border bg-background p-3">
+                      <div className="text-xs text-muted-foreground">Слова (леммы)</div>
+                      <div className="text-xl font-semibold">{analysis.word_count}</div>
+                    </div>
+                    {evaluateResult?.source?.title ? (
+                      <div className="rounded-md border bg-background p-3">
+                        <div className="text-xs text-muted-foreground">Заголовок страницы</div>
+                        <div className="text-sm font-medium">{evaluateResult.source.title}</div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {visibleClusterCoverage.length ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-semibold">Покрытие кластеров</div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Кластер</TableHead>
+                            <TableHead className="w-32 text-right">Покрытие</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {visibleClusterCoverage.map((cluster) => (
+                            <TableRow key={cluster.cluster}>
+                              <TableCell className="text-sm">{cluster.cluster}</TableCell>
+                              <TableCell className="text-right text-sm text-muted-foreground">
+                                {cluster.found}/{cluster.total}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-2">
+                    <div className="text-sm font-semibold">Найденные ключи</div>
+                    {visibleFound.length ? (
+                      <div className="space-y-1">
+                        {visibleFound.map((item) => (
+                          <div key={`${item.phrase}-${item.cluster || ''}`} className="text-sm">
+                            <span>{item.phrase}</span>
+                            {typeof item.count === 'number' ? (
+                              <span className="ml-2 text-xs text-muted-foreground">×{item.count}</span>
+                            ) : null}
+                            {item.cluster ? (
+                              <span className="ml-2 text-xs text-muted-foreground">• {item.cluster}</span>
+                            ) : null}
+                          </div>
+                        ))}
+                        {foundKeywords.length > visibleFound.length ? (
+                          <div className="text-xs text-muted-foreground">
+                            И ещё {foundKeywords.length - visibleFound.length}.
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground">Ничего не найдено.</div>
+                    )}
                   </div>
                 </div>
-                <div className="rounded-md border bg-background p-3">
-                  <div className="text-xs text-muted-foreground">Слова (леммы)</div>
-                  <div className="text-xl font-semibold">{analysis.word_count}</div>
-                </div>
-                {evaluateResult?.source?.title ? (
+              ) : null}
+            </TabsContent>
+
+            <TabsContent value="recommend" className="space-y-4">
+              {analysis ? (
+                <div className="space-y-4">
                   <div className="rounded-md border bg-background p-3">
-                    <div className="text-xs text-muted-foreground">Заголовок страницы</div>
-                    <div className="text-sm font-medium">{evaluateResult.source.title}</div>
+                    <div className="text-xs text-muted-foreground">Главный кластер</div>
+                    <div className="text-sm font-semibold">{mainCluster ?? 'Не определен'}</div>
+                    {mainClusterCoverage ? (
+                      <div className="text-xs text-muted-foreground">
+                        Покрытие {mainClusterCoverage.found}/{mainClusterCoverage.total}
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
 
-              {clusterCoverage.length ? (
-                <div className="space-y-2">
-                  <div className="text-sm font-semibold">Покрытие кластеров</div>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Кластер</TableHead>
-                        <TableHead className="w-32 text-right">Покрытие</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {clusterCoverage.map((cluster) => (
-                        <TableRow key={cluster.cluster}>
-                          <TableCell className="text-sm">{cluster.cluster}</TableCell>
-                          <TableCell className="text-right text-sm text-muted-foreground">
-                            {cluster.found}/{cluster.total}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                  <div className="space-y-2">
+                    <div className="text-sm font-semibold">Пропущенные ключи</div>
+                    {visibleMainClusterMissing.length ? (
+                      <div className="space-y-1">
+                        {visibleMainClusterMissing.map((item) => (
+                          <div key={`${item.phrase}-${item.cluster || ''}`} className="text-sm">
+                            <span>{item.phrase}</span>
+                          </div>
+                        ))}
+                        {mainClusterMissing.length > visibleMainClusterMissing.length ? (
+                          <div className="text-xs text-muted-foreground">
+                            И ещё {mainClusterMissing.length - visibleMainClusterMissing.length}.
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground">
+                        {mainCluster ? 'Все ключи по кластеру покрыты.' : 'Нет данных по кластеру.'}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : null}
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <div className="text-sm font-semibold">Найденные ключи</div>
-                  {visibleFound.length ? (
+              {aiResult ? (
+                <div className="space-y-4 rounded-md border bg-background p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm font-semibold">AI выводы</div>
+                    {aiResult.intent ? (
+                      <Badge className="bg-slate-100 text-slate-700">Интент: {aiResult.intent}</Badge>
+                    ) : null}
+                  </div>
+
+                  {aiResult.strengths?.length ? (
                     <div className="space-y-1">
-                      {visibleFound.map((item) => (
-                        <div key={`${item.phrase}-${item.cluster || ''}`} className="text-sm">
-                          <span>{item.phrase}</span>
-                          {typeof item.count === 'number' ? (
-                            <span className="ml-2 text-xs text-muted-foreground">×{item.count}</span>
-                          ) : null}
-                          {item.cluster ? (
-                            <span className="ml-2 text-xs text-muted-foreground">• {item.cluster}</span>
-                          ) : null}
+                      <div className="text-sm font-semibold">Сильные стороны</div>
+                      <div className="text-sm text-muted-foreground">{aiResult.strengths.join(' • ')}</div>
+                    </div>
+                  ) : null}
+
+                  {aiResult.gaps?.length ? (
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold">Слабые места</div>
+                      <div className="text-sm text-muted-foreground">{aiResult.gaps.join(' • ')}</div>
+                    </div>
+                  ) : null}
+
+                  {aiResult.recommendations?.length ? (
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold">Рекомендации</div>
+                      <div className="text-sm text-muted-foreground">{aiResult.recommendations.join(' • ')}</div>
+                    </div>
+                  ) : null}
+
+                  {aiResult.keyword_advice ? (
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {aiResult.keyword_advice.include?.length ? (
+                        <div className="space-y-1">
+                          <div className="text-sm font-semibold">Включить</div>
+                          <div className="text-xs text-muted-foreground">
+                            {aiResult.keyword_advice.include.join(', ')}
+                          </div>
                         </div>
-                      ))}
-                      {foundKeywords.length > visibleFound.length ? (
-                        <div className="text-xs text-muted-foreground">
-                          И ещё {foundKeywords.length - visibleFound.length}.
+                      ) : null}
+                      {aiResult.keyword_advice.exclude?.length ? (
+                        <div className="space-y-1">
+                          <div className="text-sm font-semibold">Не использовать</div>
+                          <div className="text-xs text-muted-foreground">
+                            {aiResult.keyword_advice.exclude.join(', ')}
+                          </div>
+                        </div>
+                      ) : null}
+                      {aiResult.keyword_advice.separate_article?.length ? (
+                        <div className="space-y-1">
+                          <div className="text-sm font-semibold">Отдельная статья</div>
+                          <div className="text-xs text-muted-foreground">
+                            {aiResult.keyword_advice.separate_article.join(', ')}
+                          </div>
                         </div>
                       ) : null}
                     </div>
-                  ) : (
-                    <div className="text-sm text-muted-foreground">Ничего не найдено.</div>
-                  )}
+                  ) : null}
                 </div>
+              ) : null}
+            </TabsContent>
 
-                <div className="space-y-2">
-                  <div className="text-sm font-semibold">Пропущенные ключи</div>
-                  {visibleMissing.length ? (
-                    <div className="space-y-1">
-                      {visibleMissing.map((item) => (
-                        <div key={`${item.phrase}-${item.cluster || ''}`} className="text-sm">
-                          <span>{item.phrase}</span>
-                          {item.cluster ? (
-                            <span className="ml-2 text-xs text-muted-foreground">• {item.cluster}</span>
-                          ) : null}
+            <TabsContent value="rewrite" className="space-y-4">
+              {aiResult ? (
+                <div className="space-y-4 rounded-md border bg-background p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm font-semibold">AI выводы</div>
+                    {aiResult.intent ? (
+                      <Badge className="bg-slate-100 text-slate-700">Интент: {aiResult.intent}</Badge>
+                    ) : null}
+                  </div>
+
+                  {aiResult.rewrite_plan ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-semibold">SEO-план</div>
+                      {aiResult.rewrite_plan.h1 ? (
+                        <div className="text-sm">
+                          <span className="text-xs text-muted-foreground">H1: </span>
+                          {aiResult.rewrite_plan.h1}
                         </div>
-                      ))}
-                      {missingKeywords.length > visibleMissing.length ? (
-                        <div className="text-xs text-muted-foreground">
-                          И ещё {missingKeywords.length - visibleMissing.length}.
+                      ) : null}
+                      {aiResult.rewrite_plan.h2?.length ? (
+                        <div className="text-sm text-muted-foreground">
+                          H2: {aiResult.rewrite_plan.h2.join(' • ')}
+                        </div>
+                      ) : null}
+                      {aiResult.rewrite_plan.h3?.length ? (
+                        <div className="text-sm text-muted-foreground">
+                          H3: {aiResult.rewrite_plan.h3.join(' • ')}
+                        </div>
+                      ) : null}
+                      {aiResult.rewrite_plan.add_blocks?.length ? (
+                        <div className="text-sm text-muted-foreground">
+                          Добавить: {aiResult.rewrite_plan.add_blocks.join(' • ')}
                         </div>
                       ) : null}
                     </div>
-                  ) : (
-                    <div className="text-sm text-muted-foreground">Все ключи покрыты.</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {aiResult ? (
-            <div className="space-y-4 rounded-md border bg-background p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="text-sm font-semibold">AI выводы</div>
-                {aiResult.intent ? (
-                  <Badge className="bg-slate-100 text-slate-700">Интент: {aiResult.intent}</Badge>
-                ) : null}
-              </div>
-
-              {aiResult.strengths?.length ? (
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold">Сильные стороны</div>
-                  <div className="text-sm text-muted-foreground">{aiResult.strengths.join(' • ')}</div>
-                </div>
-              ) : null}
-
-              {aiResult.gaps?.length ? (
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold">Слабые места</div>
-                  <div className="text-sm text-muted-foreground">{aiResult.gaps.join(' • ')}</div>
-                </div>
-              ) : null}
-
-              {aiResult.recommendations?.length ? (
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold">Рекомендации</div>
-                  <div className="text-sm text-muted-foreground">{aiResult.recommendations.join(' • ')}</div>
-                </div>
-              ) : null}
-
-              {aiResult.keyword_advice ? (
-                <div className="grid gap-3 md:grid-cols-3">
-                  {aiResult.keyword_advice.include?.length ? (
-                    <div className="space-y-1">
-                      <div className="text-sm font-semibold">Включить</div>
-                      <div className="text-xs text-muted-foreground">
-                        {aiResult.keyword_advice.include.join(', ')}
-                      </div>
-                    </div>
                   ) : null}
-                  {aiResult.keyword_advice.exclude?.length ? (
-                    <div className="space-y-1">
-                      <div className="text-sm font-semibold">Не использовать</div>
-                      <div className="text-xs text-muted-foreground">
-                        {aiResult.keyword_advice.exclude.join(', ')}
-                      </div>
-                    </div>
-                  ) : null}
-                  {aiResult.keyword_advice.separate_article?.length ? (
-                    <div className="space-y-1">
-                      <div className="text-sm font-semibold">Отдельная статья</div>
-                      <div className="text-xs text-muted-foreground">
-                        {aiResult.keyword_advice.separate_article.join(', ')}
-                      </div>
+
+                  {aiResult.rewrite_text ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-semibold">Короткий rewrite</div>
+                      <pre className="whitespace-pre-wrap rounded-md border bg-muted/20 p-3 text-xs leading-5">
+                        {aiResult.rewrite_text}
+                      </pre>
                     </div>
                   ) : null}
                 </div>
               ) : null}
-
-              {aiResult.rewrite_plan ? (
-                <div className="space-y-2">
-                  <div className="text-sm font-semibold">SEO-план</div>
-                  {aiResult.rewrite_plan.h1 ? (
-                    <div className="text-sm">
-                      <span className="text-xs text-muted-foreground">H1: </span>
-                      {aiResult.rewrite_plan.h1}
-                    </div>
-                  ) : null}
-                  {aiResult.rewrite_plan.h2?.length ? (
-                    <div className="text-sm text-muted-foreground">
-                      H2: {aiResult.rewrite_plan.h2.join(' • ')}
-                    </div>
-                  ) : null}
-                  {aiResult.rewrite_plan.h3?.length ? (
-                    <div className="text-sm text-muted-foreground">
-                      H3: {aiResult.rewrite_plan.h3.join(' • ')}
-                    </div>
-                  ) : null}
-                  {aiResult.rewrite_plan.add_blocks?.length ? (
-                    <div className="text-sm text-muted-foreground">
-                      Добавить: {aiResult.rewrite_plan.add_blocks.join(' • ')}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {aiResult.rewrite_text ? (
-                <div className="space-y-2">
-                  <div className="text-sm font-semibold">Короткий rewrite</div>
-                  <pre className="whitespace-pre-wrap rounded-md border bg-muted/20 p-3 text-xs leading-5">
-                    {aiResult.rewrite_text}
-                  </pre>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+            </TabsContent>
+          </Tabs>
         </TabsContent>
       </Tabs>
     </div>

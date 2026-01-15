@@ -103,10 +103,7 @@ export function VkIntegrationsPanel() {
         <div>
           <h3 className="text-xl font-semibold">Группы VKontakte</h3>
           <p className="text-sm text-muted-foreground max-w-2xl">
-            Подключите сообщества VK для публикации постов напрямую через Zavod.
-            Добавление происходит через официальный OAuth VK — токены хранятся только на
-            сервере. Для каждого клиента подключение выполняется отдельно через аккаунт
-            администратора его группы.
+            Подключите сообщество VK для публикации постов.
           </p>
         </div>
         {canEdit && (

@@ -496,6 +496,26 @@ export interface ClientSummary {
   }>;
 }
 
+export type GenerationEventType =
+  | 'post'
+  | 'article_write'
+  | 'article_evaluate'
+  | 'channel_analysis'
+  | 'website_analysis'
+  | 'weekly_collection'
+  | 'seo_group'
+  | 'wordstat_query'
+  | 'google_query'
+  | 'product'
+  | 'product_map'
+  | 'book_search';
+
+export interface GenerationEventSummary {
+  counts: Partial<Record<GenerationEventType, number>>;
+  limits: Partial<Record<GenerationEventType, number>>;
+  is_trial: boolean;
+}
+
 export interface TaskResponse {
   success: boolean;
   message: string;

@@ -5,6 +5,7 @@ from .views import (
     ArticleViewSet,
     ChannelAnalysisViewSet,
     ClientExpertBooksView,
+    GenerationEventSummaryView,
     ClientInfoView,
     ClientSettingsView,
     ClientSummaryView,
@@ -54,6 +55,7 @@ from .views import (
     YooKassaCreatePaymentView,
     YooKassaPaymentStatusView,
     PaymentPlanListView,
+    PaymentSubscriptionView,
     YooKassaWebhookView,
 )
 
@@ -99,6 +101,7 @@ urlpatterns = [
     # Client endpoints
     path('client/info/', ClientInfoView.as_view(), name='client-info'),
     path('client/summary/', ClientSummaryView.as_view(), name='client-summary'),
+    path('client/generation-events/', GenerationEventSummaryView.as_view(), name='client-generation-events'),
     path('client/settings/', ClientSettingsView.as_view(), name='client-settings'),
     path('client/expert-books/', ClientExpertBooksView.as_view(), name='client-expert-books'),
     path('weekly-sources/run/', WeeklySourceRunView.as_view(), name='weekly-sources-run'),
@@ -117,6 +120,7 @@ urlpatterns = [
     path('payments/create/', YooKassaCreatePaymentView.as_view(), name='yookassa-create-payment'),
     path('payments/status/<str:payment_id>/', YooKassaPaymentStatusView.as_view(), name='yookassa-payment-status'),
     path('payments/plans/', PaymentPlanListView.as_view(), name='payment-plans'),
+    path('payments/subscription/', PaymentSubscriptionView.as_view(), name='payment-subscription'),
     path('payments/webhook/', YooKassaWebhookView.as_view(), name='yookassa-webhook'),
 
     # Legacy list views (kept for backward compatibility)

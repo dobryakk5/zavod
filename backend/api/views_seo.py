@@ -16,7 +16,16 @@ from config.celery import app as celery_app
 from core import tasks
 from core.ai_generator import AIContentGenerator
 from core.ai_generator_seo import analyze_seo_text, cluster_wordstat_phrases, normalize_phrase
-from core.models import Article, ArticleBlock, SEOKeywordSet, WordstatCluster, WordstatQuery, WordstatResult
+from core.generation_events import record_generation_event
+from core.models import (
+    Article,
+    ArticleBlock,
+    GenerationEvent,
+    SEOKeywordSet,
+    WordstatCluster,
+    WordstatQuery,
+    WordstatResult,
+)
 from core.services.article_blocks import get_system_block_prompt_template, sync_blocks_from_seo_blocks
 from core.services.seo_article_analysis import analyze_text_against_wordstat, extract_text_from_url
 from core.wordstat import WordstatError, get_wordstat_client
@@ -31,7 +40,7 @@ from .serializers import (
     WordstatQuerySerializer,
     WordstatResultSerializer,
 )
-from .utils import get_active_client
+from .utils import enforce_generation_limit, get_active_client
 
 logger = logging.getLogger(__name__)
 
@@ -466,6 +475,10 @@ class ArticleViewSet(viewsets.ModelViewSet):
         if not phrases:
             return Response({"error": "Укажите Wordstat фразу"}, status=status.HTTP_400_BAD_REQUEST)
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_ARTICLE_WRITE)
+        if limit_response:
+            return limit_response
+
         main_phrase = phrases[0]
         cluster_phrases, _cluster_name = _resolve_cluster_phrases(client, phrases)
         wordstat_phrases = _merge_wordstat_phrases(cluster_phrases, phrases)
@@ -478,6 +491,12 @@ class ArticleViewSet(viewsets.ModelViewSet):
             created_by=request.user,
         )
         self._sync_blocks_from_seo_blocks(article)
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_ARTICLE_WRITE,
+            meta={"article_id": article.id},
+        )
 
         serializer = self.get_serializer(article)
         return Response(serializer.data)
@@ -672,6 +691,10 @@ class ArticleViewSet(viewsets.ModelViewSet):
         if not text:
             return Response({"error": "Пустой текст"}, status=status.HTTP_400_BAD_REQUEST)
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_ARTICLE_EVALUATE)
+        if limit_response:
+            return limit_response
+
         results = list(
             WordstatResult.objects.filter(query__client=client, result_type="favorite")
             .select_related("cluster")
@@ -706,6 +729,12 @@ class ArticleViewSet(viewsets.ModelViewSet):
                     error_payload["raw_response"] = ai_result.get("raw_response")
                 return Response(error_payload, status=status.HTTP_502_BAD_GATEWAY)
             payload["ai"] = ai_result.get("result")
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_ARTICLE_EVALUATE,
+            meta={"action": action_name},
+        )
 
         return Response(payload)
 
@@ -836,7 +865,15 @@ class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['post'], permission_classes=[IsTenantOwnerOrEditor])
     def generate(self, request):
         client = get_active_client(request.user)
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_SEO_GROUP)
+        if limit_response:
+            return limit_response
         task = tasks.generate_seo_keywords_for_client.delay(client.id)
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_SEO_GROUP,
+            meta={"source": "seo_keywords"},
+        )
         return Response({
             'success': True,
             'message': f"Генерация SEO-фраз запущена для клиента: {client.name}",
@@ -982,6 +1019,10 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        limit_response = enforce_generation_limit(client_obj, GenerationEvent.EVENT_WORDSTAT_QUERY)
+        if limit_response:
+            return limit_response
+
         regions = _parse_int_list(request.data.get("regions"))
         devices = _parse_str_list(request.data.get("devices"))
         include_parent_raw = request.data.get("include_parent", False)
@@ -1048,6 +1089,12 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
         if results_to_create:
             WordstatResult.objects.bulk_create(results_to_create)
 
+        record_generation_event(
+            client_obj,
+            GenerationEvent.EVENT_WORDSTAT_QUERY,
+            meta={"phrases_count": len(phrases)},
+        )
+
         serializer = self.get_serializer(query)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
@@ -1076,6 +1123,10 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
 
         if not to_fetch:
             return Response({"error": "Новых фраз не найдено"}, status=status.HTTP_400_BAD_REQUEST)
+
+        limit_response = enforce_generation_limit(query.client, GenerationEvent.EVENT_WORDSTAT_QUERY)
+        if limit_response:
+            return limit_response
 
         try:
             ws_client = get_wordstat_client()
@@ -1161,6 +1212,12 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
                 "daily_limit_remaining",
                 "raw_response",
             ]
+        )
+
+        record_generation_event(
+            query.client,
+            GenerationEvent.EVENT_WORDSTAT_QUERY,
+            meta={"phrases_count": len(to_fetch), "append": True},
         )
 
         query = self.get_queryset().get(pk=query.pk)

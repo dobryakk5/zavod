@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatTemplateDisplayName } from '@/lib/utils';
 import { Clapperboard, Image as ImageIcon, Loader2 } from 'lucide-react';
-import { subscribeToPostGenerationStart } from '@/lib/post-generation-events';
+import { subscribeToPostGenerationComplete, subscribeToPostGenerationStart } from '@/lib/post-generation-events';
 
 export type Post = {
   id: number;
@@ -132,6 +132,30 @@ export function PostsTable() {
 
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToPostGenerationComplete(({ count }) => {
+      const parsedCount = typeof count === 'number' ? count : Number(count);
+      const safeCount = Number.isFinite(parsedCount) && parsedCount > 0 ? Math.floor(parsedCount) : 0;
+
+      setPlaceholders((prev) => {
+        if (prev.length === 0) {
+          return prev;
+        }
+        if (!safeCount) {
+          return [];
+        }
+        const removeCount = Math.min(prev.length, safeCount);
+        return prev.slice(removeCount);
+      });
+
+      if (currentPage === 1) {
+        loadPosts({ showLoading: false });
+      }
+    });
+
+    return unsubscribe;
+  }, [currentPage, loadPosts]);
 
   useEffect(() => {
     if (placeholders.length === 0 || currentPage !== 1) {

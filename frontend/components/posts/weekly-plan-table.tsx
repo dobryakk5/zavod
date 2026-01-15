@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatTemplateDisplayName } from '@/lib/utils';
-import { emitPostGenerationStart } from '@/lib/post-generation-events';
+import { emitPostGenerationComplete, emitPostGenerationStart } from '@/lib/post-generation-events';
 
 interface PlanWeeklyResponse {
   success: boolean;
@@ -124,6 +124,10 @@ export function WeeklyPlanTable() {
           if (previousStatus !== normalized) {
             if (normalized === 'success') {
               toast.success('Генерация постов завершена');
+              const completedCount = status.expectedCount ?? createdCount;
+              emitPostGenerationComplete({
+                count: completedCount,
+              });
             } else if (normalized === 'failure' || normalized === 'revoked') {
               toast.error(response.error || 'Генерация постов завершилась с ошибкой');
             }

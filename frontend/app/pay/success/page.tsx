@@ -1,15 +1,19 @@
 import { redirect } from 'next/navigation';
 
 type PaySuccessPageProps = {
-  searchParams?: Record<string, string | string[] | undefined>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default function PaySuccessPage({ searchParams }: PaySuccessPageProps) {
+export default async function PaySuccessPage({ searchParams }: PaySuccessPageProps) {
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const params = new URLSearchParams();
   params.set('tab', 'payment');
 
-  if (searchParams) {
-    const paymentId = searchParams.payment_id || searchParams.paymentId || searchParams.orderId;
+  if (resolvedSearchParams) {
+    const paymentId =
+      resolvedSearchParams.payment_id ||
+      resolvedSearchParams.paymentId ||
+      resolvedSearchParams.orderId;
     if (typeof paymentId === 'string' && paymentId) {
       params.set('payment_id', paymentId);
     }

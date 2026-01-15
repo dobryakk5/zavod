@@ -11,12 +11,18 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, Toke
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.ai_generator import AIContentGenerator
-from core.models import Post, Schedule
+from core.generation_events import (
+    EVENT_TYPE_LIST,
+    get_trial_limit,
+    is_trial_client,
+    record_generation_event,
+)
+from core.models import GenerationEvent, Post, Schedule
 
 from .authentication import CookieJWTAuthentication
-from .permissions import IsTenantOwnerOrEditor
+from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers import ClientSettingsSerializer, ClientSummarySerializer
-from .utils import get_active_client
+from .utils import enforce_generation_limit, get_active_client
 
 User = get_user_model()
 
@@ -327,6 +333,26 @@ class ClientSummaryView(APIView):
         return Response(serializer.data)
 
 
+class GenerationEventSummaryView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get(self, request, *args, **kwargs):
+        client = get_active_client(request.user)
+        rows = (
+            GenerationEvent.objects.filter(client=client)
+            .values("event_type")
+            .annotate(count=Count("id"))
+        )
+        counts = {row["event_type"]: int(row["count"] or 0) for row in rows}
+        limits = {event_type: get_trial_limit(event_type) for event_type in EVENT_TYPE_LIST}
+        return Response(
+            {
+                "counts": counts,
+                "limits": limits,
+                "is_trial": is_trial_client(client),
+            }
+        )
+
 
 class ClientSettingsView(APIView):
     """
@@ -372,6 +398,10 @@ class ClientExpertBooksView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_BOOK_SEARCH)
+        if limit_response:
+            return limit_response
+
         try:
             generator = AIContentGenerator()
         except ValueError as exc:
@@ -390,6 +420,11 @@ class ClientExpertBooksView(APIView):
 
         saved = False
         if result.get("success"):
+            record_generation_event(
+                client,
+                GenerationEvent.EVENT_BOOK_SEARCH,
+                meta={"language": language},
+            )
             text_value = str(result.get("text") or "").strip()
             if not text_value:
                 books_list = result.get("books")

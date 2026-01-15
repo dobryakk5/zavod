@@ -13,9 +13,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .permissions import IsTenantMember
-from .utils import get_active_client
+from .utils import enforce_generation_limit, get_active_client
+from core.generation_events import record_generation_event
+from core.models import CompetitorSite, GenerationEvent
 from core.services.website_ai_analyzer import analyze_websites_for_competitor_insights
-from core.models import CompetitorSite
 from core.tasks.competitors import analyze_competitor_site_task
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,11 @@ class GoogleCSESearchView(APIView):
         query = str(request.query_params.get("q") or "").strip()
         if not query:
             raise ValidationError({"q": "Введите поисковый запрос"})
+
+        client = get_active_client(request.user)
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_GOOGLE_QUERY)
+        if limit_response:
+            return limit_response
 
         try:
             num = int(request.query_params.get("num") or 10)
@@ -126,6 +132,12 @@ class GoogleCSESearchView(APIView):
                 )
             except Exception:
                 continue
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_GOOGLE_QUERY,
+            meta={"query": query},
+        )
 
         return Response({"query": query, "results": results})
 

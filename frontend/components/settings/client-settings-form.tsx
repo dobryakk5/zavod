@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2 } from 'lucide-react';
@@ -55,11 +55,7 @@ export function ClientSettingsForm() {
     },
   });
 
-  useEffect(() => {
-    loadSettings();
-  }, []);
-
-  const loadSettings = async () => {
+  const loadSettings = useCallback(async () => {
     try {
       const data = await clientApi.getSettings();
       setSettings(data);
@@ -75,7 +71,11 @@ export function ClientSettingsForm() {
     } catch (error) {
       toast.error('Не удалось загрузить настройки');
     }
-  };
+  }, [form]);
+
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
 
   const handleSubmit = async (data: SettingsFormValues) => {
     setLoading(true);

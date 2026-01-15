@@ -10,7 +10,8 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from core import tasks
-from core.models import WebsiteScan, WebsiteScanPage
+from core.generation_events import record_generation_event
+from core.models import GenerationEvent, WebsiteScan, WebsiteScanPage
 
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers import (
@@ -19,7 +20,7 @@ from .serializers import (
     WebsiteScanListSerializer,
     WebsiteScanPageSerializer,
 )
-from .utils import get_active_client
+from .utils import enforce_generation_limit, get_active_client
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,10 @@ class WebsiteScanViewSet(viewsets.ModelViewSet):
         if not base_url:
             raise ValidationError({"base_url": "Введите URL сайта"})
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_WEBSITE_ANALYSIS)
+        if limit_response:
+            return limit_response
+
         scan = WebsiteScan.objects.create(
             client=client,
             base_url=base_url,
@@ -81,6 +86,12 @@ class WebsiteScanViewSet(viewsets.ModelViewSet):
             tasks.maybe_schedule_next_website_scan_for_client(int(client.id))
         except Exception:
             logger.warning("Failed to schedule WebsiteScan for client %s", client.id, exc_info=True)
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_WEBSITE_ANALYSIS,
+            meta={"base_url": base_url},
+        )
 
         scan.refresh_from_db()
         data = WebsiteScanDetailSerializer(scan, context=self.get_serializer_context()).data
@@ -106,6 +117,10 @@ class WebsiteScanViewSet(viewsets.ModelViewSet):
         if scan.client_id != client.id:
             raise ValidationError({"detail": "Скан не принадлежит текущему клиенту"})
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_WEBSITE_ANALYSIS)
+        if limit_response:
+            return limit_response
+
         new_scan = WebsiteScan.objects.create(
             client=client,
             base_url=scan.base_url,
@@ -119,6 +134,12 @@ class WebsiteScanViewSet(viewsets.ModelViewSet):
         except Exception:
             logger.warning("Failed to schedule WebsiteScan for client %s", client.id, exc_info=True)
         new_scan.refresh_from_db()
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_WEBSITE_ANALYSIS,
+            meta={"base_url": scan.base_url, "rerun": True},
+        )
 
         return Response(
             {

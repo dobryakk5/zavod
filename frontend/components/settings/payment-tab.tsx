@@ -37,6 +37,13 @@ type PaymentStatus = {
   created_at?: string;
 };
 
+type SubscriptionInfo = {
+  plan_name?: string;
+  plan_code?: string;
+  expires_at?: string | null;
+  is_active?: boolean;
+};
+
 type PaymentPlan = {
   code: string;
   name: string;
@@ -86,6 +93,8 @@ export function PaymentTab() {
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState('');
+  const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(true);
   const isDev = Boolean(telegramUser?.isDev || telegramUser?.username === 'dev_user');
 
   const selectedPlan = useMemo(() => {
@@ -131,6 +140,23 @@ export function PaymentTab() {
     };
 
     void loadUser();
+  }, []);
+
+  useEffect(() => {
+    const loadSubscription = async () => {
+      setSubscriptionLoading(true);
+      try {
+        const data = await apiFetch<SubscriptionInfo>('/payments/subscription/');
+        setSubscription(data);
+      } catch (subscriptionError) {
+        console.error('Unable to load subscription', subscriptionError);
+        setSubscription({ plan_name: 'Ознакомительный', expires_at: null, is_active: false });
+      } finally {
+        setSubscriptionLoading(false);
+      }
+    };
+
+    void loadSubscription();
   }, []);
 
   useEffect(() => {
@@ -296,13 +322,18 @@ export function PaymentTab() {
   const isPending =
     !isSuccess && (paymentStatus?.status === 'pending' || paymentStatus?.status === 'waiting_for_capture');
 
+  const subscriptionName = subscription?.plan_name || 'Ознакомительный';
+  const subscriptionUntil = subscription?.expires_at
+    ? new Date(subscription.expires_at).toLocaleDateString('ru-RU')
+    : '';
+
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold">Оплата</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Оплата проходит через YooKassa. После успешного платежа доступ активируется автоматически.
-        </p>
+      <div className="space-y-1">
+        <h2 className="text-2xl font-semibold">
+          {subscriptionLoading ? 'Ваш тариф: ...' : `Ваш тариф: ${subscriptionName}`}
+          {!subscriptionLoading && subscriptionUntil ? ` до ${subscriptionUntil}` : ''}
+        </h2>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">

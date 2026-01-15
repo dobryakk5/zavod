@@ -14,14 +14,15 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core import tasks
-from core.models import ChannelAnalysis, Client, Post
+from core.generation_events import record_generation_event
+from core.models import ChannelAnalysis, Client, GenerationEvent, Post
 from core.social_accounts import ensure_rss_zen_account
 from core.social_publishers import build_absolute_media_url
 from core.telegram_client import normalize_telegram_channel_identifier
 from core.instagram_client import normalize_instagram_username
 from core.youtube_client import normalize_youtube_identifier
 
-from .utils import get_active_client
+from .utils import enforce_generation_limit, get_active_client
 
 
 def _absolute_media_url(raw_url: str, request) -> str | None:
@@ -305,6 +306,10 @@ class TgChannelView(APIView):
 
         self._persist_channel_preferences(client, updates)
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_CHANNEL_ANALYSIS)
+        if limit_response:
+            return limit_response
+
         analysis = ChannelAnalysis.objects.create(
             client=client,
             channel_url=channel_url,
@@ -316,6 +321,12 @@ class TgChannelView(APIView):
         task = tasks.analyze_channel_task.delay(analysis.id)
         analysis.task_id = task.id
         analysis.save(update_fields=["task_id"])
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_CHANNEL_ANALYSIS,
+            meta={"channel_type": channel_type},
+        )
 
         return Response(
             {
@@ -384,4 +395,3 @@ class TgChannelView(APIView):
             payload["error"] = analysis.error or "Анализ завершился с ошибкой"
 
         return Response(payload)
-

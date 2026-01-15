@@ -14,12 +14,23 @@ from rest_framework.response import Response
 from config.celery import app as celery_app
 
 from core import tasks
-from core.models import ContentTemplate, Post, PostImage, PostTone, PostType, PostVideo, Schedule, SocialAccount
+from core.generation_events import record_generation_event
+from core.models import (
+    ContentTemplate,
+    GenerationEvent,
+    Post,
+    PostImage,
+    PostTone,
+    PostType,
+    PostVideo,
+    Schedule,
+    SocialAccount,
+)
 from core.system_settings import get_image_generation_model, get_image_generation_method
 
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
 from .serializers import PostDetailSerializer, PostSerializer, PostToneSerializer, PostTypeSerializer
-from .utils import get_active_client
+from .utils import enforce_generation_limit, get_active_client
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +253,15 @@ class PostViewSet(viewsets.ModelViewSet):
     def regenerate_text(self, request, pk=None):
         """Regenerate post text using AI"""
         post = self.get_object()
+        limit_response = enforce_generation_limit(post.client, GenerationEvent.EVENT_POST)
+        if limit_response:
+            return limit_response
         task = tasks.regenerate_post_text.delay(post.id)
+        record_generation_event(
+            post.client,
+            GenerationEvent.EVENT_POST,
+            meta={"source": "post_regenerate", "post_id": post.id},
+        )
         return Response({"success": True, "message": "Text regeneration started", "task_id": task.id})
 
     @action(detail=True, methods=["post"], permission_classes=[IsTenantOwnerOrEditor])
@@ -318,12 +337,22 @@ class PostViewSet(viewsets.ModelViewSet):
             if not SocialAccount.objects.filter(id=social_account_id_int, client=client).exists():
                 return Response({"error": "Соц. аккаунт не найден"}, status=status.HTTP_404_NOT_FOUND)
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_POST)
+        if limit_response:
+            return limit_response
+
         task = tasks.generate_weekly_posts_from_template.delay(
             client.id,
             template.id,
             posts_count,
             request.user.id if request.user and request.user.is_authenticated else None,
             social_account_id_int,
+        )
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_POST,
+            meta={"source": "weekly_plan", "posts_count": posts_count},
         )
 
         return Response(

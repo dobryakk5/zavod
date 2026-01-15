@@ -23,10 +23,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core import tasks
+from core.generation_events import record_generation_event
 from core.audience_profiles import merge_audience_profiles
 from core.models import (
     Client,
     ChannelAnalysis,
+    GenerationEvent,
     ProjectChannelAnalysisRun,
     ProjectChannelPostStat,
     VkIntegration,
@@ -45,7 +47,7 @@ from .serializers import (
     WeeklySourceBatchSerializer,
     WeeklySourceReportSerializer,
 )
-from .utils import get_active_client
+from .utils import enforce_generation_limit, get_active_client
 
 VK_SCOPE = "wall photos groups"
 VK_TIMEOUT = 15
@@ -662,6 +664,10 @@ class ProjectChannelAnalysisRunView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_CHANNEL_ANALYSIS)
+        if limit_response:
+            return limit_response
+
         run = ProjectChannelAnalysisRun.objects.create(
             client=client,
             status=ProjectChannelAnalysisRun.STATUS_PENDING,
@@ -669,6 +675,12 @@ class ProjectChannelAnalysisRunView(APIView):
         task = tasks.analyze_project_channels_task.delay(run.id)
         run.task_id = task.id
         run.save(update_fields=["task_id", "updated_at"])
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_CHANNEL_ANALYSIS,
+            meta={"source": "project"},
+        )
         return Response({"success": True, "task_id": task.id, "run_id": run.id})
 
 
@@ -818,12 +830,23 @@ class WeeklySourceRunView(APIView):
     def post(self, request):
         client = get_active_client(request.user)
         week_start = timezone.now().date() - timedelta(days=timezone.now().weekday())
+
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_WEEKLY_COLLECTION)
+        if limit_response:
+            return limit_response
+
         batch = WeeklySourceBatch.objects.create(
             client=client,
             week_start=week_start,
             status=WeeklySourceReport.STATUS_PENDING,
         )
         task = tasks.run_weekly_sources_for_client.delay(client.id, batch.id)
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_WEEKLY_COLLECTION,
+            meta={"week_start": str(week_start)},
+        )
         return Response(
             {
                 "success": True,

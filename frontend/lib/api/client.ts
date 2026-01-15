@@ -1,5 +1,11 @@
 import { apiFetch } from '../api';
-import type { ClientInfo, ClientSettings, ClientSummary, ExpertBooksResponse } from '../types';
+import type {
+  ClientInfo,
+  ClientSettings,
+  ClientSummary,
+  ExpertBooksResponse,
+  GenerationEventSummary,
+} from '../types';
 
 export const clientApi = {
   /**
@@ -46,5 +52,12 @@ export const clientApi = {
       method: 'POST',
       body: payload,
     });
+  },
+
+  /**
+   * Get generation events summary for the active client
+   */
+  generationEventsSummary: async (): Promise<GenerationEventSummary> => {
+    return apiFetch<GenerationEventSummary>('/client/generation-events/');
   },
 };

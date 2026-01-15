@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal, InvalidOperation
 from base64 import b64decode
+from datetime import datetime
 
 import requests
 from django.conf import settings
@@ -12,6 +13,8 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.core.validators import validate_email
+from django.utils import timezone
+from dateutil.relativedelta import relativedelta
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -19,7 +22,7 @@ from rest_framework.views import APIView
 
 from .permissions import IsTenantMember
 from .utils import get_active_client
-from core.models import PaymentPlan
+from core.models import Client, PaymentPlan
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -96,6 +99,55 @@ def _send_payment_confirmation(payment: dict) -> None:
     )
     cache.set(cache_key, True, 60 * 60 * 24 * 7)
     logger.info("yookassa: payment email sent payment_id=%s", payment_id)
+
+
+def _parse_payment_created_at(value: str | None) -> datetime:
+    if not value:
+        return timezone.now()
+    try:
+        cleaned = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(cleaned)
+        if timezone.is_naive(parsed):
+            return timezone.make_aware(parsed, timezone=timezone.utc)
+        return parsed
+    except ValueError:
+        return timezone.now()
+
+
+def _plan_delta(plan: PaymentPlan) -> relativedelta:
+    if plan.period == PaymentPlan.PERIOD_WEEK:
+        return relativedelta(weeks=1)
+    if plan.period == PaymentPlan.PERIOD_YEAR:
+        return relativedelta(years=1)
+    return relativedelta(months=1)
+
+
+def _apply_payment_plan(payment: dict) -> None:
+    if payment.get("status") != "succeeded" or not payment.get("paid"):
+        return
+
+    metadata = payment.get("metadata") or {}
+    client_id = metadata.get("client_id")
+    plan_code = metadata.get("plan")
+    if not client_id or not plan_code:
+        logger.warning("yookassa: missing client_id/plan in metadata")
+        return
+
+    client = Client.objects.filter(id=client_id).first()
+    plan = PaymentPlan.objects.filter(code=plan_code, is_active=True).first()
+    if not client or not plan:
+        logger.warning("yookassa: plan apply failed client_id=%s plan=%s", client_id, plan_code)
+        return
+
+    base_date = _parse_payment_created_at(payment.get("created_at"))
+    if client.plan_id == plan.id and client.plan_expires_at and client.plan_expires_at > base_date:
+        base_date = client.plan_expires_at
+
+    expires_at = base_date + _plan_delta(plan)
+    client.plan = plan
+    client.plan_expires_at = expires_at
+    client.save(update_fields=["plan", "plan_expires_at"])
+    logger.info("yookassa: plan applied client_id=%s plan=%s expires_at=%s", client_id, plan.code, expires_at)
 
 
 class YooKassaCreatePaymentView(APIView):
@@ -363,6 +415,39 @@ class PaymentPlanListView(APIView):
         return Response({"plans": data}, status=status.HTTP_200_OK)
 
 
+class PaymentSubscriptionView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get(self, request):
+        client = get_active_client(request.user)
+        plan = client.plan
+        expires_at = client.plan_expires_at
+        now = timezone.now()
+
+        if not plan or not expires_at or expires_at <= now:
+            return Response(
+                {
+                    "plan_name": "Ознакомительный",
+                    "plan_code": "trial",
+                    "expires_at": None,
+                    "is_active": False,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        return Response(
+            {
+                "plan_name": plan.name,
+                "plan_code": plan.code,
+                "expires_at": expires_at,
+                "period": plan.period,
+                "period_label": plan.get_period_display(),
+                "is_active": True,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class YooKassaWebhookView(APIView):
     authentication_classes: list = []
     permission_classes = [AllowAny]
@@ -417,6 +502,11 @@ class YooKassaWebhookView(APIView):
             paid,
             metadata,
         )
+
+        try:
+            _apply_payment_plan(payment)
+        except Exception:
+            logger.exception("yookassa: failed to apply plan payment_id=%s", payment_id)
 
         try:
             _send_payment_confirmation(payment)

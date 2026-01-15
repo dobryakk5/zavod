@@ -5,6 +5,7 @@ import logging
 
 from config.celery import app as celery_app
 from core import tasks
+from core.generation_events import record_generation_event
 from django.db.models import Count, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -17,6 +18,7 @@ from rest_framework.views import APIView
 from core.models import (
     Client,
     ClientProduct,
+    GenerationEvent,
     MindEdge,
     MindMap,
     MindNode,
@@ -49,7 +51,7 @@ from .serializers import (
     MindNodeSerializer,
     ProductTypeSerializer,
 )
-from .utils import get_active_client
+from .utils import enforce_generation_limit, get_active_client
 
 logger = logging.getLogger(__name__)
 
@@ -116,11 +118,20 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
         client = get_active_client(request.user)
         ensure_system_product_type_templates()
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_PRODUCT)
+        if limit_response:
+            return limit_response
+
         language = (request.data.get("language") or "ru").strip().lower()
         if language not in {"ru", "en"}:
             language = "ru"
 
         task = tasks.generate_client_product_for_type_task.delay(client.id, product_type.id, language=language)
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_PRODUCT,
+            meta={"product_type_id": product_type.id},
+        )
         payload = {"success": True, "message": f"Запущена генерация продукта типа {product_type.name}", "task_id": task.id}
         if getattr(task, "ready", None) and task.ready() and isinstance(getattr(task, "result", None), dict):
             payload["result"] = task.result
@@ -257,6 +268,10 @@ class ClientProductViewSet(viewsets.ModelViewSet):
         if not short_description:
             raise ValidationError({"short_description": "Описание обязательно."})
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_PRODUCT)
+        if limit_response:
+            return limit_response
+
         language = (request.data.get("language") or "ru").strip().lower()
         if language not in {"ru", "en"}:
             language = "ru"
@@ -266,6 +281,11 @@ class ClientProductViewSet(viewsets.ModelViewSet):
             name=name,
             short_description=short_description,
             language=language,
+        )
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_PRODUCT,
+            meta={"product_type": "core"},
         )
         payload = {"success": True, "message": "Запущена генерация Core-продукта", "task_id": task.id}
         if getattr(task, "ready", None) and task.ready() and isinstance(getattr(task, "result", None), dict):
@@ -314,6 +334,10 @@ class ClientProductViewSet(viewsets.ModelViewSet):
         if (product_type.name or "").strip().lower() == "core":
             raise ValidationError({"product_type_id": "Core создаётся в общем списке. Внутри Core создавайте сопутствующие типы."})
 
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_PRODUCT)
+        if limit_response:
+            return limit_response
+
         language = (request.data.get("language") or "ru").strip().lower()
         if language not in {"ru", "en"}:
             language = "ru"
@@ -328,6 +352,11 @@ class ClientProductViewSet(viewsets.ModelViewSet):
             name=name or None,
             hint=hint,
             language=language,
+        )
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_PRODUCT,
+            meta={"product_type_id": product_type.id, "core_product_id": core_product.id},
         )
         payload = {
             "success": True,
@@ -355,7 +384,15 @@ class ClientProductViewSet(viewsets.ModelViewSet):
         core_type_name = (getattr(core_product.product_type, "name", None) or "").strip().lower()
         if core_type_name != "core":
             raise ValidationError({"detail": "Карту сопутствующих можно создавать только для Core-продукта."})
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_PRODUCT_MAP)
+        if limit_response:
+            return limit_response
         created = build_related_products_mind_map(client, core_product)
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_PRODUCT_MAP,
+            meta={"core_product_id": core_product.id},
+        )
         serializer = MindMapSerializer(created, context=self.get_serializer_context())
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -442,7 +479,15 @@ class MindMapViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"], url_path="create-products-map", permission_classes=[IsTenantOwnerOrEditor])
     def create_products_map(self, request):
         client = get_active_client(request.user)
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_PRODUCT_MAP)
+        if limit_response:
+            return limit_response
         created = build_all_products_mind_map(client)
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_PRODUCT_MAP,
+            meta={"map_type": "all_products"},
+        )
         serializer = MindMapSerializer(created, context=self.get_serializer_context())
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 

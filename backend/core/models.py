@@ -56,6 +56,14 @@ class Client(models.Model):
         verbose_name="YouTube проекта",
         help_text="Ссылка или ID YouTube канала проекта"
     )
+    plan = models.ForeignKey(
+        "PaymentPlan",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="clients",
+    )
+    plan_expires_at = models.DateTimeField(null=True, blank=True)
 
     # Business description
     avatar = models.TextField(
@@ -1900,6 +1908,57 @@ class PaymentPlan(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.amount} {self.currency})"
+
+
+# ============================================================================
+# Generation events
+# ============================================================================
+
+class GenerationEvent(models.Model):
+    EVENT_POST = "post"
+    EVENT_ARTICLE_WRITE = "article_write"
+    EVENT_ARTICLE_EVALUATE = "article_evaluate"
+    EVENT_CHANNEL_ANALYSIS = "channel_analysis"
+    EVENT_WEBSITE_ANALYSIS = "website_analysis"
+    EVENT_WEEKLY_COLLECTION = "weekly_collection"
+    EVENT_SEO_GROUP = "seo_group"
+    EVENT_WORDSTAT_QUERY = "wordstat_query"
+    EVENT_GOOGLE_QUERY = "google_query"
+    EVENT_PRODUCT = "product"
+    EVENT_PRODUCT_MAP = "product_map"
+    EVENT_BOOK_SEARCH = "book_search"
+
+    EVENT_CHOICES = (
+        (EVENT_POST, "Post generation"),
+        (EVENT_ARTICLE_WRITE, "Article write"),
+        (EVENT_ARTICLE_EVALUATE, "Article evaluate"),
+        (EVENT_CHANNEL_ANALYSIS, "Channel analysis"),
+        (EVENT_WEBSITE_ANALYSIS, "Website analysis"),
+        (EVENT_WEEKLY_COLLECTION, "Weekly collections"),
+        (EVENT_SEO_GROUP, "SEO groups"),
+        (EVENT_WORDSTAT_QUERY, "Wordstat query"),
+        (EVENT_GOOGLE_QUERY, "Google query"),
+        (EVENT_PRODUCT, "Product generation"),
+        (EVENT_PRODUCT_MAP, "Product map"),
+        (EVENT_BOOK_SEARCH, "Book search"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="generation_events")
+    event_type = models.CharField(max_length=32, choices=EVENT_CHOICES)
+    meta = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(
+                fields=["client", "event_type", "-created_at"],
+                name="gen_ev_client_type_created",
+            ),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"{self.client_id}:{self.event_type} ({self.created_at:%Y-%m-%d})"
 
 
 # ============================================================================

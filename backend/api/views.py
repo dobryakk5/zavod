@@ -12,6 +12,7 @@ from .views_misc import (  # noqa: F401
     ArticleViewSet,
     ChannelAnalysisViewSet,
     ClientExpertBooksView,
+    GenerationEventSummaryView,
     ClientInfoView,
     ClientSettingsView,
     ClientSummaryView,
@@ -65,5 +66,6 @@ from .views_payments import (  # noqa: F401
     YooKassaCreatePaymentView,
     YooKassaPaymentStatusView,
     PaymentPlanListView,
+    PaymentSubscriptionView,
     YooKassaWebhookView,
 )

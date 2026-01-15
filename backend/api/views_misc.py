@@ -8,7 +8,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from core import tasks
-from core.models import ContentTemplate, Schedule, SocialAccount, Story, Topic, TrendItem
+from core.generation_events import record_generation_event
+from core.models import ContentTemplate, GenerationEvent, Schedule, SocialAccount, Story, Topic, TrendItem
 from core.services.posting_service import update_post_status_after_publish
 from core.social_accounts import sync_client_default_telegram_account
 
@@ -24,9 +25,10 @@ from .serializers import (
     TrendItemDetailSerializer,
     TrendItemSerializer,
 )
-from .utils import get_active_client
+from .utils import enforce_generation_limit, get_active_client
 from .views_accounts import (
     ClientExpertBooksView,
+    GenerationEventSummaryView,
     ClientInfoView,
     ClientSettingsView,
     ClientSummaryView,
@@ -121,8 +123,18 @@ class TopicViewSet(viewsets.ModelViewSet):
         """Generate posts from all unused trends for this topic"""
         topic = self.get_object()
 
+        limit_response = enforce_generation_limit(topic.client, GenerationEvent.EVENT_POST)
+        if limit_response:
+            return limit_response
+
         # Call existing Celery task
         task = tasks.generate_posts_for_topic.delay(topic.id)
+
+        record_generation_event(
+            topic.client,
+            GenerationEvent.EVENT_POST,
+            meta={"source": "topic", "topic_id": topic.id},
+        )
 
         return Response({
             'success': True,
@@ -135,8 +147,18 @@ class TopicViewSet(viewsets.ModelViewSet):
         """Generate SEO keywords for the topic's client"""
         topic = self.get_object()
 
+        limit_response = enforce_generation_limit(topic.client, GenerationEvent.EVENT_SEO_GROUP)
+        if limit_response:
+            return limit_response
+
         # Trigger client-level SEO generation (deduplicated per client)
         task = tasks.generate_seo_keywords_for_client.delay(topic.client_id)
+
+        record_generation_event(
+            topic.client,
+            GenerationEvent.EVENT_SEO_GROUP,
+            meta={"source": "topic", "topic_id": topic.id},
+        )
 
         return Response({
             'success': True,
@@ -181,8 +203,18 @@ class TrendItemViewSet(viewsets.ModelViewSet):
         """Generate a single post from this trend"""
         trend = self.get_object()
 
+        limit_response = enforce_generation_limit(trend.client, GenerationEvent.EVENT_POST)
+        if limit_response:
+            return limit_response
+
         # Call existing Celery task
         task = tasks.generate_post_from_trend.delay(trend.id)
+
+        record_generation_event(
+            trend.client,
+            GenerationEvent.EVENT_POST,
+            meta={"source": "trend", "trend_id": trend.id},
+        )
 
         return Response({
             'success': True,
@@ -234,8 +266,18 @@ class StoryViewSet(viewsets.ModelViewSet):
         """Generate posts from story episodes"""
         story = self.get_object()
 
+        limit_response = enforce_generation_limit(story.client, GenerationEvent.EVENT_POST)
+        if limit_response:
+            return limit_response
+
         # Call existing Celery task
         task = tasks.generate_posts_from_story.delay(story.id)
+
+        record_generation_event(
+            story.client,
+            GenerationEvent.EVENT_POST,
+            meta={"source": "story", "story_id": story.id},
+        )
 
         return Response({
             'success': True,
@@ -369,5 +411,3 @@ class SocialAccountViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         client = get_active_client(self.request.user)
         serializer.save(client=client)
-
-
