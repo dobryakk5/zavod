@@ -126,7 +126,8 @@ def _generate_block_content(article: Article, block: ArticleBlock) -> ArticleBlo
     prompt_used, keywords = _build_prompt(article, block)
     block.prompt_used = prompt_used
 
-    ai_text = generator.get_ai_response(prompt_used, max_tokens=850, temperature=0.35)
+    post_model = (generator.post_model or generator.model).strip() or None
+    ai_text = generator.get_ai_response(prompt_used, max_tokens=850, temperature=0.35, model=post_model)
     if not ai_text:
         block.status = "failed"
         block.save(update_fields=["prompt_used", "status", "updated_at"])

@@ -132,9 +132,10 @@ const renderMarkdownBlocks = (raw: string) => {
 
   const pushHeading = (level: number, text: string) => {
     if (parts.length) {
-      parts.push('<hr />');
+      parts.push('<br />');
     }
-    parts.push(`<h${level}>${applyInlineMarkdown(text)}</h${level}>`);
+    const headingText = applyInlineMarkdown(text.toUpperCase());
+    parts.push(`<h${level}><strong>${headingText}</strong></h${level}>`);
   };
 
   for (const rawLine of lines) {
@@ -199,9 +200,10 @@ const buildResultHtml = (items: ArticleBlock[]) => {
     if (!title && !content) continue;
     if (title) {
       if (parts.length) {
-        parts.push('<hr />');
+        parts.push('<br />');
       }
-      parts.push(`<h2>${applyInlineMarkdown(title)}</h2>`);
+      const headingText = applyInlineMarkdown(title.toUpperCase());
+      parts.push(`<h2><strong>${headingText}</strong></h2>`);
     }
     if (content) {
       parts.push(renderMarkdownBlocks(content));
