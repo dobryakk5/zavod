@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { ArrowUpRight, CheckCircle, Clock3, RefreshCcw, XCircle } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
@@ -97,6 +97,23 @@ export function PaymentTab() {
   const [subscriptionLoading, setSubscriptionLoading] = useState(true);
   const isDev = Boolean(telegramUser?.isDev || telegramUser?.username === 'dev_user');
 
+  const loadSubscription = useCallback(async (setLoading = true) => {
+    if (setLoading) {
+      setSubscriptionLoading(true);
+    }
+    try {
+      const data = await apiFetch<SubscriptionInfo>('/payments/subscription/');
+      setSubscription(data);
+    } catch (subscriptionError) {
+      console.error('Unable to load subscription', subscriptionError);
+      setSubscription({ plan_name: 'Ознакомительный', expires_at: null, is_active: false });
+    } finally {
+      if (setLoading) {
+        setSubscriptionLoading(false);
+      }
+    }
+  }, []);
+
   const selectedPlan = useMemo(() => {
     if (!plans.length) {
       return null;
@@ -143,21 +160,8 @@ export function PaymentTab() {
   }, []);
 
   useEffect(() => {
-    const loadSubscription = async () => {
-      setSubscriptionLoading(true);
-      try {
-        const data = await apiFetch<SubscriptionInfo>('/payments/subscription/');
-        setSubscription(data);
-      } catch (subscriptionError) {
-        console.error('Unable to load subscription', subscriptionError);
-        setSubscription({ plan_name: 'Ознакомительный', expires_at: null, is_active: false });
-      } finally {
-        setSubscriptionLoading(false);
-      }
-    };
-
     void loadSubscription();
-  }, []);
+  }, [loadSubscription]);
 
   useEffect(() => {
     const loadPlans = async () => {
@@ -321,6 +325,13 @@ export function PaymentTab() {
   const isSuccess = paymentStatus?.paid && paymentStatus?.status === 'succeeded';
   const isPending =
     !isSuccess && (paymentStatus?.status === 'pending' || paymentStatus?.status === 'waiting_for_capture');
+
+  useEffect(() => {
+    if (!isSuccess) {
+      return;
+    }
+    void loadSubscription(false);
+  }, [isSuccess, loadSubscription]);
 
   const subscriptionName = subscription?.plan_name || 'Ознакомительный';
   const subscriptionUntil = subscription?.expires_at

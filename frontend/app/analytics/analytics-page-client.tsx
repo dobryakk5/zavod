@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { ApiError } from '@/lib/api';
 import {
   analyticsApi,
   type ChannelAnalysisRecord,
@@ -1068,7 +1069,11 @@ function WeeklySourcesTab() {
   );
 }
 
-function WebsiteTab() {
+type WebsiteTabProps = {
+  isActive: boolean;
+};
+
+function WebsiteTab({ isActive }: WebsiteTabProps) {
   const { canEdit } = useRole();
   const router = useRouter();
   const [baseUrl, setBaseUrl] = useState('');
@@ -1079,35 +1084,48 @@ function WebsiteTab() {
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [rerunId, setRerunId] = useState<number | null>(null);
+  const isHistoryTabActiveRef = useRef(false);
+  const hasActiveScans = useMemo(
+    () => history.some((scan) => scan.status === 'pending' || scan.status === 'in_progress'),
+    [history],
+  );
 
-  const loadHistory = async (options?: { silent?: boolean }) => {
-    if (!options?.silent) setLoading(true);
+  const loadHistory = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent && isHistoryTabActiveRef.current) {
+      setLoading(true);
+    }
     try {
       const data = await websitesApi.listScans();
-      setHistory(data);
+      if (isHistoryTabActiveRef.current) {
+        setHistory(data);
+      }
     } catch (error) {
-      toast.error('Не удалось загрузить историю сканов');
+      if (isHistoryTabActiveRef.current) {
+        toast.error('Не удалось загрузить историю сканов');
+      }
     } finally {
-      if (!options?.silent) setLoading(false);
+      if (!options?.silent && isHistoryTabActiveRef.current) {
+        setLoading(false);
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
-    let isMounted = true;
-    let intervalId: ReturnType<typeof setInterval> | undefined;
-
-    const load = async (silent = false) => {
-      if (!isMounted) return;
-      await loadHistory({ silent });
-    };
-
-    void load(false);
-    intervalId = setInterval(() => void load(true), 5000);
+    if (!isActive) return;
+    isHistoryTabActiveRef.current = true;
+    void loadHistory();
     return () => {
-      isMounted = false;
-      if (intervalId) clearInterval(intervalId);
+      isHistoryTabActiveRef.current = false;
     };
-  }, []);
+  }, [isActive, loadHistory]);
+
+  useEffect(() => {
+    if (!isActive || !hasActiveScans) return;
+    const intervalId = setInterval(() => {
+      void loadHistory({ silent: true });
+    }, 5000);
+    return () => clearInterval(intervalId);
+  }, [hasActiveScans, isActive, loadHistory]);
 
   const handleCreate = async () => {
     if (!canEdit || creating) return;
@@ -1271,7 +1289,7 @@ function WebsiteTab() {
       <div>
         <div className="space-y-1">
           <h2 className="text-2xl font-semibold">История сканов</h2>
-          <p className="text-gray-500 text-sm">Обновление каждые 5 секунд.</p>
+          <p className="text-gray-500 text-sm">Обновление включается, пока идут активные сканы.</p>
         </div>
 
         {loading ? (
@@ -1409,6 +1427,28 @@ export default function AnalyticsPageClient() {
   }, [searchParams]);
   const [activeTab, setActiveTab] = useState<'single' | 'project' | 'weekly' | 'website'>(initialTab);
   const router = useRouter();
+  const isHistoryTabActiveRef = useRef(false);
+  const hasActiveHistory = useMemo(
+    () => history.some((item) => item.status === 'pending' || item.status === 'in_progress'),
+    [history],
+  );
+
+  const loadHistory = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent && isHistoryTabActiveRef.current) {
+      setIsHistoryLoading(true);
+    }
+    try {
+      const data = await analyticsApi.listAnalyses();
+      if (isHistoryTabActiveRef.current) {
+        setHistory(data);
+      }
+    } catch (error) {
+    } finally {
+      if (!options?.silent && isHistoryTabActiveRef.current) {
+        setIsHistoryLoading(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -1416,31 +1456,20 @@ export default function AnalyticsPageClient() {
 
   useEffect(() => {
     if (activeTab !== 'single') return;
-    let isMounted = true;
-    let intervalId: ReturnType<typeof setInterval> | undefined;
-
-    const fetchHistory = async () => {
-      try {
-        const data = await analyticsApi.listAnalyses();
-        if (isMounted) {
-          setHistory(data);
-          setIsHistoryLoading(false);
-        }
-      } catch (error) {
-        if (isMounted) {
-          setIsHistoryLoading(false);
-        }
-      }
-    };
-
-    fetchHistory();
-    intervalId = setInterval(fetchHistory, 5000);
-
+    isHistoryTabActiveRef.current = true;
+    void loadHistory();
     return () => {
-      isMounted = false;
-      if (intervalId) clearInterval(intervalId);
+      isHistoryTabActiveRef.current = false;
     };
-  }, [activeTab]);
+  }, [activeTab, loadHistory]);
+
+  useEffect(() => {
+    if (activeTab !== 'single' || !hasActiveHistory) return;
+    const intervalId = setInterval(() => {
+      void loadHistory({ silent: true });
+    }, 5000);
+    return () => clearInterval(intervalId);
+  }, [activeTab, hasActiveHistory, loadHistory]);
 
   const handleAnalyzeChannel = async () => {
     const trimmedChannel = channelUrl.trim();
@@ -1458,10 +1487,21 @@ export default function AnalyticsPageClient() {
 
       if (result.success) {
         toast.success('Анализ канала запущен');
+        void loadHistory({ silent: true });
       } else {
         toast.error(result.error || 'Не удалось запустить анализ');
       }
     } catch (error) {
+      if (error instanceof ApiError) {
+        try {
+          const payload = error.body ? JSON.parse(error.body) : null;
+          const message = payload?.error || payload?.detail || payload?.message;
+          if (message) {
+            toast.error(String(message));
+            return;
+          }
+        } catch {}
+      }
       toast.error('Ошибка при запуске анализа');
     } finally {
       setIsAnalyzing(false);
@@ -1560,7 +1600,7 @@ export default function AnalyticsPageClient() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-2xl font-semibold">История аналитики</h2>
-                <p className="text-gray-500 text-sm">Страница обновляет список каждые 5 секунд автоматически.</p>
+                <p className="text-gray-500 text-sm">Список обновляется автоматически, пока есть активные задачи.</p>
               </div>
             </div>
 
@@ -1641,7 +1681,7 @@ export default function AnalyticsPageClient() {
         </TabsContent>
 
         <TabsContent value="website">
-          <WebsiteTab />
+          <WebsiteTab isActive={activeTab === 'website'} />
         </TabsContent>
       </Tabs>
     </div>

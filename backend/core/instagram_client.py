@@ -41,6 +41,11 @@ def normalize_instagram_username(value: str) -> str:
         parsed = urlparse(text)
         text = parsed.path or ""
         text = text.strip("/")
+    else:
+        lowered = text.lower()
+        if lowered.startswith(("instagram.com/", "www.instagram.com/", "m.instagram.com/")):
+            parsed = urlparse(f"https://{text}")
+            text = (parsed.path or "").strip("/")
 
     # Удаляем query параметры, если они есть
     if "?" in text:

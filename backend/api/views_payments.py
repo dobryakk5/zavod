@@ -385,6 +385,12 @@ class YooKassaPaymentStatusView(APIView):
             )
             return Response({"detail": "Payment not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        if data.get("status") == "succeeded" and data.get("paid"):
+            try:
+                _apply_payment_plan(data)
+            except Exception:
+                logger.exception("yookassa: failed to apply plan via status payment_id=%s", payment_id)
+
         logger.info(
             "yookassa: status payment_id=%s status=%s paid=%s",
             payment_id,

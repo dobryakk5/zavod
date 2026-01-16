@@ -1458,8 +1458,3 @@ Or use the cookie-based authentication by first logging in via `/api/auth/telegr
 6. **Permissions**: Role-based access control (Owner, Editor, Viewer)
 7. **Validation**: Input validation for all endpoints
 8. **Internationalization**: Supports multiple languages (primarily Russian)
-
-Some operations require specific permissions:
-- Client settings: Owner or Editor only
-- Post generation: Owner or Editor only
-- Schedule publishing: Owner or Editor only
