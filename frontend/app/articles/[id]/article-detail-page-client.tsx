@@ -9,6 +9,7 @@ import { ApiError } from '@/lib/api';
 import { articlesApi } from '@/lib/api/articles';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
@@ -269,6 +270,7 @@ export default function ArticleDetailPageClient() {
   const [savingResult, setSavingResult] = useState(false);
   const [resultTouched, setResultTouched] = useState(false);
   const [resultMode, setResultMode] = useState<'edit' | 'preview'>('edit');
+  const [phase2ConfirmOpen, setPhase2ConfirmOpen] = useState(false);
 
   const [blocksLoading, setBlocksLoading] = useState(false);
   const [blocks, setBlocks] = useState<ArticleBlock[]>([]);
@@ -322,6 +324,10 @@ export default function ArticleDetailPageClient() {
   const resultPreviewHtml = useMemo(
     () => highlightPhrasesInHtml(sanitizedResult, wordstatPhrases),
     [sanitizedResult, wordstatPhrases]
+  );
+  const hasExistingResult = useMemo(
+    () => Boolean((resultDraft || article?.result_html || '').trim()),
+    [resultDraft, article?.result_html]
   );
   const wordstatClusterPhrases = useMemo(() => {
     const source = article?.wordstat_phrases?.length
@@ -669,7 +675,7 @@ export default function ArticleDetailPageClient() {
     }
   };
 
-  const onGenerateAllBlocks = async () => {
+  const runPhase2Generation = async () => {
     if (!article) return;
     if (phaseBusy) return;
     if (orderedBlocks.length === 0) {
@@ -693,6 +699,29 @@ export default function ArticleDetailPageClient() {
       setGeneratingPhase2(false);
       toast.error('Не удалось запустить фазу 2');
     }
+  };
+
+  const onGenerateAllBlocks = async () => {
+    if (!article) return;
+    if (phaseBusy) return;
+    if (orderedBlocks.length === 0) {
+      toast.error('Нет блоков для генерации');
+      return;
+    }
+    if (hasExistingResult) {
+      setPhase2ConfirmOpen(true);
+      return;
+    }
+    await runPhase2Generation();
+  };
+
+  const onConfirmPhase2Regenerate = () => {
+    setPhase2ConfirmOpen(false);
+    if (phaseBusy) return;
+    resultAutoRef.current = null;
+    setResultTouched(false);
+    setResultDraft('');
+    void runPhase2Generation();
   };
 
   const onSaveWordstat = async () => {
@@ -1178,6 +1207,23 @@ export default function ArticleDetailPageClient() {
           Назад к списку
         </Button>
       </div>
+
+      <Dialog open={phase2ConfirmOpen} onOpenChange={(open) => !phaseBusy && setPhase2ConfirmOpen(open)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Текст статьи уже заполнен</DialogTitle>
+            <DialogDescription>Перегенерировать?</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPhase2ConfirmOpen(false)} disabled={phaseBusy}>
+              Нет
+            </Button>
+            <Button type="button" onClick={onConfirmPhase2Regenerate} disabled={phaseBusy}>
+              Да
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

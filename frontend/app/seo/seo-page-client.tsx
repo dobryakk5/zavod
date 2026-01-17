@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Check, Loader2, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { Check, Info, Loader2, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import { seoApi } from '@/lib/api/seo';
@@ -141,6 +141,9 @@ export default function SEOPageClient() {
   const [googleResults, setGoogleResults] = useState<GoogleCseSearchResult[]>([]);
   const [resolvedResults, setResolvedResults] = useState<GoogleCompetitorsResolvedRow[]>([]);
   const [competitorPhrase, setCompetitorPhrase] = useState<string>('');
+  const [competitorPhraseDraft, setCompetitorPhraseDraft] = useState<string>('');
+  const [competitorPhraseDirty, setCompetitorPhraseDirty] = useState(false);
+  const [competitorFilter, setCompetitorFilter] = useState<'all' | 'competitors' | 'informational'>('all');
   const [competitorSitesLoading, setCompetitorSitesLoading] = useState(false);
   const [manualCompetitor, setManualCompetitor] = useState('');
   const [autoGoogle, setAutoGoogle] = useState(false);
@@ -261,15 +264,18 @@ export default function SEOPageClient() {
     const q = (searchParams.get('q') || '').trim();
     if (q) {
       setCompetitorPhrase(q);
+      setCompetitorPhraseDraft(q);
+      setCompetitorPhraseDirty(false);
     }
     setAutoGoogle((searchParams.get('save') || '').trim() === '1');
   }, [searchParams]);
 
   useEffect(() => {
-    if (!competitorPhrase && topFavorite?.phrase) {
+    if (!competitorPhrase && topFavorite?.phrase && !competitorPhraseDirty) {
       setCompetitorPhrase(topFavorite.phrase);
+      setCompetitorPhraseDraft(topFavorite.phrase);
     }
-  }, [competitorPhrase, topFavorite?.phrase]);
+  }, [competitorPhrase, topFavorite?.phrase, competitorPhraseDirty]);
 
   const extractPhrases = (value: string) => {
     const seen = new Set<string>();
@@ -568,6 +574,34 @@ export default function SEOPageClient() {
       toast.error('Не удалось добавить сайт конкурента');
     }
   };
+
+  const applyCompetitorPhrase = () => {
+    const value = competitorPhraseDraft.trim();
+    if (!value) {
+      toast.error('Введите фразу для анализа конкурентов');
+      return;
+    }
+    setCompetitorPhrase(value);
+    setCompetitorPhraseDraft(value);
+    setCompetitorPhraseDirty(false);
+  };
+
+  const competitorCounts = useMemo(() => {
+    const total = resolvedResults.length;
+    const competitors = resolvedResults.filter((row) => row.is_competitor).length;
+    const informational = resolvedResults.filter((row) => row.manual_is_competitor === false).length;
+    return { total, competitors, informational };
+  }, [resolvedResults]);
+
+  const filteredCompetitorResults = useMemo(() => {
+    if (competitorFilter === 'competitors') {
+      return resolvedResults.filter((row) => row.is_competitor);
+    }
+    if (competitorFilter === 'informational') {
+      return resolvedResults.filter((row) => row.manual_is_competitor === false);
+    }
+    return resolvedResults;
+  }, [resolvedResults, competitorFilter]);
 
   useEffect(() => {
     if (activeTab !== 'competitors') return;
@@ -988,21 +1022,50 @@ export default function SEOPageClient() {
             <CardHeader className="space-y-2">
               <CardTitle>Конкуренты</CardTitle>
               <CardDescription>
-                Поиск в Google по фразе Wordstat из избранного.
+                Поиск в Google по фразе Wordstat из избранного или введённой вручную.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">Фраза для поиска</p>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    value={competitorPhraseDraft}
+                    onChange={(e) => {
+                      setCompetitorPhraseDraft(e.target.value);
+                      setCompetitorPhraseDirty(true);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        applyCompetitorPhrase();
+                      }
+                    }}
+                    placeholder="Например: аудит сайта, продвижение в поиске"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={applyCompetitorPhrase}
+                    disabled={!competitorPhraseDraft.trim()}
+                  >
+                    Использовать
+                  </Button>
+                </div>
+                {topFavorite?.phrase === competitorPhrase ? (
+                  <p className="text-xs text-muted-foreground">
+                    {topFavorite.count.toLocaleString('ru-RU')} показов по Wordstat.
+                  </p>
+                ) : null}
+              </div>
+
               {competitorPhrase ? (
                 <div className="space-y-2">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <p className="text-sm font-semibold">Фраза</p>
+                      <p className="text-sm font-semibold">Используемая фраза</p>
                       <p className="text-sm text-slate-700">{competitorPhrase}</p>
-                      {topFavorite?.phrase === competitorPhrase ? (
-                        <p className="text-xs text-muted-foreground">
-                          {topFavorite.count.toLocaleString('ru-RU')} показов
-                        </p>
-                      ) : null}
                     </div>
                     <Button
                       type="button"
@@ -1022,7 +1085,7 @@ export default function SEOPageClient() {
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  Нет избранных фраз Wordstat — отметьте фразы как избранные и попробуйте снова.
+                  Введите фразу выше или отметьте фразы Wordstat как избранные, чтобы продолжить.
                 </p>
               )}
 
@@ -1066,18 +1129,45 @@ export default function SEOPageClient() {
                     Нет сохранённых результатов для этой фразы. Нажмите «Найти в Google», чтобы собрать сайты.
                   </p>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[56px]">#</TableHead>
-                        <TableHead className="w-[180px]">Домен</TableHead>
-                        <TableHead>Сайт</TableHead>
-                        <TableHead className="w-[140px]">Конкурент</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {resolvedResults.map((row) => (
-                        <TableRow key={`${row.position}-${row.domain}`}>
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2 text-sm">
+                      <Badge
+                        variant={competitorFilter === 'all' ? 'secondary' : 'outline'}
+                        className="text-xs cursor-pointer"
+                        onClick={() => setCompetitorFilter('all')}
+                      >
+                        Все: {competitorCounts.total}
+                      </Badge>
+                      <Badge
+                        variant={competitorFilter === 'competitors' ? 'secondary' : 'outline'}
+                        className="text-xs cursor-pointer"
+                        onClick={() => setCompetitorFilter('competitors')}
+                      >
+                        Конкуренты: {competitorCounts.competitors}
+                      </Badge>
+                      <Badge
+                        variant={competitorFilter === 'informational' ? 'secondary' : 'outline'}
+                        className="text-xs cursor-pointer"
+                        onClick={() => setCompetitorFilter('informational')}
+                      >
+                        Информационные: {competitorCounts.informational}
+                      </Badge>
+                    </div>
+                    {filteredCompetitorResults.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">Нет сайтов для выбранного фильтра.</p>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-[56px]">#</TableHead>
+                            <TableHead className="w-[180px]">Домен</TableHead>
+                            <TableHead>Сайт</TableHead>
+                            <TableHead className="w-[140px]">Конкурент</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredCompetitorResults.map((row) => (
+                            <TableRow key={`${row.position}-${row.domain}`}>
                           <TableCell className="tabular-nums text-muted-foreground">{row.position}</TableCell>
                           <TableCell>
                             <a
@@ -1167,20 +1257,22 @@ export default function SEOPageClient() {
                                 onClick={() => handleManualCompetitorMark(row.domain, false)}
                                 className={`rounded-md border p-2 transition ${
                                   row.manual_is_competitor === false
-                                    ? 'border-slate-300 bg-slate-100 text-slate-900'
+                                    ? 'border-amber-200 bg-amber-50 text-amber-800'
                                     : 'border-slate-200 text-slate-400 hover:text-slate-900'
                                 }`}
-                                title="Не конкурент"
-                                aria-label="Не конкурент"
+                                title="Информационный"
+                                aria-label="Информационный"
                               >
-                                <X className="h-4 w-4" />
+                                <Info className="h-4 w-4" />
                               </button>
                             </div>
                           </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
                 )}
               </CardContent>
             </Card>
