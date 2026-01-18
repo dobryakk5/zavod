@@ -1,0 +1,11 @@
+{
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/.git/**": true,
+    "**/media/**": true,
+    "**/staticfiles/**": true,
+    "**/logs/**": true,
+    "**/.pytest_cache/**": true,
+    "**/__pycache__/**": true
+  }
+}
