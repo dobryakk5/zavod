@@ -49,19 +49,25 @@ export const googleApi = {
     });
   },
 
-  competitorsMark: async (domain: string, is_competitor: boolean | null): Promise<{ success: boolean; domain: string; manual_is_competitor: boolean | null }> => {
-    return apiFetch<{ success: boolean; domain: string; manual_is_competitor: boolean | null }>('/google/competitors/mark/', {
+  competitorsMark: async (
+    domain: string,
+    category: 'competitor' | 'informational' | 'indirect' | 'other' | null
+  ): Promise<{ success: boolean; domain: string; manual_category: string | null; manual_is_competitor: boolean | null }> => {
+    return apiFetch<{ success: boolean; domain: string; manual_category: string | null; manual_is_competitor: boolean | null }>('/google/competitors/mark/', {
       method: 'POST',
       body: {
         domain,
-        is_competitor
+        category
       }
     });
   },
 
-  competitorsCached: async (query: string): Promise<GoogleCompetitorsResolveResponse> => {
+  competitorsCached: async (query?: string | null): Promise<GoogleCompetitorsResolveResponse> => {
     const params = new URLSearchParams();
-    params.set('q', query);
-    return apiFetch<GoogleCompetitorsResolveResponse>(`/google/competitors/cached/?${params.toString()}`);
+    if ((query || '').trim()) {
+      params.set('q', String(query));
+    }
+    const qs = params.toString();
+    return apiFetch<GoogleCompetitorsResolveResponse>(`/google/competitors/cached/${qs ? `?${qs}` : ''}`);
   }
 };

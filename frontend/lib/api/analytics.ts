@@ -102,6 +102,15 @@ export interface ChannelAnalysisDetail extends ChannelAnalysisRecord {
   error?: string;
 }
 
+export interface ChannelAnalysisShareResponse {
+  success: boolean;
+  share_token: string;
+}
+
+export interface ChannelAnalysisUnshareResponse {
+  success: boolean;
+}
+
 export type ProjectChannelPostStat = {
   external_id: string;
   title: string;
@@ -280,8 +289,31 @@ export const analyticsApi = {
   /**
    * Get stored analysis details
    */
-  getAnalysisDetail: async (id: string | number): Promise<ChannelAnalysisDetail> => {
-    return apiFetch<ChannelAnalysisDetail>(`/channel-analyses/${id}/`);
+  getAnalysisDetail: async (
+    id: string | number,
+    options?: { shareToken?: string }
+  ): Promise<ChannelAnalysisDetail> => {
+    const shareToken = options?.shareToken;
+    const query = shareToken ? `?share_token=${encodeURIComponent(shareToken)}` : '';
+    return apiFetch<ChannelAnalysisDetail>(`/channel-analyses/${id}/${query}`);
+  },
+
+  /**
+   * Enable sharing for the analysis and return a share token
+   */
+  shareAnalysis: async (id: string | number): Promise<ChannelAnalysisShareResponse> => {
+    return apiFetch<ChannelAnalysisShareResponse>(`/channel-analyses/${id}/share/`, {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * Disable sharing for the analysis
+   */
+  unshareAnalysis: async (id: string | number): Promise<ChannelAnalysisUnshareResponse> => {
+    return apiFetch<ChannelAnalysisUnshareResponse>(`/channel-analyses/${id}/unshare/`, {
+      method: 'POST',
+    });
   },
 
   /**

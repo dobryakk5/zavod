@@ -6,6 +6,7 @@ from urllib.parse import urlparse, urlunparse
 import requests
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
@@ -210,7 +211,28 @@ def _normalize_domain(value: str) -> str:
         domain = raw.strip().lower()
     if domain.startswith("www."):
         domain = domain[4:]
+    if domain.endswith("."):
+        domain = domain[:-1]
     return domain
+
+
+def _root_domain(value: str) -> str:
+    domain = _normalize_domain(value)
+    if not domain:
+        return ""
+    parts = [part for part in domain.split(".") if part]
+    if len(parts) <= 2:
+        return domain
+    return ".".join(parts[-2:])
+
+
+def _root_domain_query(roots: list[str]) -> Q:
+    query = Q()
+    for root in roots:
+        if not root:
+            continue
+        query |= Q(domain=root) | Q(domain__iendswith=f".{root}")
+    return query
 
 
 def _origin_from_url(value: str) -> str:
@@ -223,6 +245,27 @@ def _origin_from_url(value: str) -> str:
     if parsed.scheme and parsed.netloc:
         return urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
     return ""
+
+
+MANUAL_COMPETITOR_CATEGORIES = {"competitor", "informational", "indirect", "other"}
+
+
+def _manual_category_from_site(site: CompetitorSite) -> str | None:
+    if getattr(site, "manual_category", None):
+        return site.manual_category
+    if site.manual_is_competitor is True:
+        return "competitor"
+    if site.manual_is_competitor is False:
+        return "other"
+    return None
+
+
+def _manual_is_competitor_from_category(category: str | None) -> bool | None:
+    if category == "competitor":
+        return True
+    if category in {"informational", "indirect", "other"}:
+        return False
+    return None
 
 
 class GoogleCompetitorsStoreView(APIView):
@@ -253,7 +296,8 @@ class GoogleCompetitorsStoreView(APIView):
             url = str(item.get("url") or "").strip()
             display_domain = str(item.get("domain") or "").strip()
 
-            domain = _normalize_domain(display_domain) or _normalize_domain(url)
+            normalized_domain = _normalize_domain(display_domain) or _normalize_domain(url)
+            domain = _root_domain(normalized_domain)
             if not domain:
                 continue
             if domain in domains_seen:
@@ -262,19 +306,26 @@ class GoogleCompetitorsStoreView(APIView):
 
             base_url = _origin_from_url(url) or f"https://{domain}/"
 
-            try:
-                obj, was_created = CompetitorSite.objects.get_or_create(
-                    client=client,
-                    domain=domain,
-                    defaults={
-                        "base_url": base_url,
-                        "first_seen_query": query,
-                        "last_seen_query": query,
-                    },
-                )
-            except IntegrityError:
-                obj = CompetitorSite.objects.filter(client=client, domain=domain).first()
+            existing = CompetitorSite.objects.filter(client=client).filter(
+                Q(domain=domain) | Q(domain__iendswith=f".{domain}")
+            ).order_by("-updated_at").first()
+
+            if existing:
+                obj = existing
                 was_created = False
+            else:
+                try:
+                    obj = CompetitorSite.objects.create(
+                        client=client,
+                        domain=domain,
+                        base_url=base_url,
+                        first_seen_query=query,
+                        last_seen_query=query,
+                    )
+                    was_created = True
+                except IntegrityError:
+                    obj = CompetitorSite.objects.filter(client=client, domain=domain).first()
+                    was_created = False
 
             if not obj:
                 continue
@@ -361,6 +412,7 @@ class GoogleCompetitorsResolveView(APIView):
         enriched: list[dict] = []
         domains_in_request: list[str] = []
         incoming_rows: list[dict] = []
+        domains_seen: set[str] = set()
 
         for idx, item in enumerate(results[:max_results], start=1):
             if not isinstance(item, dict):
@@ -370,31 +422,40 @@ class GoogleCompetitorsResolveView(APIView):
             display_domain = str(item.get("domain") or "").strip()
             if not url and not display_domain:
                 continue
-            domain = _normalize_domain(display_domain) or _normalize_domain(url)
-            if not domain:
+            normalized_domain = _normalize_domain(display_domain) or _normalize_domain(url)
+            root_domain = _root_domain(normalized_domain)
+            if not root_domain:
                 continue
-            base_url = _origin_from_url(url) or f"https://{domain}/"
+            if root_domain in domains_seen:
+                continue
+            domains_seen.add(root_domain)
+            base_url = _origin_from_url(url) or f"https://{root_domain}/"
             incoming_rows.append(
                 {
                     "position": idx,
                     "title": title,
                     "url": url or base_url,
-                    "domain": domain,
+                    "domain": root_domain,
                     "base_url": base_url,
                 }
             )
-            domains_in_request.append(domain)
+            domains_in_request.append(root_domain)
 
-        existing = {
-            row.domain: row
-            for row in CompetitorSite.objects.filter(client=client, domain__in=domains_in_request)
-        }
+        existing_rows = {}
+        if domains_in_request:
+            root_query = _root_domain_query(domains_in_request)
+            for row in CompetitorSite.objects.filter(client=client).filter(root_query).order_by("-updated_at"):
+                root = _root_domain(row.domain)
+                if not root:
+                    continue
+                if root not in existing_rows:
+                    existing_rows[root] = row
 
         # Ensure all domains are persisted (dedupe constraint handles repeats).
         for row in incoming_rows:
             domain = row["domain"]
             base_url = row["base_url"]
-            obj = existing.get(domain)
+            obj = existing_rows.get(domain)
             if obj:
                 if query and obj.last_seen_query != query:
                     obj.last_seen_query = query
@@ -417,7 +478,7 @@ class GoogleCompetitorsResolveView(APIView):
             except IntegrityError:
                 obj = CompetitorSite.objects.filter(client=client, domain=domain).first()
             if obj:
-                existing[domain] = obj
+                existing_rows[domain] = obj
 
         scheduled = 0
 
@@ -434,7 +495,7 @@ class GoogleCompetitorsResolveView(APIView):
         # Analyze only those without cached homepage text + AI decision, but do it via Celery.
         for row in incoming_rows:
             domain = row["domain"]
-            initial_obj = existing.get(domain)
+            initial_obj = existing_rows.get(domain)
             if not initial_obj:
                 enriched.append(
                     {
@@ -442,6 +503,9 @@ class GoogleCompetitorsResolveView(APIView):
                         "cached": False,
                         "analysis_status": "failed",
                         "analysis_error": "missing_db_row",
+                        "last_seen_query": query,
+                        "manual_category": None,
+                        "manual_is_competitor": None,
                         "is_competitor": False,
                         "one_liner": "",
                         "pricing": "",
@@ -469,7 +533,9 @@ class GoogleCompetitorsResolveView(APIView):
                     obj.updated_at = timezone.now()
                     obj.save(update_fields=["analysis_status", "analysis_error", "updated_at"])
 
-                needs_analysis = not cached and obj.manual_is_competitor is None
+                manual_category = _manual_category_from_site(obj)
+                manual_is_competitor = _manual_is_competitor_from_category(manual_category)
+                needs_analysis = not cached and manual_category is None
                 can_enqueue = obj.analysis_status != "in_progress"
                 not_enqueued_yet = not (obj.task_id or "").strip()
 
@@ -488,10 +554,12 @@ class GoogleCompetitorsResolveView(APIView):
                     "cached": cached,
                     "analysis_status": obj.analysis_status or ("completed" if cached else "pending"),
                     "analysis_error": obj.analysis_error or "",
-                    "manual_is_competitor": obj.manual_is_competitor,
+                    "last_seen_query": obj.last_seen_query or query,
+                    "manual_category": manual_category,
+                    "manual_is_competitor": manual_is_competitor,
                     "is_competitor": (
-                        bool(obj.manual_is_competitor)
-                        if obj.manual_is_competitor is not None
+                        bool(manual_is_competitor)
+                        if manual_is_competitor is not None
                         else (bool(obj.ai_is_competitor) if obj.ai_is_competitor is not None else False)
                     ),
                     "one_liner": obj.ai_one_liner or ("В очереди на анализ" if obj.analysis_status in {"pending", "in_progress"} else ""),
@@ -509,6 +577,7 @@ class GoogleCompetitorsResolveView(APIView):
 class GoogleCompetitorsCachedView(APIView):
     """
     Return previously stored competitor sites for a given query (no Google call).
+    If query is empty, return latest sites for the client.
 
     GET ?q=...
     """
@@ -517,34 +586,40 @@ class GoogleCompetitorsCachedView(APIView):
 
     def get(self, request, *args, **kwargs):
         query = str(request.query_params.get("q") or "").strip()[:512]
-        if not query:
-            raise ValidationError({"q": "Введите поисковую фразу"})
 
         client = get_active_client(request.user)
-        qs = (
-            CompetitorSite.objects.filter(client=client)
-            .filter(last_seen_query=query)
-            .order_by("-updated_at", "id")[:50]
-        )
+        qs = CompetitorSite.objects.filter(client=client)
+        if query:
+            qs = qs.filter(last_seen_query=query)
+        qs = qs.order_by("-updated_at", "id")
 
         results: list[dict] = []
-        for idx, site in enumerate(qs, start=1):
+        seen_roots: set[str] = set()
+        for site in qs:
+            root = _root_domain(site.domain)
+            if not root or root in seen_roots:
+                continue
+            seen_roots.add(root)
+            manual_category = _manual_category_from_site(site)
+            manual_is_competitor = _manual_is_competitor_from_category(manual_category)
             is_competitor = (
-                bool(site.manual_is_competitor)
-                if site.manual_is_competitor is not None
+                bool(manual_is_competitor)
+                if manual_is_competitor is not None
                 else (bool(site.ai_is_competitor) if site.ai_is_competitor is not None else False)
             )
             results.append(
                 {
-                    "position": idx,
-                    "title": site.home_title or site.domain,
-                    "url": site.base_url or f"https://{site.domain}/",
-                    "domain": site.domain,
-                    "base_url": site.base_url or f"https://{site.domain}/",
+                    "position": len(results) + 1,
+                    "title": site.home_title or root,
+                    "url": site.base_url or f"https://{root}/",
+                    "domain": root,
+                    "base_url": site.base_url or f"https://{root}/",
                     "cached": True,
                     "analysis_status": site.analysis_status or "pending",
                     "analysis_error": site.analysis_error or "",
-                    "manual_is_competitor": site.manual_is_competitor,
+                    "last_seen_query": site.last_seen_query,
+                    "manual_category": manual_category,
+                    "manual_is_competitor": manual_is_competitor,
                     "is_competitor": is_competitor,
                     "one_liner": site.ai_one_liner or "",
                     "pricing": site.ai_pricing or "",
@@ -554,50 +629,71 @@ class GoogleCompetitorsCachedView(APIView):
                     "prices_url": site.prices_url or None,
                 }
             )
+            if len(results) >= 50:
+                break
 
         return Response({"query": query, "results": results})
 
 
 class GoogleCompetitorsMarkView(APIView):
     """
-    Manually mark a domain as competitor / not competitor (overrides AI).
-    Input: { "domain": "example.com", "is_competitor": true|false|null }
+    Manually mark a domain as competitor / informational / indirect / other (overrides AI).
+    Input: { "domain": "example.com", "category": "competitor|informational|indirect|other|null" }
     """
 
     permission_classes = [IsTenantMember]
 
     def post(self, request, *args, **kwargs):
         data = request.data if isinstance(request.data, dict) else {}
-        domain = _normalize_domain(str(data.get("domain") or ""))
+        raw_domain = _normalize_domain(str(data.get("domain") or ""))
+        domain = _root_domain(raw_domain)
         if not domain:
             raise ValidationError({"domain": "Введите домен"})
 
-        value = data.get("is_competitor")
-        if value is None:
-            manual_value = None
-        elif isinstance(value, bool):
-            manual_value = value
-        elif str(value).strip().lower() in {"true", "1", "yes"}:
-            manual_value = True
-        elif str(value).strip().lower() in {"false", "0", "no"}:
-            manual_value = False
+        manual_category = None
+        raw_category = data.get("category", None)
+        if raw_category is not None:
+            raw_text = str(raw_category or "").strip().lower()
+            if not raw_text:
+                manual_category = None
+            elif raw_text in MANUAL_COMPETITOR_CATEGORIES:
+                manual_category = raw_text
+            else:
+                raise ValidationError({"category": "Ожидается competitor/informational/indirect/other/null"})
         else:
-            raise ValidationError({"is_competitor": "Ожидается true/false/null"})
+            value = data.get("is_competitor")
+            if value is None:
+                manual_category = None
+            elif isinstance(value, bool):
+                manual_category = "competitor" if value else "indirect"
+            elif str(value).strip().lower() in {"true", "1", "yes"}:
+                manual_category = "competitor"
+            elif str(value).strip().lower() in {"false", "0", "no"}:
+                manual_category = "indirect"
+            else:
+                raise ValidationError({"is_competitor": "Ожидается true/false/null"})
 
         client = get_active_client(request.user)
-        site = CompetitorSite.objects.filter(client=client, domain=domain).first()
-        if not site:
+        qs = CompetitorSite.objects.filter(client=client).filter(
+            Q(domain=domain) | Q(domain__iendswith=f".{domain}")
+        )
+        if not qs.exists():
             raise ValidationError({"domain": "Домен не найден в базе. Сначала выполните поиск."})
 
-        site.manual_is_competitor = manual_value
-        site.manual_marked_at = timezone.now()
-        site.updated_at = timezone.now()
-        site.save(update_fields=["manual_is_competitor", "manual_marked_at", "updated_at"])
+        manual_is_competitor = _manual_is_competitor_from_category(manual_category)
+        now = timezone.now()
+        qs.update(
+            manual_category=manual_category,
+            manual_is_competitor=manual_is_competitor,
+            manual_marked_at=now,
+            updated_at=now,
+        )
 
         return Response(
             {
                 "success": True,
                 "domain": domain,
-                "manual_is_competitor": site.manual_is_competitor,
+                "manual_category": manual_category,
+                "manual_is_competitor": manual_is_competitor,
             }
         )

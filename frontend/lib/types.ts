@@ -614,6 +614,8 @@ export interface GoogleCompetitorsResolvedRow {
   cached: boolean;
   analysis_status: 'pending' | 'in_progress' | 'completed' | 'failed' | string;
   analysis_error?: string;
+  last_seen_query?: string;
+  manual_category?: 'competitor' | 'informational' | 'indirect' | 'other' | null;
   manual_is_competitor?: boolean | null;
   is_competitor: boolean;
   one_liner: string;

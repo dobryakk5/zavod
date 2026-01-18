@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Check, Info, Loader2, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Check, Info, Loader2, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import { seoApi } from '@/lib/api/seo';
@@ -97,6 +97,35 @@ function StatusBadge({ status }: { status: SEOStatus }) {
 
 const normalizeUrlForCompare = (value?: string | null) => (value || '').trim().replace(/\/+$/, '').toLowerCase();
 
+const getRootDomain = (value?: string | null) => {
+  const raw = (value || '').trim().toLowerCase();
+  if (!raw) return '';
+  let host = raw;
+  try {
+    if (raw.includes('://')) {
+      host = new URL(raw).hostname;
+    } else {
+      host = raw.split('/')[0];
+    }
+  } catch {
+    host = raw.split('/')[0];
+  }
+  host = host.replace(/:\d+$/, '').replace(/^www\./, '');
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host;
+  const parts = host.split('.').filter(Boolean);
+  if (parts.length <= 2) return host;
+  return parts.slice(-2).join('.');
+};
+
+const getDomainKeyFromRow = (row: GoogleCompetitorsResolvedRow) => {
+  return (
+    getRootDomain(row.domain) ||
+    getRootDomain(row.url) ||
+    (row.domain || '').trim().toLowerCase() ||
+    (row.url || '').trim().toLowerCase()
+  );
+};
+
 const buildUniqueSnippet = (value: string, maxLen: number = 240) => {
   const text = (value || '').replace(/\s+/g, ' ').trim();
   if (!text) return '';
@@ -142,12 +171,24 @@ export default function SEOPageClient() {
   const [resolvedResults, setResolvedResults] = useState<GoogleCompetitorsResolvedRow[]>([]);
   const [competitorPhrase, setCompetitorPhrase] = useState<string>('');
   const [competitorPhraseDraft, setCompetitorPhraseDraft] = useState<string>('');
-  const [competitorPhraseDirty, setCompetitorPhraseDirty] = useState(false);
-  const [competitorFilter, setCompetitorFilter] = useState<'all' | 'competitors' | 'informational'>('all');
+  const [competitorFilters, setCompetitorFilters] = useState<{
+    unsorted: boolean;
+    competitors: boolean;
+    informational: boolean;
+    indirect: boolean;
+    other: boolean;
+  }>({
+    unsorted: true,
+    competitors: false,
+    informational: false,
+    indirect: false,
+    other: false,
+  });
   const [competitorSitesLoading, setCompetitorSitesLoading] = useState(false);
   const [manualCompetitor, setManualCompetitor] = useState('');
   const [autoGoogle, setAutoGoogle] = useState(false);
   const [autoGoogleDoneFor, setAutoGoogleDoneFor] = useState<string | null>(null);
+  const [activeCompetitorDomain, setActiveCompetitorDomain] = useState<string | null>(null);
   const { canEdit } = useRole();
 
   const loadSeoSets = async (opts?: { silent?: boolean }) => {
@@ -262,20 +303,13 @@ export default function SEOPageClient() {
       setActiveTab(tab as typeof activeTab);
     }
     const q = (searchParams.get('q') || '').trim();
-    if (q) {
+    const fromFavorites = (searchParams.get('save') || '').trim() === '1';
+    if (q && fromFavorites) {
       setCompetitorPhrase(q);
       setCompetitorPhraseDraft(q);
-      setCompetitorPhraseDirty(false);
     }
-    setAutoGoogle((searchParams.get('save') || '').trim() === '1');
+    setAutoGoogle(fromFavorites);
   }, [searchParams]);
-
-  useEffect(() => {
-    if (!competitorPhrase && topFavorite?.phrase && !competitorPhraseDirty) {
-      setCompetitorPhrase(topFavorite.phrase);
-      setCompetitorPhraseDraft(topFavorite.phrase);
-    }
-  }, [competitorPhrase, topFavorite?.phrase, competitorPhraseDirty]);
 
   const extractPhrases = (value: string) => {
     const seen = new Set<string>();
@@ -465,7 +499,6 @@ export default function SEOPageClient() {
     setGoogleSearching(true);
     setGoogleQuery(null);
     setGoogleResults([]);
-    setResolvedResults([]);
     try {
       const data = await googleApi.cseSearch(query, 10);
       setGoogleQuery(data.query);
@@ -488,15 +521,14 @@ export default function SEOPageClient() {
     }
   };
 
-  const loadCachedCompetitors = async (phrase: string) => {
+  const loadCachedCompetitors = async (phrase?: string | null) => {
     const q = (phrase || '').trim();
-    if (!q) return;
     setGoogleQuery(null);
     setGoogleResults([]);
     setCompetitorSitesLoading(true);
     try {
       const data = await googleApi.competitorsCached(q);
-      setResolvedResults(data.results);
+      setResolvedResults((prev) => mergeResolvedResults(prev, data.results));
     } catch (err) {
       console.error('Failed to load cached competitors', err);
     } finally {
@@ -515,7 +547,7 @@ export default function SEOPageClient() {
         results: googleResults.map((r, index) => ({ url: r.url, domain: r.domain, title: r.title, position: index + 1 })),
         max_results: 10
       });
-      setResolvedResults(resolved.results);
+      setResolvedResults((prev) => mergeResolvedResults(prev, resolved.results));
     } catch (err) {
       console.error('Failed to resolve competitors', err);
       toast.error('Не удалось обработать результаты Google');
@@ -524,18 +556,23 @@ export default function SEOPageClient() {
     }
   };
 
-  const handleManualCompetitorMark = async (domain: string, isCompetitor: boolean) => {
+  const handleManualCompetitorMark = async (
+    domain: string,
+    category: 'competitor' | 'informational' | 'indirect' | 'other'
+  ) => {
     const normalized = (domain || '').trim();
     if (!normalized) return;
     try {
-      const res = await googleApi.competitorsMark(normalized, isCompetitor);
+      const res = await googleApi.competitorsMark(normalized, category);
       setResolvedResults((prev) =>
         prev.map((row) => {
           if (row.domain !== normalized) return row;
           const manual_is_competitor = res.manual_is_competitor;
+          const manual_category = (res.manual_category as GoogleCompetitorsResolvedRow['manual_category']) ?? null;
           return {
             ...row,
             manual_is_competitor,
+            manual_category,
             is_competitor: manual_is_competitor === null ? row.is_competitor : manual_is_competitor
           };
         })
@@ -551,22 +588,11 @@ export default function SEOPageClient() {
     if (!value) return;
     try {
       const resolved = await googleApi.competitorsResolve({
-        query: competitorPhrase || 'manual',
+        query: competitorPhrase || '',
         results: [{ url: value, domain: value, title: '' }],
         max_results: 1
       });
-      setResolvedResults((prev) => {
-        const next = [...prev];
-        resolved.results.forEach((row) => {
-          const idx = next.findIndex((r) => r.domain === row.domain);
-          if (idx >= 0) {
-            next[idx] = row;
-          } else {
-            next.push(row);
-          }
-        });
-        return next;
-      });
+      setResolvedResults((prev) => mergeResolvedResults(prev, resolved.results));
       setManualCompetitor('');
       toast.success('Сайт конкурента добавлен');
     } catch (err) {
@@ -583,31 +609,115 @@ export default function SEOPageClient() {
     }
     setCompetitorPhrase(value);
     setCompetitorPhraseDraft(value);
-    setCompetitorPhraseDirty(false);
+  };
+
+  const mergeResolvedResults = (
+    prev: GoogleCompetitorsResolvedRow[],
+    incoming: GoogleCompetitorsResolvedRow[]
+  ) => {
+    if (!incoming.length) return prev;
+
+    const next = [...prev];
+    const indexByKey = new Map<string, number>();
+    prev.forEach((row, idx) => {
+      const key = getDomainKeyFromRow(row);
+      if (key) {
+        indexByKey.set(key, idx);
+      }
+    });
+
+    let changed = false;
+    incoming.forEach((row) => {
+      const key = getDomainKeyFromRow(row);
+      if (!key) return;
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex === undefined) {
+        indexByKey.set(key, next.length);
+        next.push(row);
+        changed = true;
+        return;
+      }
+      const existing = next[existingIndex];
+      const keys = Object.keys(row) as Array<keyof GoogleCompetitorsResolvedRow>;
+      const isSame = keys.every((field) => existing[field] === row[field]);
+      if (!isSame) {
+        next[existingIndex] = { ...existing, ...row };
+        changed = true;
+      }
+    });
+
+    return changed ? next : prev;
+  };
+
+  const toggleCompetitorFilter = (key: 'unsorted' | 'competitors' | 'informational' | 'indirect' | 'other') => {
+    setCompetitorFilters((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const activeCompetitorFilters = useMemo(
+    () =>
+      Object.entries(competitorFilters)
+        .filter(([, isActive]) => isActive)
+        .map(([key]) => key as 'unsorted' | 'competitors' | 'informational' | 'indirect' | 'other'),
+    [competitorFilters]
+  );
+
+  const getCompetitorFilterKey = (row: GoogleCompetitorsResolvedRow) => {
+    if (row.manual_category === 'competitor') return 'competitors';
+    if (row.manual_category === 'informational') return 'informational';
+    if (row.manual_category === 'indirect') return 'indirect';
+    if (row.manual_category === 'other') return 'other';
+    if (row.manual_is_competitor === true) return 'competitors';
+    if (row.manual_is_competitor === false) return 'other';
+    return 'unsorted';
   };
 
   const competitorCounts = useMemo(() => {
     const total = resolvedResults.length;
-    const competitors = resolvedResults.filter((row) => row.is_competitor).length;
-    const informational = resolvedResults.filter((row) => row.manual_is_competitor === false).length;
-    return { total, competitors, informational };
+    const unsorted = resolvedResults.filter((row) => !row.manual_category && row.manual_is_competitor == null).length;
+    const competitors = resolvedResults.filter(
+      (row) =>
+        row.manual_category === 'competitor' ||
+        (row.manual_category == null && row.manual_is_competitor === true)
+    ).length;
+    const informational = resolvedResults.filter((row) => row.manual_category === 'informational').length;
+    const indirect = resolvedResults.filter(
+      (row) => row.manual_category === 'indirect'
+    ).length;
+    const other = resolvedResults.filter(
+      (row) =>
+        row.manual_category === 'other' ||
+        (row.manual_category == null && row.manual_is_competitor === false)
+    ).length;
+    return { total, unsorted, competitors, informational, indirect, other };
   }, [resolvedResults]);
 
   const filteredCompetitorResults = useMemo(() => {
-    if (competitorFilter === 'competitors') {
-      return resolvedResults.filter((row) => row.is_competitor);
-    }
-    if (competitorFilter === 'informational') {
-      return resolvedResults.filter((row) => row.manual_is_competitor === false);
-    }
-    return resolvedResults;
-  }, [resolvedResults, competitorFilter]);
+    if (!activeCompetitorFilters.length) return resolvedResults;
+    return resolvedResults.filter((row) => activeCompetitorFilters.includes(getCompetitorFilterKey(row)));
+  }, [resolvedResults, activeCompetitorFilters]);
+
+  useEffect(() => {
+    if (activeTab !== 'competitors') return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return;
+      }
+      if (event.key !== '+' && event.key !== '-' && event.key !== '±') return;
+      if (!activeCompetitorDomain) return;
+      event.preventDefault();
+      handleManualCompetitorMark(activeCompetitorDomain, 'indirect');
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [activeTab, activeCompetitorDomain]);
 
   useEffect(() => {
     if (activeTab !== 'competitors') return;
     const q = (competitorPhrase || '').trim();
-    if (!q) return;
-    if (autoGoogle && autoGoogleDoneFor !== q) {
+    if (autoGoogle && q && autoGoogleDoneFor !== q) {
       if (!googleSearching) {
         setAutoGoogleDoneFor(q);
         handleGoogleSearch(q);
@@ -1033,7 +1143,6 @@ export default function SEOPageClient() {
                     value={competitorPhraseDraft}
                     onChange={(e) => {
                       setCompetitorPhraseDraft(e.target.value);
-                      setCompetitorPhraseDirty(true);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -1106,51 +1215,67 @@ export default function SEOPageClient() {
             </CardContent>
           </Card>
 
-          {competitorPhrase && (
+          {(competitorPhrase || resolvedResults.length > 0 || competitorSitesLoading) && (
             <Card>
               <CardHeader className="space-y-2">
                 <CardTitle>Результаты Google</CardTitle>
                 <CardDescription>
-                  {competitorSitesLoading
-                    ? 'Обрабатываем сайты...'
-                    : resolvedResults.length
-                      ? `${resolvedResults.length} сайтов`
+                  {resolvedResults.length
+                    ? `${resolvedResults.length} сайтов`
+                    : competitorSitesLoading
+                      ? 'Загружаем сайты...'
                       : 'Пока нет данных — нажмите «Найти в Google»'}
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {competitorSitesLoading ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    {googleResults.length ? 'Обрабатываем сайты (проверка БД + анализ новых)...' : 'Загружаем из БД...'}
-                  </div>
-                ) : resolvedResults.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Нет сохранённых результатов для этой фразы. Нажмите «Найти в Google», чтобы собрать сайты.
-                  </p>
+                {resolvedResults.length === 0 ? (
+                  competitorSitesLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Загружаем сайты...
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Нет сохранённых результатов для этой фразы. Нажмите «Найти в Google», чтобы собрать сайты.
+                    </p>
+                  )
                 ) : (
                   <div className="space-y-3">
                     <div className="flex flex-wrap gap-2 text-sm">
                       <Badge
-                        variant={competitorFilter === 'all' ? 'secondary' : 'outline'}
+                        variant={competitorFilters.unsorted ? 'secondary' : 'outline'}
                         className="text-xs cursor-pointer"
-                        onClick={() => setCompetitorFilter('all')}
+                        onClick={() => toggleCompetitorFilter('unsorted')}
                       >
-                        Все: {competitorCounts.total}
+                        Несортированные: {competitorCounts.unsorted}
                       </Badge>
                       <Badge
-                        variant={competitorFilter === 'competitors' ? 'secondary' : 'outline'}
+                        variant={competitorFilters.competitors ? 'secondary' : 'outline'}
                         className="text-xs cursor-pointer"
-                        onClick={() => setCompetitorFilter('competitors')}
+                        onClick={() => toggleCompetitorFilter('competitors')}
                       >
                         Конкуренты: {competitorCounts.competitors}
                       </Badge>
                       <Badge
-                        variant={competitorFilter === 'informational' ? 'secondary' : 'outline'}
+                        variant={competitorFilters.informational ? 'secondary' : 'outline'}
                         className="text-xs cursor-pointer"
-                        onClick={() => setCompetitorFilter('informational')}
+                        onClick={() => toggleCompetitorFilter('informational')}
                       >
                         Информационные: {competitorCounts.informational}
+                      </Badge>
+                      <Badge
+                        variant={competitorFilters.indirect ? 'secondary' : 'outline'}
+                        className="text-xs cursor-pointer"
+                        onClick={() => toggleCompetitorFilter('indirect')}
+                      >
+                        Косвенные: {competitorCounts.indirect}
+                      </Badge>
+                      <Badge
+                        variant={competitorFilters.other ? 'secondary' : 'outline'}
+                        className="text-xs cursor-pointer"
+                        onClick={() => toggleCompetitorFilter('other')}
+                      >
+                        Остальные: {competitorCounts.other}
                       </Badge>
                     </div>
                     {filteredCompetitorResults.length === 0 ? (
@@ -1166,8 +1291,15 @@ export default function SEOPageClient() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {filteredCompetitorResults.map((row) => (
-                            <TableRow key={`${row.position}-${row.domain}`}>
+                          {filteredCompetitorResults.map((row) => {
+                            const domainKey = getDomainKeyFromRow(row);
+                            const displayDomain = getRootDomain(row.domain) || row.domain || '—';
+                            return (
+                              <TableRow
+                                key={domainKey}
+                                onMouseEnter={() => setActiveCompetitorDomain(domainKey)}
+                                onFocusCapture={() => setActiveCompetitorDomain(domainKey)}
+                              >
                           <TableCell className="tabular-nums text-muted-foreground">{row.position}</TableCell>
                           <TableCell>
                             <a
@@ -1177,11 +1309,16 @@ export default function SEOPageClient() {
                               className="inline-flex underline-offset-2 hover:underline"
                             >
                               <Badge variant="outline" className="text-xs">
-                                {row.domain || '—'}
+                                {displayDomain}
                               </Badge>
                             </a>
                             {row.cached ? (
                               <div className="mt-1 text-[10px] text-muted-foreground">из БД</div>
+                            ) : null}
+                            {row.last_seen_query ? (
+                              <div className="mt-1 text-[10px] text-muted-foreground break-words">
+                                фраза: {row.last_seen_query}
+                              </div>
                             ) : null}
                             <div className="mt-2 flex flex-wrap gap-3">
                               {(() => {
@@ -1233,7 +1370,8 @@ export default function SEOPageClient() {
                             ) : (
                               <p className="mt-1 text-xs text-muted-foreground">Не удалось получить текст главной.</p>
                             )}
-                            {row.one_liner ? (
+                            {row.one_liner &&
+                            row.one_liner !== 'На главной нет ссылок на услуги и цены — не конкурент' ? (
                               <p className="mt-2 text-xs text-slate-700">{row.one_liner}</p>
                             ) : null}
                           </TableCell>
@@ -1241,9 +1379,10 @@ export default function SEOPageClient() {
                             <div className="flex items-center justify-end gap-2">
                               <button
                                 type="button"
-                                onClick={() => handleManualCompetitorMark(row.domain, true)}
+                                onClick={() => handleManualCompetitorMark(domainKey, 'competitor')}
+                                onFocus={() => setActiveCompetitorDomain(domainKey)}
                                 className={`rounded-md border p-2 transition ${
-                                  row.manual_is_competitor === true
+                                  row.manual_category === 'competitor'
                                     ? 'border-blue-200 bg-blue-50 text-blue-700'
                                     : 'border-slate-200 text-slate-400 hover:text-slate-600'
                                 }`}
@@ -1254,9 +1393,10 @@ export default function SEOPageClient() {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleManualCompetitorMark(row.domain, false)}
+                                onClick={() => handleManualCompetitorMark(domainKey, 'informational')}
+                                onFocus={() => setActiveCompetitorDomain(domainKey)}
                                 className={`rounded-md border p-2 transition ${
-                                  row.manual_is_competitor === false
+                                  row.manual_category === 'informational'
                                     ? 'border-amber-200 bg-amber-50 text-amber-800'
                                     : 'border-slate-200 text-slate-400 hover:text-slate-900'
                                 }`}
@@ -1265,10 +1405,39 @@ export default function SEOPageClient() {
                               >
                                 <Info className="h-4 w-4" />
                               </button>
+                              <button
+                                type="button"
+                                onClick={() => handleManualCompetitorMark(domainKey, 'indirect')}
+                                onFocus={() => setActiveCompetitorDomain(domainKey)}
+                                className={`rounded-md border px-2 py-1 text-xs font-semibold transition ${
+                                  row.manual_category === 'indirect'
+                                    ? 'border-slate-300 bg-slate-100 text-slate-900'
+                                    : 'border-slate-200 text-slate-500 hover:text-slate-900'
+                                }`}
+                                title="Косвенный"
+                                aria-label="Косвенный"
+                              >
+                                +-
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleManualCompetitorMark(domainKey, 'other')}
+                                onFocus={() => setActiveCompetitorDomain(domainKey)}
+                                className={`rounded-md border p-2 transition ${
+                                  row.manual_category === 'other'
+                                    ? 'border-slate-300 bg-slate-100 text-slate-900'
+                                    : 'border-slate-200 text-slate-400 hover:text-slate-900'
+                                }`}
+                                title="Остальные"
+                                aria-label="Остальные"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
                             </div>
                           </TableCell>
                             </TableRow>
-                          ))}
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     )}

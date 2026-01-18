@@ -1,7 +1,7 @@
 'use client';
 
 import { use, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -78,9 +78,13 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
       ? use(params)
       : (params as unknown as { analysisId: string });
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const shareToken = searchParams.get('share_token') || undefined;
+  const isSharedView = Boolean(shareToken);
   const [analysis, setAnalysis] = useState<ChannelAnalysisDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isMergingAudience, setIsMergingAudience] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
   const [clientProfile, setClientProfile] = useState<AudienceProfile | null>(null);
   const formatNumber = (value?: number | null) => (value ?? 0).toLocaleString('ru-RU');
   const formatDateTime = (value: string) => new Date(value).toLocaleString('ru-RU');
@@ -90,7 +94,7 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
     const load = async () => {
       setIsLoading(true);
       try {
-        const data = await analyticsApi.getAnalysisDetail(resolvedParams.analysisId);
+        const data = await analyticsApi.getAnalysisDetail(resolvedParams.analysisId, { shareToken });
         if (isMounted) {
           setAnalysis(data);
         }
@@ -107,7 +111,7 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
     return () => {
       isMounted = false;
     };
-  }, [resolvedParams.analysisId]);
+  }, [resolvedParams.analysisId, shareToken]);
 
   useEffect(() => {
     setClientProfile(null);
@@ -131,6 +135,30 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
       toast.error('Не удалось обновить описание клиента');
     } finally {
       setIsMergingAudience(false);
+    }
+  };
+
+  const handleShare = async () => {
+    if (!analysis?.id) {
+      return;
+    }
+    setIsSharing(true);
+    try {
+      const response = await analyticsApi.shareAnalysis(analysis.id);
+      const shareUrl = `${window.location.origin}/analytics/${analysis.id}?share_token=${encodeURIComponent(
+        response.share_token
+      )}`;
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+        toast.success('Ссылка на отчет скопирована');
+      } else {
+        window.prompt('Скопируйте ссылку на отчет', shareUrl);
+      }
+    } catch (error) {
+      toast.error('Не удалось создать ссылку для доступа');
+    } finally {
+      setIsSharing(false);
     }
   };
 
@@ -181,6 +209,11 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
         </div>
         <div className="flex flex-wrap gap-2">
           <Badge className={statusClasses[analysis.status]}>{statusLabels[analysis.status]}</Badge>
+          {!isSharedView && (
+            <Button variant="outline" onClick={handleShare} disabled={isSharing}>
+              {isSharing ? 'Готовим ссылку...' : 'Поделиться'}
+            </Button>
+          )}
           <Button variant="outline" onClick={() => router.push('/analytics')}>
             Вернуться к аналитике
           </Button>
@@ -310,7 +343,7 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
                   <CardTitle>Целевая аудитория</CardTitle>
                   <p className="text-sm text-gray-500">К кому обращаются на канале</p>
                 </div>
-                {hasAudienceProfileData && (
+                {!isSharedView && hasAudienceProfileData && (
                   <Button variant="secondary" onClick={handleMergeAudience} disabled={isMergingAudience}>
                     {isMergingAudience ? 'Добавляем...' : 'Добавить в настройки клиента'}
                   </Button>

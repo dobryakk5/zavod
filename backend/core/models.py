@@ -323,6 +323,8 @@ class ChannelAnalysis(models.Model):
     progress = models.PositiveIntegerField(default=0)
     result = models.JSONField(default=dict, blank=True)
     error = models.TextField(blank=True)
+    share_token = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    share_enabled = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -430,6 +432,13 @@ class CompetitorSite(models.Model):
     Stored per-client and unique by domain.
     """
 
+    MANUAL_CATEGORY_CHOICES = (
+        ("competitor", "Competitor"),
+        ("informational", "Informational"),
+        ("indirect", "Indirect"),
+        ("other", "Other"),
+    )
+
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="competitor_sites")
     domain = models.CharField(max_length=255)
     base_url = models.CharField(max_length=500, blank=True, default="")
@@ -446,6 +455,7 @@ class CompetitorSite(models.Model):
     analysis_status = models.CharField(max_length=20, blank=True, default="pending")
     analysis_error = models.TextField(blank=True, default="")
     task_id = models.CharField(max_length=255, blank=True, default="")
+    manual_category = models.CharField(max_length=32, blank=True, null=True, choices=MANUAL_CATEGORY_CHOICES)
     manual_is_competitor = models.BooleanField(blank=True, null=True)
     manual_marked_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)

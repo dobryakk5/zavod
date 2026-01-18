@@ -200,7 +200,7 @@ def analyze_website_for_competitor_insights(
                 input_url=input_url,
                 base_url=normalized_origin,
                 is_competitor=False,
-                one_liner="На главной нет ссылок на услуги и цены — не конкурент",
+                one_liner="",
                 offers=[],
                 pricing="",
                 home_title=home_page.title,

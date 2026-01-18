@@ -451,10 +451,6 @@ export function PaymentTab() {
 
         <div className="space-y-6">
           <Card>
-            <CardHeader>
-              <CardTitle>Сводка</CardTitle>
-              <CardDescription>Проверка данных перед оплатой.</CardDescription>
-            </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>

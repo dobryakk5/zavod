@@ -570,6 +570,20 @@ class ChannelAnalysisViewSet(mixins.DestroyModelMixin, viewsets.ReadOnlyModelVie
     permission_classes = [IsTenantMember]
     pagination_class = None
 
+    def get_object(self):
+        share_token = self.request.query_params.get("share_token")
+        if self.action == "retrieve" and share_token:
+            lookup_value = self.kwargs.get(self.lookup_url_kwarg or self.lookup_field)
+            return get_object_or_404(
+                ChannelAnalysis,
+                **{
+                    self.lookup_field: lookup_value,
+                    "share_token": share_token,
+                    "share_enabled": True,
+                },
+            )
+        return super().get_object()
+
     def get_permissions(self):
         if self.action == "destroy":
             return [IsTenantOwnerOrEditor()]
@@ -587,6 +601,36 @@ class ChannelAnalysisViewSet(mixins.DestroyModelMixin, viewsets.ReadOnlyModelVie
         if self.action == "list":
             return ChannelAnalysisListSerializer
         return ChannelAnalysisDetailSerializer
+
+    def _issue_share_token(self) -> str:
+        for _ in range(5):
+            token = secrets.token_urlsafe(24)
+            if not ChannelAnalysis.objects.filter(share_token=token).exists():
+                return token
+        raise RuntimeError("Failed to generate unique share token")
+
+    @action(detail=True, methods=["post"], url_path="share", permission_classes=[IsTenantOwnerOrEditor])
+    def share(self, request, pk=None):
+        """Enable external sharing by issuing a one-time token."""
+        analysis = self.get_object()
+
+        if not analysis.share_enabled:
+            analysis.share_token = self._issue_share_token()
+        elif not analysis.share_token:
+            analysis.share_token = self._issue_share_token()
+
+        analysis.share_enabled = True
+        analysis.save(update_fields=["share_token", "share_enabled", "updated_at"])
+
+        return Response({"success": True, "share_token": analysis.share_token})
+
+    @action(detail=True, methods=["post"], url_path="unshare", permission_classes=[IsTenantOwnerOrEditor])
+    def unshare(self, request, pk=None):
+        """Disable external sharing for this report."""
+        analysis = self.get_object()
+        analysis.share_enabled = False
+        analysis.save(update_fields=["share_enabled", "updated_at"])
+        return Response({"success": True})
 
     @action(
         detail=True,
