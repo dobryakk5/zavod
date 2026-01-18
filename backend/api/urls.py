@@ -29,6 +29,10 @@ from .views import (
     TopicViewSet,
     TrendItemViewSet,
     TgChannelView,
+    TgstatCategoryListView,
+    TgstatChannelListView,
+    TgstatFavoritesView,
+    TgstatTagListView,
     VkIntegrationViewSet,
     VkConnectView,
     VkCallbackView,
@@ -91,6 +95,10 @@ router.register(r'products/types', ProductTypeViewSet, basename='product-type')
 urlpatterns = [
     # Analytics endpoint (must be before router to avoid conflicts)
     path('tg_channel/', TgChannelView.as_view(), name='tg_channel'),
+    path('tgstat/categories/', TgstatCategoryListView.as_view(), name='tgstat-categories'),
+    path('tgstat/tags/', TgstatTagListView.as_view(), name='tgstat-tags'),
+    path('tgstat/channels/', TgstatChannelListView.as_view(), name='tgstat-channels'),
+    path('tgstat/favorites/', TgstatFavoritesView.as_view(), name='tgstat-favorites'),
 
     # Authentication endpoints
     path('auth/telegram', TelegramAuthView.as_view(), name='telegram-auth'),

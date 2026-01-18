@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ApiError } from '@/lib/api';
 import {
@@ -1563,9 +1564,16 @@ export default function AnalyticsPageClient() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="channelUrl">
-                {channelInputLabels[channelType as 'telegram' | 'instagram' | 'youtube'] ?? 'Ссылка на канал'}
-              </Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="channelUrl">
+                  {channelInputLabels[channelType as 'telegram' | 'instagram' | 'youtube'] ?? 'Ссылка на канал'}
+                </Label>
+                {channelType === 'telegram' ? (
+                  <Link href="/analytics/tgstat" className="text-xs text-blue-600 hover:underline">
+                    Или выбрать из списка
+                  </Link>
+                ) : null}
+              </div>
               <Input
                 id="channelUrl"
                 placeholder={

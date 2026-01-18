@@ -9,6 +9,7 @@ export * from './socialAccounts';
 export * from './client';
 export * from './postTypes';
 export * from './analytics';
+export * from './tgstat';
 export * from './seo';
 export * from './wordstat';
 export * from './vk';

@@ -21,6 +21,8 @@ pymorphy2>=0.9,<1.0
 pymorphy2-dicts-ru>=2.4,<3.0
 beautifulsoup4>=4.12,<5.0
 lxml>=5.0,<6.0
+curl_cffi
+
 
 # YouTube публикация
 google-api-python-client>=2.129.0,<3.0

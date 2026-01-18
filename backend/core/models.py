@@ -178,6 +178,11 @@ class Client(models.Model):
         blank=True,
         help_text="Список VK групп/пабликов для сбора контента через запятую (например: apiclub, thecode)"
     )
+    tgstat_channels = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Список избранных TGStat каналов (id)",
+    )
 
     def get_telegram_source_channels_list(self):
         """Парсит telegram_source_channels в список каналов."""
