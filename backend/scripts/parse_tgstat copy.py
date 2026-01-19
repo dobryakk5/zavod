@@ -269,29 +269,28 @@ def fetch_categories():
     r.raise_for_status()
 
     soup = BeautifulSoup(r.text, "lxml")
+    html = r.text
+
+    print("HTML length:", len(html))
+    print("HTML head:", html[:500].replace("\n", " "))
+
+    with open("tgstat_home_debug.html", "w", encoding="utf-8") as f:
+        f.write(html)
+
+    slides = soup.select("div.slick-slide[data-slick-index]")
+    #if not slides: raise RuntimeError("TGSTAT: no slick slides found on homepage")
+
     categories = {}
 
-    # 1. Найти заголовок "Все категории"
-    title = soup.find("div", class_="h4", string=lambda s: s and "Все категории" in s)
-    if not title:
-        raise RuntimeError("TGSTAT: 'Все категории' block not found")
+    slides = soup.select("div.slick-slide[data-slick-index]")
 
-    # 2. Подняться к card → slick-slider
-    container = title.find_parent("div", class_="my-3")
-    if not container:
-        raise RuntimeError("TGSTAT: categories container not found")
+    for slide in slides:
+        slide_index = int(slide.get("data-slick-index", -1))
 
-    slider = container.select_one("div.slick-slider")
-    if not slider:
-        raise RuntimeError("TGSTAT: slick-slider not found in categories block")
+        item = slide.select_one("div.slick-slider-item")
+        if not item:
+            continue
 
-    # 3. Все колонки категорий
-    items = slider.select("div.slick-slider-item")
-    if not items:
-        raise RuntimeError("TGSTAT: no category columns found")
-
-    # 4. Парсинг категорий внутри колонок
-    for col_index, item in enumerate(items):
         row = item.select_one("div.row.align-items-center")
         if not row:
             continue
@@ -300,7 +299,10 @@ def fetch_categories():
         i = 0
 
         while i < len(cols) - 1:
-            link = cols[i].select_one("a.text-dark[href]")
+            left = cols[i]
+            right = cols[i + 1]
+
+            link = left.select_one("a.text-dark[href]")
             if not link:
                 i += 1
                 continue
@@ -312,18 +314,13 @@ def fetch_categories():
                 "slug": slug,
                 "title": link.get_text(strip=True),
                 "url": urljoin(BASE_URL, href),
-                "channels_count": parse_count(cols[i + 1].get_text(strip=True)),
-                "column_index": col_index,
+                "channels_count": parse_count(right.get_text(strip=True)),
+                "slick_index": slide_index,
             }
 
             i += 2
 
-    # sanity check
-    if len(categories) < 30:
-        raise RuntimeError(f"TGSTAT: too few categories parsed ({len(categories)})")
-
     return list(categories.values())
-
 
 
 
@@ -386,35 +383,6 @@ def save_categories(categories):
             )
 
 
-def ensure_category_ids(category_slugs):
-    if not category_slugs:
-        return
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
-            UPDATE {table_name('tgstat_categories')}
-            SET id = DEFAULT
-            WHERE slug = ANY(%s) AND id IS NULL
-            """,
-            (category_slugs,),
-        )
-
-
-def load_category_ids(category_slugs):
-    if not category_slugs:
-        return {}
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT slug, id
-            FROM {table_name('tgstat_categories')}
-            WHERE slug = ANY(%s)
-            """,
-            (category_slugs,),
-        )
-        return {row[0]: row[1] for row in cur.fetchall()}
-
-
 def mark_category_parsed(category_slug):
     with db() as conn, conn.cursor() as cur:
         cur.execute(
@@ -443,26 +411,21 @@ def load_categories_parsed_today(category_slugs):
         return {row[0] for row in cur.fetchall()}
 
 
-def save_tags(tags, category_id_map):
+def save_tags(tags):
     with db() as conn, conn.cursor() as cur:
         for t in tags:
-            category_id = category_id_map.get(t["category_slug"])
             cur.execute(
                 f"""
                 INSERT INTO {table_name('tgstat_tags')}
-                (slug, title, url, category_slug, category_id, more_channels_count)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (slug) DO UPDATE
-                SET category_slug = EXCLUDED.category_slug,
-                    category_id = EXCLUDED.category_id,
-                    more_channels_count = EXCLUDED.more_channels_count
+                (slug, title, url, category_slug, more_channels_count)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (slug) DO NOTHING
                 """,
                 (
                     t["slug"],
                     t["title"],
                     t["url"],
                     t["category_slug"],
-                    category_id,
                     t["more"],
                 ),
             )
@@ -497,7 +460,7 @@ def load_tag_ids(tag_slugs):
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def save_tag_channels(tag_slug, tag_id, category_id, channels):
+def save_tag_channels(tag_slug, tag_id, channels):
     if not channels:
         return
     with db() as conn, conn.cursor() as cur:
@@ -505,16 +468,13 @@ def save_tag_channels(tag_slug, tag_id, category_id, channels):
             cur.execute(
                 f"""
                 INSERT INTO {table_name('tgstat_tag_channels')}
-                (tag_slug, tag_id, category_id, username, title, subscribers, url)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (tag_slug, username) DO UPDATE
-                SET category_id = EXCLUDED.category_id,
-                    tag_id = EXCLUDED.tag_id
+                (tag_slug, tag_id, username, title, subscribers, url)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
                 """,
                 (
                     tag_slug,
                     tag_id,
-                    category_id,
                     ch["username"],
                     ch["title"],
                     ch["subscribers"],
@@ -529,8 +489,6 @@ def main():
 
     print("-> Save categories")
     save_categories(categories)
-    ensure_category_ids([c["slug"] for c in categories])
-    category_id_map = load_category_ids([c["slug"] for c in categories])
 
     parsed_today = load_categories_parsed_today([c["slug"] for c in categories])
 
@@ -550,7 +508,7 @@ def main():
 
         print(f"-> Fetch subgroups for {category['slug']}")
         tags = fetch_subgroups_for_category(category)
-        save_tags(tags, category_id_map)
+        save_tags(tags)
         all_tags.extend(tags)
         mark_category_parsed(category["slug"])
         did_fetch_categories = True
@@ -570,8 +528,7 @@ def main():
 
         print(f"-> Fetch channels for {tag_slug}")
         channels = fetch_tag_channels(tag)
-        category_id = category_id_map.get(tag.get("category_slug", ""))
-        save_tag_channels(tag_slug, tag_id_map.get(tag_slug), category_id, channels)
+        save_tag_channels(tag_slug, tag_id_map.get(tag_slug), channels)
         mark_progress(PROGRESS_FILE, processed, tag_slug)
         did_fetch_tags = True
 

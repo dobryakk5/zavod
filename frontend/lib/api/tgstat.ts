@@ -1,6 +1,7 @@
 import { apiFetch } from '../api';
 
 export type TgstatCategory = {
+  id: number;
   slug: string;
   title: string;
   url: string;
@@ -28,11 +29,14 @@ export const tgstatApi = {
   listCategories() {
     return apiFetch<TgstatCategory[]>('/tgstat/categories/');
   },
-  listTags(categorySlug: string) {
-    return apiFetch<TgstatTag[]>(`/tgstat/tags/?category=${encodeURIComponent(categorySlug)}`);
+  listTags(categoryId: number) {
+    return apiFetch<TgstatTag[]>(`/tgstat/tags/?category_id=${encodeURIComponent(categoryId)}`);
   },
   listChannels(tagSlug: string) {
     return apiFetch<TgstatChannel[]>(`/tgstat/channels/?tag=${encodeURIComponent(tagSlug)}`);
+  },
+  listChannelsByCategory(categoryId: number) {
+    return apiFetch<TgstatChannel[]>(`/tgstat/channels/?category_id=${encodeURIComponent(categoryId)}`);
   },
   listFavorites() {
     return apiFetch<TgstatChannel[]>('/tgstat/favorites/');
@@ -40,6 +44,14 @@ export const tgstatApi = {
   addFavorite(channelId: number) {
     return apiFetch<{ success: boolean; tgstat_channels: number[] }>('/tgstat/favorites/', {
       method: 'POST',
+      body: {
+        channel_id: channelId,
+      },
+    });
+  },
+  removeFavorite(channelId: number) {
+    return apiFetch<{ success: boolean; tgstat_channels: number[] }>('/tgstat/favorites/', {
+      method: 'DELETE',
       body: {
         channel_id: channelId,
       },

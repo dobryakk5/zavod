@@ -36,7 +36,7 @@ class TgstatCategoryListView(APIView):
         with connection.cursor() as cursor:
             cursor.execute(
                 f"""
-                SELECT slug, title, url
+                SELECT id, slug, title, url
                 FROM {schema}.tgstat_categories
                 ORDER BY title ASC
                 """
@@ -49,7 +49,12 @@ class TgstatTagListView(APIView):
     permission_classes = [IsTenantMember]
 
     def get(self, request):
-        category_slug = (request.query_params.get("category") or "").strip()
+        raw_category = (
+            request.query_params.get("category_id")
+            or request.query_params.get("category")
+            or ""
+        )
+        category_slug = str(raw_category).strip()
         if not category_slug:
             return Response(
                 {"error": "category is required"},
@@ -58,15 +63,26 @@ class TgstatTagListView(APIView):
 
         schema = _tgstat_schema()
         with connection.cursor() as cursor:
-            cursor.execute(
-                f"""
-                SELECT slug, title, url, category_slug, more_channels_count
-                FROM {schema}.tgstat_tags
-                WHERE category_slug = %s
-                ORDER BY title ASC
-                """,
-                [category_slug],
-            )
+            if category_slug.isdigit():
+                cursor.execute(
+                    f"""
+                    SELECT t.slug, t.title, t.url, t.category_slug, t.more_channels_count
+                    FROM {schema}.tgstat_tags t
+                    WHERE t.category_id = %s
+                    ORDER BY t.title ASC
+                    """,
+                    [int(category_slug)],
+                )
+            else:
+                cursor.execute(
+                    f"""
+                    SELECT slug, title, url, category_slug, more_channels_count
+                    FROM {schema}.tgstat_tags
+                    WHERE category_slug = %s
+                    ORDER BY title ASC
+                    """,
+                    [category_slug],
+                )
             data = _fetch_all(cursor)
         return Response(data)
 
@@ -76,23 +92,52 @@ class TgstatChannelListView(APIView):
 
     def get(self, request):
         tag_slug = (request.query_params.get("tag") or "").strip()
-        if not tag_slug:
+        raw_category = (
+            request.query_params.get("category_id")
+            or request.query_params.get("category")
+            or ""
+        )
+        category_slug = str(raw_category).strip()
+        if not tag_slug and not category_slug:
             return Response(
-                {"error": "tag is required"},
+                {"error": "tag or category is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         schema = _tgstat_schema()
         with connection.cursor() as cursor:
-            cursor.execute(
-                f"""
-                SELECT id, tag_slug, tag_id, username, title, subscribers, url
-                FROM {schema}.tgstat_tag_channels
-                WHERE tag_slug = %s
-                ORDER BY subscribers DESC NULLS LAST, title ASC
-                """,
-                [tag_slug],
-            )
+            if tag_slug:
+                cursor.execute(
+                    f"""
+                    SELECT id, tag_slug, tag_id, username, title, subscribers, url
+                    FROM {schema}.tgstat_tag_channels
+                    WHERE tag_slug = %s
+                    ORDER BY subscribers DESC NULLS LAST, title ASC
+                    """,
+                    [tag_slug],
+                )
+            else:
+                if category_slug.isdigit():
+                    cursor.execute(
+                        f"""
+                        SELECT ch.id, ch.tag_slug, ch.tag_id, ch.username, ch.title, ch.subscribers, ch.url
+                        FROM {schema}.tgstat_tag_channels ch
+                        WHERE ch.category_id = %s
+                        ORDER BY ch.subscribers DESC NULLS LAST, ch.title ASC
+                        """,
+                        [int(category_slug)],
+                    )
+                else:
+                    cursor.execute(
+                        f"""
+                        SELECT ch.id, ch.tag_slug, ch.tag_id, ch.username, ch.title, ch.subscribers, ch.url
+                        FROM {schema}.tgstat_tag_channels ch
+                        JOIN {schema}.tgstat_categories c ON c.id = ch.category_id
+                        WHERE c.slug = %s
+                        ORDER BY ch.subscribers DESC NULLS LAST, ch.title ASC
+                        """,
+                        [category_slug],
+                    )
             data = _fetch_all(cursor)
         return Response(data)
 
@@ -193,6 +238,31 @@ class TgstatFavoritesView(APIView):
         stored_ids = _normalize_tgstat_ids(client.tgstat_channels or [])
         if resolved_id not in stored_ids:
             stored_ids.append(resolved_id)
+            client.tgstat_channels = stored_ids
+            client.save(update_fields=["tgstat_channels"])
+
+        return Response({"success": True, "tgstat_channels": stored_ids})
+
+    def delete(self, request):
+        client = get_active_client(request.user)
+        payload = request.data or {}
+        channel_id = payload.get("channel_id") or request.query_params.get("channel_id")
+        if channel_id is None:
+            return Response(
+                {"error": "channel_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            channel_id = int(channel_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "channel_id must be an integer"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        stored_ids = _normalize_tgstat_ids(client.tgstat_channels or [])
+        if channel_id in stored_ids:
+            stored_ids = [value for value in stored_ids if value != channel_id]
             client.tgstat_channels = stored_ids
             client.save(update_fields=["tgstat_channels"])
 

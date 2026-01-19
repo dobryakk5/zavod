@@ -1,15 +1,63 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { analyticsApi } from '@/lib/api/analytics';
 import { tgstatApi, type TgstatCategory, type TgstatChannel, type TgstatTag } from '@/lib/api/tgstat';
-import { Loader2, Plus } from 'lucide-react';
+import { toast } from 'sonner';
+import { ChevronDown, Loader2, Plus } from 'lucide-react';
 
 type TabValue = 'categories' | 'tags' | 'channels' | 'favorites';
 
+const CATEGORY_GROUPS: Array<{ key: string; label: string; slugs: string[] }> = [
+  {
+    key: 'business',
+    label: '💰 Бизнес',
+    slugs: [
+      'news',
+      'economics',
+      'business',
+      'marketing',
+      'design',
+      'law',
+      'telegram',
+      'instagram',
+      'sales',
+      'politics',
+    ],
+  },
+  {
+    key: 'growth',
+    label: '🚀 Работа',
+    slugs: ['blogs', 'tech', 'apps', 'books', 'language', 'career', 'courses', 'education'],
+  },
+  {
+    key: 'family',
+    label: '🏠 Семья',
+    slugs: ['babies', 'nature', 'construction', 'food', 'handmade', 'religion'],
+  },
+  {
+    key: 'health',
+    label: '❤️ Здоровье',
+    slugs: ['health', 'medicine', 'psychology', 'sport', 'beauty'],
+  },
+  {
+    key: 'rest',
+    label: '🌴 Отдых',
+    slugs: ['entertainment', 'travels', 'video', 'music', 'games', 'pics', 'edutainment', 'art', 'quotes', 'transport'],
+  },
+  {
+    key: 'caution',
+    label: '🕶 Осторожно',
+    slugs: ['crypto', 'darknet', 'gambling', 'shock', 'erotica', 'adult', 'esoterics', 'other'],
+  },
+];
+
 export default function TgstatPageClient() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabValue>('categories');
   const [categories, setCategories] = useState<TgstatCategory[]>([]);
   const [tags, setTags] = useState<TgstatTag[]>([]);
@@ -22,10 +70,30 @@ export default function TgstatPageClient() {
   const [isChannelsLoading, setIsChannelsLoading] = useState(false);
   const [isFavoritesLoading, setIsFavoritesLoading] = useState(false);
   const [savingFavoriteId, setSavingFavoriteId] = useState<number | null>(null);
+  const [runningAnalysisId, setRunningAnalysisId] = useState<number | null>(null);
+  const [removingFavoriteId, setRemovingFavoriteId] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
 
   const numberFormatter = useMemo(() => new Intl.NumberFormat('ru-RU'), []);
   const favoriteIdSet = useMemo(() => new Set(favorites.map((channel) => channel.id)), [favorites]);
+  const categoriesBySlug = useMemo(() => {
+    const map = new Map<string, TgstatCategory>();
+    categories.forEach((category) => {
+      map.set(category.slug, category);
+    });
+    return map;
+  }, [categories]);
+  const groupedCategories = useMemo(
+    () =>
+      CATEGORY_GROUPS.map((group) => ({
+        ...group,
+        categories: group.slugs
+          .map((slug) => categoriesBySlug.get(slug))
+          .filter((category): category is TgstatCategory => Boolean(category)),
+      })),
+    [categoriesBySlug],
+  );
 
   const loadCategories = useCallback(async () => {
     setIsCategoriesLoading(true);
@@ -40,14 +108,16 @@ export default function TgstatPageClient() {
     }
   }, []);
 
-  const loadTags = useCallback(async (categorySlug: string) => {
+  const loadTags = useCallback(async (categoryId: number) => {
     setIsTagsLoading(true);
     setErrorMessage(null);
     try {
-      const data = await tgstatApi.listTags(categorySlug);
+      const data = await tgstatApi.listTags(categoryId);
       setTags(data);
+      return data;
     } catch (error) {
       setErrorMessage('Не удалось загрузить подкатегории.');
+      return [];
     } finally {
       setIsTagsLoading(false);
     }
@@ -58,6 +128,19 @@ export default function TgstatPageClient() {
     setErrorMessage(null);
     try {
       const data = await tgstatApi.listChannels(tagSlug);
+      setChannels(data);
+    } catch (error) {
+      setErrorMessage('Не удалось загрузить каналы.');
+    } finally {
+      setIsChannelsLoading(false);
+    }
+  }, []);
+
+  const loadChannelsByCategory = useCallback(async (categoryId: number) => {
+    setIsChannelsLoading(true);
+    setErrorMessage(null);
+    try {
+      const data = await tgstatApi.listChannelsByCategory(categoryId);
       setChannels(data);
     } catch (error) {
       setErrorMessage('Не удалось загрузить каналы.');
@@ -85,15 +168,20 @@ export default function TgstatPageClient() {
   }, [loadCategories, loadFavorites]);
 
   const handleCategorySelect = useCallback(
-    (category: TgstatCategory) => {
+    async (category: TgstatCategory) => {
       setSelectedCategory(category);
       setSelectedTag(null);
       setTags([]);
       setChannels([]);
-      setActiveTab('tags');
-      void loadTags(category.slug);
+      const data = await loadTags(category.id);
+      if (data.length === 0) {
+        setActiveTab('channels');
+        void loadChannelsByCategory(category.id);
+      } else {
+        setActiveTab('tags');
+      }
     },
-    [loadTags],
+    [loadChannelsByCategory, loadTags],
   );
 
   const handleTagSelect = useCallback(
@@ -125,10 +213,63 @@ export default function TgstatPageClient() {
     [favoriteIdSet],
   );
 
+  const handleRemoveFavorite = useCallback(async (channel: TgstatChannel) => {
+    setRemovingFavoriteId(channel.id);
+    setErrorMessage(null);
+    try {
+      await tgstatApi.removeFavorite(channel.id);
+      setFavorites((prev) => prev.filter((item) => item.id !== channel.id));
+    } catch (error) {
+      setErrorMessage('Не удалось убрать канал из избранного.');
+    } finally {
+      setRemovingFavoriteId(null);
+    }
+  }, []);
+
+  const handleAnalyzeFavorite = useCallback(async (channel: TgstatChannel) => {
+    const normalizedUsername = channel.username ? channel.username.replace(/^@/, '') : '';
+    const channelUrl = normalizedUsername ? `https://t.me/${normalizedUsername}` : channel.url;
+    if (!channelUrl) {
+      setErrorMessage('Не удалось определить ссылку на канал.');
+      return;
+    }
+
+    setRunningAnalysisId(channel.id);
+    setErrorMessage(null);
+    try {
+      const response = await analyticsApi.analyzeChannel({
+        channel_url: channelUrl,
+        channel_type: 'telegram',
+      });
+      if (response.success) {
+        toast.success('Анализ запущен');
+        router.push('/analytics');
+      } else {
+        toast.error(response.error || 'Не удалось запустить анализ');
+      }
+    } catch (error) {
+      toast.error('Не удалось запустить анализ');
+    } finally {
+      setRunningAnalysisId(null);
+    }
+  }, [router]);
+
+  const handleGroupToggle = useCallback((key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
   return (
     <div className="container mx-auto py-8 space-y-6">
       <div className="space-y-1">
-        <h1 className="text-3xl font-bold">Категории Telegram каналов</h1>
+        <h1 className="text-3xl font-bold">Telegram каналы</h1>
         <p className="text-sm text-muted-foreground">
           Выберите категорию, затем подкатегорию, чтобы увидеть список каналов.
         </p>
@@ -163,34 +304,45 @@ export default function TgstatPageClient() {
           ) : categories.length === 0 ? (
             <p className="text-sm text-gray-500">Нет данных по категориям.</p>
           ) : (
-            <div className="rounded-lg border bg-white shadow-sm">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-gray-50">
-                    <TableHead>Категория</TableHead>
-                    <TableHead className="hidden md:table-cell">Slug</TableHead>
-                    <TableHead className="hidden md:table-cell">Ссылка</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {categories.map((category) => {
-                    const isSelected = selectedCategory?.slug === category.slug;
-                    return (
-                      <TableRow
-                        key={category.slug}
-                        className={`cursor-pointer ${isSelected ? 'bg-blue-50' : ''}`}
-                        onClick={() => handleCategorySelect(category)}
-                      >
-                        <TableCell className="font-medium text-gray-900">{category.title}</TableCell>
-                        <TableCell className="hidden md:table-cell text-xs text-gray-500">{category.slug}</TableCell>
-                        <TableCell className="hidden md:table-cell text-xs text-blue-600">
-                          {category.url}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+            <div className="space-y-3">
+              {groupedCategories.map((group) => {
+                const isExpanded = expandedGroups.has(group.key);
+                return (
+                  <div key={group.key} className="rounded-lg border bg-white shadow-sm">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-gray-900"
+                      onClick={() => handleGroupToggle(group.key)}
+                      aria-expanded={isExpanded}
+                    >
+                      <span>{group.label}</span>
+                      <ChevronDown
+                        className={`h-4 w-4 text-gray-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                      />
+                    </button>
+                    {isExpanded ? (
+                      <div className="border-t">
+                        {group.categories.map((category) => {
+                          const isSelected = selectedCategory?.slug === category.slug;
+                          const label = category.title || category.slug;
+                          return (
+                            <button
+                              key={category.slug}
+                              type="button"
+                              className={`flex w-full items-center px-4 py-2 text-left text-sm ${
+                                isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'
+                              }`}
+                              onClick={() => handleCategorySelect(category)}
+                            >
+                              <span className="font-medium text-gray-900">{label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           )}
         </TabsContent>
@@ -204,7 +356,9 @@ export default function TgstatPageClient() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => loadTags(selectedCategory.slug)}
+                onClick={() => {
+                  void loadTags(selectedCategory.id);
+                }}
                 disabled={isTagsLoading}
               >
                 Обновить
@@ -228,7 +382,6 @@ export default function TgstatPageClient() {
                   <TableRow className="bg-gray-50">
                     <TableHead>Подкатегория</TableHead>
                     <TableHead className="hidden md:table-cell">Slug</TableHead>
-                    <TableHead className="hidden md:table-cell">Ссылка</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -242,7 +395,6 @@ export default function TgstatPageClient() {
                       >
                         <TableCell className="font-medium text-gray-900">{tag.title}</TableCell>
                         <TableCell className="hidden md:table-cell text-xs text-gray-500">{tag.slug}</TableCell>
-                        <TableCell className="hidden md:table-cell text-xs text-blue-600">{tag.url}</TableCell>
                       </TableRow>
                     );
                   })}
@@ -267,6 +419,20 @@ export default function TgstatPageClient() {
                 Обновить
               </Button>
             </div>
+          ) : selectedCategory ? (
+            <div className="flex items-center justify-between text-sm text-muted-foreground">
+              <span>
+                Категория: <span className="font-medium text-gray-900">{selectedCategory.title}</span>
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => loadChannelsByCategory(selectedCategory.id)}
+                disabled={isChannelsLoading}
+              >
+                Обновить
+              </Button>
+            </div>
           ) : (
             <p className="text-sm text-gray-500">Сначала выберите подкатегорию.</p>
           )}
@@ -285,7 +451,6 @@ export default function TgstatPageClient() {
                   <TableRow className="bg-gray-50">
                     <TableHead>Канал</TableHead>
                     <TableHead className="hidden md:table-cell">Подписчики</TableHead>
-                    <TableHead className="hidden md:table-cell">Ссылка</TableHead>
                     <TableHead className="w-16 text-right">В избранное</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -293,10 +458,19 @@ export default function TgstatPageClient() {
                   {channels.map((channel) => {
                     const label = channel.title || channel.username || channel.url || 'Без названия';
                     const username = channel.username ? `@${channel.username.replace(/^@/, '')}` : null;
+                    const normalizedUsername = channel.username ? channel.username.replace(/^@/, '') : '';
                     const isFavorite = favoriteIdSet.has(channel.id);
                     const isSaving = savingFavoriteId === channel.id;
                     return (
-                      <TableRow key={channel.id}>
+                      <TableRow
+                        key={channel.id}
+                        className={normalizedUsername ? 'cursor-pointer' : ''}
+                        onClick={() => {
+                          if (normalizedUsername) {
+                            window.open(`https://t.me/${normalizedUsername}`, '_blank', 'noopener,noreferrer');
+                          }
+                        }}
+                      >
                         <TableCell className="space-y-1">
                           <div className="font-medium text-gray-900">{label}</div>
                           {username ? <div className="text-xs text-gray-500">{username}</div> : null}
@@ -306,20 +480,14 @@ export default function TgstatPageClient() {
                             ? '—'
                             : numberFormatter.format(channel.subscribers)}
                         </TableCell>
-                        <TableCell className="hidden md:table-cell text-xs text-blue-600">
-                          {channel.url ? (
-                            <a href={channel.url} target="_blank" rel="noreferrer">
-                              {channel.url}
-                            </a>
-                          ) : (
-                            '—'
-                          )}
-                        </TableCell>
                         <TableCell className="text-right">
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => handleAddFavorite(channel)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleAddFavorite(channel);
+                            }}
                             disabled={isFavorite || isSaving}
                             aria-label={isFavorite ? 'Канал уже в избранном' : 'Добавить в избранное'}
                           >
@@ -356,15 +524,26 @@ export default function TgstatPageClient() {
                   <TableRow className="bg-gray-50">
                     <TableHead>Канал</TableHead>
                     <TableHead className="hidden md:table-cell">Подписчики</TableHead>
-                    <TableHead className="hidden md:table-cell">Ссылка</TableHead>
+                    <TableHead className="w-28 text-right">Действие</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {favorites.map((channel) => {
                     const label = channel.title || channel.username || channel.url || 'Без названия';
                     const username = channel.username ? `@${channel.username.replace(/^@/, '')}` : null;
+                    const normalizedUsername = channel.username ? channel.username.replace(/^@/, '') : '';
+                    const isAnalyzing = runningAnalysisId === channel.id;
+                    const isRemoving = removingFavoriteId === channel.id;
                     return (
-                      <TableRow key={channel.id}>
+                      <TableRow
+                        key={channel.id}
+                        className={normalizedUsername ? 'cursor-pointer' : ''}
+                        onClick={() => {
+                          if (normalizedUsername) {
+                            window.open(`https://t.me/${normalizedUsername}`, '_blank', 'noopener,noreferrer');
+                          }
+                        }}
+                      >
                         <TableCell className="space-y-1">
                           <div className="font-medium text-gray-900">{label}</div>
                           {username ? <div className="text-xs text-gray-500">{username}</div> : null}
@@ -374,14 +553,35 @@ export default function TgstatPageClient() {
                             ? '—'
                             : numberFormatter.format(channel.subscribers)}
                         </TableCell>
-                        <TableCell className="hidden md:table-cell text-xs text-blue-600">
-                          {channel.url ? (
-                            <a href={channel.url} target="_blank" rel="noreferrer">
-                              {channel.url}
-                            </a>
-                          ) : (
-                            '—'
-                          )}
+                        <TableCell className="text-right">
+                          <div className="inline-flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              title="Анализ канала"
+                              aria-label="Анализ канала"
+                              disabled={isAnalyzing}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleAnalyzeFavorite(channel);
+                              }}
+                            >
+                              {isAnalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'А'}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              title="Убрать из избранного"
+                              aria-label="Убрать из избранного"
+                              disabled={isRemoving}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleRemoveFavorite(channel);
+                              }}
+                            >
+                              {isRemoving ? <Loader2 className="h-4 w-4 animate-spin" /> : '-'}
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
