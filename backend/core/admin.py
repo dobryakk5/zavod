@@ -30,12 +30,14 @@ from .models import (
     PostType,
     PostTone,
     SystemSetting,
+    GeneratorPrompt,
     PaymentPlan,
     ProductType,
     Article,
     Articles,
     ArticleBlock,
 )
+from .prompt_settings import invalidate_generator_prompt_cache
 from .system_settings import invalidate_system_settings_cache, get_image_generation_model, get_image_generation_method
 
 logger = logging.getLogger(__name__)
@@ -371,6 +373,65 @@ class SystemSettingAdmin(admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         invalidate_system_settings_cache()
+
+
+@admin.register(GeneratorPrompt)
+class GeneratorPromptAdmin(admin.ModelAdmin):
+    list_display = ("group", "code", "comment", "updated_at")
+    list_filter = ("group",)
+    search_fields = ("code", "comment", "prompt")
+    readonly_fields = ("created_at", "updated_at")
+    ordering = ("group", "code")
+    change_list_template = "admin/core/generatorprompt/change_list.html"
+    actions = None
+    fieldsets = (
+        ("Промпт", {"fields": ("group", "code", "comment", "prompt")}),
+        ("Служебное", {"fields": ("created_at", "updated_at")}),
+    )
+
+    def save_model(self, request, obj, form, change):
+        old_code = None
+        if change and obj.pk:
+            old_code = GeneratorPrompt.objects.filter(pk=obj.pk).values_list("code", flat=True).first()
+        super().save_model(request, obj, form, change)
+        invalidate_generator_prompt_cache(obj.code)
+        if old_code and old_code != obj.code:
+            invalidate_generator_prompt_cache(old_code)
+
+    def delete_model(self, request, obj):
+        code = obj.code
+        super().delete_model(request, obj)
+        invalidate_generator_prompt_cache(code)
+
+    def delete_queryset(self, request, queryset):
+        codes = list(queryset.values_list("code", flat=True))
+        super().delete_queryset(request, queryset)
+        for code in codes:
+            invalidate_generator_prompt_cache(code)
+
+    def changelist_view(self, request, extra_context=None):
+        response = super().changelist_view(request, extra_context=extra_context)
+        try:
+            cl = response.context_data["cl"]
+        except Exception:
+            return response
+
+        grouped = []
+        grouped_map = {}
+        for obj in cl.result_list:
+            grouped_map.setdefault(obj.group, []).append(obj)
+
+        for key, label in GeneratorPrompt.GROUP_CHOICES:
+            grouped.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "objects": grouped_map.get(key, []),
+                }
+            )
+
+        response.context_data["grouped_results"] = grouped
+        return response
 
 
 @admin.register(PaymentPlan)
@@ -2391,6 +2452,7 @@ CORE_ADMIN_MODEL_ORDER = {
     "ProductTypeAdminProxy": 5,
     "Article": 6,
     "Articles": 7,
+    "GeneratorPrompt": 998,
     "SystemSetting": 999,
 }
 

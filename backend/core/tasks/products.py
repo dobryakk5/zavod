@@ -95,6 +95,9 @@ def _extra_context_for_client(client: Client) -> str:
     niche = (client.niche or "").strip()
     if niche:
         parts.append(f"Ниша: {niche}")
+    product_service = (client.product_service or "").strip()
+    if product_service:
+        parts.append(f"Продукт/услуга: {product_service}")
     return "\n".join(parts).strip()
 
 

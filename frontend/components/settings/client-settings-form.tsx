@@ -10,6 +10,14 @@ import { seoApi } from '@/lib/api/seo';
 import { useRole } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import {
   Form,
   FormControl,
   FormDescription,
@@ -25,8 +33,9 @@ import type { ClientSettings } from '@/lib/types';
 
 const settingsFormSchema = z.object({
   brand_name: z.string().optional(),
-  niche: z.string().optional(),
-  avatar: z.string().optional(),
+  niche: z.string().min(1, 'Ниша обязательна'),
+  product_service: z.string().min(1, 'Продукт/услуга обязательна'),
+  avatar: z.string().min(1, 'Портрет ЦА обязателен'),
   pains: z.string().optional(),
   desires: z.string().optional(),
   objections: z.string().optional(),
@@ -47,6 +56,7 @@ export function ClientSettingsForm() {
     defaultValues: {
       brand_name: '',
       niche: '',
+      product_service: '',
       avatar: '',
       pains: '',
       desires: '',
@@ -62,6 +72,7 @@ export function ClientSettingsForm() {
       form.reset({
         brand_name: data.brand_name || '',
         niche: data.niche || '',
+        product_service: data.product_service || '',
         avatar: data.avatar || '',
         pains: data.pains || '',
         desires: data.desires || '',
@@ -170,7 +181,142 @@ export function ClientSettingsForm() {
           name="niche"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Ниша</FormLabel>
+              <div className="flex items-center justify-between gap-2">
+                <FormLabel>
+                  Ниша <span className="text-red-500">*</span>
+                </FormLabel>
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="h-auto p-0 text-xs text-blue-600 hover:text-blue-700"
+                    >
+                      Как заполнить нишу и продукт
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto bg-white text-gray-900 dark:bg-white dark:text-gray-900">
+                    <DialogHeader>
+                      <DialogTitle>Как заполнить нишу и продукт</DialogTitle>
+                      <DialogDescription>
+                        Примеры заполнения для товаров и услуг.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+                      {`🟦 ТОВАРКА (e-commerce)
+✅ ВЕРНО
+
+1️⃣
+Ниша: Продажа бытовой техники
+Продукт: Холодильники и морозильные камеры
+
+🔍 Почему верно:
+ниша = рынок и тип товаров
+продукт = конкретная товарная группа
+
+2️⃣
+Ниша: Товары для ремонта и строительства
+Продукт: Ламинат и напольные покрытия
+
+🔍 Почему верно:
+Wordstat даст «ламинат купить», «ламинат цена», «ламинат для квартиры»
+
+3️⃣
+Ниша: Товары для красоты и ухода
+Продукт: Профессиональная косметика для волос
+
+🔍 Почему верно:
+ниша шире, продукт коммерчески понятен
+
+❌ НЕВЕРНО
+
+1️⃣
+Ниша: Интернет-магазин
+Продукт: Товары
+
+❌ Почему плохо:
+это форма бизнеса, а не ниша
+ИИ и Wordstat пойдут «куда угодно»
+
+2️⃣
+Ниша: Электроника
+Продукт: Смартфоны Samsung Galaxy S23 256GB
+
+❌ Почему плохо:
+продукт слишком узкий, это уже хвост
+нельзя масштабировать семантику
+
+3️⃣
+Ниша: Бизнес
+Продукт: Продажа оборудования
+
+❌ Почему плохо:
+слишком абстрактно
+Wordstat взорвётся мусором
+
+🟩 УСЛУГИ
+
+✅ ВЕРНО
+
+1️⃣
+Ниша: Юридические услуги
+Услуга: Регистрация и сопровождение ООО
+
+🔍 Почему верно:
+чёткий интент, понятный SERP
+
+2️⃣
+Ниша: Ремонт и обслуживание недвижимости
+Услуга: Ремонт квартир под ключ
+
+🔍 Почему верно:
+идеальный коммерческий кластер
+
+3️⃣
+Ниша: Digital-маркетинг
+Услуга: SEO-продвижение сайтов
+
+🔍 Почему верно:
+масштабируемая семантика
+понятная коммерция
+
+❌ НЕВЕРНО
+
+1️⃣
+Ниша: Маркетинг
+Услуга: Помощь бизнесу
+
+❌ Почему плохо:
+нет ни рынка, ни интента
+
+2️⃣
+Ниша: IT
+Услуга: Разработка сайтов и приложений
+
+❌ Почему плохо:
+смешаны разные услуги
+SERP будет разный
+
+3️⃣
+Ниша: Консалтинг
+Услуга: Бизнес-консультации
+
+❌ Почему плохо:
+слишком широко
+Wordstat даст кашу
+
+🧠 Короткая шпаргалка
+✔ Ниша отвечает на вопрос:
+
+«В какой области мы работаем?»
+
+✔ Продукт / услуга отвечает на вопрос:
+
+«За что конкретно платят деньги?»`}
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
               <FormControl>
                 <Input placeholder='Например: "пиццерия"' {...field} />
               </FormControl>
@@ -184,10 +330,31 @@ export function ClientSettingsForm() {
 
         <FormField
           control={form.control}
+          name="product_service"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>
+                Продукт/услуга <span className="text-red-500">*</span>
+              </FormLabel>
+              <FormControl>
+                <Input placeholder='Например: "доставка пиццы" или "онлайн-курс по йоге"' {...field} />
+              </FormControl>
+              <FormDescription>
+                Коротко опишите, что именно вы предлагаете клиентам.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
           name="avatar"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Портрет ЦА</FormLabel>
+              <FormLabel>
+                Портрет ЦА <span className="text-red-500">*</span>
+              </FormLabel>
               <FormControl>
                 <CustomTextarea
                   placeholder="Описание целевой аудитории (например: 'Мама двоих детей, работает удалённо, хочет больше времени для себя')"

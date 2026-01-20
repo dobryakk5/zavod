@@ -9,6 +9,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .ai_generator_base import logger
+from .prompt_settings import render_generator_prompt
 
 _COMMENTED_VALUE_RE = re.compile(r'#\s*(?=")')
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
@@ -107,18 +108,14 @@ class ContentGenerationMixin:
         if not broken_text or not broken_text.strip():
             return None
 
-        repair_prompt = f"""
-Ты получил ответ модели, который не соответствует ожидаемому JSON-формату.
-Приведи текст ниже к строго валидному JSON согласно схеме:
-{schema_hint}
-
-ВАЖНО:
-- Верни только JSON без комментариев.
-- Сохрани исходный смысл и данные.
-
-Текст для исправления:
-<<<{broken_text}>>>
-"""
+        repair_prompt = render_generator_prompt(
+            "repair_json_structure",
+            schema_hint=schema_hint,
+            broken_text=broken_text,
+        )
+        if not repair_prompt:
+            logger.error("Missing generator prompt: repair_json_structure")
+            return None
 
         repaired_response = self.get_ai_response(
             repair_prompt,
@@ -181,61 +178,29 @@ class ContentGenerationMixin:
             }
             type_description = type_descriptions.get(post_type, "универсальный")
 
-            if language.lower() == "ru":
-                prompt = f"""Создай короткий цепляющий заголовок (максимум 3 слова) для поста в соцсетях.
-
-Тема: {topic_name}
-Тренд: {trend_title}
-Описание тренда: {trend_description}
-
-Стиль: {tone_ru}
-Тип поста: {type_description}
-Целевая аудитория: {avatar[:200] if avatar else 'широкая аудитория'}
-
-Требования к заголовку:
-- Максимум 3 слова на русском языке
-- Должен быть коротким и привлекательным
-- Вызывать интерес или эмоции
-- Использовать восклицательные знаки, вопросы или прямое обращение
-- Быть релевантным теме
-
-Примеры цепляющих заголовков:
-• "Это работает!"
-• "Секрет успеха!"
-• "Внимание!"
-• "Почему именно?"
-• "Узнайте сейчас!"
-
-Создай только заголовок из 1-3 слов, без кавычек и дополнительного текста:"""
-            else:
-                prompt = f"""Create a short catchy hook title (5-10 words) for a social media post.
-
-Topic: {topic_name}
-Trend: {trend_title}
-Trend description: {trend_description}
-
-Style: {tone}
-Post type: {type_description}
-Target audience: {avatar[:200] if avatar else 'general audience'}
-
-Title requirements:
-- Must be short and attractive
-- Should provoke interest or emotions
-- Use exclamation marks, questions, or direct address
-- Maximum 10 words
-- Be relevant to the topic
-
-Examples of catchy titles:
-• "This will change your life!"
-• "The secret few people know"
-• "Breaking: Important news!"
-• "Why this works?"
-• "Learn the truth right now!"
-
-Create only the title, without quotes or additional text:"""
-
+            seo_keyword_line = ""
             if first_keyword:
-                prompt += f"\n\nSEO keyword to include: {first_keyword}"
+                seo_keyword_line = render_generator_prompt(
+                    "hook_title_seo_keyword_line",
+                    first_keyword=first_keyword,
+                )
+
+            prompt_code = "hook_title_ru" if language.lower() == "ru" else "hook_title_en"
+            avatar_label = avatar[:200] if avatar else ("широкая аудитория" if language.lower() == "ru" else "general audience")
+            prompt = render_generator_prompt(
+                prompt_code,
+                topic_name=topic_name,
+                trend_title=trend_title,
+                trend_description=trend_description,
+                tone_ru=tone_ru,
+                tone=tone,
+                type_description=type_description,
+                avatar=avatar_label,
+                seo_keyword_line=seo_keyword_line,
+            )
+            if not prompt:
+                logger.warning("Missing generator prompt: %s", prompt_code)
+                return None
 
             response = self.get_ai_response(
                 prompt=prompt,
@@ -378,93 +343,66 @@ Create only the title, without quotes or additional text:"""
                     )
                     prompt_template = ""
             if not prompt_template:
-                if str(prompt_type).lower() == "seo":
-                    prompt = f"""
-Ты - SEO-копирайтер и SMM-стратег, который создаёт контент для социальных сетей.
+                prompt_code = "post_text_seo_base" if str(prompt_type).lower() == "seo" else "post_text_trend_base"
+                seo_keywords_display = seo_keywords_for_prompt or "ключи отсутствуют"
 
-ДАННЫЕ О ЦЕЛЕВОЙ АУДИТОРИИ:
-Аватар: {avatar}
-Боли: {pains}
-Хотелки: {desires}
-Возражения: {objections}
-
-ЗАДАЧА: Создай пост (≈{length_ru}) для социальных сетей в {tone_ru} стиле на {lang_name} языке,
-используя SEO-ключевые фразы: {seo_keywords_for_prompt or "ключи отсутствуют"}.
-
-ТЕМА БИЗНЕСА: {topic_name}
-
-ИНСТРУКЦИИ:
-1. Сформируй цепляющий заголовок (до 100 символов)
-2. Напиши основной текст, который:
-   - Связывает SEO-ключи с продуктом/услугой
-   - Отражает боли и желания целевой аудитории
-   - Выстраивает логичную структуру для {post_type} типа контента
-   - Соответствует требуемой длине: {length_ru}
-"""
-                else:
-                    prompt = f"""
-Ты - опытный SMM-менеджер, который создаёт контент для социальных сетей.
-
-ДАННЫЕ О ЦЕЛЕВОЙ АУДИТОРИИ:
-Аватар: {avatar}
-Боли: {pains}
-Хотелки: {desires}
-Возражения: {objections}
-
-ЗАДАЧА: Создай пост (≈{length_ru}) для социальных сетей в {tone_ru} стиле на {lang_name} языке.
-
-ТЕМА БИЗНЕСА: {topic_name}
-
-НОВОСТЬ/ТРЕНД:
-Заголовок: {trend_title}
-Описание: {trend_description}
-Источник: {trend_url}
-
-ИНСТРУКЦИИ:
-1. Создай привлекательный заголовок поста (до 100 символов)
-2. Напиши основной текст, который:
-   - Объясняет суть новости/тренда
-   - Показывает, почему это важно для аудитории именно с учётом его болей, хотелок и возражений
-   - Связан с темой бизнеса "{topic_name}"
-   - Имеет {tone_ru} тон
-   - Соответствует требуемой длине: {length_ru}
-"""
-
+                hashtags_block = ""
                 if include_hashtags:
-                    prompt += f"""3. Добавь {max_hashtags} релевантных хэштега
-"""
+                    hashtags_block = render_generator_prompt(
+                        "post_text_hashtags_block",
+                        max_hashtags=max_hashtags,
+                    )
 
+                seo_block = ""
                 if selected_seo_keywords:
                     seo_keywords_str = "\n   - ".join(selected_seo_keywords)
-                    prompt += f"""
-ВАЖНО - SEO ОПТИМИЗАЦИЯ:
-Естественным образом включи в текст поста следующие SEO-ключевые фразы (по одной из каждой группы):
-   - {seo_keywords_str}
+                    seo_block = render_generator_prompt(
+                        "post_text_seo_block",
+                        seo_keywords_str=seo_keywords_str,
+                    )
 
-Фразы должны выглядеть органично и не выделяться из контекста.
-"""
+                wordstat_block = ""
                 if wordstat_phrases_clean:
-                    prompt += f"""
-WORDSTAT-ФРАЗЫ:
-Естественно включи 1-2 из фраз: {", ".join(wordstat_phrases_clean)}.
-Не превращай текст в список ключей и не повторяй одну фразу много раз.
-"""
+                    wordstat_block = render_generator_prompt(
+                        "post_text_wordstat_block",
+                        wordstat_phrases=", ".join(wordstat_phrases_clean),
+                    )
 
+                additional_block = ""
                 if additional_instructions:
-                    prompt += f"""
-ДОПОЛНИТЕЛЬНЫЕ ТРЕБОВАНИЯ:
-{additional_instructions}
-"""
+                    additional_block = render_generator_prompt(
+                        "post_text_additional_block",
+                        additional_instructions=additional_instructions,
+                    )
 
-                prompt += """
-ФОРМАТ ОТВЕТА (строго JSON):
-{
-    "title": "Заголовок поста",
-    "text": "Основной текст поста",
-    "hashtags": ["хэштег1", "хэштег2", "хэштег3"]
-}
+                response_format_block = render_generator_prompt("post_text_response_format_block")
 
-Ответь ТОЛЬКО JSON, без дополнительных комментариев."""
+                prompt = render_generator_prompt(
+                    prompt_code,
+                    avatar=avatar,
+                    pains=pains,
+                    desires=desires,
+                    objections=objections,
+                    length_ru=length_ru,
+                    tone_ru=tone_ru,
+                    lang_name=lang_name,
+                    topic_name=topic_name,
+                    trend_title=trend_title,
+                    trend_description=trend_description,
+                    trend_url=trend_url or "",
+                    post_type=post_type,
+                    seo_keywords_for_prompt=seo_keywords_display,
+                    hashtags_block=hashtags_block,
+                    seo_block=seo_block,
+                    wordstat_block=wordstat_block,
+                    additional_block=additional_block,
+                    response_format_block=response_format_block,
+                )
+                if not prompt:
+                    return {
+                        "success": False,
+                        "error": f"Missing generator prompt: {prompt_code}",
+                    }
 
             if "{keyword}" in prompt:
                 prompt = prompt.replace("{keyword}", first_keyword or "")
@@ -597,29 +535,15 @@ WORDSTAT-ФРАЗЫ:
         if len(base_text) > max_text_len:
             text_for_prompt = base_text[:max_text_len] + "..."
 
-        prompt = f"""
-Ты редактор SMM-контента. Нужно оставить смысл поста и аккуратно вписать точные фразы из списка.
-
-ЯЗЫК: {language}
-ФРАЗЫ: {", ".join(cleaned_phrases)}
-
-ТЕКУЩИЙ ЗАГОЛОВОК:
-{title}
-
-ТЕКУЩИЙ ТЕКСТ:
-{text_for_prompt}
-
-ТРЕБОВАНИЯ:
-- Сохрани длину текста ±15% и общий стиль.
-- Добавь все указанные фразы один раз в естественных предложениях.
-- Не превращай текст в набор ключей и не меняй тональность.
-
-Формат ответа строго JSON:
-{{
-  "title": "Обновленный заголовок (можно оставить без изменений)",
-  "text": "Текст с встроенными фразами"
-}}
-"""
+        prompt = render_generator_prompt(
+            "refine_text_wordstat",
+            language=language,
+            phrases=", ".join(cleaned_phrases),
+            title=title,
+            text_for_prompt=text_for_prompt,
+        )
+        if not prompt:
+            return {"success": False, "error": "Missing generator prompt: refine_text_wordstat"}
 
         try:
             post_model = (self.post_model or self.model).strip() or None
@@ -778,119 +702,55 @@ WORDSTAT-ФРАЗЫ:
                     "key": "seo_pains",
                     "variable": "seo_pains",
                     "max_tokens": 1200,
-                    "prompt": f"""
-Ты — стратег по контенту и SEO-аналитике бренда {brand_name}.
-Тема бизнеса: {topic_name}.
-Проанализируй следующую аудиторию:
-
-Аватар: {avatar_desc}
-Боли: {pains_desc}
-Возражения: {objections_desc}
-Хотелки: {desires_desc}
-
-Задача:
-Сформируй список из 15–25 SEO-поисковых болей — фраз, которые люди реально могут вводить в Google/Yandex, пытаясь решить свои проблемы.
-Формулируй так, как пишет сам клиент, максимально приближенно к естественному поисковому запросу.
-Создавай запросы на {lang_name} языке.
-
-Выведи результат в формате Python-переменной:
-seo_pains = [ ... ]
-""",
+                    "prompt_code": "seo_keywords_pains",
                 },
                 {
                     "key": "seo_desires",
                     "variable": "seo_desires",
                     "max_tokens": 1200,
-                    "prompt": f"""
-Ты — SEO-стратег бренда {brand_name}.
-Тема бизнеса: {topic_name}.
-На основе данных о целевой аудитории:
-
-Аватар: {avatar_desc}
-Хотелки: {desires_desc}
-Боли: {pains_desc}
-
-Создай список из 15–25 желаний, которые люди ищут в поиске (ключевые запросы, связанные с ростом, мечтами, результатами) на {lang_name} языке.
-
-Выведи результат в формате Python-переменной:
-seo_desires = [ ... ]
-""",
+                    "prompt_code": "seo_keywords_desires",
                 },
                 {
                     "key": "seo_objections",
                     "variable": "seo_objections",
                     "max_tokens": 1000,
-                    "prompt": f"""
-Ты — маркетолог бренда {brand_name}.
-Тема бизнеса: {topic_name}.
-Используя данные:
-
-Боли: {pains_desc}
-Возражения: {objections_desc}
-Страхи: {objections_desc}
-
-Сгенерируй список из 10–20 поисковых возражений — фраз, которые человек ищет, сомневаясь или опасаясь купить. Используй формулировки, которые звучат как реальные запросы на {lang_name} языке.
-
-Выведи в формате:
-seo_objections = [ ... ]
-""",
+                    "prompt_code": "seo_keywords_objections",
                 },
                 {
                     "key": "seo_avatar",
                     "variable": "seo_avatar",
                     "max_tokens": 1000,
-                    "prompt": f"""
-Ты — SEO-аналитик бренда {brand_name}.
-Тема бизнеса: {topic_name}.
-Используя данные об аудитории (аватар, профессия, стиль мышления, боли, хотелки), сформируй 10–15 формулировок того, как человек может описывать себя в поиске.
-
-Аватар: {avatar_desc}
-Боли: {pains_desc}
-Хотелки: {desires_desc}
-Возражения: {objections_desc}
-
-Пример: "психолог который хочет клиентов через Instagram".
-Генерируй формулировки на {lang_name} языке.
-
-Выведи в формате:
-seo_avatar = [ ... ]
-""",
+                    "prompt_code": "seo_keywords_avatar",
                 },
                 {
                     "key": "seo_keywords",
                     "variable": "seo_keywords",
                     "max_tokens": 1500,
-                    "prompt": f"""
-Ты — специалист по SEO-структурам для бренда {brand_name}.
-Тема бизнеса: {topic_name}.
-Используя данные:
-
-Аватар: {avatar_desc}
-Боли: {pains_desc}
-Хотелки: {desires_desc}
-Возражения: {objections_desc}
-Существующие ключевые слова: {keywords_str}
-
-Создай список из 20–40 SEO ключей (низкочастотных, среднечастотных и ключей-модификаторов), которые можно использовать для блога, соцсетей, лендинга, рилс и автогенерации контента.
-Обязательно включай комбинации:
-- [боль + решение]
-- [хотелка + инструмент]
-- [ниша + контент]
-- [бренд + категория продукта]
-
-Фразы должны быть записаны как реальные поисковые запросы на {lang_name} языке.
-
-Выведи в формате:
-seo_keywords = [ ... ]
-""",
+                    "prompt_code": "seo_keywords_list",
                 },
             ]
 
             seo_results = {}
+            prompt_values = {
+                "brand_name": brand_name,
+                "topic_name": topic_name,
+                "avatar_desc": avatar_desc,
+                "pains_desc": pains_desc,
+                "desires_desc": desires_desc,
+                "objections_desc": objections_desc,
+                "lang_name": lang_name,
+                "keywords_str": keywords_str,
+            }
             for spec in prompt_specs:
                 logger.info("Генерация блока %s для темы '%s'", spec["key"], topic_name)
+                prompt = render_generator_prompt(spec["prompt_code"], **prompt_values)
+                if not prompt:
+                    return {
+                        "success": False,
+                        "error": f"Missing generator prompt: {spec['prompt_code']}",
+                    }
                 ai_response = self.get_ai_response(
-                    spec["prompt"],
+                    prompt,
                     max_tokens=spec.get("max_tokens", 1200),
                     temperature=0.55,
                 )
@@ -963,32 +823,16 @@ seo_keywords = [ ... ]
             avatar_text = (avatar or "").strip() or "не описан"
             brand_text = (brand or "").strip() or "без названия"
 
-            prompt = f"""
-Ты — эксперт по персонализированным подборкам книг для предпринимателей и экспертов.
-
-БРЕНД/ПРОЕКТ: {brand_text}
-ОПИСАНИЕ АВАТАРА: {avatar_text}
-КЛЮЧЕВЫЕ БОЛИ: {pains_text}
-КЛЮЧЕВЫЕ ЖЕЛАНИЯ: {desires_text}
-
-Найди 10 книг (на русском или в переводе), которые помогут этой аудитории решить проблемы и достичь желаемого.
-
-ТРЕБОВАНИЯ:
-- Указывай точное название и автора книги.
-- Добавь 1–2 предложения, почему книга пригодится именно этой аудитории.
-- Ориентируйся на практические, прикладные и вдохновляющие издания.
-- Пиши на {lang_name} языке.
-
-ФОРМАТ ОТВЕТА, СТРОГО JSON:
-{{
-  "books": [
-    {{"title": "Название", "author": "Автор", "reason": "Почему книга полезна"}},
-    ...
-  ]
-}}
-
-Верни ровно 10 элементов. Никаких пояснений вне JSON.
-"""
+            prompt = render_generator_prompt(
+                "book_recommendations",
+                brand_text=brand_text,
+                avatar_text=avatar_text,
+                pains_text=pains_text,
+                desires_text=desires_text,
+                lang_name=lang_name,
+            )
+            if not prompt:
+                return {"success": False, "error": "Missing generator prompt: book_recommendations"}
 
             ai_response = self.get_ai_response(
                 prompt,
@@ -1153,42 +997,23 @@ seo_keywords = [ ... ]
 }
 """
 
-                requirements_prompt = f"""
-Ты — опытный продуктолог и методолог.
-Сначала сформируй ТРЕБОВАНИЯ (не результат) для генерации продукта данного типа.
-
-ВХОДНЫЕ ДАННЫЕ
-- Бренд: {brand_text}
-- Тип продукта: {type_name}
-- Ценность типа: {type_value or "не указана"}
-- Цель типа: {type_goal or "не указана"}
-
-ПОРТРЕТ И МОТИВАЦИЯ АУДИТОРИИ
-- Портрет ЦА: {avatar_text}
-- Боли: {pains_text}
-- Желания: {desires_text}
-- Возражения: {objections_text}
-
-WORDSTAT (ИЗБРАННОЕ)
-{favorites_text}
-{extra_context_block}
-
-ЗАДАЧА
-Сгенерируй 9 требований: по одному требованию на каждый блок результата:
-1) name (вместе с short_description),
-2) packages,
-3–9) 7 частей структуры: audience, transformation, metrics, method, lesson_format (формат взаимодействия), program_modules, packaging.
-
-ТРЕБОВАНИЯ К ТРЕБОВАНИЯМ
-- Пиши на {lang_name} языке.
-- Каждое требование — это чёткая инструкция для генерации соответствующего блока (что включить, что исключить, сколько элементов).
-- Обязательный акцент на типе продукта: short_description должен начинаться с "{type_name}:".
-- Не выдумывай лишние блоки: только перечисленные 9.
-- Wordstat использовать как источники формулировок/контекста: 5–12 фраз суммарно по продукту (не обязательно в каждом блоке).
-
-ФОРМАТ ОТВЕТА: СТРОГО JSON по схеме:
-{requirements_schema_hint}
-"""
+                requirements_prompt = render_generator_prompt(
+                    "product_requirements_prompt",
+                    brand_text=brand_text,
+                    type_name=type_name,
+                    type_value=type_value or "не указана",
+                    type_goal=type_goal or "не указана",
+                    avatar_text=avatar_text,
+                    pains_text=pains_text,
+                    desires_text=desires_text,
+                    objections_text=objections_text,
+                    favorites_text=favorites_text,
+                    extra_context_block=extra_context_block,
+                    lang_name=lang_name,
+                    requirements_schema_hint=requirements_schema_hint,
+                )
+                if not requirements_prompt:
+                    return {"success": False, "error": "Missing generator prompt: product_requirements_prompt"}
 
                 req_raw = self.get_ai_response(
                     requirements_prompt,
@@ -1240,22 +1065,16 @@ WORDSTAT (избранное):
 """
 
             def _generate_block(requirement_key: str, requirement_text: str, schema_hint: str, max_tokens: int = 900) -> Dict[str, Any]:
-                prompt = f"""
-Ты — продуктолог.
-Сгенерируй ТОЛЬКО один блок продукта: {requirement_key}.
-
-{common_context}
-
-ТРЕБОВАНИЕ ДЛЯ ЭТОГО БЛОКА
-{requirement_text}
-
-ДОПОЛНИТЕЛЬНО
-- Пиши на {lang_name} языке.
-- Верни список "phrases_used" (0–5 фраз), которые реально использовал(а) из Wordstat в этом блоке.
-
-ФОРМАТ ОТВЕТА: СТРОГО валидный JSON по схеме:
-{schema_hint}
-"""
+                prompt = render_generator_prompt(
+                    "product_block_prompt",
+                    requirement_key=requirement_key,
+                    common_context=common_context,
+                    requirement_text=requirement_text,
+                    lang_name=lang_name,
+                    schema_hint=schema_hint,
+                )
+                if not prompt:
+                    return {"success": False, "error": "Missing generator prompt: product_block_prompt"}
                 raw = self.get_ai_response(
                     prompt,
                     max_tokens=max_tokens,
@@ -1464,52 +1283,17 @@ class StoryGenerationMixin:
         try:
             lang_name = "русском" if language == "ru" else "английском"
 
-            prompt = f"""
-Ты - профессиональный сценарист и SMM-специалист, который создаёт вовлекающие истории для социальных сетей.
-
-ЗАДАЧА: Создай увлекательную историю (мини-сериал) из {episode_count} эпизодов на {lang_name} языке.
-
-ТЕМА БИЗНЕСА: {topic_name}
-
-ОСНОВА ДЛЯ ИСТОРИИ:
-Тренд: {trend_title}
-Описание: {trend_description}
-
-ЦЕЛЕВАЯ АУДИТОРИЯ:
-Хотелки и желания: {client_desires}
-
-ИНСТРУКЦИИ:
-1. Придумай общий заголовок истории (1 предложение, до 100 символов)
-2. Создай {episode_count} эпизодов, которые:
-   - Вовлекают аудиторию через эмоциональную связь
-   - Учитывают желания целевой аудитории ({client_desires})
-   - Связаны с темой бизнеса "{topic_name}"
-   - Основаны на тренде "{trend_title}"
-   - Имеют развитие сюжета от эпизода к эпизоду
-   - Держат интригу и мотивируют читать дальше
-   - Каждый эпизод имеет заголовок (20-80 символов)
-
-3. История должна быть:
-   - Вовлекающей и эмоциональной
-   - С человеческими персонажами (если уместно)
-   - С развитием конфликта или интриги
-   - Связана с желаниями аудитории
-
-ПРИМЕРЫ ХОРОШИХ ИСТОРИЙ:
-- "Маша на занятиях по танцам увидела Колю" → "Коля пригласил Машу потанцевать" → "На следующее занятие он не пришел" → "Он вернулся в новой рубашке" → "Они встретились глазами"
-- "Анна решила изменить свою жизнь" → "Первое занятие было тяжелым" → "Через неделю она почувствовала изменения" → "Коллеги заметили перемены" → "Анна обрела уверенность"
-
-ФОРМАТ ОТВЕТА (строго JSON):
-{{
-    "title": "Общий заголовок истории",
-    "episodes": [
-        {{"order": 1, "title": "Заголовок эпизода 1"}},
-        ...
-        {{"order": {episode_count}, "title": "Заголовок эпизода {episode_count}"}}
-    ]
-}}
-
-Ответь ТОЛЬКО JSON, без дополнительных комментариев."""
+            prompt = render_generator_prompt(
+                "story_episodes_prompt",
+                episode_count=episode_count,
+                lang_name=lang_name,
+                topic_name=topic_name,
+                trend_title=trend_title,
+                trend_description=trend_description,
+                client_desires=client_desires,
+            )
+            if not prompt:
+                return {"success": False, "error": "Missing generator prompt: story_episodes_prompt"}
 
             logger.info("Генерация истории на основе тренда: %s", trend_title[:50])
 
@@ -1629,65 +1413,53 @@ class StoryGenerationMixin:
             length_ru = _format_length_value(length)
             lang_name = "русском" if language == "ru" else "английском"
 
-            prompt = f"""
-Ты - профессиональный копирайтер для социальных сетей.
-
-ЗАДАЧА: Создай пост (≈{length_ru}) для социальных сетей в {tone_ru} стиле на {lang_name} языке.
-
-КОНТЕКСТ ИСТОРИИ:
-- Общий заголовок истории: {story_title}
-- Эпизод {episode_number} из {total_episodes}: {episode_title}
-
-ТЕМА БИЗНЕСА: {topic_name}
-
-ДАННЫЕ О ЦЕЛЕВОЙ АУДИТОРИИ:
-Аватар: {avatar}
-Боли: {pains}
-Хотелки: {desires}
-Возражения: {objections}
-
-ИНСТРУКЦИИ:
-1. Создай привлекательный заголовок поста (до 100 символов)
-2. Напиши основной текст, который:
-   - Развивает сюжет эпизода "{episode_title}"
-   - Связан с общей историей "{story_title}"
-   - Учитывает желания и боли аудитории
-   - Связан с темой бизнеса "{topic_name}"
-   - Имеет {tone_ru} тон
-   - Соответствует длине: {length_ru}
-   - Создаёт эмоциональную связь с читателем
-   - Если это не последний эпизод, создаёт интригу для продолжения
-"""
-
             if episode_number == 1:
-                prompt += """   - Это первый эпизод - заинтригуй читателя и представь главного героя
-"""
+                episode_extra_line = render_generator_prompt("story_post_episode_first_line")
             elif episode_number == total_episodes:
-                prompt += """   - Это финальный эпизод - создай удовлетворяющую концовку
-"""
+                episode_extra_line = render_generator_prompt("story_post_episode_last_line")
             else:
-                prompt += """   - Это промежуточный эпизод - развивай сюжет и поддерживай интригу
-"""
+                episode_extra_line = render_generator_prompt("story_post_episode_middle_line")
 
+            hashtags_block = ""
             if include_hashtags:
-                prompt += f"""3. Добавь {max_hashtags} релевантных хэштега
-"""
+                hashtags_block = render_generator_prompt(
+                    "post_text_hashtags_block",
+                    max_hashtags=max_hashtags,
+                )
 
+            additional_block = ""
             if additional_instructions:
-                prompt += f"""
-ДОПОЛНИТЕЛЬНЫЕ ТРЕБОВАНИЯ:
-{additional_instructions}
-"""
+                additional_block = render_generator_prompt(
+                    "post_text_additional_block",
+                    additional_instructions=additional_instructions,
+                )
 
-            prompt += """
-ФОРМАТ ОТВЕТА (строго JSON):
-{
-    "title": "Заголовок поста",
-    "text": "Основной текст поста",
-    "hashtags": ["хэштег1", "хэштег2", "хэштег3"]
-}
+            response_format_block = render_generator_prompt("post_text_response_format_block")
 
-Ответь ТОЛЬКО JSON, без дополнительных комментариев."""
+            prompt = render_generator_prompt(
+                "story_post_from_episode_prompt",
+                length_ru=length_ru,
+                tone_ru=tone_ru,
+                lang_name=lang_name,
+                story_title=story_title,
+                episode_number=episode_number,
+                total_episodes=total_episodes,
+                episode_title=episode_title,
+                topic_name=topic_name,
+                avatar=avatar,
+                pains=pains,
+                desires=desires,
+                objections=objections,
+                episode_extra_line=episode_extra_line,
+                hashtags_block=hashtags_block,
+                additional_block=additional_block,
+                response_format_block=response_format_block,
+            )
+            if not prompt:
+                return {
+                    "success": False,
+                    "error": "Missing generator prompt: story_post_from_episode_prompt",
+                }
 
             logger.info(
                 "Генерация поста для эпизода %s/%s: %s",

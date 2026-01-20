@@ -10,6 +10,12 @@ type WordstatRequestPayload = {
   group_name?: string;
 };
 
+type WordstatSeedGroupsResponse = {
+  success: boolean;
+  queries: WordstatQuery[];
+  seed_groups?: Record<string, string[]>;
+};
+
 export const wordstatApi = {
   list: async (): Promise<WordstatQuery[]> => {
     return apiFetch<WordstatQuery[]>('/wordstat/');
@@ -27,6 +33,12 @@ export const wordstatApi = {
     return apiFetch<WordstatQuery>('/wordstat/', {
       method: 'POST',
       body: payload,
+    });
+  },
+
+  generateSeedGroups: async (): Promise<WordstatSeedGroupsResponse> => {
+    return apiFetch<WordstatSeedGroupsResponse>('/wordstat/seed-from-settings/', {
+      method: 'POST',
     });
   },
 

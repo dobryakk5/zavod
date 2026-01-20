@@ -1,0 +1,40 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls %}
+
+{% block result_list %}
+  {% if grouped_results %}
+    <div class="results">
+      {% for group in grouped_results %}
+        <h2 class="generator-prompt-group">{{ group.label }}</h2>
+        <table class="results">
+          <thead>
+            <tr>
+              <th scope="col">Код</th>
+              <th scope="col">Комментарий</th>
+              <th scope="col">Обновлено</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if group.objects %}
+              {% for obj in group.objects %}
+                <tr>
+                  <th scope="row">
+                    <a href="{% url opts|admin_urlname:'change' obj.pk %}">{{ obj.code }}</a>
+                  </th>
+                  <td>{{ obj.comment|default:"-" }}</td>
+                  <td>{{ obj.updated_at|date:"Y-m-d H:i" }}</td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr class="empty-row">
+                <td colspan="3">Нет промптов в группе.</td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      {% endfor %}
+    </div>
+  {% else %}
+    {{ block.super }}
+  {% endif %}
+{% endblock %}

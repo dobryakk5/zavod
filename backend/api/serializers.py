@@ -702,6 +702,7 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "slug",
             "brand_name",
             "niche",
+            "product_service",
             "timezone",
             "avatar",
             "pains",

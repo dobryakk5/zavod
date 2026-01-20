@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import foto_video_gen
 from .ai_generator_base import logger
+from .prompt_settings import render_generator_prompt
 from .system_settings import get_photo_prompt_instructions, get_video_prompt_instructions
 
 
@@ -93,34 +94,20 @@ class MediaGenerationMixin:
             extra_photo_instructions = get_photo_prompt_instructions().strip()
             admin_instructions_block = ""
             if extra_photo_instructions:
-                admin_instructions_block = (
-                    "\nДополнительные пожелания от администратора (учти их в ответе):\n"
-                    f"{extra_photo_instructions}\n"
+                admin_instructions_block = render_generator_prompt(
+                    "image_prompt_admin_block",
+                    extra_photo_instructions=extra_photo_instructions,
                 )
 
-            prompt = f"""
-Ты - эксперт по созданию промптов для генерации изображений.
-
-ЗАДАЧА: Создай детальный промпт на английском языке для генерации изображения к посту в социальных сетях.
-
-ПОСТ:
-Заголовок: {post_title}
-Текст: {post_text[:500]}
-
-ИНСТРУКЦИИ:
-1. Промпт должен быть на английском языке
-2. Опиши визуальную сцену, которая отражает суть поста
-3. Включи стиль изображения (например, "professional photography", "modern digital art", "minimalist design")
-4. Укажи освещение, цветовую гамму, композицию
-5. Промпт должен быть 1-2 предложения, очень конкретный и визуальный
-6. Избегай текста на изображении
-7. Фокусируйся на визуальной метафоре или прямом представлении темы
-{admin_instructions_block}
-ФОРМАТ ОТВЕТА: Только промпт на английском языке, без дополнительных комментариев.
-
-Пример хорошего промпта:
-"A professional, modern office space with a diverse team collaborating around a sleek conference table, warm natural lighting through large windows, minimalist contemporary design, corporate photography style, high quality, focused composition"
-"""
+            prompt = render_generator_prompt(
+                "image_prompt_base",
+                post_title=post_title,
+                post_text=post_text[:500],
+                admin_instructions_block=admin_instructions_block,
+            )
+            if not prompt:
+                logger.error("Missing generator prompt: image_prompt_base")
+                return None
 
             logger.info("Генерация промпта для изображения поста: %s", post_title[:50])
 
@@ -153,30 +140,31 @@ class MediaGenerationMixin:
             extra_video_instructions = (extra_instructions or "").strip()
             if not extra_video_instructions:
                 extra_video_instructions = get_video_prompt_instructions().strip()
-            admin_instructions_block = ""
-            if extra_video_instructions:
-                admin_instructions_block = (
-                    "\nДополнительные пожелания от администратора (учти их в ответе):\n"
-                    f"{extra_video_instructions}\n"
-                )
 
             if not base_instructions:
-                base_instructions = """Ты — режиссёр и сценарист коротких вертикальных видео TikTok/Reels. На входе у тебя текст поста.
+                base_instructions = render_generator_prompt("video_prompt_base_instructions")
+                if not base_instructions:
+                    logger.error("Missing generator prompt: video_prompt_base_instructions")
+                    return None
 
-1. Сделай вовлекающий, визуально насыщенный prompt на английском языке.
-2. Описывай сцену, настроение, движения камеры, переходы, ключевые визуальные объекты.
-3. Стиль — современный, динамичный, вдохновляющий. Максимум 3 предложения.
-4. Не добавляй хештеги, кавычки и технические команды."""
+            admin_instructions_block = ""
+            if extra_video_instructions:
+                admin_instructions_block = render_generator_prompt(
+                    "video_prompt_admin_block",
+                    extra_video_instructions=extra_video_instructions,
+                )
 
-            prompt = f"""{base_instructions}
-{admin_instructions_block}
-
-Пост ({lang_name}):
-Заголовок: {post_title}
-Текст: {post_text[:800]}
-
-Выход: только английский prompt для генерации видео.
-"""
+            prompt = render_generator_prompt(
+                "video_prompt_main",
+                base_instructions=base_instructions,
+                admin_instructions_block=admin_instructions_block,
+                lang_name=lang_name,
+                post_title=post_title,
+                post_text=post_text[:800],
+            )
+            if not prompt:
+                logger.error("Missing generator prompt: video_prompt_main")
+                return None
 
             logger.info("Генерация промпта для видео по посту: %s", post_title[:50])
             ai_response = self.get_ai_response(prompt, max_tokens=300, temperature=0.7)
@@ -483,12 +471,16 @@ class MediaGenerationMixin:
             snippet = snippet[:900] + "..."
 
         lang_label = "Russian" if language == "ru" else "English"
-        return (
-            "Create a vertical 9:16 short-form social media video with cinematic motion.\n"
-            f"Base language of the provided script: {lang_label}.\n"
-            f"Title: {post_title}.\n"
-            f"Script idea: {snippet}"
+        prompt = render_generator_prompt(
+            "video_prompt_fallback",
+            lang_label=lang_label,
+            post_title=post_title,
+            snippet=snippet,
         )
+        if not prompt:
+            logger.error("Missing generator prompt: video_prompt_fallback")
+            return ""
+        return prompt
 
 
 __all__ = ["MediaGenerationMixin", "merge_video_prompt_with_additional"]

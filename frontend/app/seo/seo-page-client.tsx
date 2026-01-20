@@ -2,13 +2,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Check, Info, Loader2, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import { seoApi } from '@/lib/api/seo';
 import { wordstatApi } from '@/lib/api/wordstat';
 import { googleApi } from '@/lib/api/google';
+import { clientApi } from '@/lib/api/client';
 import type {
   GoogleCompetitorsResolvedRow,
   GoogleCseSearchResult,
@@ -20,6 +21,7 @@ import { useRole } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -150,6 +152,7 @@ const buildUniqueSnippet = (value: string, maxLen: number = 240) => {
 
 export default function SEOPageClient() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<'seo' | 'wordstat' | 'competitors'>('seo');
   const [seoSets, setSeoSets] = useState<SEOKeywordSet[]>([]);
   const [loading, setLoading] = useState(true);
@@ -159,6 +162,7 @@ export default function SEOPageClient() {
   const [wordstatLoading, setWordstatLoading] = useState(true);
   const [wordstatRefreshing, setWordstatRefreshing] = useState(false);
   const [wordstatSubmitting, setWordstatSubmitting] = useState(false);
+  const [wordstatSeedGenerating, setWordstatSeedGenerating] = useState(false);
   const [wordstatGroup, setWordstatGroup] = useState('');
   const [selectedQueryId, setSelectedQueryId] = useState<number | null>(null);
   const [phraseCounts, setPhraseCounts] = useState<Record<string, number>>({});
@@ -189,6 +193,7 @@ export default function SEOPageClient() {
   const [autoGoogle, setAutoGoogle] = useState(false);
   const [autoGoogleDoneFor, setAutoGoogleDoneFor] = useState<string | null>(null);
   const [activeCompetitorDomain, setActiveCompetitorDomain] = useState<string | null>(null);
+  const [projectDataDialogOpen, setProjectDataDialogOpen] = useState(false);
   const { canEdit } = useRole();
 
   const loadSeoSets = async (opts?: { silent?: boolean }) => {
@@ -410,6 +415,61 @@ export default function SEOPageClient() {
   const handleWordstatGroupFetch = () => {
     const phrases = extractPhrases(wordstatGroup);
     fetchWordstatAndRedirect({ phrases });
+  };
+
+  const handleGenerateWordstatSeedGroups = async () => {
+    if (!canEdit || wordstatSeedGenerating) return;
+    setWordstatSeedGenerating(true);
+    try {
+      const settings = await clientApi.getSettings();
+      const niche = (settings.niche || '').trim();
+      const product = (settings.product_service || '').trim();
+      const avatar = (settings.avatar || '').trim();
+      if (!niche || !product || !avatar) {
+        setProjectDataDialogOpen(true);
+        return;
+      }
+
+      const data = await wordstatApi.generateSeedGroups();
+      const created = data.queries || [];
+      if (!created.length) {
+        toast.error('Не удалось создать Wordstat группы');
+        return;
+      }
+
+      setWordstatQueries((prev) => {
+        const existing = new Map(prev.map((item) => [item.id, item]));
+        const merged: WordstatQuery[] = [];
+        created.forEach((item) => {
+          if (!item?.id) return;
+          existing.delete(item.id);
+          merged.push(item);
+        });
+        merged.push(...existing.values());
+        return merged;
+      });
+      setSelectedQueryId(created[0]?.id ?? null);
+      toast.success('Wordstat группы созданы');
+    } catch (error) {
+      console.error('Failed to generate Wordstat seed groups', error);
+      if (error instanceof ApiError) {
+        try {
+          const payload = error.body ? JSON.parse(error.body) : null;
+          if (payload?.missing_fields) {
+            setProjectDataDialogOpen(true);
+            return;
+          }
+          if (payload?.error) {
+            toast.error(String(payload.error));
+            return;
+          }
+        } catch {}
+      }
+      const message = error instanceof Error ? error.message : 'Не удалось создать Wordstat группы';
+      toast.error(message);
+    } finally {
+      setWordstatSeedGenerating(false);
+    }
   };
 
   const rerunWordstatFromText = async (value: string, query?: WordstatQuery) => {
@@ -748,6 +808,28 @@ export default function SEOPageClient() {
 
   return (
     <div className="space-y-6">
+      <Dialog open={projectDataDialogOpen} onOpenChange={setProjectDataDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Введите данные проекта</DialogTitle>
+            <DialogDescription>
+              Для автогенерации Wordstat заполните нишу, продукт и ЦА в настройках.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => {
+                setProjectDataDialogOpen(false);
+                router.push('/settings?tab=client');
+              }}
+            >
+              Перейти к вводу
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="flex flex-col gap-2">
         <h1 className="text-3xl font-bold">SEO</h1>
         <p className="text-muted-foreground">
@@ -940,6 +1022,41 @@ export default function SEOPageClient() {
         </TabsContent>
 
         <TabsContent value="wordstat" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Автогенерация Wordstat</CardTitle>
+              <CardDescription>
+                Создаёт 4 группы по 3 seed-запроса на основе ниши, продукта и ЦА из настроек проекта.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Button
+                  type="button"
+                  onClick={handleGenerateWordstatSeedGroups}
+                  disabled={!canEdit || wordstatSeedGenerating}
+                >
+                  {wordstatSeedGenerating ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Генерация...
+                    </>
+                  ) : (
+                    'Сгенерировать группы Wordstat'
+                  )}
+                </Button>
+                {!canEdit && (
+                  <p className="text-xs text-muted-foreground">
+                    Доступно владельцу и редактору.
+                  </p>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Мы автоматически создадим группы: Коммерческие, Категорийные, Проблемные, Альтернативные формулировки.
+              </p>
+            </CardContent>
+          </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle>Wordstat</CardTitle>

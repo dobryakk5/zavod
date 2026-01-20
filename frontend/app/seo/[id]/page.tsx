@@ -22,6 +22,7 @@ export default function WordstatDetailPage() {
   const [filterType, setFilterType] = useState<WordstatResultType | 'all'>('top_request');
   const [phraseDraft, setPhraseDraft] = useState<string>('');
   const [groupNameDraft, setGroupNameDraft] = useState<string>('');
+  const [favoriteCounts, setFavoriteCounts] = useState<Record<string, number>>({});
 
   const getQueryText = (data: WordstatQuery | null) => {
     if (!data) return '';
@@ -46,6 +47,21 @@ export default function WordstatDetailPage() {
       });
   };
 
+  const normalizePhrase = (value: string) => (value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+  const buildFavoriteCounts = (items: WordstatQuery[]) => {
+    const counts: Record<string, number> = {};
+    items.forEach((item) => {
+      item.results.forEach((result) => {
+        if (result.result_type !== 'favorite') return;
+        const key = normalizePhrase(result.phrase);
+        if (!key) return;
+        counts[key] = (counts[key] || 0) + 1;
+      });
+    });
+    return counts;
+  };
+
   const loadQuery = async () => {
     if (!params?.id) return;
     setLoading(true);
@@ -62,8 +78,18 @@ export default function WordstatDetailPage() {
     }
   };
 
+  const loadFavorites = async () => {
+    try {
+      const data = await wordstatApi.list();
+      setFavoriteCounts(buildFavoriteCounts(data));
+    } catch (error) {
+      console.error('Failed to load Wordstat favorites list', error);
+    }
+  };
+
   useEffect(() => {
     loadQuery();
+    loadFavorites();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params?.id]);
 
@@ -189,6 +215,14 @@ export default function WordstatDetailPage() {
 
   const handleResultTypeChange = async (resultId: number, result_type: WordstatResultType) => {
     if (!query) return;
+    const target = query.results.find((r) => r.id === resultId);
+    if (!target) return;
+    const normalized = normalizePhrase(target.phrase);
+    const existingFavoriteCount = favoriteCounts[normalized] || 0;
+    if (result_type === 'favorite' && target.result_type !== 'favorite' && existingFavoriteCount > 0) {
+      toast('Фраза уже отмечена как избранная в другой группе.');
+      return;
+    }
     setUpdating(true);
     setQuery((prev) =>
       prev
@@ -198,12 +232,27 @@ export default function WordstatDetailPage() {
           }
         : prev
     );
+    if (normalized) {
+      setFavoriteCounts((prev) => {
+        const delta = (target.result_type === 'favorite' ? -1 : 0) + (result_type === 'favorite' ? 1 : 0);
+        if (delta === 0) return prev;
+        const next = { ...prev };
+        const nextCount = (next[normalized] || 0) + delta;
+        if (nextCount <= 0) {
+          delete next[normalized];
+        } else {
+          next[normalized] = nextCount;
+        }
+        return next;
+      });
+    }
     try {
       await wordstatApi.updateResultType(resultId, result_type);
     } catch (error) {
       console.error('Failed to update Wordstat result type', error);
       toast.error('Не удалось обновить метку фразы');
       loadQuery();
+      loadFavorites();
     } finally {
       setUpdating(false);
     }
@@ -212,7 +261,7 @@ export default function WordstatDetailPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <Button variant="ghost" onClick={() => router.push('/seo')} className="p-2">
+        <Button variant="ghost" onClick={() => router.push('/seo?tab=wordstat')} className="p-2">
           <ArrowLeft className="h-8 w-8" />
         </Button>
         <div>
@@ -345,65 +394,84 @@ export default function WordstatDetailPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredResults.map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell
-                        className={`${
-                          row.result_type === 'skip'
-                            ? 'text-slate-400'
-                            : row.result_type === 'favorite'
-                              ? 'text-emerald-700'
-                              : ''
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => handleAppendPhrase(row.phrase)}
-                          disabled={updating}
-                          className="text-left underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-70"
-                          title="Добавить фразу в запрос"
+                  {filteredResults.map((row) => {
+                    const normalized = normalizePhrase(row.phrase);
+                    const favoriteCount = favoriteCounts[normalized] || 0;
+                    const isFavoriteElsewhere = row.result_type !== 'favorite' && favoriteCount > 0;
+                    const disableFavorite = updating || (row.result_type !== 'favorite' && favoriteCount > 0);
+                    return (
+                      <TableRow key={row.id}>
+                        <TableCell
+                          className={`${
+                            row.result_type === 'skip'
+                              ? 'text-slate-400'
+                              : row.result_type === 'favorite'
+                                ? 'text-emerald-700'
+                                : ''
+                          }`}
                         >
-                          {row.phrase}
-                        </button>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <button
-                            type="button"
-                            onClick={() => handleResultTypeChange(row.id, 'favorite')}
-                            className={`rounded-md p-2 transition ${
-                              row.result_type === 'favorite' ? 'text-emerald-700' : 'text-slate-600 hover:text-emerald-700'
-                            } ${updating ? 'opacity-70' : ''}`}
-                            aria-label="Добавить в избранное"
-                          >
-                            <ThumbsUp className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleResultTypeChange(row.id, 'skip')}
-                            className={`rounded-md p-2 transition ${
-                              row.result_type === 'skip' ? 'text-slate-400' : 'text-slate-600 hover:text-slate-400'
-                            } ${updating ? 'opacity-70' : ''}`}
-                            aria-label="Отметить как мимо"
-                          >
-                            <ThumbsDown className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{row.count.toLocaleString('ru-RU')}</TableCell>
-                      <TableCell className="text-right">
-                        <Badge variant="outline" className="text-xs">
-                          {row.result_type === 'association'
-                            ? 'Ассоциация'
-                            : row.result_type === 'favorite'
-                              ? 'Избранное'
-                              : row.result_type === 'skip'
-                                ? 'Мимо'
-                                : 'Запрос'}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleAppendPhrase(row.phrase)}
+                              disabled={updating}
+                              className="text-left underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-70"
+                              title="Добавить фразу в запрос"
+                            >
+                              {row.phrase}
+                            </button>
+                            {isFavoriteElsewhere ? (
+                              <Badge variant="secondary" className="text-[10px] font-medium">
+                                Уже в избранном
+                              </Badge>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleResultTypeChange(row.id, 'favorite')}
+                              disabled={disableFavorite}
+                              title={
+                                disableFavorite && row.result_type !== 'favorite'
+                                  ? 'Фраза уже в избранном (другая группа)'
+                                  : 'Добавить в избранное'
+                              }
+                              className={`rounded-md p-2 transition ${
+                                row.result_type === 'favorite' ? 'text-emerald-700' : 'text-slate-600 hover:text-emerald-700'
+                              } ${disableFavorite ? 'opacity-50' : ''}`}
+                              aria-label="Добавить в избранное"
+                            >
+                              <ThumbsUp className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleResultTypeChange(row.id, 'skip')}
+                              className={`rounded-md p-2 transition ${
+                                row.result_type === 'skip' ? 'text-slate-400' : 'text-slate-600 hover:text-slate-400'
+                              } ${updating ? 'opacity-70' : ''}`}
+                              aria-label="Отметить как мимо"
+                            >
+                              <ThumbsDown className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{row.count.toLocaleString('ru-RU')}</TableCell>
+                        <TableCell className="text-right">
+                          <Badge variant="outline" className="text-xs">
+                            {row.result_type === 'association'
+                              ? 'Ассоциация'
+                              : row.result_type === 'favorite'
+                                ? 'Избранное'
+                                : row.result_type === 'skip'
+                                  ? 'Мимо'
+                                  : 'Запрос'}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </>

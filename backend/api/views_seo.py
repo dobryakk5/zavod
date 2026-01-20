@@ -15,8 +15,18 @@ from config.celery import app as celery_app
 
 from core import tasks
 from core.ai_generator import AIContentGenerator
-from core.ai_generator_seo import analyze_seo_text, cluster_wordstat_phrases, normalize_phrase
-from core.generation_events import record_generation_event
+from core.ai_generator_seo import (
+    analyze_seo_text,
+    cluster_wordstat_phrases,
+    generate_wordstat_seed_groups,
+    normalize_phrase,
+)
+from core.generation_events import (
+    build_limit_error_payload,
+    get_trial_limit,
+    is_trial_client,
+    record_generation_event,
+)
 from core.models import (
     Article,
     ArticleBlock,
@@ -982,6 +992,25 @@ def _collect_wordstat_data(
     return aggregated, total_count, responses
 
 
+def _build_wordstat_request_phrase(phrases: list[str]) -> str:
+    label = phrases[0] if phrases else ""
+    if len(phrases) > 1:
+        label = f"{label} (+{len(phrases) - 1})"
+    return label[:255]
+
+
+def _check_wordstat_generation_limit(client, needed: int):
+    if not is_trial_client(client):
+        return None
+    limit = get_trial_limit(GenerationEvent.EVENT_WORDSTAT_QUERY)
+    used = GenerationEvent.objects.filter(client=client, event_type=GenerationEvent.EVENT_WORDSTAT_QUERY).count()
+    if used + needed > limit:
+        payload = build_limit_error_payload(GenerationEvent.EVENT_WORDSTAT_QUERY, used, limit)
+        payload["needed"] = needed
+        return Response(payload, status=status.HTTP_403_FORBIDDEN)
+    return None
+
+
 class WordstatQueryViewSet(viewsets.ModelViewSet):
     """Получение и сохранение Wordstat-результатов для клиента."""
 
@@ -990,7 +1019,7 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_permissions(self):
-        if self.action in {"create", "append_phrases", "partial_update", "destroy"}:
+        if self.action in {"create", "append_phrases", "partial_update", "destroy", "seed_from_settings"}:
             return [IsTenantOwnerOrEditor()]
         return super().get_permissions()
 
@@ -1002,6 +1031,163 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
                 Prefetch("results", queryset=WordstatResult.objects.order_by("-count", "phrase"))
             )
             .order_by("-created_at")
+        )
+
+    @action(detail=False, methods=["post"], url_path="seed-from-settings")
+    def seed_from_settings(self, request):
+        client_obj = get_active_client(request.user)
+        niche = (client_obj.niche or "").strip()
+        product_service = (client_obj.product_service or "").strip()
+        audience = (client_obj.avatar or "").strip()
+
+        missing_fields: list[str] = []
+        if not niche:
+            missing_fields.append("niche")
+        if not product_service:
+            missing_fields.append("product_service")
+        if not audience:
+            missing_fields.append("avatar")
+
+        if missing_fields:
+            return Response(
+                {"error": "Введите данные проекта", "missing_fields": missing_fields},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        seed_result = generate_wordstat_seed_groups(
+            niche=niche,
+            product_service=product_service,
+            audience=audience,
+        )
+        if not seed_result.get("success"):
+            return Response(
+                {
+                    "error": "Не удалось сгенерировать seed-запросы",
+                    "details": seed_result.get("error"),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        seed_groups = seed_result.get("groups") or {}
+        group_order = [
+            "Коммерческие",
+            "Категорийные",
+            "Проблемные",
+            "Альтернативные формулировки",
+        ]
+
+        prepared: list[tuple[str, list[str]]] = []
+        missing_groups: list[str] = []
+        for group_name in group_order:
+            phrases = _parse_phrases(seed_groups.get(group_name, []))
+            if len(phrases) < 3:
+                missing_groups.append(group_name)
+            prepared.append((group_name, phrases[:3]))
+
+        if missing_groups:
+            return Response(
+                {
+                    "error": "Недостаточно seed-фраз для групп",
+                    "missing_groups": missing_groups,
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        limit_response = _check_wordstat_generation_limit(client_obj, len(prepared))
+        if limit_response:
+            return limit_response
+
+        try:
+            ws_client = get_wordstat_client()
+            user_info = ws_client.fetch_user_info()
+            user_info_data = user_info.get("userInfo") if isinstance(user_info, dict) else {}
+            payloads: list[dict[str, object]] = []
+
+            for group_name, phrases in prepared:
+                aggregated, total_count, responses = _collect_wordstat_data(
+                    ws_client=ws_client,
+                    phrases=phrases,
+                    regions=[],
+                    devices=[],
+                    include_parent=False,
+                )
+                raw_response_data = (
+                    responses[0]["response"]
+                    if len(responses) == 1
+                    else {"group_phrases": phrases, "responses": responses}
+                )
+                payloads.append(
+                    {
+                        "group_name": group_name,
+                        "phrases": phrases,
+                        "aggregated": aggregated,
+                        "total_count": total_count,
+                        "raw_response": raw_response_data,
+                    }
+                )
+        except WordstatError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logger.exception("Wordstat seed request failed")
+            return Response(
+                {"error": "Не удалось получить данные Wordstat"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        created_queries: list[WordstatQuery] = []
+        with transaction.atomic():
+            for payload in payloads:
+                phrases = payload["phrases"]
+                request_phrase_value = _build_wordstat_request_phrase(phrases)
+                group_name = str(payload.get("group_name") or "").strip() or request_phrase_value
+                group_name = group_name[:255]
+                query = WordstatQuery.objects.create(
+                    client=client_obj,
+                    group_name=group_name,
+                    phrases=phrases,
+                    request_phrase=request_phrase_value,
+                    total_count=payload["total_count"],
+                    include_parent=False,
+                    regions=[],
+                    devices=[],
+                    user_login=user_info_data.get("login", ""),
+                    limit_per_second=user_info_data.get("limitPerSecond"),
+                    daily_limit=user_info_data.get("dailyLimit"),
+                    daily_limit_remaining=user_info_data.get("dailyLimitRemaining"),
+                    raw_response=payload["raw_response"],
+                )
+
+                results_to_create = []
+                for (phrase_text, result_type), count in sorted(
+                    payload["aggregated"].items(), key=lambda item: (-item[1], item[0][0])
+                ):
+                    results_to_create.append(
+                        WordstatResult(
+                            query=query,
+                            phrase=phrase_text,
+                            count=int(count or 0),
+                            result_type=result_type,
+                        )
+                    )
+
+                if results_to_create:
+                    WordstatResult.objects.bulk_create(results_to_create)
+
+                record_generation_event(
+                    client_obj,
+                    GenerationEvent.EVENT_WORDSTAT_QUERY,
+                    meta={"phrases_count": len(phrases), "seed_group": group_name},
+                )
+
+                created_queries.append(query)
+
+        serializer = self.get_serializer(created_queries, many=True)
+        return Response(
+            {
+                "success": True,
+                "queries": serializer.data,
+                "seed_groups": seed_groups,
+            }
         )
 
     def create(self, request, *args, **kwargs):

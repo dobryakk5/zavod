@@ -22,6 +22,13 @@ class Client(models.Model):
         verbose_name="Ниша",
         help_text='Например "пиццерия" или "школа психологии"',
     )
+    product_service = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="Продукт/услуга",
+        help_text='Например "доставка пиццы" или "онлайн-курс по йоге"',
+    )
     slug = models.SlugField(unique=True)
     timezone = models.CharField(max_length=64, default="Europe/Helsinki")
 
@@ -1889,6 +1896,47 @@ class SystemSetting(models.Model):
             },
         )
         return obj
+
+
+# ============================================================================
+# Generator prompts
+# ============================================================================
+
+class GeneratorPrompt(models.Model):
+    """Справочник промптов для генераторов контента (редактируется в админке)."""
+
+    GROUP_POSTS = "posts"
+    GROUP_SEO = "seo"
+    GROUP_ARTICLES = "articles"
+    GROUP_WORDSTAT = "wordstat"
+    GROUP_PRODUCTS = "products"
+    GROUP_MEDIA = "media"
+    GROUP_SERVICE = "service"
+
+    GROUP_CHOICES = [
+        (GROUP_POSTS, "Посты"),
+        (GROUP_SEO, "SEO"),
+        (GROUP_ARTICLES, "Статьи"),
+        (GROUP_WORDSTAT, "Wordstat"),
+        (GROUP_PRODUCTS, "Продукты"),
+        (GROUP_MEDIA, "Медиа"),
+        (GROUP_SERVICE, "Служебные"),
+    ]
+
+    code = models.SlugField(max_length=120, unique=True)
+    group = models.CharField(max_length=20, choices=GROUP_CHOICES, default=GROUP_POSTS)
+    prompt = models.TextField()
+    comment = models.TextField(blank=True, help_text="Где используется")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("code",)
+        verbose_name = "Промпт генератора"
+        verbose_name_plural = "Промпты"
+
+    def __str__(self):
+        return self.code
 
 
 # ============================================================================
