@@ -1026,7 +1026,7 @@ export default function SEOPageClient() {
             <CardHeader>
               <CardTitle>Автогенерация Wordstat</CardTitle>
               <CardDescription>
-                Создаёт 4 группы по 3 seed-запроса на основе ниши, продукта и ЦА из настроек проекта.
+                Создаёт 4 группы по 3 seed-запроса, затем по ассоциациям делает дополнительные запросы для каждой группы.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">

@@ -215,6 +215,166 @@ def generate_wordstat_seed_groups(
     return {"success": True, "groups": groups, "raw_response": normalized_text}
 
 
+def select_wordstat_association_seeds(
+    *,
+    niche: str,
+    product_service: str,
+    associations: List[Dict[str, Any]],
+    audience: str | None = None,
+    group_name: str | None = None,
+    language: str = "ru",
+    max_results: int = 3,
+) -> Dict[str, object]:
+    niche_value = (niche or "").strip()
+    product_value = (product_service or "").strip()
+    audience_value = (audience or "").strip()
+    group_value = (group_name or "").strip()
+
+    candidates: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in associations or []:
+        phrase = str(item.get("phrase") or "").strip()
+        if not phrase:
+            continue
+        try:
+            count = int(item.get("count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count <= 0:
+            continue
+        normalized = normalize_phrase(phrase)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        candidates.append({"phrase": phrase, "count": count, "norm": normalized})
+
+    if not candidates:
+        return {"success": False, "error": "no_candidates"}
+
+    candidates.sort(key=lambda item: (-item["count"], item["phrase"]))
+
+    def _fallback_phrases() -> List[str]:
+        return [item["phrase"] for item in candidates[:max_results]]
+
+    try:
+        generator = AIContentGenerator()
+    except Exception as exc:
+        logger.error(
+            "Failed to init AI generator for Wordstat association seeds: %s",
+            exc,
+            exc_info=True,
+        )
+        return {
+            "success": True,
+            "phrases": _fallback_phrases(),
+            "used_fallback": True,
+            "error": "ai_init_error",
+        }
+
+    language_note = "Пиши на русском языке." if language.lower().startswith("ru") else "Пиши на языке ниши."
+    prompt = render_generator_prompt(
+        "seo_wordstat_top_associations",
+        language_note=language_note,
+        niche_value=niche_value,
+        product_value=product_value,
+        audience_value=audience_value,
+        group_name=group_value or "-",
+        associations_count=str(len(candidates)),
+        associations_json=json.dumps(
+            [{"phrase": item["phrase"], "count": item["count"]} for item in candidates],
+            ensure_ascii=False,
+        ),
+    )
+    if not prompt:
+        logger.error("Missing generator prompt: seo_wordstat_top_associations")
+        return {
+            "success": True,
+            "phrases": _fallback_phrases(),
+            "used_fallback": True,
+            "error": "missing_prompt",
+        }
+
+    ai_response = generator.get_ai_response(
+        prompt=prompt,
+        max_tokens=400,
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+    if not ai_response:
+        return {
+            "success": True,
+            "phrases": _fallback_phrases(),
+            "used_fallback": True,
+            "error": "ai_no_response",
+        }
+
+    parsed, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+    if parse_error or not isinstance(parsed, (dict, list)):
+        repaired = generator._repair_json_structure(
+            normalized_text,
+            schema_hint="""
+{
+  "phrases": ["string", "string", "string"]
+}
+""",
+        )
+        if repaired and isinstance(repaired, dict):
+            parsed = repaired
+            parse_error = None
+
+    extracted: List[str] = []
+    if isinstance(parsed, dict):
+        raw_list = (
+            parsed.get("phrases")
+            or parsed.get("associations")
+            or parsed.get("top_associations")
+            or parsed.get("keywords")
+            or []
+        )
+        if isinstance(raw_list, list):
+            extracted = [str(item) for item in raw_list]
+        elif isinstance(raw_list, str):
+            extracted = _extract_seed_phrases(raw_list)
+    elif isinstance(parsed, list):
+        extracted = [str(item) for item in parsed]
+
+    normalized_map = {item["norm"]: item["phrase"] for item in candidates}
+    selected: List[str] = []
+    selected_norms: set[str] = set()
+    for item in extracted:
+        phrase = str(item or "").strip()
+        if not phrase:
+            continue
+        normalized = normalize_phrase(phrase)
+        if normalized in normalized_map and normalized not in selected_norms:
+            selected.append(normalized_map[normalized])
+            selected_norms.add(normalized)
+        if len(selected) >= max_results:
+            break
+
+    used_fallback = False
+    if len(selected) < max_results:
+        used_fallback = True
+        for item in candidates:
+            if item["norm"] in selected_norms:
+                continue
+            selected.append(item["phrase"])
+            selected_norms.add(item["norm"])
+            if len(selected) >= max_results:
+                break
+
+    if not selected:
+        selected = _fallback_phrases()
+        used_fallback = True
+
+    return {
+        "success": True,
+        "phrases": selected,
+        "raw_response": normalized_text,
+        "used_fallback": used_fallback,
+    }
+
+
 def cluster_wordstat_phrases(
     phrases: List[str],
     *,
@@ -453,4 +613,5 @@ __all__ = [
     "normalize_phrase",
     "analyze_seo_text",
     "generate_wordstat_seed_groups",
+    "select_wordstat_association_seeds",
 ]

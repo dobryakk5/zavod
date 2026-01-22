@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     ArticleViewSet,
     ChannelAnalysisViewSet,
+    ClientBookSemanticsView,
     ClientExpertBooksView,
     GenerationEventSummaryView,
     ClientInfoView,
@@ -32,6 +33,7 @@ from .views import (
     TgstatCategoryListView,
     TgstatChannelListView,
     TgstatFavoritesView,
+    TgstatRecommendationsView,
     TgstatTagListView,
     VkIntegrationViewSet,
     VkConnectView,
@@ -99,6 +101,7 @@ urlpatterns = [
     path('tgstat/tags/', TgstatTagListView.as_view(), name='tgstat-tags'),
     path('tgstat/channels/', TgstatChannelListView.as_view(), name='tgstat-channels'),
     path('tgstat/favorites/', TgstatFavoritesView.as_view(), name='tgstat-favorites'),
+    path('tgstat/recommendations/', TgstatRecommendationsView.as_view(), name='tgstat-recommendations'),
 
     # Authentication endpoints
     path('auth/telegram', TelegramAuthView.as_view(), name='telegram-auth'),
@@ -112,6 +115,7 @@ urlpatterns = [
     path('client/generation-events/', GenerationEventSummaryView.as_view(), name='client-generation-events'),
     path('client/settings/', ClientSettingsView.as_view(), name='client-settings'),
     path('client/expert-books/', ClientExpertBooksView.as_view(), name='client-expert-books'),
+    path('client/book-semantics/', ClientBookSemanticsView.as_view(), name='client-book-semantics'),
     path('weekly-sources/run/', WeeklySourceRunView.as_view(), name='weekly-sources-run'),
     path('project-analyses/run/', ProjectChannelAnalysisRunView.as_view(), name='project-analyses-run'),
 

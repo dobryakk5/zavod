@@ -25,6 +25,27 @@ export type TgstatChannel = {
   url?: string | null;
 };
 
+export type TgstatRecommendationTag = {
+  slug: string;
+  title: string;
+  reason?: string | null;
+};
+
+export type TgstatRecommendationCategory = {
+  category_slug: string;
+  category_title: string;
+  tags: TgstatRecommendationTag[];
+};
+
+export type TgstatRecommendationResponse = {
+  success: boolean;
+  niche?: string;
+  product_service?: string;
+  recommendations: TgstatRecommendationCategory[];
+  error?: string;
+  details?: string;
+};
+
 export const tgstatApi = {
   listCategories() {
     return apiFetch<TgstatCategory[]>('/tgstat/categories/');
@@ -37,6 +58,11 @@ export const tgstatApi = {
   },
   listChannelsByCategory(categoryId: number) {
     return apiFetch<TgstatChannel[]>(`/tgstat/channels/?category_id=${encodeURIComponent(categoryId)}`);
+  },
+  getRecommendations() {
+    return apiFetch<TgstatRecommendationResponse>('/tgstat/recommendations/', {
+      method: 'POST',
+    });
   },
   listFavorites() {
     return apiFetch<TgstatChannel[]>('/tgstat/favorites/');

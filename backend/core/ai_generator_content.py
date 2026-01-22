@@ -913,6 +913,225 @@ class ContentGenerationMixin:
                 "error": str(exc),
             }
 
+    def generate_project_semantics_from_books(
+        self,
+        books_text: str,
+        brand: str = "",
+        language: str = "ru",
+    ) -> Dict[str, Any]:
+        """Сформировать семантику проекта на основе списка экспертных книг."""
+        try:
+            books_value = (books_text or "").strip()
+            if not books_value:
+                return {"success": False, "error": "Книги не указаны"}
+
+            lang_name = "русском" if language == "ru" else "английском"
+            brand_text = (brand or "").strip() or "без названия"
+
+            prompt = render_generator_prompt(
+                "project_semantics_from_books",
+                books_text=books_value,
+                brand_text=brand_text,
+                lang_name=lang_name,
+            )
+            if not prompt:
+                return {"success": False, "error": "Missing generator prompt: project_semantics_from_books"}
+
+            ai_response = self.get_ai_response(
+                prompt,
+                max_tokens=1600,
+                temperature=0.35,
+                response_format={"type": "json_object"},
+            )
+            if not ai_response:
+                return {"success": False, "error": "Не удалось получить ответ от AI"}
+
+            parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+            if parse_error or not isinstance(parsed_result, dict):
+                repaired = self._repair_json_structure(
+                    normalized_text,
+                    schema_hint="""
+{
+  "groups": [
+    {"name": "Название кластера", "phrases": ["фраза 1", "фраза 2"]}
+  ],
+  "keywords": ["ключ 1", "ключ 2"]
+}
+""",
+                )
+                if repaired and isinstance(repaired, dict):
+                    parsed_result = repaired
+                    parse_error = None
+
+            if parse_error or not isinstance(parsed_result, dict):
+                logger.error("Failed to parse project semantics: %s", normalized_text)
+                return {
+                    "success": False,
+                    "error": f"Ошибка разбора JSON: {str(parse_error)}",
+                    "raw_response": normalized_text,
+                }
+
+            whitespace_re = re.compile(r"\s+")
+
+            def _clean_list(items) -> list:
+                seen = set()
+                cleaned: list[str] = []
+                if not isinstance(items, list):
+                    items = [items]
+                for item in items:
+                    value = whitespace_re.sub(" ", str(item or "").strip())
+                    if not value:
+                        continue
+                    key = value.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    cleaned.append(value)
+                return cleaned
+
+            def _normalize_groups(payload: Dict[str, Any]) -> Dict[str, List[str]]:
+                groups_payload = (
+                    payload.get("groups")
+                    or payload.get("clusters")
+                    or payload.get("themes")
+                    or {}
+                )
+                groups: Dict[str, List[str]] = {}
+                if isinstance(groups_payload, dict):
+                    for name, phrases in groups_payload.items():
+                        group_name = whitespace_re.sub(" ", str(name or "").strip())
+                        cleaned = _clean_list(phrases)
+                        if group_name and cleaned:
+                            groups[group_name] = cleaned[:20]
+                elif isinstance(groups_payload, list):
+                    for item in groups_payload:
+                        if not isinstance(item, dict):
+                            continue
+                        name = item.get("name") or item.get("group") or item.get("title") or ""
+                        phrases = item.get("phrases") or item.get("items") or item.get("keywords") or []
+                        group_name = whitespace_re.sub(" ", str(name or "").strip())
+                        cleaned = _clean_list(phrases)
+                        if group_name and cleaned:
+                            groups[group_name] = cleaned[:20]
+                return groups
+
+            groups = _normalize_groups(parsed_result)
+            keywords = _clean_list(
+                parsed_result.get("keywords")
+                or parsed_result.get("phrases")
+                or parsed_result.get("semantic_core")
+                or []
+            )
+
+            if not keywords and groups:
+                flattened: list[str] = []
+                for phrases in groups.values():
+                    flattened.extend(phrases)
+                keywords = _clean_list(flattened)
+
+            keywords = keywords[:120]
+
+            if not groups and not keywords:
+                return {
+                    "success": False,
+                    "error": "AI вернул пустую семантику",
+                    "raw_response": parsed_result,
+                }
+
+            return {
+                "success": True,
+                "groups": groups,
+                "keywords": keywords,
+                "raw_response": parsed_result,
+                "prompt_used": prompt,
+            }
+
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Error generating project semantics: %s", exc, exc_info=True)
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
+    def generate_tgstat_tag_recommendations(
+        self,
+        niche: str,
+        product_service: str,
+        categories_json: str,
+        language: str = "ru",
+    ) -> Dict[str, Any]:
+        """Подобрать TGStat подкатегории под нишу и продукт."""
+        try:
+            niche_text = (niche or "").strip() or "не указана"
+            product_text = (product_service or "").strip() or "не указан"
+            categories_text = (categories_json or "").strip()
+            lang_name = "русском" if language == "ru" else "английском"
+
+            prompt = render_generator_prompt(
+                "tgstat_recommendations",
+                niche_value=niche_text,
+                product_value=product_text,
+                categories_json=categories_text,
+                lang_name=lang_name,
+            )
+            if not prompt:
+                return {"success": False, "error": "Missing generator prompt: tgstat_recommendations"}
+
+            ai_response = self.get_ai_response(
+                prompt,
+                max_tokens=2000,
+                temperature=0.4,
+                response_format={"type": "json_object"},
+            )
+            if not ai_response:
+                return {"success": False, "error": "Не удалось получить ответ от AI"}
+
+            parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+            if parse_error:
+                schema_hint = """
+{
+  "recommendations": [
+    {
+      "category_slug": "string",
+      "category_title": "string",
+      "tags": [
+        {"slug": "string", "title": "string", "reason": "string"}
+      ]
+    }
+  ]
+}
+"""
+                repaired_result = self._repair_json_structure(normalized_text, schema_hint)
+                parsed_result = repaired_result
+                if not repaired_result:
+                    return {
+                        "success": False,
+                        "error": f"JSON parsing error: {str(parse_error)}",
+                        "raw_response": normalized_text,
+                    }
+
+            result = parsed_result or {}
+            recommendations = result.get("recommendations")
+            if not isinstance(recommendations, list):
+                return {
+                    "success": False,
+                    "error": "AI не вернул список рекомендаций",
+                    "raw_response": result,
+                }
+
+            return {
+                "success": True,
+                "recommendations": recommendations,
+                "raw_response": result,
+            }
+
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Error generating TGStat recommendations: %s", exc, exc_info=True)
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
     def generate_client_product_from_type(
         self,
         product_type_name: str,

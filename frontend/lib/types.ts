@@ -102,6 +102,15 @@ export interface ArticleBlock {
   updated_at?: string;
 }
 
+export type BookSemanticsResponse = {
+  success: boolean;
+  saved?: boolean;
+  semantic_set_id?: number;
+  keywords_count?: number;
+  groups_count?: number;
+  error?: string;
+};
+
 export type ArticleSeoKeywordStat = {
   phrase: string;
   count?: number;

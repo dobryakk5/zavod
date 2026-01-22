@@ -17,7 +17,7 @@ from core.generation_events import (
     is_trial_client,
     record_generation_event,
 )
-from core.models import GenerationEvent, Post, Schedule
+from core.models import GenerationEvent, Post, ProjectSemanticSet, Schedule
 
 from .authentication import CookieJWTAuthentication
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
@@ -454,3 +454,107 @@ class ClientExpertBooksView(APIView):
 
         http_status = status.HTTP_200_OK if result.get("success") else status.HTTP_502_BAD_GATEWAY
         return Response(result, status=http_status)
+
+
+class ClientBookSemanticsView(APIView):
+    """AI-powered project semantics generation based on expert books."""
+
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        books_text = request.data.get("expert_books") or client.expert_books or ""
+        books_text = str(books_text or "").strip()
+        language = request.data.get("language") or "ru"
+
+        if not books_text:
+            return Response(
+                {"success": False, "error": "Укажите список книг экспертов"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_BOOK_SEMANTICS)
+        if limit_response:
+            return limit_response
+
+        try:
+            generator = AIContentGenerator()
+        except ValueError as exc:
+            return Response(
+                {"success": False, "error": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        semantic_set = ProjectSemanticSet.objects.create(
+            client=client,
+            source=ProjectSemanticSet.SOURCE_EXPERT_BOOKS,
+            status="generating",
+            books_text=books_text,
+        )
+
+        result = generator.generate_project_semantics_from_books(
+            books_text=books_text,
+            brand=client.name,
+            language=language,
+        )
+
+        if not result.get("success"):
+            semantic_set.status = "failed"
+            semantic_set.error_log = str(result.get("error") or "AI error")
+            semantic_set.prompt_used = str(result.get("prompt_used") or "")
+            semantic_set.ai_model = str(generator.model or "")
+            semantic_set.raw_response = result.get("raw_response") or {}
+            semantic_set.save(
+                update_fields=[
+                    "status",
+                    "error_log",
+                    "prompt_used",
+                    "ai_model",
+                    "raw_response",
+                    "updated_at",
+                ]
+            )
+            return Response(
+                {"success": False, "error": semantic_set.error_log},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        keyword_groups = result.get("groups") or {}
+        keywords_list = result.get("keywords") or []
+
+        semantic_set.status = "completed"
+        semantic_set.keyword_groups = keyword_groups
+        semantic_set.keywords_list = keywords_list
+        semantic_set.prompt_used = str(result.get("prompt_used") or "")
+        semantic_set.ai_model = str(generator.model or "")
+        semantic_set.raw_response = result.get("raw_response") or {}
+        semantic_set.error_log = ""
+        semantic_set.save(
+            update_fields=[
+                "status",
+                "keyword_groups",
+                "keywords_list",
+                "prompt_used",
+                "ai_model",
+                "raw_response",
+                "error_log",
+                "updated_at",
+            ]
+        )
+
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_BOOK_SEMANTICS,
+            meta={"source": "expert_books", "keywords_count": len(keywords_list)},
+        )
+
+        return Response(
+            {
+                "success": True,
+                "saved": True,
+                "semantic_set_id": semantic_set.id,
+                "keywords_count": len(keywords_list),
+                "groups_count": len(keyword_groups),
+            },
+            status=status.HTTP_200_OK,
+        )

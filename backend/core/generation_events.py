@@ -22,6 +22,7 @@ EVENT_LABELS: dict[str, str] = {
     GenerationEvent.EVENT_PRODUCT: "Продукт",
     GenerationEvent.EVENT_PRODUCT_MAP: "Карта продуктов",
     GenerationEvent.EVENT_BOOK_SEARCH: "Книги",
+    GenerationEvent.EVENT_BOOK_SEMANTICS: "Семантика по книгам",
 }
 
 EVENT_TYPE_LIST = list(EVENT_LABELS.keys())

@@ -2,11 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ApiError } from '@/lib/api';
 import { analyticsApi } from '@/lib/api/analytics';
-import { tgstatApi, type TgstatCategory, type TgstatChannel, type TgstatTag } from '@/lib/api/tgstat';
+import {
+  tgstatApi,
+  type TgstatCategory,
+  type TgstatChannel,
+  type TgstatRecommendationCategory,
+  type TgstatTag,
+} from '@/lib/api/tgstat';
 import { toast } from 'sonner';
 import { ChevronDown, Loader2, Plus } from 'lucide-react';
 
@@ -69,6 +77,10 @@ export default function TgstatPageClient() {
   const [isTagsLoading, setIsTagsLoading] = useState(false);
   const [isChannelsLoading, setIsChannelsLoading] = useState(false);
   const [isFavoritesLoading, setIsFavoritesLoading] = useState(false);
+  const [isRecommendationsLoading, setIsRecommendationsLoading] = useState(false);
+  const [recommendations, setRecommendations] = useState<TgstatRecommendationCategory[]>([]);
+  const [hasRequestedRecommendations, setHasRequestedRecommendations] = useState(false);
+  const [recommendationsMeta, setRecommendationsMeta] = useState<{ niche: string; product: string } | null>(null);
   const [savingFavoriteId, setSavingFavoriteId] = useState<number | null>(null);
   const [runningAnalysisId, setRunningAnalysisId] = useState<number | null>(null);
   const [removingFavoriteId, setRemovingFavoriteId] = useState<number | null>(null);
@@ -266,6 +278,41 @@ export default function TgstatPageClient() {
     });
   }, []);
 
+  const handleFindRecommendations = useCallback(async () => {
+    setIsRecommendationsLoading(true);
+    setErrorMessage(null);
+    try {
+      const data = await tgstatApi.getRecommendations();
+      if (!data.success) {
+        setErrorMessage(data.error || 'Не удалось получить рекомендации.');
+        return;
+      }
+      setRecommendations(data.recommendations || []);
+      setRecommendationsMeta({
+        niche: data.niche || '',
+        product: data.product_service || '',
+      });
+      setHasRequestedRecommendations(true);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        try {
+          const payload = error.body ? JSON.parse(error.body) : null;
+          if (payload?.missing_fields) {
+            setErrorMessage('Заполните нишу и продукт в настройках проекта.');
+            return;
+          }
+          if (payload?.error) {
+            setErrorMessage(String(payload.error));
+            return;
+          }
+        } catch {}
+      }
+      setErrorMessage('Не удалось получить рекомендации.');
+    } finally {
+      setIsRecommendationsLoading(false);
+    }
+  }, []);
+
   return (
     <div className="container mx-auto py-8 space-y-6">
       <div className="space-y-1">
@@ -290,12 +337,61 @@ export default function TgstatPageClient() {
         </TabsList>
 
         <TabsContent value="categories" className="space-y-4">
-          <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
             <span>Всего категорий: {categories.length}</span>
-            <Button variant="outline" size="sm" onClick={loadCategories} disabled={isCategoriesLoading}>
-              Обновить
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={loadCategories} disabled={isCategoriesLoading}>
+                Обновить
+              </Button>
+              <Button
+                size="sm"
+                className="gap-2"
+                onClick={handleFindRecommendations}
+                disabled={isRecommendationsLoading}
+              >
+                {isRecommendationsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Найди мои
+              </Button>
+            </div>
           </div>
+          {isRecommendationsLoading ? (
+            <div className="flex items-center gap-2 text-gray-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Ищем подходящие подкатегории
+            </div>
+          ) : hasRequestedRecommendations && recommendations.length === 0 ? (
+            <p className="text-sm text-gray-500">Не нашли подходящих подкатегорий для ниши.</p>
+          ) : recommendations.length > 0 ? (
+            <div className="rounded-lg border bg-white shadow-sm">
+              <div className="border-b px-4 py-3">
+                <div className="text-sm font-semibold text-gray-900">Рекомендации по подкатегориям</div>
+                {recommendationsMeta ? (
+                  <div className="text-xs text-muted-foreground">
+                    Ниша: {recommendationsMeta.niche || '—'} · Продукт: {recommendationsMeta.product || '—'}
+                  </div>
+                ) : null}
+              </div>
+              <div className="space-y-4 px-4 py-3">
+                {recommendations.map((recommendation) => (
+                  <div key={recommendation.category_slug} className="space-y-2">
+                    <div className="text-sm font-medium text-gray-900">{recommendation.category_title}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {recommendation.tags.map((tag) => (
+                        <Badge
+                          key={`${recommendation.category_slug}-${tag.slug}`}
+                          variant="secondary"
+                          className="text-xs"
+                          title={tag.reason || undefined}
+                        >
+                          {tag.title}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {isCategoriesLoading ? (
             <div className="flex items-center gap-2 text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" />

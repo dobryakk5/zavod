@@ -49,6 +49,7 @@ export function ClientSettingsForm() {
   const [loading, setLoading] = useState(false);
   const [generatingSEO, setGeneratingSEO] = useState(false);
   const [generatingBooks, setGeneratingBooks] = useState(false);
+  const [generatingSemantics, setGeneratingSemantics] = useState(false);
   const { canEdit } = useRole();
 
   const form = useForm<SettingsFormValues>({
@@ -149,6 +150,38 @@ export function ClientSettingsForm() {
       toast.error('Не удалось подобрать книги');
     } finally {
       setGeneratingBooks(false);
+    }
+  };
+
+  const handleGenerateBookSemantics = async () => {
+    if (!canEdit || generatingSemantics) {
+      return;
+    }
+    const { expert_books } = form.getValues();
+    if (!expert_books?.trim()) {
+      toast.error('Добавьте книги экспертов, чтобы собрать семантику');
+      return;
+    }
+    setGeneratingSemantics(true);
+    try {
+      const response = await clientApi.generateBookSemantics({ expert_books });
+      if (response.success) {
+        const details = [];
+        if (response.groups_count) {
+          details.push(`${response.groups_count} групп`);
+        }
+        if (response.keywords_count) {
+          details.push(`${response.keywords_count} ключей`);
+        }
+        const suffix = details.length ? ` (${details.join(', ')})` : '';
+        toast.success(`Семантика сохранена${suffix}`);
+      } else {
+        toast.error(response.error || 'Не удалось собрать семантику');
+      }
+    } catch (error) {
+      toast.error('Не удалось собрать семантику');
+    } finally {
+      setGeneratingSemantics(false);
     }
   };
 
@@ -463,6 +496,21 @@ Wordstat даст кашу
                     </>
                   ) : (
                     'Найти книги для ЦА'
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleGenerateBookSemantics}
+                  disabled={!canEdit || generatingSemantics}
+                >
+                  {generatingSemantics ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Семантика...
+                    </>
+                  ) : (
+                    'Собрать семантику по книгам'
                   )}
                 </Button>
                 {!canEdit && (

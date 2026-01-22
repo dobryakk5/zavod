@@ -3,6 +3,7 @@ import type {
   ClientInfo,
   ClientSettings,
   ClientSummary,
+  BookSemanticsResponse,
   ExpertBooksResponse,
   GenerationEventSummary,
 } from '../types';
@@ -49,6 +50,19 @@ export const clientApi = {
     language?: string;
   }): Promise<ExpertBooksResponse> => {
     return apiFetch<ExpertBooksResponse>('/client/expert-books/', {
+      method: 'POST',
+      body: payload,
+    });
+  },
+
+  /**
+   * Generate project semantics from expert books
+   */
+  generateBookSemantics: async (payload: {
+    expert_books?: string;
+    language?: string;
+  }): Promise<BookSemanticsResponse> => {
+    return apiFetch<BookSemanticsResponse>('/client/book-semantics/', {
       method: 'POST',
       body: payload,
     });

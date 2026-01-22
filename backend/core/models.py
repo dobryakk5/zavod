@@ -1699,6 +1699,75 @@ class SEOKeywordSet(models.Model):
         return flat_keywords
 
 
+class ProjectSemanticSet(models.Model):
+    """Семантика проекта, сгенерированная на основе книг экспертов."""
+
+    SOURCE_EXPERT_BOOKS = "expert_books"
+
+    SOURCE_CHOICES = (
+        (SOURCE_EXPERT_BOOKS, "Expert books"),
+    )
+
+    STATUS_CHOICES = (
+        ("pending", "Ожидает генерации"),
+        ("generating", "Генерируется"),
+        ("completed", "Завершено"),
+        ("failed", "Ошибка"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="semantic_sets")
+    source = models.CharField(max_length=32, choices=SOURCE_CHOICES, default=SOURCE_EXPERT_BOOKS)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+
+    books_text = models.TextField(blank=True, help_text="Книги экспертов, использованные для генерации")
+    keyword_groups = models.JSONField(default=dict, blank=True)
+    keywords_list = models.JSONField(default=list, blank=True)
+
+    ai_model = models.CharField(max_length=100, blank=True)
+    prompt_used = models.TextField(blank=True)
+    error_log = models.TextField(blank=True)
+    raw_response = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        verbose_name = "Project Semantic Set"
+        verbose_name_plural = "Project Semantic Sets"
+
+    def __str__(self):
+        return f"[{self.client.slug}] Semantics ({self.status})"
+
+    def get_flat_keywords(self) -> List[str]:
+        cleaned: List[str] = []
+        seen = set()
+        for keyword in self.keywords_list or []:
+            if not isinstance(keyword, str):
+                continue
+            value = keyword.strip()
+            if not value or value.lower() in seen:
+                continue
+            seen.add(value.lower())
+            cleaned.append(value)
+        if cleaned:
+            return cleaned
+        flat_keywords: List[str] = []
+        if isinstance(self.keyword_groups, dict):
+            for _, keywords in self.keyword_groups.items():
+                if not isinstance(keywords, list):
+                    continue
+                for keyword in keywords:
+                    if not isinstance(keyword, str):
+                        continue
+                    value = keyword.strip()
+                    if not value or value.lower() in seen:
+                        continue
+                    seen.add(value.lower())
+                    flat_keywords.append(value)
+        return flat_keywords
+
+
 class WordstatQuery(models.Model):
     """Сохранённый запрос Wordstat и его результаты для конкретного клиента."""
 
@@ -1990,6 +2059,7 @@ class GenerationEvent(models.Model):
     EVENT_PRODUCT = "product"
     EVENT_PRODUCT_MAP = "product_map"
     EVENT_BOOK_SEARCH = "book_search"
+    EVENT_BOOK_SEMANTICS = "book_semantics"
 
     EVENT_CHOICES = (
         (EVENT_POST, "Post generation"),
@@ -2004,6 +2074,7 @@ class GenerationEvent(models.Model):
         (EVENT_PRODUCT, "Product generation"),
         (EVENT_PRODUCT_MAP, "Product map"),
         (EVENT_BOOK_SEARCH, "Book search"),
+        (EVENT_BOOK_SEMANTICS, "Book semantics"),
     )
 
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="generation_events")

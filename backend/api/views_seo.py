@@ -20,6 +20,7 @@ from core.ai_generator_seo import (
     cluster_wordstat_phrases,
     generate_wordstat_seed_groups,
     normalize_phrase,
+    select_wordstat_association_seeds,
 )
 from core.generation_events import (
     build_limit_error_payload,
@@ -999,6 +1000,45 @@ def _build_wordstat_request_phrase(phrases: list[str]) -> str:
     return label[:255]
 
 
+def _build_association_group_name(base_group: str, association_phrase: str) -> str:
+    base_value = (base_group or "").strip()
+    phrase_value = (association_phrase or "").strip()
+    if base_value and phrase_value:
+        return f"{base_value} - {phrase_value}"[:255]
+    return (phrase_value or base_value)[:255]
+
+
+def _extract_top_association_candidates(
+    aggregated: dict[tuple[str, str], int],
+    base_phrases: list[str],
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    base_norms = {normalize_phrase(phrase) for phrase in base_phrases if phrase}
+    items: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for (phrase_text, result_type), count in aggregated.items():
+        if result_type != "association":
+            continue
+        phrase_value = str(phrase_text or "").strip()
+        if not phrase_value:
+            continue
+        normalized = normalize_phrase(phrase_value)
+        if not normalized or normalized in seen or normalized in base_norms:
+            continue
+        try:
+            count_value = int(count or 0)
+        except (TypeError, ValueError):
+            count_value = 0
+        if count_value <= 0:
+            continue
+        seen.add(normalized)
+        items.append({"phrase": phrase_value, "count": count_value, "norm": normalized})
+
+    items.sort(key=lambda item: (-int(item["count"]), str(item["phrase"])))
+    trimmed = items[:limit]
+    return [{"phrase": item["phrase"], "count": item["count"]} for item in trimmed]
+
+
 def _check_wordstat_generation_limit(client, needed: int):
     if not is_trial_client(client):
         return None
@@ -1093,7 +1133,11 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        limit_response = _check_wordstat_generation_limit(client_obj, len(prepared))
+        extra_queries_per_group = 3
+        limit_response = _check_wordstat_generation_limit(
+            client_obj,
+            len(prepared) * (1 + extra_queries_per_group),
+        )
         if limit_response:
             return limit_response
 
@@ -1123,8 +1167,55 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
                         "aggregated": aggregated,
                         "total_count": total_count,
                         "raw_response": raw_response_data,
+                        "seed_group": group_name,
                     }
                 )
+
+            association_payloads: list[dict[str, object]] = []
+            for payload in payloads:
+                group_name = str(payload.get("group_name") or "").strip()
+                phrases = payload.get("phrases") or []
+                aggregated = payload.get("aggregated") or {}
+                candidates = _extract_top_association_candidates(aggregated, phrases)
+                if not candidates:
+                    continue
+                selection = select_wordstat_association_seeds(
+                    niche=niche,
+                    product_service=product_service,
+                    audience=audience,
+                    group_name=group_name,
+                    associations=candidates,
+                )
+                association_phrases = selection.get("phrases") or []
+                for association_phrase in association_phrases:
+                    phrase_value = str(association_phrase or "").strip()
+                    if not phrase_value:
+                        continue
+                    aggregated, total_count, responses = _collect_wordstat_data(
+                        ws_client=ws_client,
+                        phrases=[phrase_value],
+                        regions=[],
+                        devices=[],
+                        include_parent=False,
+                    )
+                    raw_response_data = (
+                        responses[0]["response"]
+                        if len(responses) == 1
+                        else {"group_phrases": [phrase_value], "responses": responses}
+                    )
+                    association_payloads.append(
+                        {
+                            "group_name": _build_association_group_name(group_name, phrase_value),
+                            "phrases": [phrase_value],
+                            "aggregated": aggregated,
+                            "total_count": total_count,
+                            "raw_response": raw_response_data,
+                            "seed_group": group_name,
+                            "association_seed": phrase_value,
+                        }
+                    )
+
+            payloads.extend(association_payloads)
         except WordstatError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception:
@@ -1173,10 +1264,18 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
                 if results_to_create:
                     WordstatResult.objects.bulk_create(results_to_create)
 
+                meta = {"phrases_count": len(phrases)}
+                seed_group = payload.get("seed_group")
+                association_seed = payload.get("association_seed")
+                if seed_group:
+                    meta["seed_group"] = seed_group
+                if association_seed:
+                    meta["association_seed"] = association_seed
+
                 record_generation_event(
                     client_obj,
                     GenerationEvent.EVENT_WORDSTAT_QUERY,
-                    meta={"phrases_count": len(phrases), "seed_group": group_name},
+                    meta=meta,
                 )
 
                 created_queries.append(query)

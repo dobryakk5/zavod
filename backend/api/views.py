@@ -11,6 +11,7 @@ This module re-exports view classes from smaller `views_*.py` modules to keep
 from .views_misc import (  # noqa: F401
     ArticleViewSet,
     ChannelAnalysisViewSet,
+    ClientBookSemanticsView,
     ClientExpertBooksView,
     GenerationEventSummaryView,
     ClientInfoView,
@@ -56,6 +57,7 @@ from .views_tgstat import (  # noqa: F401
     TgstatCategoryListView,
     TgstatChannelListView,
     TgstatFavoritesView,
+    TgstatRecommendationsView,
     TgstatTagListView,
 )
 from .views_websites import WebsiteScanViewSet  # noqa: F401

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+from collections import defaultdict
 from typing import Any, Dict, List, Sequence
 
 from django.db import connection
@@ -9,7 +11,8 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .permissions import IsTenantMember
+from core.ai_generator import AIContentGenerator
+from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .utils import get_active_client
 
 
@@ -27,6 +30,143 @@ def _fetch_all(cursor) -> List[Dict[str, Any]]:
     columns = [col[0] for col in cursor.description]
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+
+def _normalize_label(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def _build_categories_payload(
+    categories: List[Dict[str, Any]],
+    tags: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    tags_by_category_id: dict[int, list[dict[str, str]]] = defaultdict(list)
+    for tag in tags:
+        category_id = tag.get("category_id")
+        if not isinstance(category_id, int):
+            continue
+        slug = str(tag.get("slug") or "").strip()
+        title = str(tag.get("title") or "").strip()
+        if not slug:
+            continue
+        tags_by_category_id[category_id].append(
+            {
+                "slug": slug,
+                "title": title or slug,
+            }
+        )
+
+    payload: List[Dict[str, Any]] = []
+    for category in categories:
+        payload.append(
+            {
+                "category_slug": str(category.get("slug") or "").strip(),
+                "category_title": str(category.get("title") or "").strip(),
+                "tags": tags_by_category_id.get(category.get("id"), []),
+            }
+        )
+    return payload
+
+
+def _normalize_tgstat_recommendations(
+    raw_recommendations: Any,
+    categories: List[Dict[str, Any]],
+    tags: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not isinstance(raw_recommendations, list):
+        return []
+
+    categories_by_slug = {str(item.get("slug") or "").strip(): item for item in categories}
+    categories_by_title = {
+        _normalize_label(item.get("title")): item for item in categories if item.get("title")
+    }
+
+    tags_by_slug = {str(item.get("slug") or "").strip(): item for item in tags}
+    tags_by_category_slug: dict[str, dict[str, Dict[str, Any]]] = defaultdict(dict)
+    tags_by_title: dict[str, dict[str, Dict[str, Any]]] = defaultdict(dict)
+    for tag in tags:
+        category_slug = str(tag.get("category_slug") or "").strip()
+        slug = str(tag.get("slug") or "").strip()
+        title = str(tag.get("title") or "").strip()
+        if not category_slug or not slug:
+            continue
+        tags_by_category_slug[category_slug][slug] = tag
+        if title:
+            tags_by_title[category_slug][_normalize_label(title)] = tag
+
+    ordered_categories: List[str] = []
+    normalized: Dict[str, Dict[str, Any]] = {}
+
+    for item in raw_recommendations:
+        if not isinstance(item, dict):
+            continue
+
+        category_slug = str(item.get("category_slug") or "").strip()
+        if not category_slug:
+            category_title = str(item.get("category_title") or item.get("category") or "").strip()
+            if category_title:
+                matched = categories_by_title.get(_normalize_label(category_title))
+                if matched:
+                    category_slug = str(matched.get("slug") or "").strip()
+
+        if not category_slug or category_slug not in categories_by_slug:
+            continue
+
+        entry = normalized.get(category_slug)
+        if entry is None:
+            category = categories_by_slug[category_slug]
+            entry = {
+                "category_slug": category_slug,
+                "category_title": str(category.get("title") or category_slug),
+                "tags": [],
+            }
+            normalized[category_slug] = entry
+            ordered_categories.append(category_slug)
+
+        raw_tags = item.get("tags") or item.get("subcategories") or []
+        if not isinstance(raw_tags, list):
+            continue
+
+        existing_slugs = {tag["slug"] for tag in entry["tags"] if isinstance(tag, dict) and tag.get("slug")}
+        for raw_tag in raw_tags:
+            tag_slug = ""
+            tag_title = ""
+            reason = None
+            if isinstance(raw_tag, dict):
+                tag_slug = str(raw_tag.get("slug") or "").strip()
+                tag_title = str(raw_tag.get("title") or "").strip()
+                reason = str(raw_tag.get("reason") or "").strip() or None
+            else:
+                tag_title = str(raw_tag).strip()
+                if tag_title in tags_by_slug:
+                    tag_slug = tag_title
+
+            resolved = None
+            if tag_slug:
+                resolved = tags_by_category_slug.get(category_slug, {}).get(tag_slug)
+                if not resolved:
+                    candidate = tags_by_slug.get(tag_slug)
+                    if candidate and str(candidate.get("category_slug") or "") == category_slug:
+                        resolved = candidate
+            if not resolved and tag_title:
+                resolved = tags_by_title.get(category_slug, {}).get(_normalize_label(tag_title))
+            if not resolved:
+                continue
+
+            resolved_slug = str(resolved.get("slug") or "").strip()
+            if not resolved_slug or resolved_slug in existing_slugs:
+                continue
+            entry["tags"].append(
+                {
+                    "slug": resolved_slug,
+                    "title": str(resolved.get("title") or resolved_slug),
+                    "reason": reason,
+                }
+            )
+            existing_slugs.add(resolved_slug)
+            if len(entry["tags"]) >= 10:
+                break
+
+    return [normalized[slug] for slug in ordered_categories if normalized.get(slug) and normalized[slug]["tags"]]
 
 class TgstatCategoryListView(APIView):
     permission_classes = [IsTenantMember]
@@ -267,3 +407,90 @@ class TgstatFavoritesView(APIView):
             client.save(update_fields=["tgstat_channels"])
 
         return Response({"success": True, "tgstat_channels": stored_ids})
+
+
+class TgstatRecommendationsView(APIView):
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        niche = (client.niche or "").strip()
+        product_service = (client.product_service or "").strip()
+
+        missing_fields: list[str] = []
+        if not niche:
+            missing_fields.append("niche")
+        if not product_service:
+            missing_fields.append("product_service")
+        if missing_fields:
+            return Response(
+                {"error": "Введите данные проекта", "missing_fields": missing_fields},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        schema = _tgstat_schema()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT id, slug, title
+                FROM {schema}.tgstat_categories
+                ORDER BY title ASC
+                """
+            )
+            categories = _fetch_all(cursor)
+            cursor.execute(
+                f"""
+                SELECT slug, title, category_id, category_slug
+                FROM {schema}.tgstat_tags
+                ORDER BY title ASC
+                """
+            )
+            tags = _fetch_all(cursor)
+
+        if not categories or not tags:
+            return Response(
+                {"success": False, "error": "Нет данных TGStat для рекомендаций"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        categories_payload = _build_categories_payload(categories, tags)
+        categories_json = json.dumps(categories_payload, ensure_ascii=False, separators=(",", ":"))
+
+        try:
+            generator = AIContentGenerator()
+        except ValueError as exc:
+            return Response(
+                {"success": False, "error": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        result = generator.generate_tgstat_tag_recommendations(
+            niche=niche,
+            product_service=product_service,
+            categories_json=categories_json,
+            language="ru",
+        )
+        if not result.get("success"):
+            return Response(
+                {
+                    "success": False,
+                    "error": "Не удалось получить рекомендации",
+                    "details": result.get("error"),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        recommendations = _normalize_tgstat_recommendations(
+            result.get("recommendations"),
+            categories,
+            tags,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "niche": niche,
+                "product_service": product_service,
+                "recommendations": recommendations,
+            }
+        )

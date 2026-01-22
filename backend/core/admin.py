@@ -26,6 +26,7 @@ from .models import (
     TrendItem,
     ContentTemplate,
     SEOKeywordSet,
+    ProjectSemanticSet,
     Story,
     PostType,
     PostTone,
@@ -89,6 +90,30 @@ class ClientSEOKeywordSetInline(admin.TabularInline):
         if obj.keyword_groups:
             preview = []
             for group_name, items in obj.keyword_groups.items():
+                if isinstance(items, list):
+                    preview.extend(items[:2])
+            if preview:
+                return ", ".join(preview[:3]) + ("..." if len(preview) > 3 else "")
+        return "-"
+    keywords_preview.short_description = "Ключи"
+
+
+class ClientProjectSemanticSetInline(admin.TabularInline):
+    model = ProjectSemanticSet
+    fk_name = "client"
+    extra = 0
+    fields = ("source", "status", "keywords_preview", "created_at")
+    readonly_fields = ("source", "status", "keywords_preview", "created_at")
+    show_change_link = True
+    can_delete = False
+
+    def keywords_preview(self, obj):
+        keywords = obj.keywords_list or []
+        if keywords:
+            return ", ".join(keywords[:3]) + ("..." if len(keywords) > 3 else "")
+        if obj.keyword_groups:
+            preview = []
+            for _, items in obj.keyword_groups.items():
                 if isinstance(items, list):
                     preview.extend(items[:2])
             if preview:
@@ -183,7 +208,7 @@ class ClientAdmin(admin.ModelAdmin):
     list_display = ("name", "slug", "timezone", "has_business_info")
     search_fields = ("name", "slug", "avatar", "pains", "desires", "objections")
     prepopulated_fields = {"slug": ("name",)}
-    inlines = [ContentTemplateInline, ClientSEOKeywordSetInline]
+    inlines = [ContentTemplateInline, ClientSEOKeywordSetInline, ClientProjectSemanticSetInline]
     actions = ["generate_seo_keywords_action"]
     readonly_fields = ("analyze_channel_button",)
 
@@ -2574,3 +2599,56 @@ class PostToneAdmin(admin.ModelAdmin):
         return obj.client.name if obj.client else "Системный"
     client_display.short_description = "Client"
     client_display.admin_order_field = "client"
+
+
+@admin.register(ProjectSemanticSet)
+class ProjectSemanticSetAdmin(admin.ModelAdmin):
+    list_display = ("client", "source", "status", "keywords_count", "created_at")
+    list_filter = ("source", "status", "client", "created_at")
+    search_fields = ("client__name", "client__slug", "books_text")
+    autocomplete_fields = ("client",)
+    readonly_fields = ("created_at", "updated_at", "keywords_display")
+
+    fieldsets = (
+        ("Основное", {
+            "fields": ("client", "source", "status", "books_text"),
+        }),
+        ("Семантика", {
+            "fields": ("keywords_list", "keyword_groups", "keywords_display"),
+        }),
+        ("Техническая информация", {
+            "fields": ("ai_model", "prompt_used", "error_log", "raw_response"),
+            "classes": ("collapse",),
+        }),
+        ("Служебное", {
+            "fields": ("created_at", "updated_at"),
+        }),
+    )
+
+    def keywords_count(self, obj):
+        if not obj:
+            return 0
+        return len(obj.get_flat_keywords())
+    keywords_count.short_description = "Количество"
+
+    def keywords_display(self, obj):
+        if obj.keywords_list:
+            html = '<div style="font-family: monospace; background: #f5f5f5; padding: 15px; border-radius: 5px;">'
+            html += '<ul style="margin: 0;">'
+            for keyword in obj.keywords_list:
+                html += f'<li>{keyword}</li>'
+            html += '</ul></div>'
+            return format_html(html)
+        if obj.keyword_groups:
+            html = '<div style="font-family: monospace; background: #f5f5f5; padding: 15px; border-radius: 5px;">'
+            for group_name, keywords in obj.keyword_groups.items():
+                html += f'<h4 style="color: #417690; margin-top: 10px;">{group_name.upper()}</h4>'
+                if isinstance(keywords, list):
+                    html += '<ul style="margin: 5px 0;">'
+                    for keyword in keywords:
+                        html += f'<li>{keyword}</li>'
+                    html += '</ul>'
+            html += '</div>'
+            return format_html(html)
+        return "Ключи не сгенерированы"
+    keywords_display.short_description = "Сгенерированные ключи"

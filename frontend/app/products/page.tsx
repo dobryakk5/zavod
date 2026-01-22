@@ -13,6 +13,7 @@ import type { MindMap } from '@/lib/types';
 import { Copy, Loader2, Trash2 } from 'lucide-react';
 import { ClientProductsTab } from './client-products-tab';
 import { ProductTypesTab } from './product-types-tab';
+import { SalesTab } from './sales-tab';
 
 const formatDate = (iso?: string) =>
   iso ? new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium' }).format(new Date(iso)) : '—';
@@ -337,6 +338,7 @@ export default function ProductsPage() {
         <TabsList>
           <TabsTrigger value="list">Список продуктов</TabsTrigger>
           <TabsTrigger value="types">Типы продуктов</TabsTrigger>
+          <TabsTrigger value="sales">Продажи</TabsTrigger>
           <TabsTrigger value="maps">Продуктовая карта</TabsTrigger>
         </TabsList>
 
@@ -346,6 +348,10 @@ export default function ProductsPage() {
 
         <TabsContent value="types">
           <ProductTypesTab />
+        </TabsContent>
+
+        <TabsContent value="sales">
+          <SalesTab />
         </TabsContent>
 
         <TabsContent value="maps" className="space-y-8">
