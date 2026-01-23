@@ -224,8 +224,9 @@ export function SalesTab() {
   const removeRow = (rowId: string) => {
     setRows((prev) => {
       const target = prev.find((row) => row.rowId === rowId);
-      if (target?.id) {
-        setDeletedIds((current) => (current.includes(target.id) ? current : [...current, target.id]));
+      if (typeof target?.id === 'number') {
+        const id = target.id;
+        setDeletedIds((current) => (current.includes(id) ? current : [...current, id]));
       }
       return prev.filter((row) => row.rowId !== rowId);
     });
