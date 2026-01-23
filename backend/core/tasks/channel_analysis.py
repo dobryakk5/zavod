@@ -14,11 +14,14 @@ import requests
 
 from celery import shared_task
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..ai_generator import AIContentGenerator
+from ..generation_events import check_generation_limit, record_generation_event
 from ..instagram_client import fetch_instagram_profile, normalize_instagram_username
-from ..models import ChannelAnalysis, ProjectChannelAnalysisRun, ProjectChannelPostStat
+from ..models import ChannelAnalysis, Client, GenerationEvent, ProjectChannelAnalysisRun, ProjectChannelPostStat
 from ..telegram_client import (
     TelegramContentCollector,
     normalize_telegram_channel_identifier,
@@ -120,6 +123,116 @@ def _send_telegram_alert(message: str) -> None:
             logger.error("Failed to send Telegram alert: %s %s", response.status_code, response.text)
     except Exception as exc:
         logger.error("Error while sending Telegram alert: %s", exc, exc_info=True)
+
+
+def _split_telegram_message(text: str, max_length: int = 4000) -> List[str]:
+    normalized = (text or "").strip()
+    if not normalized:
+        return []
+    if len(normalized) <= max_length:
+        return [normalized]
+    parts: List[str] = []
+    remaining = normalized
+    while remaining:
+        if len(remaining) <= max_length:
+            parts.append(remaining)
+            break
+        split_idx = remaining.rfind("\n", 0, max_length)
+        if split_idx <= 0:
+            split_idx = max_length
+        parts.append(remaining[:split_idx].rstrip())
+        remaining = remaining[split_idx:].lstrip()
+    return parts
+
+
+def _send_telegram_message(chat_id: str, text: str) -> None:
+    token = getattr(settings, "TELEGRAM_BOT_TOKEN", "") or ""
+    if not token or not chat_id:
+        logger.warning("Telegram notify is skipped (token or chat id missing)")
+        return
+    for part in _split_telegram_message(text):
+        try:
+            response = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": part},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                logger.error("Failed to send Telegram message: %s %s", response.status_code, response.text)
+        except Exception as exc:
+            logger.error("Error while sending Telegram message: %s", exc, exc_info=True)
+
+
+def _format_metric(value: int | None) -> str:
+    if value is None:
+        return "—"
+    return f"{int(value):,}".replace(",", " ")
+
+
+def _format_delta(value: int | None) -> str:
+    if value is None:
+        return ""
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{int(value):,}".replace(",", " ")
+
+
+def _format_metric_with_delta(value: int | None, delta: int | None) -> str:
+    base = _format_metric(value)
+    if delta is None:
+        return base
+    return f"{base} ({_format_delta(delta)})"
+
+
+def _resolve_client_timezone(client: Client):
+    try:
+        return ZoneInfo(client.timezone or "")
+    except ZoneInfoNotFoundError:
+        return timezone.get_default_timezone()
+
+
+def _build_project_channel_message(
+    client: Client,
+    run: ProjectChannelAnalysisRun,
+    channels: List[Dict],
+    previous_subscribers: Dict[Tuple[int, str, str], int],
+) -> str:
+    tz = _resolve_client_timezone(client)
+    generated_at = timezone.localtime(run.created_at, tz)
+    header = f"📊 Аналитика каналов проекта — {client.name}\n{generated_at:%Y-%m-%d %H:%M}"
+
+    lines: List[str] = [header]
+    if not channels:
+        lines.append("Нет данных для анализа.")
+        return "\n".join(lines)
+
+    for channel in channels:
+        channel_type = channel.get("channel_type") or "unknown"
+        channel_identifier = channel.get("channel_identifier") or ""
+        summary = channel.get("summary") or {}
+        totals = channel.get("totals") or {}
+        delta = channel.get("delta") or {}
+
+        channel_name = summary.get("channel_name") or channel_identifier or channel.get("channel_url") or "Без названия"
+        subscribers = summary.get("subscribers")
+        prev_run_id = channel.get("previous_run_id")
+        prev_subs = previous_subscribers.get((prev_run_id, channel_type, channel_identifier))
+        delta_subs = None if prev_subs is None else int(subscribers or 0) - int(prev_subs)
+
+        lines.append("")
+        lines.append(f"• {channel_name} ({channel_type})")
+        if channel.get("channel_url"):
+            lines.append(str(channel.get("channel_url")))
+
+        subs_line = f"Подписчики: {_format_metric(subscribers)}"
+        if delta_subs is not None:
+            subs_line += f" ({_format_delta(delta_subs)})"
+        lines.append(subs_line)
+
+        lines.append("Просмотры: " + _format_metric_with_delta(totals.get("views"), delta.get("views")))
+        lines.append("Реакции: " + _format_metric_with_delta(totals.get("reactions"), delta.get("reactions")))
+        lines.append("Комментарии: " + _format_metric_with_delta(totals.get("comments"), delta.get("comments")))
+
+    return "\n".join(lines)
 
 
 def _notify_ai_failure(context: str, errors: List[str], analysis: Optional[ChannelAnalysis] = None) -> None:
@@ -1124,3 +1237,91 @@ def analyze_project_channels_task(self, run_id: int):
             error=str(exc),
         )
         raise
+
+
+@shared_task
+def notify_project_channel_analysis_run(analysis_result, run_id: int):
+    """Отправить уведомление в Telegram по результатам анализа каналов проекта."""
+    try:
+        run = ProjectChannelAnalysisRun.objects.select_related("client").get(id=run_id)
+    except ProjectChannelAnalysisRun.DoesNotExist:
+        logger.error("ProjectChannelAnalysisRun %s не найден для уведомления", run_id)
+        return
+
+    if run.status != ProjectChannelAnalysisRun.STATUS_COMPLETED:
+        logger.warning("Project channel analysis %s not completed, skip notify", run_id)
+        return
+
+    result = run.result if isinstance(run.result, dict) else {}
+    channels = result.get("channels") if isinstance(result.get("channels"), list) else []
+
+    client = run.client
+    chat_id = (client.telegram_client_channel or "").strip() or getattr(settings, "TELEGRAM_ALERT_USER_ID", "")
+    if not chat_id:
+        logger.warning("Telegram chat id is missing for client %s", client.id)
+        return
+
+    previous_run_ids = {channel.get("previous_run_id") for channel in channels if channel.get("previous_run_id")}
+    previous_runs = ProjectChannelAnalysisRun.objects.filter(
+        id__in=previous_run_ids,
+        status=ProjectChannelAnalysisRun.STATUS_COMPLETED,
+    )
+    previous_subscribers: Dict[Tuple[int, str, str], int] = {}
+    for previous_run in previous_runs:
+        previous_result = previous_run.result if isinstance(previous_run.result, dict) else {}
+        previous_channels = previous_result.get("channels") if isinstance(previous_result.get("channels"), list) else []
+        for previous_channel in previous_channels:
+            channel_type = previous_channel.get("channel_type") or ""
+            channel_identifier = previous_channel.get("channel_identifier") or ""
+            summary = previous_channel.get("summary") or {}
+            subscribers = summary.get("subscribers")
+            if subscribers is None:
+                continue
+            previous_subscribers[(previous_run.id, channel_type, channel_identifier)] = int(subscribers)
+
+    message = _build_project_channel_message(client, run, channels, previous_subscribers)
+    _send_telegram_message(chat_id, message)
+
+
+@shared_task
+def schedule_project_channel_analysis_daily():
+    """Запустить ежедневный анализ каналов проекта для всех клиентов."""
+    clients = Client.objects.filter(
+        Q(project_telegram_channel__gt="") |
+        Q(project_instagram_channel__gt="") |
+        Q(project_youtube_channel__gt="")
+    )
+
+    created = 0
+    for client in clients:
+        limit_info = check_generation_limit(client, GenerationEvent.EVENT_CHANNEL_ANALYSIS)
+        if limit_info:
+            logger.info(
+                "Skip project channel analysis for client %s: limit reached (%s/%s)",
+                client.id,
+                limit_info["used"],
+                limit_info["limit"],
+            )
+            continue
+
+        has_running = ProjectChannelAnalysisRun.objects.filter(
+            client=client,
+            status__in=[ProjectChannelAnalysisRun.STATUS_PENDING, ProjectChannelAnalysisRun.STATUS_IN_PROGRESS],
+        ).exists()
+        if has_running:
+            continue
+
+        run = ProjectChannelAnalysisRun.objects.create(
+            client=client,
+            status=ProjectChannelAnalysisRun.STATUS_PENDING,
+        )
+        async_result = analyze_project_channels_task.apply_async(
+            args=[run.id],
+            link=notify_project_channel_analysis_run.s(run.id),
+        )
+        run.task_id = async_result.id
+        run.save(update_fields=["task_id", "updated_at"])
+        record_generation_event(client, GenerationEvent.EVENT_CHANNEL_ANALYSIS, meta={"source": "schedule"})
+        created += 1
+
+    return created

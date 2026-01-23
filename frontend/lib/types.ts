@@ -306,6 +306,13 @@ export interface Schedule {
   status: ScheduleStatus;
 }
 
+export interface TelegramTask {
+  id: number;
+  tg_name: string;
+  message_text: string;
+  received_at: string;
+}
+
 export interface SocialAccount {
   id: number;
   platform: Platform;

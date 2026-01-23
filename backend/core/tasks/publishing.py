@@ -63,14 +63,26 @@ def process_due_schedules():
     и запускает для них таску publish_schedule.
     """
     now = timezone.now()
-    qs = (
+    due_ids = list(
         Schedule.objects
-        .select_related("post", "social_account", "connection", "client")
         .filter(status="pending", scheduled_at__lte=now)
+        .values_list("id", flat=True)
     )
+    scheduled = 0
 
-    for schedule in qs:
-        publish_schedule.delay(schedule.id)
+    for schedule_id in due_ids:
+        updated = Schedule.objects.filter(id=schedule_id, status="pending").update(status="in_progress")
+        if not updated:
+            continue
+        try:
+            publish_schedule.delay(schedule_id)
+        except Exception:
+            Schedule.objects.filter(id=schedule_id).update(status="pending")
+            logger.warning("Failed to enqueue schedule %s", schedule_id, exc_info=True)
+            continue
+        scheduled += 1
+
+    return scheduled
 
 
 @shared_task

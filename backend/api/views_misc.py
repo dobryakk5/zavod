@@ -9,7 +9,7 @@ from rest_framework.response import Response
 
 from core import tasks
 from core.generation_events import record_generation_event
-from core.models import ContentTemplate, GenerationEvent, Schedule, SocialAccount, Story, Topic, TrendItem
+from core.models import ContentTemplate, GenerationEvent, Schedule, SocialAccount, Story, TelegramTask, Topic, TrendItem
 from core.services.posting_service import update_post_status_after_publish
 from core.social_accounts import sync_client_default_telegram_account
 
@@ -20,6 +20,7 @@ from .serializers import (
     SocialAccountSerializer,
     StoryDetailSerializer,
     StorySerializer,
+    TelegramTaskSerializer,
     TopicDetailSerializer,
     TopicSerializer,
     TrendItemDetailSerializer,
@@ -81,6 +82,17 @@ class ScheduleListView(generics.ListAPIView):
         if post_id:
             queryset = queryset.filter(post_id=post_id)
         return queryset
+
+
+class TelegramTaskListView(generics.ListAPIView):
+    serializer_class = TelegramTaskSerializer
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return (
+            TelegramTask.objects.filter(client=client)
+            .order_by("-received_at", "-id")
+        )
 
 class TopicViewSet(viewsets.ModelViewSet):
     """ViewSet for Topic CRUD operations and content discovery"""

@@ -170,6 +170,27 @@ create index if not exists idx_mind_node_properties_node
     on map.mind_node_properties(node_id);
 
 -- =========================================
+-- Telegram tasks
+-- =========================================
+create table if not exists map.telegram_tasks (
+    id bigserial primary key,
+
+    client_id bigint not null
+        references public.core_client(id)
+        on delete cascade,
+
+    tg_name text not null,
+    telegram_user_id bigint not null,
+    telegram_message_id bigint,
+    message_text text not null,
+
+    received_at timestamptz not null default now()
+);
+
+create index if not exists idx_telegram_tasks_client_received
+    on map.telegram_tasks(client_id, received_at desc);
+
+-- =========================================
 -- updated_at trigger
 -- =========================================
 create or replace function map.set_updated_at()

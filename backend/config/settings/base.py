@@ -3,6 +3,7 @@ from datetime import timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 import dj_database_url
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 LOG_DIR = BASE_DIR / "logs"
@@ -192,6 +193,19 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERYD_HIJACK_ROOT_LOGGER = False
+SCHEDULES_POLL_SECONDS = int(os.getenv("SCHEDULES_POLL_SECONDS", "60"))
+PROJECT_CHANNEL_ANALYSIS_HOUR = int(os.getenv("PROJECT_CHANNEL_ANALYSIS_HOUR", "9"))
+PROJECT_CHANNEL_ANALYSIS_MINUTE = int(os.getenv("PROJECT_CHANNEL_ANALYSIS_MINUTE", "0"))
+CELERY_BEAT_SCHEDULE = {
+    "process-due-schedules": {
+        "task": "core.tasks.publishing.process_due_schedules",
+        "schedule": timedelta(seconds=SCHEDULES_POLL_SECONDS),
+    },
+    "project-channel-analysis-daily": {
+        "task": "core.tasks.channel_analysis.schedule_project_channel_analysis_daily",
+        "schedule": crontab(hour=PROJECT_CHANNEL_ANALYSIS_HOUR, minute=PROJECT_CHANNEL_ANALYSIS_MINUTE),
+    },
+}
 
 # AI Content Generation
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")

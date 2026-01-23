@@ -23,6 +23,7 @@ from .views import (
     ProjectChannelAnalysisRunViewSet,
     ScheduleListView,
     ScheduleViewSet,
+    TelegramTaskListView,
     SocialAccountViewSet,
     SEOKeywordSetViewSet,
     StoryViewSet,
@@ -138,6 +139,7 @@ urlpatterns = [
     # Legacy list views (kept for backward compatibility)
     path('posts-list/', PostsListView.as_view(), name='posts-list'),
     path('schedules/', ScheduleListView.as_view(), name='schedules'),
+    path('telegram-tasks/', TelegramTaskListView.as_view(), name='telegram-tasks'),
 
     # Public RSS feed for Yandex Zen
     path('rss/<slug:client_slug>.xml', DzenRSSFeedView.as_view(), name='api-rss-feed'),

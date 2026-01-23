@@ -28,6 +28,7 @@ from .views_misc import (  # noqa: F401
     ProjectChannelAnalysisRunView,
     ProjectChannelAnalysisRunViewSet,
     StoryViewSet,
+    TelegramTaskListView,
     TelegramAuthView,
     TopicViewSet,
     TrendItemViewSet,

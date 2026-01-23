@@ -28,6 +28,7 @@ from core.models import (
     SEOKeywordSet,
     SocialAccount,
     Story,
+    TelegramTask,
     Topic,
     TrendItem,
     VkIntegration,
@@ -152,6 +153,17 @@ class ScheduleSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Нужно указать social_account или connection для публикации")
 
         return attrs
+
+
+class TelegramTaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TelegramTask
+        fields = [
+            "id",
+            "tg_name",
+            "message_text",
+            "received_at",
+        ]
 
     def get_platform(self, obj: Schedule) -> Optional[str]:
         if obj.connection_id:

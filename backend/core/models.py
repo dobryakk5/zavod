@@ -2243,3 +2243,20 @@ class MindNodePosition(models.Model):
     class Meta:
         managed = False
         db_table = 'map"."mind_node_positions'
+
+
+class TelegramTask(models.Model):
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="client_id", related_name="telegram_tasks")
+    tg_name = models.TextField()
+    telegram_user_id = models.BigIntegerField()
+    telegram_message_id = models.BigIntegerField(blank=True, null=True)
+    message_text = models.TextField()
+    received_at = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'map"."telegram_tasks'
+        ordering = ("-received_at", "-id")
+
+    def __str__(self):
+        return f"@{self.tg_name}: {self.message_text[:48]}"

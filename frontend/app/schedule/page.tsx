@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import ContentCalendarPage from './calendar';
 import ScheduleListView from './list-view';
+import ScheduleTasksView from './tasks-view';
 
 export default function SchedulePage() {
   const [activeTab, setActiveTab] = useState('calendar');
@@ -16,6 +17,7 @@ export default function SchedulePage() {
           <TabsList>
             <TabsTrigger value="calendar">Календарь</TabsTrigger>
             <TabsTrigger value="list">Список</TabsTrigger>
+            <TabsTrigger value="tasks">Задачи</TabsTrigger>
           </TabsList>
         </div>
 
@@ -25,6 +27,10 @@ export default function SchedulePage() {
 
         <TabsContent value="list" className="mt-0">
           <ScheduleListView />
+        </TabsContent>
+
+        <TabsContent value="tasks" className="mt-0">
+          <ScheduleTasksView />
         </TabsContent>
       </Tabs>
     </div>

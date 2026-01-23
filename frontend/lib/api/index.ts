@@ -19,3 +19,4 @@ export * from './productTypes';
 export * from './websites';
 export * from './google';
 export * from './articles';
+export * from './telegramTasks';
