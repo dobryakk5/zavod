@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { ArrowUpRight, CheckCircle, Clock3, RefreshCcw, XCircle } from 'lucide-react';
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 type PaymentResponse = {
   id?: string;
@@ -86,6 +87,9 @@ export function PaymentTab() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [amount, setAmount] = useState('');
+  const [promoCode, setPromoCode] = useState('');
+  const [promoLoading, setPromoLoading] = useState(false);
+  const [promoError, setPromoError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [telegramUser, setTelegramUser] = useState<TelegramAuthResponse['user'] | null>(null);
@@ -240,6 +244,49 @@ export function PaymentTab() {
       setStatusError('Не удалось получить статус платежа.');
     } finally {
       setStatusLoading(false);
+    }
+  };
+
+  const handleApplyPromo = async () => {
+    const code = promoCode.trim();
+    if (!code) {
+      setPromoError('Введите промокод.');
+      return;
+    }
+
+    setPromoLoading(true);
+    setPromoError('');
+    try {
+      const response = await apiFetch<{
+        success: boolean;
+        message?: string;
+        plan_name?: string;
+        expires_at?: string;
+      }>('/payments/promo/', {
+        method: 'POST',
+        body: { code },
+      });
+      toast.success(response.message || 'Промокод применен.');
+      setPromoCode('');
+      await loadSubscription(false);
+    } catch (applyError) {
+      let message = 'Промокод не принят.';
+      if (applyError instanceof ApiError) {
+        try {
+          const parsed = JSON.parse(applyError.body ?? '');
+          if (parsed?.detail) {
+            message = parsed.detail;
+          }
+        } catch {
+          if (applyError.body) {
+            message = applyError.body;
+          }
+        }
+      }
+      setPromoError(message);
+      toast.error(message);
+    } finally {
+      setPromoLoading(false);
     }
   };
 
@@ -419,7 +466,53 @@ export function PaymentTab() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="pay-amount">Сумма к оплате, ₽</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="pay-amount">Сумма к оплате, ₽</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground underline decoration-dotted underline-offset-2 transition hover:text-foreground"
+                      >
+                        Ввести промокод
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-64 space-y-2 p-3">
+                      <div className="text-xs font-medium text-foreground">Промокод</div>
+                      <Input
+                        value={promoCode}
+                        onChange={(event) => {
+                          setPromoCode(event.target.value);
+                          if (promoError) {
+                            setPromoError('');
+                          }
+                        }}
+                        placeholder="Например: 1free"
+                        className="h-8 text-xs"
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            void handleApplyPromo();
+                          }
+                        }}
+                      />
+                      {promoError ? <div className="text-xs text-destructive">{promoError}</div> : null}
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={handleApplyPromo}
+                        disabled={promoLoading || !promoCode.trim()}
+                        className="w-full"
+                      >
+                        {promoLoading ? 'Применяем...' : 'Применить'}
+                      </Button>
+                      <div className="text-xs text-muted-foreground">
+                        Промокод <span className="font-medium text-foreground">1free</span> дает 1 месяц тарифа
+                        starter.
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
                 <Input
                   id="pay-amount"
                   value={amount}

@@ -26,6 +26,7 @@ from core.models import Client, PaymentPlan
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+PROMO_CODE_STARTER = "1free"
 
 def _is_dev_user(user) -> bool:
     return getattr(user, "is_dev_user", False) or user.username == "dev_user"
@@ -449,6 +450,70 @@ class PaymentSubscriptionView(APIView):
                 "period": plan.period,
                 "period_label": plan.get_period_display(),
                 "is_active": True,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PaymentPromoCodeApplyView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        raw_code = request.data.get("code") or request.data.get("promo_code")
+        code = str(raw_code or "").strip().lower()
+
+        if not code:
+            return Response({"detail": "Промокод обязателен."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if code != PROMO_CODE_STARTER:
+            return Response({"detail": "Промокод не найден."}, status=status.HTTP_400_BAD_REQUEST)
+
+        plan = PaymentPlan.objects.filter(code="starter", is_active=True).first()
+        if not plan:
+            logger.error("promo: starter plan missing")
+            return Response(
+                {"detail": "Тариф starter не настроен."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        now = timezone.now()
+        if client.plan_id and client.plan_id != plan.id and client.plan_expires_at and client.plan_expires_at > now:
+            until = timezone.localtime(client.plan_expires_at).strftime("%d.%m.%Y")
+            return Response(
+                {
+                    "detail": (
+                        f"У вас уже активный тариф {client.plan.name} до {until}. "
+                        "Промокод можно применить после окончания."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        base_date = now
+        if client.plan_id == plan.id and client.plan_expires_at and client.plan_expires_at > now:
+            base_date = client.plan_expires_at
+
+        expires_at = base_date + relativedelta(months=1)
+        client.plan = plan
+        client.plan_expires_at = expires_at
+        client.save(update_fields=["plan", "plan_expires_at"])
+
+        logger.info(
+            "promo: applied code=%s client_id=%s plan=%s expires_at=%s",
+            code,
+            client.id,
+            plan.code,
+            expires_at,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "plan_code": plan.code,
+                "plan_name": plan.name,
+                "expires_at": expires_at,
+                "message": "Промокод применен.",
             },
             status=status.HTTP_200_OK,
         )

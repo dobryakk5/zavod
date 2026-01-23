@@ -76,6 +76,7 @@ from .views_payments import (  # noqa: F401
     YooKassaCreatePaymentView,
     YooKassaPaymentStatusView,
     PaymentPlanListView,
+    PaymentPromoCodeApplyView,
     PaymentSubscriptionView,
     YooKassaWebhookView,
 )

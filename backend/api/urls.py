@@ -64,6 +64,7 @@ from .views import (
     YooKassaCreatePaymentView,
     YooKassaPaymentStatusView,
     PaymentPlanListView,
+    PaymentPromoCodeApplyView,
     PaymentSubscriptionView,
     YooKassaWebhookView,
 )
@@ -138,6 +139,7 @@ urlpatterns = [
     path('payments/status/<str:payment_id>/', YooKassaPaymentStatusView.as_view(), name='yookassa-payment-status'),
     path('payments/plans/', PaymentPlanListView.as_view(), name='payment-plans'),
     path('payments/subscription/', PaymentSubscriptionView.as_view(), name='payment-subscription'),
+    path('payments/promo/', PaymentPromoCodeApplyView.as_view(), name='payment-promo-apply'),
     path('payments/webhook/', YooKassaWebhookView.as_view(), name='yookassa-webhook'),
 
     # Legacy list views (kept for backward compatibility)
