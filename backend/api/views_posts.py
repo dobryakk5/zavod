@@ -25,11 +25,18 @@ from core.models import (
     PostVideo,
     Schedule,
     SocialAccount,
+    WeeklyContentStrategy,
 )
 from core.system_settings import get_image_generation_model, get_image_generation_method
 
 from .permissions import CanGenerateVideo, IsTenantMember, IsTenantOwnerOrEditor
-from .serializers import PostDetailSerializer, PostSerializer, PostToneSerializer, PostTypeSerializer
+from .serializers import (
+    PostDetailSerializer,
+    PostSerializer,
+    PostToneSerializer,
+    PostTypeSerializer,
+    WeeklyContentStrategySerializer,
+)
 from .utils import enforce_generation_limit, get_active_client
 
 logger = logging.getLogger(__name__)
@@ -480,3 +487,30 @@ class PostToneViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(client=None)
+
+
+class WeeklyContentStrategyViewSet(viewsets.ModelViewSet):
+    """Контент-стратегия по неделям."""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = WeeklyContentStrategySerializer
+    pagination_class = None
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in {"create", "update", "partial_update", "destroy"}:
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["client"] = get_active_client(self.request.user)
+        return context
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return WeeklyContentStrategy.objects.filter(client=client).order_by("-week_start")
+
+    def perform_create(self, serializer):
+        client = get_active_client(self.request.user)
+        serializer.save(client=client)

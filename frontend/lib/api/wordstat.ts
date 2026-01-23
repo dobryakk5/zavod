@@ -76,6 +76,13 @@ export const wordstatApi = {
     });
   },
 
+  updateClusterMain: async (clusterId: number, is_main: boolean): Promise<void> => {
+    await apiFetch<void>(`/wordstat-clusters/${clusterId}/`, {
+      method: 'PATCH',
+      body: { is_main },
+    });
+  },
+
   clusterFavorites: async (): Promise<{ success: boolean; clusters: WordstatCluster[] }> => {
     return apiFetch<{ success: boolean; clusters: WordstatCluster[] }>('/wordstat-results/cluster-favorites/', {
       method: 'POST',

@@ -646,6 +646,28 @@ class WeeklySalesPlan(models.Model):
         return f"[{self.client.slug}] Продажи {self.week_start}"
 
 
+class WeeklyContentStrategy(models.Model):
+    """Контент-стратегия по неделям."""
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="weekly_content_strategies")
+    week_start = models.DateField(help_text="Дата начала недели (понедельник)")
+    comment = models.TextField(blank=True, default="")
+    wordstat_cluster_ids = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-week_start",)
+        verbose_name = "Weekly Content Strategy"
+        verbose_name_plural = "Weekly Content Strategies"
+        constraints = [
+            models.UniqueConstraint(fields=["client", "week_start"], name="core_weekly_content_strategy_client_week_unique"),
+        ]
+
+    def __str__(self):
+        return f"[{self.client.slug}] Контент-стратегия {self.week_start}"
+
+
 class UserTenantRole(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     client = models.ForeignKey(Client, on_delete=models.CASCADE)
@@ -1833,6 +1855,7 @@ class WordstatCluster(models.Model):
     id = models.SmallAutoField(primary_key=True)
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="wordstat_clusters")
     name = models.CharField(max_length=255)
+    is_main = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -1510,12 +1510,18 @@ class WordstatQueryViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-class WordstatClusterViewSet(viewsets.ReadOnlyModelViewSet):
+class WordstatClusterViewSet(mixins.UpdateModelMixin, viewsets.ReadOnlyModelViewSet):
     """Список кластеров Wordstat для клиента."""
 
     permission_classes = [IsTenantMember]
     serializer_class = WordstatClusterSerializer
     pagination_class = None
+    http_method_names = ["get", "patch", "put", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in ("update", "partial_update"):
+            return [IsTenantOwnerOrEditor()]
+        return [IsTenantMember()]
 
     def get_queryset(self):
         client = get_active_client(self.request.user)

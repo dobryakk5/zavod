@@ -558,6 +558,7 @@ export interface WordstatResult {
 export interface WordstatCluster {
   id: number;
   name: string;
+  is_main?: boolean;
   phrases_count?: number;
   created_at?: string;
 }

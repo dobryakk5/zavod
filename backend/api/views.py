@@ -45,7 +45,7 @@ from .views_misc import (  # noqa: F401
 )
 
 # Extracted modules (overrides legacy implementations).
-from .views_posts import PostsListView, PostToneViewSet, PostTypeViewSet, PostViewSet  # noqa: F401
+from .views_posts import PostsListView, PostToneViewSet, PostTypeViewSet, PostViewSet, WeeklyContentStrategyViewSet  # noqa: F401
 from .views_products import (  # noqa: F401
     ClientProductViewSet,
     MindMapViewSet,

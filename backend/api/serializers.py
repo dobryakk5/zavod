@@ -40,6 +40,7 @@ from core.models import (
     WeeklySourceReport,
     WeeklySourceBatch,
     WeeklySalesPlan,
+    WeeklyContentStrategy,
     ProjectChannelAnalysisRun,
 )
 from core.services.product_type_templates import is_system_product_type_name
@@ -578,8 +579,8 @@ class WordstatClusterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = WordstatCluster
-        fields = ["id", "name", "phrases_count", "created_at"]
-        read_only_fields = ["id", "phrases_count", "created_at"]
+        fields = ["id", "name", "is_main", "phrases_count", "created_at"]
+        read_only_fields = ["id", "name", "phrases_count", "created_at"]
 
 
 class WordstatQuerySerializer(serializers.ModelSerializer):
@@ -1029,6 +1030,47 @@ class WeeklySalesPlanSerializer(serializers.ModelSerializer):
             "hot_leads_fact",
             "sales_plan",
             "sales_fact",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class WeeklyContentStrategySerializer(serializers.ModelSerializer):
+    def validate_wordstat_cluster_ids(self, value):
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Ожидается список Wordstat-кластеров.")
+
+        cleaned: list[int] = []
+        for item in value:
+            try:
+                cluster_id = int(item)
+            except (TypeError, ValueError):
+                raise serializers.ValidationError("Некорректный идентификатор Wordstat-кластера.")
+            if cluster_id <= 0:
+                raise serializers.ValidationError("Некорректный идентификатор Wordstat-кластера.")
+            if cluster_id not in cleaned:
+                cleaned.append(cluster_id)
+
+        client = self.context.get("client")
+        if client and cleaned:
+            valid_ids = set(
+                WordstatCluster.objects.filter(client=client, is_main=False, id__in=cleaned).values_list("id", flat=True)
+            )
+            if len(valid_ids) != len(cleaned):
+                raise serializers.ValidationError("Некоторые кластеры недоступны для выбора.")
+
+        return cleaned
+
+    class Meta:
+        model = WeeklyContentStrategy
+        fields = [
+            "id",
+            "week_start",
+            "comment",
+            "wordstat_cluster_ids",
             "created_at",
             "updated_at",
         ]

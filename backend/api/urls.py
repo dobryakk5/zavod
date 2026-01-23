@@ -17,6 +17,7 @@ from .views import (
     PostToneViewSet,
     PostTypeViewSet,
     PostViewSet,
+    WeeklyContentStrategyViewSet,
     DzenRSSFeedView,
     RefreshTokenView,
     ProjectChannelAnalysisRunView,
@@ -81,6 +82,7 @@ router.register(r'schedules-manage', ScheduleViewSet, basename='schedule-manage'
 router.register(r'social-accounts', SocialAccountViewSet, basename='social-account')
 router.register(r'post-types', PostTypeViewSet, basename='post-type')
 router.register(r'post-tones', PostToneViewSet, basename='post-tone')
+router.register(r'content-strategy', WeeklyContentStrategyViewSet, basename='content-strategy')
 router.register(r'seo-keywords', SEOKeywordSetViewSet, basename='seo-keyword')
 router.register(r'wordstat', WordstatQueryViewSet, basename='wordstat')
 router.register(r'wordstat-clusters', WordstatClusterViewSet, basename='wordstat-cluster')

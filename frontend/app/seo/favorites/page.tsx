@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { wordstatApi } from '@/lib/api/wordstat';
 import { articlesApi } from '@/lib/api/articles';
 import { ApiError } from '@/lib/api';
+import { useRole } from '@/lib/hooks';
 import type { WordstatCluster, WordstatQuery, WordstatResultType } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -31,6 +32,7 @@ type FavoriteRow = {
 
 export default function WordstatFavoritesPage() {
   const router = useRouter();
+  const { canEdit } = useRole();
   const [queries, setQueries] = useState<WordstatQuery[]>([]);
   const [clusters, setClusters] = useState<WordstatCluster[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,6 +40,7 @@ export default function WordstatFavoritesPage() {
   const [creatingArticle, setCreatingArticle] = useState<string | null>(null);
   const [clusterizing, setClusterizing] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [updatingClusterMain, setUpdatingClusterMain] = useState<Record<number, boolean>>({});
 
   const clusterNameById = useMemo(() => {
     const map = new Map<number, string>();
@@ -53,6 +56,14 @@ export default function WordstatFavoritesPage() {
     const base = (name || 'Без кластера').trim();
     return `${base.slice(0, 5)}...`;
   };
+
+  const clusterMainById = useMemo(() => {
+    const map = new Map<number, boolean>();
+    clusters.forEach((cluster) => {
+      map.set(cluster.id, Boolean(cluster.is_main));
+    });
+    return map;
+  }, [clusters]);
 
   const load = async () => {
     setLoading(true);
@@ -118,7 +129,7 @@ export default function WordstatFavoritesPage() {
       unclustered.push(row);
     });
 
-    const grouped: Array<{ key: string; title: string; rows: FavoriteRow[]; total: number }> = [];
+    const grouped: Array<{ key: string; title: string; rows: FavoriteRow[]; total: number; clusterId?: number; isMain?: boolean }> = [];
     rowsByCluster.forEach((rows, clusterId) => {
       const total = rows.reduce((sum, row) => sum + row.count, 0);
       grouped.push({
@@ -126,6 +137,8 @@ export default function WordstatFavoritesPage() {
         title: clusterNames.get(clusterId) || `Кластер #${clusterId}`,
         rows,
         total,
+        clusterId,
+        isMain: clusterMainById.get(clusterId) || false,
       });
     });
 
@@ -152,7 +165,7 @@ export default function WordstatFavoritesPage() {
         total: favorites.reduce((sum, row) => sum + row.count, 0),
       },
     ];
-  }, [clusters, favorites]);
+  }, [clusters, favorites, clusterMainById]);
 
   const handleResultTypeChange = async (resultId: number, result_type: WordstatResultType) => {
     setUpdating(true);
@@ -230,6 +243,23 @@ export default function WordstatFavoritesPage() {
       load();
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const handleClusterMainToggle = async (clusterId: number, nextValue: boolean) => {
+    if (!canEdit) return;
+    setUpdatingClusterMain((prev) => ({ ...prev, [clusterId]: true }));
+    setClusters((prev) =>
+      prev.map((cluster) => (cluster.id === clusterId ? { ...cluster, is_main: nextValue } : cluster))
+    );
+    try {
+      await wordstatApi.updateClusterMain(clusterId, nextValue);
+    } catch (error) {
+      console.error('Failed to update Wordstat cluster main flag', error);
+      toast.error('Не удалось обновить параметр «Основной»');
+      load();
+    } finally {
+      setUpdatingClusterMain((prev) => ({ ...prev, [clusterId]: false }));
     }
   };
 
@@ -367,8 +397,28 @@ export default function WordstatFavoritesPage() {
                                   {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                                   {group.title}
                                 </span>
-                                <span className="text-[11px] text-slate-500">
-                                  {group.total.toLocaleString('ru-RU')} показов
+                                <span className="inline-flex items-center gap-3 text-[11px] text-slate-500">
+                                  {group.clusterId ? (
+                                    <label
+                                      className={`inline-flex items-center gap-2 ${
+                                        canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+                                      }`}
+                                      onClick={(event) => event.stopPropagation()}
+                                      onPointerDown={(event) => event.stopPropagation()}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        className="h-3 w-3 accent-emerald-600"
+                                        checked={Boolean(group.isMain)}
+                                        onClick={(event) => event.stopPropagation()}
+                                        onChange={(event) => handleClusterMainToggle(group.clusterId!, event.target.checked)}
+                                        disabled={!canEdit || Boolean(updatingClusterMain[group.clusterId])}
+                                        aria-label="Основной кластер"
+                                      />
+                                      Основной
+                                    </label>
+                                  ) : null}
+                                  <span>{group.total.toLocaleString('ru-RU')} показов</span>
                                 </span>
                               </button>
                             </TableCell>
