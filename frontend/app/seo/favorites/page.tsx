@@ -114,7 +114,9 @@ export default function WordstatFavoritesPage() {
 
   const hasClusters = clusters.length > 0;
 
-  const groupedFavorites = useMemo(() => {
+  const groupedFavorites = useMemo<
+    Array<{ key: string; title: string; rows: FavoriteRow[]; total: number; clusterId?: number; isMain?: boolean }>
+  >(() => {
     if (!favorites.length) return [];
     const rowsByCluster = new Map<number, FavoriteRow[]>();
     const unclustered: FavoriteRow[] = [];
