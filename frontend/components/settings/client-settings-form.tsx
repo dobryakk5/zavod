@@ -201,7 +201,7 @@ export function ClientSettingsForm() {
             <FormItem>
               <FormLabel>Название бренда</FormLabel>
               <FormControl>
-                <Input placeholder="Например: Zavod Media" {...field} />
+                <Input placeholder="Например: Ромашка и партнеры" {...field} />
               </FormControl>
               <FormDescription>Используется для упоминания в постах</FormDescription>
               <FormMessage />
@@ -351,11 +351,8 @@ Wordstat даст кашу
                 </Dialog>
               </div>
               <FormControl>
-                <Input placeholder='Например: "пиццерия"' {...field} />
+                <Input placeholder='Например: "Юридические услуги"' {...field} />
               </FormControl>
-              <FormDescription>
-                Например &quot;пиццерия&quot; или &quot;школа психологии&quot;
-              </FormDescription>
               <FormMessage />
             </FormItem>
           )}
@@ -370,11 +367,8 @@ Wordstat даст кашу
                 Продукт/услуга <span className="text-red-500">*</span>
               </FormLabel>
               <FormControl>
-                <Input placeholder='Например: "доставка пиццы" или "онлайн-курс по йоге"' {...field} />
+                <Input placeholder='Например: "Регистрация и сопровождение ООО"' {...field} />
               </FormControl>
-              <FormDescription>
-                Коротко опишите, что именно вы предлагаете клиентам.
-              </FormDescription>
               <FormMessage />
             </FormItem>
           )}
