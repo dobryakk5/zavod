@@ -620,6 +620,32 @@ class WeeklySourceBatch(models.Model):
         return f"[{self.client.slug}] Подборка {self.week_start}"
 
 
+class WeeklySalesPlan(models.Model):
+    """План/факт продаж по неделям."""
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="weekly_sales_plans")
+    week_start = models.DateField(help_text="Дата начала недели (понедельник)")
+    cold_leads_plan = models.PositiveIntegerField(null=True, blank=True)
+    cold_leads_fact = models.PositiveIntegerField(null=True, blank=True)
+    hot_leads_plan = models.PositiveIntegerField(null=True, blank=True)
+    hot_leads_fact = models.PositiveIntegerField(null=True, blank=True)
+    sales_plan = models.PositiveIntegerField(null=True, blank=True)
+    sales_fact = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-week_start",)
+        verbose_name = "Weekly Sales Plan"
+        verbose_name_plural = "Weekly Sales Plans"
+        constraints = [
+            models.UniqueConstraint(fields=["client", "week_start"], name="core_weekly_sales_client_week_unique"),
+        ]
+
+    def __str__(self):
+        return f"[{self.client.slug}] Продажи {self.week_start}"
+
+
 class UserTenantRole(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     client = models.ForeignKey(Client, on_delete=models.CASCADE)

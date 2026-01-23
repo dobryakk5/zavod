@@ -52,6 +52,7 @@ from .views_products import (  # noqa: F401
     MindNodePositionView,
     MindNodePropertyViewSet,
     ProductTypeViewSet,
+    WeeklySalesPlanViewSet,
 )
 from .views_social import DzenRSSFeedView, TgChannelView  # noqa: F401
 from .views_tgstat import (  # noqa: F401

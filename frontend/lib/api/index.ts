@@ -16,6 +16,7 @@ export * from './vk';
 export * from './mindmaps';
 export * from './clientProducts';
 export * from './productTypes';
+export * from './weeklySales';
 export * from './websites';
 export * from './google';
 export * from './articles';

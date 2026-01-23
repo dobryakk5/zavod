@@ -48,6 +48,7 @@ from .views import (
     WeeklySourceReportViewSet,
     WeeklySourceRunView,
     WeeklySourceBatchViewSet,
+    WeeklySalesPlanViewSet,
     WordstatQueryViewSet,
     WordstatClusterViewSet,
     WordstatResultViewSet,
@@ -89,6 +90,7 @@ router.register(r'project-analyses', ProjectChannelAnalysisRunViewSet, basename=
 router.register(r'vk/integrations', VkIntegrationViewSet, basename='vk-integration')
 router.register(r'weekly-sources', WeeklySourceReportViewSet, basename='weekly-sources')
 router.register(r'weekly-batches', WeeklySourceBatchViewSet, basename='weekly-batches')
+router.register(r'weekly-sales', WeeklySalesPlanViewSet, basename='weekly-sales')
 router.register(r'website-scans', WebsiteScanViewSet, basename='website-scan')
 router.register(r'map/node-properties', MindNodePropertyViewSet, basename='mind-node-property')
 router.register(r'map/mind-maps', MindMapViewSet, basename='mind-map')

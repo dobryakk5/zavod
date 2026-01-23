@@ -1,13 +1,16 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ApiError } from '@/lib/api';
+import { weeklySalesApi, type WeeklySalesPlan } from '@/lib/api/weeklySales';
 import { Trash2 } from 'lucide-react';
 
 type SalesWeekRow = {
-  id: string;
+  rowId: string;
+  id?: number;
   weekStart: string;
   coldLeadsPlan: string;
   coldLeadsFact: string;
@@ -25,6 +28,7 @@ type SalesMonthGroup = {
 
 const monthFormatter = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' });
 const weekFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short' });
+const timeFormatter = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
 
 const padNumber = (value: number) => String(value).padStart(2, '0');
 
@@ -103,8 +107,40 @@ const getNextWeekStart = (value: string) => {
   return toDateInputValue(addDays(base, 7));
 };
 
+const toInputValue = (value?: number | null) => (typeof value === 'number' ? String(value) : '');
+
+const mapApiToRow = (item: WeeklySalesPlan): SalesWeekRow => ({
+  rowId: `srv-${item.id}`,
+  id: item.id,
+  weekStart: item.week_start,
+  coldLeadsPlan: toInputValue(item.cold_leads_plan),
+  coldLeadsFact: toInputValue(item.cold_leads_fact),
+  hotLeadsPlan: toInputValue(item.hot_leads_plan),
+  hotLeadsFact: toInputValue(item.hot_leads_fact),
+  salesPlan: toInputValue(item.sales_plan),
+  salesFact: toInputValue(item.sales_fact)
+});
+
+const parseMetricValue = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (Number.isNaN(parsed) || parsed < 0) return null;
+  return parsed;
+};
+
+const buildPayload = (row: SalesWeekRow) => ({
+  week_start: row.weekStart,
+  cold_leads_plan: parseMetricValue(row.coldLeadsPlan),
+  cold_leads_fact: parseMetricValue(row.coldLeadsFact),
+  hot_leads_plan: parseMetricValue(row.hotLeadsPlan),
+  hot_leads_fact: parseMetricValue(row.hotLeadsFact),
+  sales_plan: parseMetricValue(row.salesPlan),
+  sales_fact: parseMetricValue(row.salesFact)
+});
+
 const createRow = (weekStart: string): SalesWeekRow => ({
-  id: crypto.randomUUID(),
+  rowId: crypto.randomUUID(),
   weekStart,
   coldLeadsPlan: '',
   coldLeadsFact: '',
@@ -114,11 +150,52 @@ const createRow = (weekStart: string): SalesWeekRow => ({
   salesFact: ''
 });
 
+const validateRows = (rows: SalesWeekRow[]) => {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (!row.weekStart) {
+      return 'Укажите дату начала недели во всех строках.';
+    }
+    if (seen.has(row.weekStart)) {
+      return 'Обнаружены одинаковые недели. Оставьте только одну строку на неделю.';
+    }
+    seen.add(row.weekStart);
+  }
+  return null;
+};
+
 export function SalesTab() {
   const [rows, setRows] = useState<SalesWeekRow[]>([]);
+  const [deletedIds, setDeletedIds] = useState<number[]>([]);
   const [newWeekStart, setNewWeekStart] = useState(getCurrentWeekStart);
   const [addError, setAddError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const groups = useMemo(() => groupByMonth(rows), [rows]);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const data = await weeklySalesApi.list();
+        setRows(sortRows(data.map(mapApiToRow)));
+        setDeletedIds([]);
+        setDirty(false);
+      } catch (err) {
+        console.error('Failed to load weekly sales', err);
+        setLoadError('Не удалось загрузить данные. Проверьте API /weekly-sales/.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    load();
+  }, []);
 
   const handleAddWeek = () => {
     if (!newWeekStart) {
@@ -132,16 +209,73 @@ export function SalesTab() {
     }
 
     setRows((prev) => sortRows([...prev, createRow(newWeekStart)]));
+    setDirty(true);
     setNewWeekStart(getNextWeekStart(newWeekStart));
     setAddError(null);
+    setSaveError(null);
   };
 
   const updateRow = (rowId: string, patch: Partial<SalesWeekRow>) => {
-    setRows((prev) => sortRows(prev.map((row) => (row.id === rowId ? { ...row, ...patch } : row))));
+    setRows((prev) => sortRows(prev.map((row) => (row.rowId === rowId ? { ...row, ...patch } : row))));
+    setDirty(true);
+    setSaveError(null);
   };
 
   const removeRow = (rowId: string) => {
-    setRows((prev) => prev.filter((row) => row.id !== rowId));
+    setRows((prev) => {
+      const target = prev.find((row) => row.rowId === rowId);
+      if (target?.id) {
+        setDeletedIds((current) => (current.includes(target.id) ? current : [...current, target.id]));
+      }
+      return prev.filter((row) => row.rowId !== rowId);
+    });
+    setDirty(true);
+    setSaveError(null);
+  };
+
+  const handleSave = async () => {
+    if (saving) return;
+    const validationError = validateRows(rows);
+    if (validationError) {
+      setSaveError(validationError);
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+
+    try {
+      for (const id of deletedIds) {
+        await weeklySalesApi.delete(id);
+      }
+
+      const nextRows = [...rows];
+      for (let index = 0; index < nextRows.length; index += 1) {
+        const row = nextRows[index];
+        const payload = buildPayload(row);
+        if (row.id) {
+          const updated = await weeklySalesApi.update(row.id, payload);
+          nextRows[index] = { ...row, ...mapApiToRow(updated), rowId: row.rowId };
+        } else {
+          const created = await weeklySalesApi.create(payload);
+          nextRows[index] = { ...row, ...mapApiToRow(created), rowId: row.rowId };
+        }
+      }
+
+      setRows(sortRows(nextRows));
+      setDeletedIds([]);
+      setDirty(false);
+      setSavedAt(timeFormatter.format(new Date()));
+    } catch (err) {
+      console.error('Failed to save weekly sales', err);
+      if (err instanceof ApiError) {
+        setSaveError('Не удалось сохранить данные. Проверьте поля и повторите.');
+      } else {
+        setSaveError('Не удалось сохранить данные. Проверьте подключение и повторите.');
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -154,7 +288,7 @@ export function SalesTab() {
       </div>
 
       <div className="space-y-3 rounded-xl border bg-card/70 p-4 shadow-sm">
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="space-y-1">
             <div className="text-xs text-muted-foreground">Дата начала недели</div>
             <Input
@@ -167,17 +301,31 @@ export function SalesTab() {
               className="h-9 w-[180px]"
             />
           </div>
-          <Button onClick={handleAddWeek} disabled={!newWeekStart}>
-            Добавить неделю
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={handleAddWeek} disabled={!newWeekStart || saving}>
+              Добавить неделю
+            </Button>
+            <Button variant="secondary" onClick={() => void handleSave()} disabled={!dirty || saving}>
+              {saving ? 'Сохранение…' : 'Сохранить'}
+            </Button>
+          </div>
         </div>
         {addError ? <div className="text-xs text-destructive">{addError}</div> : null}
+        {loadError ? <div className="text-xs text-destructive">{loadError}</div> : null}
+        {saveError ? <div className="text-xs text-destructive">{saveError}</div> : null}
+        {savedAt && !dirty ? (
+          <div className="text-xs text-muted-foreground">Сохранено в {savedAt}</div>
+        ) : null}
         <div className="text-xs text-muted-foreground">
           Выберите понедельник — неделя автоматически считается до воскресенья.
         </div>
       </div>
 
-      {groups.length === 0 ? (
+      {loading ? (
+        <div className="rounded-xl border bg-card/70 px-4 py-6 text-sm text-muted-foreground shadow-sm">
+          Загружаем данные...
+        </div>
+      ) : groups.length === 0 ? (
         <div className="rounded-xl border bg-card/70 px-4 py-6 text-sm text-muted-foreground shadow-sm">
           Пока нет данных по неделям. Добавьте первую неделю для ввода план/факт.
         </div>
@@ -216,14 +364,14 @@ export function SalesTab() {
               </TableHeader>
               <TableBody>
                 {group.rows.map((row) => (
-                  <TableRow key={row.id}>
+                  <TableRow key={row.rowId}>
                     <TableCell className="align-top">
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
                           <Input
                             type="date"
                             value={row.weekStart}
-                            onChange={(event) => updateRow(row.id, { weekStart: event.target.value })}
+                            onChange={(event) => updateRow(row.rowId, { weekStart: event.target.value })}
                             className="h-9 w-[160px]"
                           />
                           <Button
@@ -231,7 +379,7 @@ export function SalesTab() {
                             variant="ghost"
                             size="icon"
                             className="h-9 w-9 text-red-600 hover:bg-red-50 hover:text-red-700"
-                            onClick={() => removeRow(row.id)}
+                            onClick={() => removeRow(row.rowId)}
                             aria-label="Удалить неделю"
                             title="Удалить неделю"
                           >
@@ -247,7 +395,7 @@ export function SalesTab() {
                         min={0}
                         inputMode="numeric"
                         value={row.coldLeadsPlan}
-                        onChange={(event) => updateRow(row.id, { coldLeadsPlan: event.target.value })}
+                        onChange={(event) => updateRow(row.rowId, { coldLeadsPlan: event.target.value })}
                         className="h-9 min-w-[96px] text-right tabular-nums"
                       />
                     </TableCell>
@@ -257,7 +405,7 @@ export function SalesTab() {
                         min={0}
                         inputMode="numeric"
                         value={row.coldLeadsFact}
-                        onChange={(event) => updateRow(row.id, { coldLeadsFact: event.target.value })}
+                        onChange={(event) => updateRow(row.rowId, { coldLeadsFact: event.target.value })}
                         className="h-9 min-w-[96px] text-right tabular-nums"
                       />
                     </TableCell>
@@ -267,7 +415,7 @@ export function SalesTab() {
                         min={0}
                         inputMode="numeric"
                         value={row.hotLeadsPlan}
-                        onChange={(event) => updateRow(row.id, { hotLeadsPlan: event.target.value })}
+                        onChange={(event) => updateRow(row.rowId, { hotLeadsPlan: event.target.value })}
                         className="h-9 min-w-[96px] text-right tabular-nums"
                       />
                     </TableCell>
@@ -277,7 +425,7 @@ export function SalesTab() {
                         min={0}
                         inputMode="numeric"
                         value={row.hotLeadsFact}
-                        onChange={(event) => updateRow(row.id, { hotLeadsFact: event.target.value })}
+                        onChange={(event) => updateRow(row.rowId, { hotLeadsFact: event.target.value })}
                         className="h-9 min-w-[96px] text-right tabular-nums"
                       />
                     </TableCell>
@@ -287,7 +435,7 @@ export function SalesTab() {
                         min={0}
                         inputMode="numeric"
                         value={row.salesPlan}
-                        onChange={(event) => updateRow(row.id, { salesPlan: event.target.value })}
+                        onChange={(event) => updateRow(row.rowId, { salesPlan: event.target.value })}
                         className="h-9 min-w-[96px] text-right tabular-nums"
                       />
                     </TableCell>
@@ -297,7 +445,7 @@ export function SalesTab() {
                         min={0}
                         inputMode="numeric"
                         value={row.salesFact}
-                        onChange={(event) => updateRow(row.id, { salesFact: event.target.value })}
+                        onChange={(event) => updateRow(row.rowId, { salesFact: event.target.value })}
                         className="h-9 min-w-[96px] text-right tabular-nums"
                       />
                     </TableCell>

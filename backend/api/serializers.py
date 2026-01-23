@@ -39,6 +39,7 @@ from core.models import (
     WordstatCluster,
     WeeklySourceReport,
     WeeklySourceBatch,
+    WeeklySalesPlan,
     ProjectChannelAnalysisRun,
 )
 from core.services.product_type_templates import is_system_product_type_name
@@ -1014,6 +1015,24 @@ class WeeklySourceBatchListSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+
+class WeeklySalesPlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WeeklySalesPlan
+        fields = [
+            "id",
+            "week_start",
+            "cold_leads_plan",
+            "cold_leads_fact",
+            "hot_leads_plan",
+            "hot_leads_fact",
+            "sales_plan",
+            "sales_fact",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
 
 
 # ============================================================================

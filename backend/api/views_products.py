@@ -25,6 +25,7 @@ from core.models import (
     MindNodePosition,
     MindNodeProperty,
     ProductType,
+    WeeklySalesPlan,
 )
 from core.services.product_type_templates import (
     ensure_system_product_type_templates,
@@ -50,6 +51,7 @@ from .serializers import (
     MindNodePropertySerializer,
     MindNodeSerializer,
     ProductTypeSerializer,
+    WeeklySalesPlanSerializer,
 )
 from .utils import enforce_generation_limit, get_active_client
 
@@ -430,6 +432,28 @@ class ClientProductViewSet(viewsets.ModelViewSet):
         client = get_active_client(self.request.user)
         self._ensure_product_type_belongs_to_client(serializer, client)
         serializer.save()
+
+
+class WeeklySalesPlanViewSet(viewsets.ModelViewSet):
+    """Weekly sales plan/fact data."""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = WeeklySalesPlanSerializer
+    pagination_class = None
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in {"create", "update", "partial_update", "destroy"}:
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return WeeklySalesPlan.objects.filter(client=client).order_by("-week_start")
+
+    def perform_create(self, serializer):
+        client = get_active_client(self.request.user)
+        serializer.save(client=client)
 
 
 def _touch_mind_map(map_id: int) -> None:
