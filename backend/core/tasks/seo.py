@@ -4,6 +4,7 @@ from typing import Dict
 
 from ..models import Topic, SEOKeywordSet, Client
 from ..ai_generator import AIContentGenerator
+from ..services.seo_generation import has_active_generation
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +38,8 @@ def _create_seo_records_for_generation(client: Client) -> Dict[str, SEOKeywordSe
     """
     Создать (или пересоздать) SEOKeywordSet записи для каждой группы перед генерацией.
     """
-    SEOKeywordSet.objects.filter(
-        client=client,
-        status__in=['pending', 'generating']
-    ).update(status='failed', error_log='Superseded by new SEO generation')
+    if has_active_generation(client):
+        return {}
 
     records = {}
     for group_type, _ in SEOKeywordSet.GROUP_TYPE_CHOICES:
@@ -83,7 +82,14 @@ def _collect_client_topics_and_keywords(client: Client):
 def _generate_seo_keywords_for_client_instance(client: Client, language: str = "ru"):
     logger.info(f"Генерация SEO-фраз для клиента: {client.name}")
 
+    if has_active_generation(client):
+        logger.info("SEO generation already in progress for client %s", client.id)
+        return None
+
     seo_records = _create_seo_records_for_generation(client)
+    if not seo_records:
+        logger.info("SEO generation skipped because another run is active for client %s", client.id)
+        return None
 
     try:
         generator = AIContentGenerator()
@@ -106,6 +112,8 @@ def _generate_seo_keywords_for_client_instance(client: Client, language: str = "
     def mark_record_success(group_type: str, keywords: list):
         record = seo_records.get(group_type)
         if not record:
+            return
+        if not SEOKeywordSet.objects.filter(id=record.id, status='generating').exists():
             return
         record.keywords_list = keywords
         record.keyword_groups = {group_type: keywords}
@@ -134,6 +142,8 @@ def _generate_seo_keywords_for_client_instance(client: Client, language: str = "
         for record in seo_records.values():
             if record.status == 'completed':
                 continue
+            if not SEOKeywordSet.objects.filter(id=record.id, status='generating').exists():
+                continue
             record.status = 'failed'
             record.error_log = error_message
             record.prompt_used = prompt_text
@@ -149,6 +159,9 @@ def _generate_seo_keywords_for_client_instance(client: Client, language: str = "
     for group_type, record in seo_records.items():
         if record.status == 'completed':
             completed_ids.append(record.id)
+            continue
+
+        if not SEOKeywordSet.objects.filter(id=record.id, status='generating').exists():
             continue
 
         keywords = keyword_groups.get(group_type, [])

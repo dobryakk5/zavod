@@ -23,6 +23,7 @@ from .views_misc import (  # noqa: F401
     RefreshTokenView,
     ScheduleListView,
     ScheduleViewSet,
+    ProjectSemanticSetViewSet,
     SEOKeywordSetViewSet,
     SocialAccountViewSet,
     ProjectChannelAnalysisRunView,

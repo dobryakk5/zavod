@@ -32,6 +32,7 @@ from core.models import (
     Article,
     ArticleBlock,
     GenerationEvent,
+    ProjectSemanticSet,
     SEOKeywordSet,
     WordstatCluster,
     WordstatQuery,
@@ -39,6 +40,7 @@ from core.models import (
 )
 from core.services.article_blocks import get_system_block_prompt_template, sync_blocks_from_seo_blocks
 from core.services.seo_article_analysis import analyze_text_against_wordstat, extract_text_from_url
+from core.services.seo_generation import cancel_active_generation, has_active_generation
 from core.wordstat import WordstatError, get_wordstat_client
 
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
@@ -46,6 +48,7 @@ from .serializers import (
     ArticleBlockSerializer,
     ArticleListSerializer,
     ArticleSerializer,
+    ProjectSemanticSetSerializer,
     SEOKeywordSetSerializer,
     WordstatClusterSerializer,
     WordstatQuerySerializer,
@@ -54,6 +57,7 @@ from .serializers import (
 from .utils import enforce_generation_limit, get_active_client
 
 logger = logging.getLogger(__name__)
+
 
 def _strip_code_fences(text: str) -> str:
     value = (text or "").strip()
@@ -64,6 +68,41 @@ def _strip_code_fences(text: str) -> str:
     if value.endswith("```"):
         value = value[:-3]
     return value.strip()
+
+
+def _escape_newlines_in_strings(text: str) -> str:
+    if not text:
+        return text
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                result.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                result.append(ch)
+                escaped = True
+                continue
+            if ch == '"':
+                result.append(ch)
+                in_string = False
+                continue
+            if ch == "\n":
+                result.append("\\n")
+                continue
+            if ch == "\r":
+                result.append("\\r")
+                continue
+            result.append(ch)
+        else:
+            result.append(ch)
+            if ch == '"':
+                in_string = True
+                escaped = False
+    return "".join(result)
 
 
 def _parse_ai_json_object(raw_response: str):
@@ -77,12 +116,17 @@ def _parse_ai_json_object(raw_response: str):
         candidates.append(raw_response.strip())
 
     for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
+        variants = [candidate]
+        repaired = _escape_newlines_in_strings(candidate)
+        if repaired and repaired != candidate:
+            variants.append(repaired)
+        for variant in variants:
+            try:
+                parsed = json.loads(variant)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
     return None
 
 
@@ -876,6 +920,14 @@ class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['post'], permission_classes=[IsTenantOwnerOrEditor])
     def generate(self, request):
         client = get_active_client(request.user)
+        if has_active_generation(client):
+            return Response(
+                {
+                    'success': False,
+                    'message': 'SEO генерация уже выполняется. Дождитесь завершения текущего запуска.',
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_SEO_GROUP)
         if limit_response:
             return limit_response
@@ -890,6 +942,40 @@ class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):
             'message': f"Генерация SEO-фраз запущена для клиента: {client.name}",
             'task_id': task.id,
         })
+
+    @action(detail=False, methods=['post'], permission_classes=[IsTenantOwnerOrEditor])
+    def restart(self, request):
+        client = get_active_client(request.user)
+        cancel_active_generation(client, reason="Canceled by user")
+        task = tasks.generate_seo_keywords_for_client.delay(client.id)
+        record_generation_event(
+            client,
+            GenerationEvent.EVENT_SEO_GROUP,
+            meta={"source": "seo_keywords", "restart": True},
+        )
+        return Response({
+            'success': True,
+            'message': f"SEO генерация перезапущена для клиента: {client.name}",
+            'task_id': task.id,
+        })
+
+
+class ProjectSemanticSetViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing project semantic sets generated from expert books."""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = ProjectSemanticSetSerializer
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        queryset = ProjectSemanticSet.objects.filter(client=client).order_by('-created_at')
+        source = self.request.query_params.get('source')
+        if source:
+            queryset = queryset.filter(source=source)
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        return queryset
 
 
 def _parse_int_list(value):

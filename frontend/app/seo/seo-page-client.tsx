@@ -7,12 +7,14 @@ import { Check, Info, Loader2, RefreshCw, Search, Trash2, X } from 'lucide-react
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import { seoApi } from '@/lib/api/seo';
+import { semanticsApi } from '@/lib/api/semantics';
 import { wordstatApi } from '@/lib/api/wordstat';
 import { googleApi } from '@/lib/api/google';
 import { clientApi } from '@/lib/api/client';
 import type {
   GoogleCompetitorsResolvedRow,
   GoogleCseSearchResult,
+  ProjectSemanticSet,
   SEOKeywordSet,
   SEOStatus,
   WordstatQuery
@@ -89,6 +91,31 @@ function getKeywords(set: SEOKeywordSet): string[] {
   return [];
 }
 
+function getSemanticKeywords(set: ProjectSemanticSet): string[] {
+  if (Array.isArray(set.keywords_list) && set.keywords_list.length) {
+    return set.keywords_list;
+  }
+  if (set.keyword_groups) {
+    return Object.values(set.keyword_groups)
+      .flat()
+      .filter((item): item is string => Boolean(item));
+  }
+  return [];
+}
+
+const getKeywordsCount = (set: { keywords_list: string[]; keyword_groups: Record<string, string[]> }) => {
+  if (Array.isArray(set.keywords_list) && set.keywords_list.length) {
+    return set.keywords_list.length;
+  }
+  return Object.values(set.keyword_groups || {}).reduce((total, arr) => total + (arr?.length || 0), 0);
+};
+
+const splitTextLines = (value?: string | null) =>
+  (value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
 function StatusBadge({ status }: { status: SEOStatus }) {
   return (
     <Badge className={`${STATUS_STYLES[status] ?? ''} text-xs font-medium`}>
@@ -96,6 +123,20 @@ function StatusBadge({ status }: { status: SEOStatus }) {
     </Badge>
   );
 }
+
+const getVisibleErrorLog = (set: { status: SEOStatus; error_log?: string | null }) => {
+  const raw = (set.error_log || '').trim();
+  if (!raw) return '';
+  const filtered = raw
+    .split('\n')
+    .filter((line) => !line.toLowerCase().includes('literal_eval'))
+    .join('\n')
+    .trim();
+  return filtered;
+};
+
+const shouldShowErrorLog = (set: { status: SEOStatus; error_log?: string | null }) =>
+  set.status === 'failed' && Boolean(getVisibleErrorLog(set));
 
 const normalizeUrlForCompare = (value?: string | null) => (value || '').trim().replace(/\/+$/, '').toLowerCase();
 
@@ -153,11 +194,15 @@ const buildUniqueSnippet = (value: string, maxLen: number = 240) => {
 export default function SEOPageClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'seo' | 'wordstat' | 'competitors'>('seo');
+  const [activeTab, setActiveTab] = useState<'seo' | 'semantics' | 'wordstat' | 'competitors'>('seo');
   const [seoSets, setSeoSets] = useState<SEOKeywordSet[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [semanticSets, setSemanticSets] = useState<ProjectSemanticSet[]>([]);
+  const [semanticsLoading, setSemanticsLoading] = useState(true);
+  const [semanticsRefreshing, setSemanticsRefreshing] = useState(false);
   const [wordstatQueries, setWordstatQueries] = useState<WordstatQuery[]>([]);
   const [wordstatLoading, setWordstatLoading] = useState(true);
   const [wordstatRefreshing, setWordstatRefreshing] = useState(false);
@@ -219,6 +264,30 @@ export default function SEOPageClient() {
 
   useEffect(() => {
     loadSeoSets();
+  }, []);
+
+  const loadSemanticSets = async (opts?: { silent?: boolean }) => {
+    if (opts?.silent) {
+      setSemanticsRefreshing(true);
+    } else {
+      setSemanticsLoading(true);
+    }
+    try {
+      const data = await semanticsApi.list({ source: 'expert_books' });
+      setSemanticSets(data);
+    } catch (error) {
+      console.error('Failed to load project semantics', error);
+      toast.error('Не удалось загрузить семантику по книгам');
+    } finally {
+      setSemanticsLoading(false);
+      if (opts?.silent) {
+        setSemanticsRefreshing(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    loadSemanticSets();
   }, []);
 
   const loadWordstatQueries = async (opts?: { silent?: boolean }) => {
@@ -304,7 +373,7 @@ export default function SEOPageClient() {
 
   useEffect(() => {
     const tab = (searchParams.get('tab') || '').trim();
-    if (tab === 'competitors' || tab === 'seo' || tab === 'wordstat') {
+    if (tab === 'competitors' || tab === 'seo' || tab === 'wordstat' || tab === 'semantics') {
       setActiveTab(tab as typeof activeTab);
     }
     const q = (searchParams.get('q') || '').trim();
@@ -363,13 +432,33 @@ export default function SEOPageClient() {
       await loadSeoSets({ silent: true });
     } catch (error) {
       console.error('Failed to start SEO generation', error);
-      toast.error('Не удалось запустить SEO-анализ');
+      if (error instanceof ApiError && error.status === 409) {
+        toast.error('SEO генерация уже выполняется. Дождитесь завершения.');
+      } else {
+        toast.error('Не удалось запустить SEO-анализ');
+      }
     } finally {
       setGenerating(false);
     }
   };
 
+  const handleRestartSEO = async () => {
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      const response = await seoApi.restart();
+      toast.success(response.message || 'SEO генерация перезапущена');
+      await loadSeoSets({ silent: true });
+    } catch (error) {
+      console.error('Failed to restart SEO generation', error);
+      toast.error('Не удалось перезапустить SEO-анализ');
+    } finally {
+      setRestarting(false);
+    }
+  };
+
   const handleRefresh = () => loadSeoSets({ silent: true });
+  const handleSemanticsRefresh = () => loadSemanticSets({ silent: true });
 
   const fetchWordstatAndRedirect = async (payload: { phrase?: string; phrases?: string[]; group_name?: string }) => {
     const phrase = (payload.phrase || '').trim();
@@ -839,11 +928,12 @@ export default function SEOPageClient() {
 
       <Tabs
         value={activeTab}
-        onValueChange={(value) => setActiveTab(value as 'seo' | 'wordstat' | 'competitors')}
+        onValueChange={(value) => setActiveTab(value as 'seo' | 'semantics' | 'wordstat' | 'competitors')}
         className="space-y-6"
       >
         <TabsList>
           <TabsTrigger value="seo">SEO группы</TabsTrigger>
+          <TabsTrigger value="semantics">Семантика по книгам</TabsTrigger>
           <TabsTrigger value="wordstat">Wordstat</TabsTrigger>
           <TabsTrigger value="competitors">Конкуренты</TabsTrigger>
         </TabsList>
@@ -915,7 +1005,21 @@ export default function SEOPageClient() {
                             <CardTitle>{GROUP_LABELS[group_key] ?? GROUP_LABELS.legacy}</CardTitle>
                             <CardDescription>{GROUP_DESCRIPTIONS[group_key] ?? GROUP_DESCRIPTIONS.legacy}</CardDescription>
                           </div>
-                          <StatusBadge status={latest.status} />
+                          <div className="flex items-center gap-2">
+                            <StatusBadge status={latest.status} />
+                            {(latest.status === 'pending' || latest.status === 'generating') && (
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                onClick={handleRestartSEO}
+                                disabled={!canEdit || restarting}
+                                title="Отменить и перезапустить SEO"
+                              >
+                                <RefreshCw className={`h-4 w-4 ${restarting ? 'animate-spin' : ''}`} />
+                              </Button>
+                            )}
+                          </div>
                         </div>
                         <div className="text-xs text-muted-foreground">
                           Обновлено: {formatDate(latest.created_at)}
@@ -967,10 +1071,10 @@ export default function SEOPageClient() {
                             </div>
                           </div>
                         )}
-                        {latest.error_log && (
+                        {shouldShowErrorLog(latest) && (
                           <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">
                             <p className="font-semibold">Ошибка генерации</p>
-                            <p className="mt-1 whitespace-pre-wrap">{latest.error_log}</p>
+                            <p className="mt-1 whitespace-pre-wrap">{getVisibleErrorLog(latest)}</p>
                           </div>
                         )}
                       </CardContent>
@@ -1001,8 +1105,10 @@ export default function SEOPageClient() {
                           {formatDate(seoSet.created_at)}
                           {seoSet.topic_name ? ` • ${seoSet.topic_name}` : ''}
                         </p>
-                        {seoSet.error_log && (
-                          <p className="text-xs text-red-600">Ошибка: {seoSet.error_log.split('\n')[0]}</p>
+                        {shouldShowErrorLog(seoSet) && (
+                          <p className="text-xs text-red-600">
+                            Ошибка: {getVisibleErrorLog(seoSet).split('\n')[0]}
+                          </p>
                         )}
                       </div>
                       <div className="text-xs text-muted-foreground">
@@ -1012,6 +1118,181 @@ export default function SEOPageClient() {
                               (total, arr) => total + (arr?.length || 0),
                               0
                             ) + ' фраз'}
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </TabsContent>
+
+        <TabsContent value="semantics" className="space-y-6">
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-2xl font-semibold">Семантика по книгам</h2>
+                <p className="text-muted-foreground">
+                  Семантика, собранная из списка экспертных книг в настройках проекта.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={handleSemanticsRefresh} disabled={semanticsLoading || semanticsRefreshing}>
+                  <RefreshCw className={`mr-2 h-4 w-4 ${semanticsRefreshing ? 'animate-spin' : ''}`} />
+                  Обновить
+                </Button>
+                <Button variant="outline" onClick={() => router.push('/settings?tab=client')}>
+                  Перейти в настройки
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {semanticsLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Загружаем семантику...
+            </div>
+          ) : semanticSets.length === 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Пока нет данных</CardTitle>
+                <CardDescription>
+                  Соберите семантику в настройках (раздел «Книги экспертов» → «Собрать семантику по книгам»).
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button variant="outline" onClick={() => router.push('/settings?tab=client')}>
+                  Перейти в настройки
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              {(() => {
+                const latest = semanticSets[0];
+                const keywords = getSemanticKeywords(latest);
+                const keywordGroupsEntries = latest.keyword_groups
+                  ? Object.entries(latest.keyword_groups).filter(([, values]) => Array.isArray(values) && values.length)
+                  : [];
+                const showKeywordGroups = keywordGroupsEntries.length > 0 && keywords.length === 0;
+                const bookLines = splitTextLines(latest.books_text);
+                const keywordLimit = 40;
+                const visibleKeywords = keywords.slice(0, keywordLimit);
+                const keywordsOverflow = keywords.length - visibleKeywords.length;
+                return (
+                  <Card>
+                    <CardHeader className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <CardTitle>Последняя семантика</CardTitle>
+                          <CardDescription>Собрана на основе списка экспертных книг.</CardDescription>
+                        </div>
+                        <StatusBadge status={latest.status} />
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Обновлено: {formatDate(latest.created_at)} • {getKeywordsCount(latest)} ключей
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {bookLines.length ? (
+                        <div>
+                          <p className="text-sm font-semibold">Книги экспертов</p>
+                          <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-slate-600">
+                            {bookLines.slice(0, 6).map((line, idx) => (
+                              <li key={`${line}-${idx}`}>{line}</li>
+                            ))}
+                          </ul>
+                          {bookLines.length > 6 && (
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              и еще {bookLines.length - 6} строк
+                            </p>
+                          )}
+                        </div>
+                      ) : null}
+                      <div>
+                        <p className="text-sm font-semibold">Ключевые фразы</p>
+                        {visibleKeywords.length ? (
+                          <ul className="mt-2 space-y-1 text-sm text-slate-700">
+                            {visibleKeywords.map((keyword, idx) => (
+                              <li key={`${keyword}-${idx}`}>
+                                <button
+                                  type="button"
+                                  onClick={() => fetchWordstatAndRedirect({ phrases: [keyword] })}
+                                  className="text-left text-slate-800 underline-offset-2 hover:underline"
+                                >
+                                  {keyword}
+                                </button>
+                                {typeof phraseCounts[keyword] === 'number' && (
+                                  <span className="ml-2 text-xs text-muted-foreground">
+                                    ({phraseCounts[keyword]} фраз)
+                                  </span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Фразы появятся после завершения генерации.</p>
+                        )}
+                        {keywordsOverflow > 0 && (
+                          <p className="mt-2 text-xs text-muted-foreground">и еще {keywordsOverflow} фраз</p>
+                        )}
+                      </div>
+                      {showKeywordGroups && (
+                        <div className="space-y-2">
+                          <p className="text-sm font-semibold">Группы запросов</p>
+                          <div className="space-y-3 rounded-md border bg-slate-50 p-3">
+                            {keywordGroupsEntries.map(([groupName, values]) => (
+                              <div key={groupName}>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  {groupName || 'Группа'}
+                                </p>
+                                <ul className="mt-1 list-disc space-y-1 pl-4 text-sm text-slate-600">
+                                  {values.map((value, index) => (
+                                    <li key={`${groupName}-${value}-${index}`}>{value}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {shouldShowErrorLog(latest) && (
+                        <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">
+                          <p className="font-semibold">Ошибка генерации</p>
+                          <p className="mt-1 whitespace-pre-wrap">{getVisibleErrorLog(latest)}</p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })()}
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>История генераций</CardTitle>
+                  <CardDescription>Последние запуски семантики по книгам</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {semanticSets.slice(0, 10).map((semanticSet) => (
+                    <div
+                      key={semanticSet.id}
+                      className="flex flex-col gap-1 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold">Семантика по книгам</p>
+                          <StatusBadge status={semanticSet.status} />
+                        </div>
+                        <p className="text-xs text-muted-foreground">{formatDate(semanticSet.created_at)}</p>
+                        {shouldShowErrorLog(semanticSet) && (
+                          <p className="text-xs text-red-600">
+                            Ошибка: {getVisibleErrorLog(semanticSet).split('\n')[0]}
+                          </p>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {getKeywordsCount(semanticSet)} фраз
                       </div>
                     </div>
                   ))}

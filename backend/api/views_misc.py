@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from core import tasks
 from core.generation_events import record_generation_event
 from core.models import ContentTemplate, GenerationEvent, Schedule, SocialAccount, Story, TelegramTask, Topic, TrendItem
+from core.services.seo_generation import has_active_generation
 from core.services.posting_service import update_post_status_after_publish
 from core.social_accounts import sync_client_default_telegram_account
 
@@ -61,6 +62,7 @@ from .views_products import (
 )  # noqa: F401
 from .views_seo import (
     ArticleViewSet,
+    ProjectSemanticSetViewSet,
     SEOKeywordSetViewSet,
     WordstatClusterViewSet,
     WordstatQueryViewSet,
@@ -159,6 +161,15 @@ class TopicViewSet(viewsets.ModelViewSet):
     def generate_seo(self, request, pk=None):
         """Generate SEO keywords for the topic's client"""
         topic = self.get_object()
+
+        if has_active_generation(topic.client):
+            return Response(
+                {
+                    'success': False,
+                    'message': 'SEO генерация уже выполняется. Дождитесь завершения текущего запуска.',
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
         limit_response = enforce_generation_limit(topic.client, GenerationEvent.EVENT_SEO_GROUP)
         if limit_response:

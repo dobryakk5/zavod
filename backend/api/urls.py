@@ -17,6 +17,7 @@ from .views import (
     PostToneViewSet,
     PostTypeViewSet,
     PostViewSet,
+    ProjectSemanticSetViewSet,
     WeeklyContentStrategyViewSet,
     DzenRSSFeedView,
     RefreshTokenView,
@@ -85,6 +86,7 @@ router.register(r'post-types', PostTypeViewSet, basename='post-type')
 router.register(r'post-tones', PostToneViewSet, basename='post-tone')
 router.register(r'content-strategy', WeeklyContentStrategyViewSet, basename='content-strategy')
 router.register(r'seo-keywords', SEOKeywordSetViewSet, basename='seo-keyword')
+router.register(r'project-semantics', ProjectSemanticSetViewSet, basename='project-semantic-set')
 router.register(r'wordstat', WordstatQueryViewSet, basename='wordstat')
 router.register(r'wordstat-clusters', WordstatClusterViewSet, basename='wordstat-cluster')
 router.register(r'wordstat-results', WordstatResultViewSet, basename='wordstat-result')

@@ -25,6 +25,45 @@ def _strip_code_fences(text: str) -> str:
     return value.strip()
 
 
+def _escape_newlines_in_strings(text: str) -> str:
+    if not text:
+        return text
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                result.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                result.append(ch)
+                escaped = True
+                continue
+            if ch == '"':
+                result.append(ch)
+                in_string = False
+                continue
+            if ch == "\n":
+                result.append("\\n")
+                continue
+            if ch == "\r":
+                result.append("\\r")
+                continue
+            result.append(ch)
+        else:
+            result.append(ch)
+            if ch == '"':
+                in_string = True
+                escaped = False
+    return "".join(result)
+
+
+def _normalize_inline_text(value: str) -> str:
+    return " ".join(str(value or "").split())
+
+
 def _parse_ai_json_object(raw_response: str):
     if not raw_response:
         return None
@@ -36,12 +75,17 @@ def _parse_ai_json_object(raw_response: str):
         candidates.append(raw_response.strip())
 
     for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
+        variants = [candidate]
+        repaired = _escape_newlines_in_strings(candidate)
+        if repaired and repaired != candidate:
+            variants.append(repaired)
+        for variant in variants:
+            try:
+                parsed = json.loads(variant)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
     return None
 
 
@@ -509,8 +553,8 @@ H2: "{h2_title}"
             if block_id not in block_id_map or block_id in seen_ids:
                 invalid_blocks += 1
                 continue
-            h2_title = str(item.get("h2_title") or item.get("h2") or item.get("title") or "").strip()
-            micro_intent = str(item.get("intent") or item.get("micro_intent") or "").strip()
+            h2_title = _normalize_inline_text(item.get("h2_title") or item.get("h2") or item.get("title") or "")
+            micro_intent = _normalize_inline_text(item.get("intent") or item.get("micro_intent") or "")
             if not h2_title or not micro_intent:
                 invalid_blocks += 1
                 continue
@@ -591,13 +635,15 @@ H2: "{h2_title}"
             if not details_parsed:
                 _fail_blueprint("ai_invalid_json_details", raw=details_raw or "")
 
-            subquery = str(details_parsed.get("subquery") or details_parsed.get("question") or "").strip()
+            subquery = _normalize_inline_text(details_parsed.get("subquery") or details_parsed.get("question") or "")
             raw_key_points = details_parsed.get("key_points")
             key_points = []
             if isinstance(raw_key_points, list):
-                key_points = [str(point).strip() for point in raw_key_points if str(point).strip()][:6]
+                key_points = [
+                    _normalize_inline_text(point) for point in raw_key_points if str(point).strip()
+                ][:6]
             elif isinstance(raw_key_points, str) and raw_key_points.strip():
-                key_points = [raw_key_points.strip()]
+                key_points = [_normalize_inline_text(raw_key_points)]
             if not subquery or not key_points:
                 _fail_blueprint("ai_missing_details", raw=details_raw or "")
 

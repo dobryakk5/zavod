@@ -17,4 +17,13 @@ export const seoApi = {
       method: 'POST',
     });
   },
+
+  /**
+   * Cancel active generation and start a new one
+   */
+  restart: async (): Promise<TaskResponse> => {
+    return apiFetch<TaskResponse>('/seo-keywords/restart/', {
+      method: 'POST',
+    });
+  },
 };

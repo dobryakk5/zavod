@@ -26,6 +26,7 @@ from core.models import (
     PostVideo,
     Schedule,
     SEOKeywordSet,
+    ProjectSemanticSet,
     SocialAccount,
     Story,
     TelegramTask,
@@ -562,6 +563,44 @@ class SEOKeywordSetSerializer(serializers.ModelSerializer):
             "prompt_used",
             "error_log",
             "created_at",
+        ]
+
+
+class ProjectSemanticSetSerializer(serializers.ModelSerializer):
+    """Project semantic set serializer."""
+
+    client_name = serializers.CharField(source="client.name", read_only=True)
+
+    class Meta:
+        model = ProjectSemanticSet
+        fields = [
+            "id",
+            "client",
+            "client_name",
+            "source",
+            "status",
+            "books_text",
+            "keywords_list",
+            "keyword_groups",
+            "ai_model",
+            "prompt_used",
+            "error_log",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "client",
+            "source",
+            "status",
+            "books_text",
+            "keywords_list",
+            "keyword_groups",
+            "ai_model",
+            "prompt_used",
+            "error_log",
+            "created_at",
+            "updated_at",
         ]
 
 

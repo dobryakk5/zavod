@@ -597,6 +597,24 @@ export interface SEOKeywordSet {
   created_at: string;
 }
 
+export type ProjectSemanticSource = 'expert_books' | string;
+
+export interface ProjectSemanticSet {
+  id: number;
+  client: number;
+  client_name?: string;
+  source: ProjectSemanticSource;
+  status: SEOStatus;
+  books_text?: string;
+  keywords_list: string[];
+  keyword_groups: Record<string, string[]>;
+  ai_model?: string;
+  prompt_used?: string;
+  error_log?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface GoogleCseSearchResult {
   position: number;
   title: string;
