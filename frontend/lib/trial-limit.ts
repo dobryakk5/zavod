@@ -3,7 +3,7 @@ const TRIAL_LIMIT_MATCH = 'Лимит ознакомительного тари�
 const TRIAL_LIMIT_DETAILS_PATTERN = /для\s+[«"]?(.+?)[»"]?\s+исчерпан\s+\((\d+)\/(\d+)\)/i;
 
 export const TRIAL_LIMIT_MESSAGE = 'Лимит ознакомительного тарифа исчерпан';
-export const TRIAL_LIMIT_PAYMENT_URL = 'http://localhost:3000/settings?tab=payment';
+export const TRIAL_LIMIT_PAYMENT_URL = '/settings?tab=payment';
 
 export type TrialLimitDetails = {
   label?: string;
