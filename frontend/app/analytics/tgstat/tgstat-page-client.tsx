@@ -13,6 +13,7 @@ import {
   type TgstatCategory,
   type TgstatChannel,
   type TgstatRecommendationCategory,
+  type TgstatRecommendationTag,
   type TgstatTag,
 } from '@/lib/api/tgstat';
 import { toast } from 'sonner';
@@ -206,6 +207,29 @@ export default function TgstatPageClient() {
     [loadChannels],
   );
 
+  const handleRecommendationTagSelect = useCallback(
+    (categorySlug: string, tag: TgstatRecommendationTag) => {
+      const category = categoriesBySlug.get(categorySlug) || null;
+      if (category) {
+        setSelectedCategory(category);
+        void loadTags(category.id);
+      } else {
+        setSelectedCategory(null);
+        setTags([]);
+      }
+      setSelectedTag({
+        slug: tag.slug,
+        title: tag.title,
+        url: '',
+        category_slug: categorySlug,
+      });
+      setChannels([]);
+      setActiveTab('channels');
+      void loadChannels(tag.slug);
+    },
+    [categoriesBySlug, loadChannels, loadTags],
+  );
+
   const handleAddFavorite = useCallback(
     async (channel: TgstatChannel) => {
       if (favoriteIdSet.has(channel.id)) {
@@ -377,14 +401,21 @@ export default function TgstatPageClient() {
                     <div className="text-sm font-medium text-gray-900">{recommendation.category_title}</div>
                     <div className="flex flex-wrap gap-2">
                       {recommendation.tags.map((tag) => (
-                        <Badge
+                        <button
                           key={`${recommendation.category_slug}-${tag.slug}`}
-                          variant="secondary"
-                          className="text-xs"
-                          title={tag.reason || undefined}
+                          type="button"
+                          onClick={() => handleRecommendationTagSelect(recommendation.category_slug, tag)}
+                          className="group rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                          aria-label={`Показать каналы подкатегории ${tag.title}`}
                         >
-                          {tag.title}
-                        </Badge>
+                          <Badge
+                            variant="secondary"
+                            className="text-xs cursor-pointer group-hover:bg-secondary/80"
+                            title={tag.reason || undefined}
+                          >
+                            {tag.title}
+                          </Badge>
+                        </button>
                       ))}
                     </div>
                   </div>
