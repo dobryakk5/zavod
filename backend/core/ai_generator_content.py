@@ -13,6 +13,413 @@ from .prompt_settings import render_generator_prompt
 
 _COMMENTED_VALUE_RE = re.compile(r'#\s*(?=")')
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_SMART_QUOTES_MAP = {
+    "“": '"',
+    "”": '"',
+    "„": '"',
+    "‟": '"',
+    "«": '"',
+    "»": '"',
+    "‘": "'",
+    "’": "'",
+    "‚": "'",
+    "‛": "'",
+}
+
+
+def _escape_newlines_in_strings(text: str) -> str:
+    if not text:
+        return text
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                result.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                result.append(ch)
+                escaped = True
+                continue
+            if ch == '"':
+                result.append(ch)
+                in_string = False
+                continue
+            if ch == "\n":
+                result.append("\\n")
+                continue
+            if ch == "\r":
+                result.append("\\r")
+                continue
+            result.append(ch)
+        else:
+            result.append(ch)
+            if ch == '"':
+                in_string = True
+                escaped = False
+    return "".join(result)
+
+
+def _strip_trailing_commas(text: str) -> str:
+    if not text:
+        return text
+    return re.sub(r",\s*([}\]])", r"\1", text)
+
+
+def _replace_smart_quotes(text: str) -> str:
+    if not text:
+        return text
+    return "".join(_SMART_QUOTES_MAP.get(ch, ch) for ch in text)
+
+
+def _escape_unescaped_quotes_in_strings(text: str) -> str:
+    if not text:
+        return text
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    for idx, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                result.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                result.append(ch)
+                escaped = True
+                continue
+            if ch == '"':
+                # Treat as closing quote if next non-space char is a structural delimiter.
+                j = idx + 1
+                while j < len(text) and text[j].isspace():
+                    j += 1
+                if j >= len(text) or text[j] in {",", "}", "]", ":"}:
+                    result.append(ch)
+                    in_string = False
+                else:
+                    result.append('\\"')
+                continue
+            if ch == "\n":
+                result.append("\\n")
+                continue
+            if ch == "\r":
+                result.append("\\r")
+                continue
+            result.append(ch)
+        else:
+            result.append(ch)
+            if ch == '"':
+                in_string = True
+                escaped = False
+    return "".join(result)
+
+
+def _insert_missing_commas(text: str) -> str:
+    if not text:
+        return text
+
+    def previous_non_space(buffer: list[str]) -> str:
+        for item in reversed(buffer):
+            if not item.isspace():
+                return item
+        return ""
+
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    last_token_value = False
+    idx = 0
+
+    def is_boundary(pos: int) -> bool:
+        if pos < 0 or pos >= len(text):
+            return True
+        return not (text[pos].isalnum() or text[pos] == "_")
+
+    while idx < len(text):
+        ch = text[idx]
+        if in_string:
+            result.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+                last_token_value = True
+            idx += 1
+            continue
+
+        if ch.isspace():
+            result.append(ch)
+            idx += 1
+            continue
+
+        starts_token = ch in {'"', "{", "["} or ch.isdigit() or ch == "-" or ch in {"t", "f", "n"}
+        if starts_token and last_token_value:
+            prev = previous_non_space(result)
+            if prev and prev not in {",", "{", "[", ":"}:
+                result.append(",")
+
+        if ch == '"':
+            in_string = True
+            escaped = False
+            result.append(ch)
+            idx += 1
+            continue
+
+        if ch in {"{", "["}:
+            last_token_value = False
+            result.append(ch)
+            idx += 1
+            continue
+
+        if ch in {"}", "]"}:
+            last_token_value = True
+            result.append(ch)
+            idx += 1
+            continue
+
+        if ch == ",":
+            last_token_value = False
+            result.append(ch)
+            idx += 1
+            continue
+
+        if ch == ":":
+            last_token_value = False
+            result.append(ch)
+            idx += 1
+            continue
+
+        if ch.isdigit() or ch == "-":
+            start = idx
+            idx += 1
+            while idx < len(text) and text[idx] not in " \t\r\n,]}":
+                idx += 1
+            result.append(text[start:idx])
+            last_token_value = True
+            continue
+
+        if (
+            text.startswith("true", idx)
+            and is_boundary(idx - 1)
+            and is_boundary(idx + 4)
+        ) or (
+            text.startswith("false", idx)
+            and is_boundary(idx - 1)
+            and is_boundary(idx + 5)
+        ) or (
+            text.startswith("null", idx)
+            and is_boundary(idx - 1)
+            and is_boundary(idx + 4)
+        ):
+            if text.startswith("true", idx):
+                token = "true"
+            elif text.startswith("false", idx):
+                token = "false"
+            else:
+                token = "null"
+            result.append(token)
+            idx += len(token)
+            last_token_value = True
+            continue
+
+        result.append(ch)
+        idx += 1
+
+    return "".join(result)
+
+
+def _replace_json_literals_for_python(text: str) -> str:
+    if not text:
+        return text
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    quote_char = '"'
+    idx = 0
+    def is_boundary(pos: int) -> bool:
+        if pos < 0 or pos >= len(text):
+            return True
+        return not (text[pos].isalnum() or text[pos] == "_")
+
+    while idx < len(text):
+        ch = text[idx]
+        if in_string:
+            result.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote_char:
+                in_string = False
+            idx += 1
+            continue
+
+        if ch in {"'", '"'}:
+            in_string = True
+            quote_char = ch
+            result.append(ch)
+            idx += 1
+            continue
+
+        if text.startswith("true", idx) and is_boundary(idx - 1) and is_boundary(idx + 4):
+            result.append("True")
+            idx += 4
+            continue
+        if text.startswith("false", idx) and is_boundary(idx - 1) and is_boundary(idx + 5):
+            result.append("False")
+            idx += 5
+            continue
+        if text.startswith("null", idx) and is_boundary(idx - 1) and is_boundary(idx + 4):
+            result.append("None")
+            idx += 4
+            continue
+
+        result.append(ch)
+        idx += 1
+    return "".join(result)
+
+
+def _try_literal_eval(candidate: str) -> Optional[Dict[str, Any]]:
+    if not candidate:
+        return None
+    try:
+        cleaned = _replace_json_literals_for_python(candidate)
+        parsed = ast.literal_eval(cleaned)
+    except (SyntaxError, ValueError):
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _extract_json_object(text: str) -> str:
+    if not text:
+        return text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return text
+    return text[start : end + 1]
+
+
+def _extract_json_array_by_key(text: str, key: str) -> str:
+    if not text or not key:
+        return ""
+    needle = f"\"{key}\""
+    idx = text.find(needle)
+    if idx == -1:
+        return ""
+    idx = text.find("[", idx + len(needle))
+    if idx == -1:
+        return ""
+    depth = 0
+    in_string = False
+    escaped = False
+    start = idx
+    for pos in range(idx, len(text)):
+        ch = text[pos]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            escaped = False
+            continue
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return text[start : pos + 1]
+    return text[start:]
+
+
+def _split_top_level_json_objects(array_text: str) -> List[str]:
+    if not array_text:
+        return []
+    text = array_text.strip()
+    if text.startswith("["):
+        text = text[1:]
+    if text.endswith("]"):
+        text = text[:-1]
+
+    objects: list[str] = []
+    in_string = False
+    escaped = False
+    depth = 0
+    start: Optional[int] = None
+    for idx, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            escaped = False
+            continue
+
+        if ch == "{":
+            if depth == 0:
+                start = idx
+            depth += 1
+            continue
+        if ch == "}":
+            depth = max(depth - 1, 0)
+            if depth == 0 and start is not None:
+                objects.append(text[start : idx + 1])
+                start = None
+            continue
+
+    return objects
+
+
+def _try_parse_json_object(candidate: str) -> Optional[Dict[str, Any]]:
+    if not candidate:
+        return None
+    sanitized = _extract_json_object(candidate)
+    sanitized = _replace_smart_quotes(sanitized)
+    sanitized = _escape_unescaped_quotes_in_strings(sanitized)
+    sanitized = _escape_newlines_in_strings(sanitized)
+    sanitized = _insert_missing_commas(sanitized)
+    sanitized = _strip_trailing_commas(sanitized)
+    try:
+        parsed = json.loads(sanitized)
+    except json.JSONDecodeError:
+        parsed = _try_literal_eval(sanitized)
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _salvage_json_objects_for_key(text: str, key: str) -> Optional[list[Dict[str, Any]]]:
+    array_text = _extract_json_array_by_key(text, key)
+    if not array_text:
+        return None
+    objects = _split_top_level_json_objects(array_text)
+    if not objects:
+        return None
+    parsed_items: list[Dict[str, Any]] = []
+    for item in objects:
+        parsed = _try_parse_json_object(item)
+        if parsed:
+            parsed_items.append(parsed)
+    if parsed_items:
+        return parsed_items
+    return None
 
 
 def _normalize_ai_json_response(raw_response: str) -> str:
@@ -24,6 +431,17 @@ def _normalize_ai_json_response(raw_response: str) -> str:
     if text.endswith("```"):
         text = text[:-3]
     return text.strip()
+
+
+def _strip_code_fences(text: str) -> str:
+    value = (text or "").strip()
+    if value.startswith("```json"):
+        value = value[7:]
+    if value.startswith("```"):
+        value = value[3:]
+    if value.endswith("```"):
+        value = value[:-3]
+    return value.strip()
 
 
 def _add_json_candidate(attempts: List[str], text: str):
@@ -63,6 +481,21 @@ def _parse_ai_json_response(
                     truncated = candidate[:end_index]
                     return parsed_obj, truncated, None
             except json.JSONDecodeError:
+                sanitized = _extract_json_object(candidate)
+                sanitized = _replace_smart_quotes(sanitized)
+                sanitized = _escape_unescaped_quotes_in_strings(sanitized)
+                sanitized = _escape_newlines_in_strings(sanitized)
+                sanitized = _insert_missing_commas(sanitized)
+                sanitized = _strip_trailing_commas(sanitized)
+                if sanitized and sanitized != candidate:
+                    try:
+                        return json.loads(sanitized), sanitized, None
+                    except json.JSONDecodeError as inner_exc:
+                        last_error = inner_exc
+                        last_text = sanitized
+                parsed = _try_literal_eval(sanitized)
+                if parsed is not None:
+                    return parsed, sanitized, None
                 continue
 
     return None, last_text, last_error
@@ -1048,6 +1481,823 @@ class ContentGenerationMixin:
 
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Error generating project semantics: %s", exc, exc_info=True)
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
+    def generate_semantic_groups_from_books(
+        self,
+        books_text: str,
+        niche: str = "",
+        audience: str = "",
+        product: str = "",
+        fragments: str = "",
+        language: str = "ru",
+    ) -> Dict[str, Any]:
+        """Сформировать смысловые группы по книгам экспертов."""
+        try:
+            books_value = (books_text or "").strip()
+            if not books_value:
+                return {"success": False, "error": "Книги не указаны"}
+
+            niche_text = (niche or "").strip() or "не указано"
+            audience_text = (audience or "").strip() or "не указана"
+            product_text = (product or "").strip() or "не указан"
+            fragments_text = (fragments or "").strip() or "нет"
+
+            prompt = render_generator_prompt(
+                "semantic_groups_from_books",
+                niche_text=niche_text,
+                audience_text=audience_text,
+                product_text=product_text,
+                books_text=books_value,
+                fragments_text=fragments_text,
+            )
+            if not prompt:
+                return {"success": False, "error": "Missing generator prompt: semantic_groups_from_books"}
+
+            ai_response = self.get_ai_response(
+                prompt,
+                max_tokens=2000,
+                temperature=0.35,
+                response_format={"type": "json_object"},
+            )
+            if not ai_response:
+                return {"success": False, "error": "Не удалось получить ответ от AI"}
+
+            parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+            if parse_error or not isinstance(parsed_result, dict):
+                repaired = self._repair_json_structure(
+                    normalized_text,
+                    schema_hint="""
+{
+  "groups": [
+    {
+      "name": "Название",
+      "description": "Что входит и что не входит",
+      "scope": "narrow|normal|wide",
+      "expected_clusters": 12,
+      "source_books": ["Книга 1", "Книга 2"],
+      "examples": ["пример 1", "пример 2"]
+    }
+  ]
+}
+""",
+                )
+                if repaired and isinstance(repaired, dict):
+                    parsed_result = repaired
+                    parse_error = None
+
+            if parse_error or not isinstance(parsed_result, dict):
+                logger.error("Failed to parse semantic groups: %s", normalized_text)
+                return {
+                    "success": False,
+                    "error": f"Ошибка разбора JSON: {str(parse_error)}",
+                    "raw_response": normalized_text,
+                }
+
+            groups_payload = (
+                parsed_result.get("groups")
+                or parsed_result.get("semantic_groups")
+                or parsed_result.get("themes")
+                or []
+            )
+
+            if not isinstance(groups_payload, list):
+                return {
+                    "success": False,
+                    "error": "AI не вернул список смысловых групп",
+                    "raw_response": parsed_result,
+                }
+
+            whitespace_re = re.compile(r"\s+")
+            def normalize_source_books(value: Any) -> list[str]:
+                if value is None:
+                    return []
+                raw_items: list[Any]
+                if isinstance(value, list):
+                    raw_items = value
+                elif isinstance(value, str):
+                    value = value.strip()
+                    if not value:
+                        return []
+                    if "\n" in value:
+                        raw_items = [item for item in value.splitlines() if item.strip()]
+                    elif ";" in value and "," not in value:
+                        raw_items = [item for item in value.split(";") if str(item).strip()]
+                    else:
+                        raw_items = [value]
+                else:
+                    raw_items = [value]
+
+                cleaned: list[str] = []
+                for item in raw_items:
+                    text_value = ""
+                    if isinstance(item, dict):
+                        title = str(item.get("title") or item.get("name") or "").strip()
+                        author = str(item.get("author") or "").strip()
+                        if title and author:
+                            text_value = f"{title} — {author}"
+                        else:
+                            text_value = title or author
+                    else:
+                        text_value = str(item or "").strip()
+                    text_value = whitespace_re.sub(" ", text_value)
+                    if text_value:
+                        cleaned.append(text_value)
+
+                seen_books: set[str] = set()
+                unique: list[str] = []
+                for item in cleaned:
+                    key = item.lower()
+                    if key in seen_books:
+                        continue
+                    seen_books.add(key)
+                    unique.append(item)
+                return unique
+
+            seen = set()
+            cleaned_groups: list[Dict[str, Any]] = []
+            for item in groups_payload:
+                if not isinstance(item, dict):
+                    continue
+                name = whitespace_re.sub(" ", str(item.get("name") or item.get("title") or "").strip())
+                if not name:
+                    continue
+                key = name.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                description = whitespace_re.sub(
+                    " ",
+                    str(item.get("description") or item.get("details") or "").strip(),
+                )
+                scope = str(item.get("scope") or "").strip().lower()
+                if scope not in {"narrow", "normal", "wide"}:
+                    scope = "normal"
+                expected_raw = item.get("expected_clusters") or item.get("clusters") or None
+                expected_clusters = None
+                if expected_raw is not None and str(expected_raw).strip():
+                    try:
+                        expected_clusters = int(expected_raw)
+                    except (TypeError, ValueError):
+                        expected_clusters = None
+                examples = item.get("examples") or []
+                if not isinstance(examples, list):
+                    examples = [examples]
+                cleaned_examples = []
+                for example in examples:
+                    value = whitespace_re.sub(" ", str(example or "").strip())
+                    if value:
+                        cleaned_examples.append(value)
+                source_books_raw = (
+                    item.get("source_books")
+                    or item.get("sources")
+                    or item.get("books")
+                )
+                source_books = normalize_source_books(source_books_raw)
+                cleaned_groups.append(
+                    {
+                        "name": name,
+                        "description": description,
+                        "scope": scope,
+                        "expected_clusters": expected_clusters,
+                        "source_books": source_books,
+                        "examples": cleaned_examples,
+                    }
+                )
+
+            if not cleaned_groups:
+                return {
+                    "success": False,
+                    "error": "AI вернул пустой список смысловых групп",
+                    "raw_response": parsed_result,
+                }
+
+            return {
+                "success": True,
+                "groups": cleaned_groups,
+                "raw_response": parsed_result,
+                "prompt_used": prompt,
+            }
+
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Error generating semantic groups: %s", exc, exc_info=True)
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
+    def generate_semantic_clusters_from_group(
+        self,
+        *,
+        niche: str,
+        audience: str,
+        product: str,
+        group_name: str,
+        group_description: str = "",
+        group_scope: str = "",
+        expected_clusters: Optional[int] = None,
+        examples: Optional[list[str]] = None,
+        source_books: Optional[list[str]] = None,
+        language: str = "ru",
+    ) -> Dict[str, Any]:
+        """Сформировать SEO-кластеры (интенты) внутри смысловой группы."""
+        try:
+            name_value = (group_name or "").strip()
+            if not name_value:
+                return {"success": False, "error": "semantic_group_name_required"}
+
+            niche_text = (niche or "").strip() or "не указано"
+            audience_text = (audience or "").strip() or "не указана"
+            product_text = (product or "").strip() or "не указан"
+            description_text = (group_description or "").strip()
+            scope_text = (group_scope or "").strip() or "normal"
+            expected_value = ""
+            if expected_clusters is not None:
+                expected_value = str(expected_clusters)
+
+            examples_list = examples or []
+            if not isinstance(examples_list, list):
+                examples_list = [examples_list]
+            cleaned_examples = []
+            whitespace_re = re.compile(r"\s+")
+            for example in examples_list:
+                value = whitespace_re.sub(" ", str(example or "").strip())
+                if value:
+                    cleaned_examples.append(value)
+            examples_text = "\n".join(cleaned_examples) if cleaned_examples else "нет"
+            if source_books is None:
+                source_books_list = []
+            elif isinstance(source_books, list):
+                source_books_list = source_books
+            else:
+                source_books_list = [str(source_books)]
+            cleaned_sources: list[str] = []
+            for item in source_books_list:
+                value = whitespace_re.sub(" ", str(item or "").strip())
+                if value:
+                    cleaned_sources.append(value)
+            group_source_books = "; ".join(cleaned_sources) if cleaned_sources else "не указаны"
+
+            prompt = render_generator_prompt(
+                "semantic_clusters_from_group",
+                niche_text=niche_text,
+                audience_text=audience_text,
+                product_text=product_text,
+                group_name=name_value,
+                group_description=description_text or "не указано",
+                group_scope=scope_text,
+                group_expected_clusters=expected_value or "не указано",
+                group_examples=examples_text,
+                group_source_books=group_source_books,
+                language_note="Пиши на русском языке." if language.lower().startswith("ru") else "",
+            )
+            if not prompt:
+                return {"success": False, "error": "Missing generator prompt: semantic_clusters_from_group"}
+
+            ai_response = self.get_ai_response(
+                prompt,
+                max_tokens=2400,
+                temperature=0.3,
+                response_format={"type": "json_object"},
+            )
+            if not ai_response:
+                return {"success": False, "error": "Не удалось получить ответ от AI"}
+
+            schema_hint = """
+{
+  "clusters": [
+    {
+      "name": "string",
+      "description": "string",
+      "main_keyword": "string",
+      "intent": "info|commercial|navigational|brand",
+      "user_goal": "string",
+      "cta": "string",
+      "priority": "high|medium|low",
+      "examples": ["string"]
+    }
+  ],
+  "total_clusters": 0,
+  "comment": "string"
+}
+"""
+
+            parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+            if parse_error or not isinstance(parsed_result, dict):
+                repaired = self._repair_json_structure(normalized_text, schema_hint=schema_hint)
+                if repaired and isinstance(repaired, dict):
+                    parsed_result = repaired
+                    parse_error = None
+            if parse_error or not isinstance(parsed_result, dict):
+                sanitized = _extract_json_object(normalized_text)
+                sanitized = _escape_newlines_in_strings(sanitized)
+                sanitized = _strip_trailing_commas(sanitized)
+                try:
+                    parsed_candidate = json.loads(sanitized)
+                except json.JSONDecodeError:
+                    parsed_candidate = None
+                if isinstance(parsed_candidate, dict):
+                    parsed_result = parsed_candidate
+                    parse_error = None
+            if parse_error or not isinstance(parsed_result, dict):
+                salvaged_clusters = _salvage_json_objects_for_key(normalized_text, "clusters")
+                if salvaged_clusters:
+                    parsed_result = {"clusters": salvaged_clusters}
+                    parse_error = None
+
+            if parse_error or not isinstance(parsed_result, dict):
+                logger.error("Failed to parse semantic clusters: %s", normalized_text)
+                return {
+                    "success": False,
+                    "error": f"Ошибка разбора JSON: {str(parse_error)}",
+                    "raw_response": normalized_text,
+                }
+
+            clusters_payload = (
+                parsed_result.get("clusters")
+                or parsed_result.get("items")
+                or parsed_result.get("semantic_clusters")
+                or []
+            )
+            if not isinstance(clusters_payload, list):
+                return {
+                    "success": False,
+                    "error": "AI не вернул список кластеров",
+                    "raw_response": parsed_result,
+                }
+
+            allowed_intents = {"info", "commercial", "navigational", "brand"}
+            priority_map = {"high": 3, "medium": 2, "low": 1}
+            seen = set()
+            cleaned_clusters: list[Dict[str, Any]] = []
+            for item in clusters_payload:
+                if not isinstance(item, dict):
+                    continue
+                name = whitespace_re.sub(" ", str(item.get("name") or item.get("title") or "").strip())
+                if not name:
+                    continue
+                key = name.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                description = whitespace_re.sub(" ", str(item.get("description") or "").strip())
+                main_keyword = whitespace_re.sub(" ", str(item.get("main_keyword") or item.get("keyword") or "").strip())
+                intent = str(item.get("intent") or "").strip().lower()
+                if intent not in allowed_intents:
+                    intent = ""
+                user_goal = whitespace_re.sub(" ", str(item.get("user_goal") or "").strip())
+                cta = whitespace_re.sub(" ", str(item.get("cta") or "").strip())
+                priority_raw = item.get("priority")
+                priority_value: Optional[int] = None
+                if isinstance(priority_raw, str):
+                    priority_value = priority_map.get(priority_raw.strip().lower())
+                elif isinstance(priority_raw, (int, float)):
+                    priority_value = int(priority_raw)
+                if priority_value is not None and priority_value <= 0:
+                    priority_value = None
+                examples_payload = item.get("examples") or []
+                if not isinstance(examples_payload, list):
+                    examples_payload = [examples_payload]
+                cleaned_examples = []
+                for example in examples_payload:
+                    value = whitespace_re.sub(" ", str(example or "").strip())
+                    if value:
+                        cleaned_examples.append(value)
+
+                cleaned_clusters.append(
+                    {
+                        "name": name,
+                        "description": description,
+                        "main_keyword": main_keyword,
+                        "intent": intent,
+                        "user_goal": user_goal,
+                        "cta": cta,
+                        "priority": priority_value,
+                        "examples": cleaned_examples,
+                    }
+                )
+
+            if not cleaned_clusters:
+                return {
+                    "success": False,
+                    "error": "AI вернул пустой список кластеров",
+                    "raw_response": parsed_result,
+                }
+
+            return {
+                "success": True,
+                "clusters": cleaned_clusters,
+                "raw_response": parsed_result,
+                "prompt_used": prompt,
+            }
+
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Error generating semantic clusters: %s", exc, exc_info=True)
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
+    def generate_semantic_phrases_from_cluster(
+        self,
+        *,
+        niche: str,
+        product: str,
+        group_name: str,
+        group_description: str = "",
+        group_source_books: Optional[list[str]] = None,
+        cluster_name: str,
+        cluster_description: str = "",
+        cluster_main_keyword: str = "",
+        cluster_intent: str = "",
+        cluster_user_goal: str = "",
+        cluster_cta: str = "",
+        language: str = "ru",
+    ) -> Dict[str, Any]:
+        """Сформировать список SEO-фраз для кластера."""
+        try:
+            niche_text = (niche or "").strip() or "не указано"
+            product_text = (product or "").strip() or "не указано"
+            group_name_text = (group_name or "").strip() or "не указано"
+            group_description_text = (group_description or "").strip() or "не указано"
+            cluster_name_text = (cluster_name or "").strip() or "не указано"
+            cluster_description_text = (cluster_description or "").strip() or "не указано"
+            cluster_main_keyword_text = (cluster_main_keyword or "").strip() or "не указано"
+            cluster_intent_text = (cluster_intent or "").strip() or "не указано"
+            cluster_user_goal_text = (cluster_user_goal or "").strip() or "не указано"
+            cluster_cta_text = (cluster_cta or "").strip() or "не указано"
+
+            books_list = group_source_books or []
+            cleaned_books = []
+            whitespace_re = re.compile(r"\s+")
+            for item in books_list:
+                value = whitespace_re.sub(" ", str(item or "").strip())
+                if value:
+                    cleaned_books.append(value)
+            books_text = "; ".join(cleaned_books) if cleaned_books else "не указаны"
+
+            prompt = render_generator_prompt(
+                "semantic_phrases_from_cluster",
+                niche_text=niche_text,
+                product_text=product_text,
+                group_name=group_name_text,
+                group_description=group_description_text,
+                group_source_books=books_text,
+                cluster_name=cluster_name_text,
+                cluster_description=cluster_description_text,
+                cluster_main_keyword=cluster_main_keyword_text,
+                cluster_intent=cluster_intent_text,
+                cluster_user_goal=cluster_user_goal_text,
+                cluster_cta=cluster_cta_text,
+                language_note="Пиши на русском языке." if language.lower().startswith("ru") else "",
+            )
+            if not prompt:
+                return {"success": False, "error": "Missing generator prompt: semantic_phrases_from_cluster"}
+
+            ai_response = self.get_ai_response(
+                prompt,
+                max_tokens=2000,
+                temperature=0.35,
+                response_format={"type": "json_object"},
+            )
+            if not ai_response:
+                return {"success": False, "error": "Не удалось получить ответ от AI"}
+
+            parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+            if parse_error or not isinstance(parsed_result, dict):
+                repaired = self._repair_json_structure(
+                    normalized_text,
+                    schema_hint="""
+{
+  "phrases": [
+    {
+      "phrase": "текст фразы",
+      "type": "key",
+      "intent": "info|commercial|navigational|brand",
+      "comment": "пояснение"
+    }
+  ]
+}
+""",
+                )
+                if repaired and isinstance(repaired, dict):
+                    parsed_result = repaired
+                    parse_error = None
+
+            if parse_error or not isinstance(parsed_result, dict):
+                fallback_text = _strip_code_fences(normalized_text or ai_response or "")
+                phrase_pattern = re.compile(r'"phrase"\s*:\s*"((?:[^"\\\\]|\\\\.)+)"')
+                intent_pattern = re.compile(r'"intent"\s*:\s*"((?:[^"\\\\]|\\\\.)+)"')
+                phrases_list: list[Dict[str, Any]] = []
+                matches = list(phrase_pattern.finditer(fallback_text))
+                for idx, match in enumerate(matches):
+                    raw_phrase = match.group(1)
+                    try:
+                        phrase_value = json.loads(f"\"{raw_phrase}\"")
+                    except json.JSONDecodeError:
+                        phrase_value = raw_phrase
+                    chunk_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(fallback_text)
+                    chunk = fallback_text[match.end():chunk_end]
+                    intent_match = intent_pattern.search(chunk)
+                    raw_intent = intent_match.group(1) if intent_match else ""
+                    try:
+                        intent_value = json.loads(f"\"{raw_intent}\"") if raw_intent else ""
+                    except json.JSONDecodeError:
+                        intent_value = raw_intent
+                    phrases_list.append(
+                        {
+                            "phrase": phrase_value,
+                            "type": "key",
+                            "intent": intent_value,
+                        }
+                    )
+
+                if not phrases_list:
+                    for line in fallback_text.splitlines():
+                        cleaned = line.strip()
+                        cleaned = re.sub(r"^[\s\-–—•\*\d\.\)\(]+", "", cleaned).strip()
+                        if not cleaned or len(cleaned) < 3:
+                            continue
+                        phrases_list.append(
+                            {
+                                "phrase": cleaned,
+                                "type": "key",
+                                "intent": "",
+                            }
+                        )
+
+                if phrases_list:
+                    parsed_result = {"phrases": phrases_list}
+                    parse_error = None
+
+            if parse_error or not isinstance(parsed_result, dict):
+                logger.error("Failed to parse semantic phrases: %s", normalized_text)
+                return {
+                    "success": False,
+                    "error": f"Ошибка разбора JSON: {str(parse_error)}",
+                    "raw_response": normalized_text,
+                }
+
+            phrases_payload = (
+                parsed_result.get("phrases")
+                or parsed_result.get("items")
+                or parsed_result.get("keywords")
+                or parsed_result.get("values")
+                or []
+            )
+            if not isinstance(phrases_payload, list):
+                return {
+                    "success": False,
+                    "error": "AI не вернул список фраз",
+                    "raw_response": parsed_result,
+                }
+
+            whitespace_re = re.compile(r"\s+")
+            seen = set()
+            cleaned_phrases: list[Dict[str, Any]] = []
+            for item in phrases_payload:
+                if isinstance(item, dict):
+                    raw_phrase = (
+                        item.get("phrase")
+                        or item.get("keyword")
+                        or item.get("name")
+                        or item.get("value")
+                        or ""
+                    )
+                    raw_intent = item.get("intent") or ""
+                else:
+                    raw_phrase = item
+                    raw_intent = ""
+                phrase_text = whitespace_re.sub(" ", str(raw_phrase or "").strip())
+                if not phrase_text:
+                    continue
+                key = phrase_text.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                intent_value = whitespace_re.sub(" ", str(raw_intent or "").strip().lower())
+                cleaned_phrases.append(
+                    {
+                        "phrase": phrase_text,
+                        "type": "key",
+                        "intent": intent_value,
+                    }
+                )
+
+            if not cleaned_phrases:
+                return {
+                    "success": False,
+                    "error": "AI вернул пустой список фраз",
+                    "raw_response": parsed_result,
+                }
+
+            return {
+                "success": True,
+                "phrases": cleaned_phrases,
+                "raw_response": parsed_result,
+                "prompt_used": prompt,
+            }
+
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Error generating semantic phrases: %s", exc, exc_info=True)
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
+    def generate_semantic_lsi_from_cluster(
+        self,
+        *,
+        niche: str,
+        product: str,
+        group_name: str,
+        group_description: str = "",
+        group_source_books: Optional[list[str]] = None,
+        cluster_name: str,
+        cluster_description: str = "",
+        cluster_main_keyword: str = "",
+        cluster_intent: str = "",
+        cluster_user_goal: str = "",
+        language: str = "ru",
+    ) -> Dict[str, Any]:
+        """Сформировать список LSI-фраз для кластера."""
+        try:
+            niche_text = (niche or "").strip() or "не указано"
+            product_text = (product or "").strip() or "не указано"
+            group_name_text = (group_name or "").strip() or "не указано"
+            group_description_text = (group_description or "").strip() or "не указано"
+            cluster_name_text = (cluster_name or "").strip() or "не указано"
+            cluster_description_text = (cluster_description or "").strip() or "не указано"
+            cluster_main_keyword_text = (cluster_main_keyword or "").strip() or "не указано"
+            cluster_intent_text = (cluster_intent or "").strip() or "не указано"
+            cluster_user_goal_text = (cluster_user_goal or "").strip() or "не указано"
+
+            books_list = group_source_books or []
+            cleaned_books = []
+            whitespace_re = re.compile(r"\s+")
+            for item in books_list:
+                value = whitespace_re.sub(" ", str(item or "").strip())
+                if value:
+                    cleaned_books.append(value)
+            books_text = "; ".join(cleaned_books) if cleaned_books else "не указаны"
+
+            prompt = render_generator_prompt(
+                "semantic_lsi_from_cluster",
+                niche_text=niche_text,
+                product_text=product_text,
+                group_name=group_name_text,
+                group_description=group_description_text,
+                group_source_books=books_text,
+                cluster_name=cluster_name_text,
+                cluster_description=cluster_description_text,
+                cluster_main_keyword=cluster_main_keyword_text,
+                cluster_intent=cluster_intent_text,
+                cluster_user_goal=cluster_user_goal_text,
+                language_note="Пиши на русском языке." if language.lower().startswith("ru") else "",
+            )
+            if not prompt:
+                return {"success": False, "error": "Missing generator prompt: semantic_lsi_from_cluster"}
+
+            ai_response = self.get_ai_response(
+                prompt,
+                max_tokens=2400,
+                temperature=0.4,
+                response_format={"type": "json_object"},
+            )
+            if not ai_response:
+                return {"success": False, "error": "Не удалось получить ответ от AI"}
+
+            parsed_result, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+            if parse_error or not isinstance(parsed_result, dict):
+                repaired = self._repair_json_structure(
+                    normalized_text,
+                    schema_hint="""
+{
+  "phrases": [
+    {
+      "phrase": "текст фразы",
+      "type": "lsi",
+      "category": "term|process|tool|problem|result|comparison|question",
+      "comment": "пояснение"
+    }
+  ]
+}
+""",
+                )
+                if repaired and isinstance(repaired, dict):
+                    parsed_result = repaired
+                    parse_error = None
+
+            if parse_error or not isinstance(parsed_result, dict):
+                fallback_text = _strip_code_fences(normalized_text or ai_response or "")
+                phrase_pattern = re.compile(r'"phrase"\s*:\s*"((?:[^"\\\\]|\\\\.)+)"')
+                phrases_list: list[Dict[str, Any]] = []
+                matches = list(phrase_pattern.finditer(fallback_text))
+                for match in matches:
+                    raw_phrase = match.group(1)
+                    try:
+                        phrase_value = json.loads(f"\"{raw_phrase}\"")
+                    except json.JSONDecodeError:
+                        phrase_value = raw_phrase
+                    phrases_list.append(
+                        {
+                            "phrase": phrase_value,
+                            "type": "lsi",
+                        }
+                    )
+
+                if not phrases_list:
+                    for line in fallback_text.splitlines():
+                        cleaned = line.strip()
+                        cleaned = re.sub(r"^[\s\-–—•\*\d\.\)\(]+", "", cleaned).strip()
+                        if not cleaned or len(cleaned) < 3:
+                            continue
+                        phrases_list.append(
+                            {
+                                "phrase": cleaned,
+                                "type": "lsi",
+                            }
+                        )
+
+                if phrases_list:
+                    parsed_result = {"phrases": phrases_list}
+                    parse_error = None
+
+            if parse_error or not isinstance(parsed_result, dict):
+                logger.error("Failed to parse semantic LSI phrases: %s", normalized_text)
+                return {
+                    "success": False,
+                    "error": f"Ошибка разбора JSON: {str(parse_error)}",
+                    "raw_response": normalized_text,
+                }
+
+            phrases_payload = (
+                parsed_result.get("phrases")
+                or parsed_result.get("items")
+                or parsed_result.get("keywords")
+                or parsed_result.get("values")
+                or []
+            )
+            if not isinstance(phrases_payload, list):
+                return {
+                    "success": False,
+                    "error": "AI не вернул список фраз",
+                    "raw_response": parsed_result,
+                }
+
+            whitespace_re = re.compile(r"\s+")
+            seen = set()
+            cleaned_phrases: list[Dict[str, Any]] = []
+            for item in phrases_payload:
+                if isinstance(item, dict):
+                    raw_phrase = (
+                        item.get("phrase")
+                        or item.get("keyword")
+                        or item.get("name")
+                        or item.get("value")
+                        or ""
+                    )
+                    raw_category = item.get("category") or ""
+                    raw_comment = item.get("comment") or ""
+                else:
+                    raw_phrase = item
+                    raw_category = ""
+                    raw_comment = ""
+                phrase_text = whitespace_re.sub(" ", str(raw_phrase or "").strip())
+                if not phrase_text:
+                    continue
+                key = phrase_text.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                cleaned_phrases.append(
+                    {
+                        "phrase": phrase_text,
+                        "type": "lsi",
+                        "category": whitespace_re.sub(" ", str(raw_category or "").strip().lower()),
+                        "comment": whitespace_re.sub(" ", str(raw_comment or "").strip()),
+                    }
+                )
+
+            if not cleaned_phrases:
+                return {
+                    "success": False,
+                    "error": "AI вернул пустой список фраз",
+                    "raw_response": parsed_result,
+                }
+
+            return {
+                "success": True,
+                "phrases": cleaned_phrases,
+                "raw_response": parsed_result,
+                "prompt_used": prompt,
+            }
+
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Error generating semantic LSI phrases: %s", exc, exc_info=True)
             return {
                 "success": False,
                 "error": str(exc),

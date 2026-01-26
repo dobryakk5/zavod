@@ -17,6 +17,8 @@ EVENT_LABELS: dict[str, str] = {
     GenerationEvent.EVENT_WEBSITE_ANALYSIS: "Аналитика сайта",
     GenerationEvent.EVENT_WEEKLY_COLLECTION: "Подборка",
     GenerationEvent.EVENT_SEO_GROUP: "SEO группы",
+    GenerationEvent.EVENT_SEMANTIC_CLUSTERS: "SEO кластеры",
+    GenerationEvent.EVENT_SEMANTIC_PHRASES: "SEO фразы",
     GenerationEvent.EVENT_WORDSTAT_QUERY: "Wordstat",
     GenerationEvent.EVENT_GOOGLE_QUERY: "Google запросы",
     GenerationEvent.EVENT_PRODUCT: "Продукт",

@@ -41,6 +41,7 @@ const EVENT_LABELS: Record<GenerationEventType, string> = {
   product: "Продукт",
   product_map: "Карта продуктов",
   book_search: "Книги",
+  semantic_phrases: "SEO фразы",
 };
 
 const STEPS = [

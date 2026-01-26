@@ -8,7 +8,11 @@ from typing import Any, Dict, List
 
 from .ai_generator import AIContentGenerator
 from .ai_generator_base import logger
-from .ai_generator_content import _parse_ai_json_response
+from .ai_generator_content import (
+    _parse_ai_json_response,
+    _salvage_json_objects_for_key,
+    _try_parse_json_object,
+)
 from .prompt_settings import render_generator_prompt
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -144,6 +148,135 @@ def _parse_seed_groups_from_text(text: str) -> Dict[str, List[str]]:
         if cleaned not in groups[current_group]:
             groups[current_group].append(cleaned)
     return groups
+
+
+def normalize_wordstat_phrases_ai(
+    *,
+    phrases: List[str],
+    language: str = "ru",
+) -> Dict[str, object]:
+    cleaned = _prepare_phrases(phrases)
+    if not cleaned:
+        return {"success": False, "error": "no_phrases"}
+
+    try:
+        generator = AIContentGenerator()
+    except Exception as exc:
+        logger.error(
+            "Failed to init AI generator for Wordstat phrase normalization: %s",
+            exc,
+            exc_info=True,
+        )
+        return {"success": False, "error": "ai_init_error"}
+
+    language_note = "Пиши на русском языке." if language.lower().startswith("ru") else "Пиши на языке ниши."
+    prompt = render_generator_prompt(
+        "seo_wordstat_normalize_phrases",
+        language_note=language_note,
+        phrases_count=str(len(cleaned)),
+        phrases_json=json.dumps(cleaned, ensure_ascii=False),
+    )
+    if not prompt:
+        return {"success": False, "error": "missing_prompt"}
+
+    ai_response = generator.get_ai_response(
+        prompt=prompt,
+        max_tokens=1200,
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+    if not ai_response:
+        return {"success": False, "error": "ai_no_response"}
+
+    parsed, normalized_text, parse_error = _parse_ai_json_response(ai_response)
+    if not parse_error and isinstance(parsed, list):
+        parsed = {"phrases": parsed}
+    if parse_error or not isinstance(parsed, dict):
+        parsed_candidate = _try_parse_json_object(normalized_text)
+        if not parsed_candidate:
+            parsed_candidate = _try_parse_json_object(ai_response)
+        if isinstance(parsed_candidate, dict):
+            parsed = parsed_candidate
+            parse_error = None
+
+    if parse_error or not isinstance(parsed, dict):
+        repaired = generator._repair_json_structure(
+            normalized_text,
+            schema_hint="""
+{
+  "phrases": [
+    {
+      "raw_phrase": "string",
+      "normalized_phrase": "string|null",
+      "comment": "string"
+    }
+  ]
+}
+""",
+        )
+        if repaired and isinstance(repaired, list):
+            repaired = {"phrases": repaired}
+        if repaired and isinstance(repaired, dict):
+            parsed = repaired
+            parse_error = None
+
+    if parse_error or not isinstance(parsed, dict):
+        salvaged = _salvage_json_objects_for_key(normalized_text, "phrases")
+        if not salvaged:
+            salvaged = _salvage_json_objects_for_key(ai_response, "phrases")
+        if salvaged:
+            parsed = {"phrases": salvaged}
+            parse_error = None
+
+    if parse_error or not isinstance(parsed, dict):
+        logger.error("Wordstat normalization JSON parse failed: %s", parse_error)
+        return {
+            "success": False,
+            "error": "ai_json_parse_failed",
+            "raw_response": normalized_text,
+        }
+
+    raw_items = parsed.get("phrases") or parsed.get("items") or []
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    mapped: Dict[str, Dict[str, str | None]] = {}
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        raw_phrase = str(item.get("raw_phrase") or item.get("phrase") or "").strip()
+        if not raw_phrase:
+            continue
+        normalized_value = item.get("normalized_phrase")
+        if normalized_value is None:
+            normalized_phrase = None
+        else:
+            normalized_phrase = _WHITESPACE_RE.sub(" ", str(normalized_value).strip())
+            if not normalized_phrase or normalized_phrase.lower() == "null":
+                normalized_phrase = None
+        comment = str(item.get("comment") or "").strip()
+        mapped[normalize_phrase(raw_phrase)] = {
+            "raw_phrase": raw_phrase,
+            "normalized_phrase": normalized_phrase,
+            "comment": comment,
+        }
+
+    results: List[Dict[str, str | None]] = []
+    for phrase in cleaned:
+        key = normalize_phrase(phrase)
+        item = mapped.get(key)
+        if item:
+            results.append(
+                {
+                    "raw_phrase": phrase,
+                    "normalized_phrase": item.get("normalized_phrase"),
+                    "comment": item.get("comment") or "",
+                }
+            )
+        else:
+            results.append({"raw_phrase": phrase, "normalized_phrase": None, "comment": ""})
+
+    return {"success": True, "phrases": results}
 
 
 def generate_wordstat_seed_groups(
@@ -611,6 +744,7 @@ def analyze_seo_text(
 __all__ = [
     "cluster_wordstat_phrases",
     "normalize_phrase",
+    "normalize_wordstat_phrases_ai",
     "analyze_seo_text",
     "generate_wordstat_seed_groups",
     "select_wordstat_association_seeds",

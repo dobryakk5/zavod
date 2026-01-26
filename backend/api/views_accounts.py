@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Count, F
@@ -17,7 +19,9 @@ from core.generation_events import (
     is_trial_client,
     record_generation_event,
 )
-from core.models import GenerationEvent, Post, ProjectSemanticSet, Schedule
+from django.db import transaction
+
+from core.models import GenerationEvent, Post, Schedule, SemanticGroup
 
 from .authentication import CookieJWTAuthentication
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
@@ -485,76 +489,120 @@ class ClientBookSemanticsView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        semantic_set = ProjectSemanticSet.objects.create(
-            client=client,
-            source=ProjectSemanticSet.SOURCE_EXPERT_BOOKS,
-            status="generating",
+        result = generator.generate_semantic_groups_from_books(
             books_text=books_text,
-        )
-
-        result = generator.generate_project_semantics_from_books(
-            books_text=books_text,
-            brand=client.name,
+            niche=client.niche,
+            audience=client.avatar,
+            product=client.product_service,
             language=language,
         )
 
         if not result.get("success"):
-            semantic_set.status = "failed"
-            semantic_set.error_log = str(result.get("error") or "AI error")
-            semantic_set.prompt_used = str(result.get("prompt_used") or "")
-            semantic_set.ai_model = str(generator.model or "")
-            semantic_set.raw_response = result.get("raw_response") or {}
-            semantic_set.save(
-                update_fields=[
-                    "status",
-                    "error_log",
-                    "prompt_used",
-                    "ai_model",
-                    "raw_response",
-                    "updated_at",
-                ]
-            )
             return Response(
-                {"success": False, "error": semantic_set.error_log},
+                {"success": False, "error": str(result.get("error") or "AI error")},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        keyword_groups = result.get("groups") or {}
-        keywords_list = result.get("keywords") or []
+        groups = result.get("groups") or []
+        if not isinstance(groups, list) or not groups:
+            return Response(
+                {"success": False, "error": "AI вернул пустой список смысловых групп"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
-        semantic_set.status = "completed"
-        semantic_set.keyword_groups = keyword_groups
-        semantic_set.keywords_list = keywords_list
-        semantic_set.prompt_used = str(result.get("prompt_used") or "")
-        semantic_set.ai_model = str(generator.model or "")
-        semantic_set.raw_response = result.get("raw_response") or {}
-        semantic_set.error_log = ""
-        semantic_set.save(
-            update_fields=[
-                "status",
-                "keyword_groups",
-                "keywords_list",
-                "prompt_used",
-                "ai_model",
-                "raw_response",
-                "error_log",
-                "updated_at",
-            ]
-        )
+        created_groups = []
+        whitespace_re = re.compile(r"\s+")
+
+        def normalize_source_books(value):
+            if value is None:
+                return []
+            if isinstance(value, list):
+                raw_items = value
+            elif isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    return []
+                if "\n" in value:
+                    raw_items = [item for item in value.splitlines() if item.strip()]
+                elif ";" in value and "," not in value:
+                    raw_items = [item for item in value.split(";") if str(item).strip()]
+                else:
+                    raw_items = [value]
+            else:
+                raw_items = [value]
+
+            cleaned = []
+            for item in raw_items:
+                text_value = ""
+                if isinstance(item, dict):
+                    title = str(item.get("title") or item.get("name") or "").strip()
+                    author = str(item.get("author") or "").strip()
+                    if title and author:
+                        text_value = f"{title} — {author}"
+                    else:
+                        text_value = title or author
+                else:
+                    text_value = str(item or "").strip()
+                text_value = whitespace_re.sub(" ", text_value)
+                if text_value:
+                    cleaned.append(text_value)
+
+            seen = set()
+            unique = []
+            for item in cleaned:
+                key = item.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(item)
+            return unique
+
+        with transaction.atomic():
+            SemanticGroup.objects.filter(client=client, source="ai").exclude(status="archived").update(
+                status="archived"
+            )
+            for item in groups:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                scope = str(item.get("scope") or "normal").strip().lower() or "normal"
+                if scope not in {"narrow", "normal", "wide"}:
+                    scope = "normal"
+                expected_clusters = item.get("expected_clusters")
+                if expected_clusters is not None:
+                    try:
+                        expected_clusters = int(expected_clusters)
+                    except (TypeError, ValueError):
+                        expected_clusters = None
+                source_books_raw = item.get("source_books") or item.get("sources") or item.get("books")
+                source_books = normalize_source_books(source_books_raw)
+                created_groups.append(
+                    SemanticGroup(
+                        client=client,
+                        name=name,
+                        description=str(item.get("description") or "").strip(),
+                        scope=scope,
+                        expected_clusters=expected_clusters,
+                        source_books=source_books,
+                        source="ai",
+                    )
+                )
+            if created_groups:
+                SemanticGroup.objects.bulk_create(created_groups)
 
         record_generation_event(
             client,
             GenerationEvent.EVENT_BOOK_SEMANTICS,
-            meta={"source": "expert_books", "keywords_count": len(keywords_list)},
+            meta={"source": "expert_books", "groups_count": len(created_groups)},
         )
 
         return Response(
             {
                 "success": True,
                 "saved": True,
-                "semantic_set_id": semantic_set.id,
-                "keywords_count": len(keywords_list),
-                "groups_count": len(keyword_groups),
+                "groups_count": len(created_groups),
             },
             status=status.HTTP_200_OK,
         )

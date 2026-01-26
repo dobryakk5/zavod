@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import timedelta
 
 from django.db import transaction
 from django.db.models import Count, Prefetch, Q
+from django.db.models.functions import Coalesce, Lower
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -17,9 +20,9 @@ from core import tasks
 from core.ai_generator import AIContentGenerator
 from core.ai_generator_seo import (
     analyze_seo_text,
-    cluster_wordstat_phrases,
     generate_wordstat_seed_groups,
     normalize_phrase,
+    normalize_wordstat_phrases_ai,
     select_wordstat_association_seeds,
 )
 from core.generation_events import (
@@ -31,12 +34,18 @@ from core.generation_events import (
 from core.models import (
     Article,
     ArticleBlock,
+    Client,
     GenerationEvent,
     ProjectSemanticSet,
+    SemanticCluster,
+    SemanticGroup,
+    SemanticPhrase,
+    WordstatPhrase,
     SEOKeywordSet,
     WordstatCluster,
     WordstatQuery,
     WordstatResult,
+    ClusterPhrase,
 )
 from core.services.article_blocks import get_system_block_prompt_template, sync_blocks_from_seo_blocks
 from core.services.seo_article_analysis import analyze_text_against_wordstat, extract_text_from_url
@@ -49,6 +58,9 @@ from .serializers import (
     ArticleListSerializer,
     ArticleSerializer,
     ProjectSemanticSetSerializer,
+    SemanticClusterSerializer,
+    SemanticGroupSerializer,
+    SemanticPhraseSerializer,
     SEOKeywordSetSerializer,
     WordstatClusterSerializer,
     WordstatQuerySerializer,
@@ -57,6 +69,7 @@ from .serializers import (
 from .utils import enforce_generation_limit, get_active_client
 
 logger = logging.getLogger(__name__)
+WORDSTAT_MIN_FREQUENCY = 50
 
 
 def _strip_code_fences(text: str) -> str:
@@ -138,6 +151,96 @@ def _parse_optional_positive_int(value):
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _get_wordstat_phrase_map(phrases: list[str]) -> dict[str, WordstatPhrase]:
+    normalized_map: dict[str, str] = {}
+    for phrase in phrases or []:
+        normalized = normalize_phrase(phrase)
+        if not normalized:
+            continue
+        normalized_map[normalized] = normalized
+
+    if not normalized_map:
+        return {}
+
+    existing = WordstatPhrase.objects.filter(
+        phrase__in=normalized_map.values(),
+        frequency__gte=WORDSTAT_MIN_FREQUENCY,
+    )
+    return {row.phrase: row for row in existing}
+
+
+def _upsert_wordstat_phrases(
+    counts: dict[str, int],
+    *,
+    min_frequency: int = WORDSTAT_MIN_FREQUENCY,
+) -> dict[str, WordstatPhrase]:
+    normalized_counts: dict[str, int] = {}
+    for phrase, count in (counts or {}).items():
+        normalized = normalize_phrase(phrase)
+        if not normalized:
+            continue
+        try:
+            parsed = int(count or 0)
+        except (TypeError, ValueError):
+            parsed = 0
+        if parsed < min_frequency:
+            continue
+        current = normalized_counts.get(normalized)
+        if current is None or parsed > current:
+            normalized_counts[normalized] = parsed
+
+    if not normalized_counts:
+        return {}
+
+    existing = WordstatPhrase.objects.filter(phrase__in=normalized_counts.keys())
+    phrase_map = {row.phrase: row for row in existing}
+    to_create: list[WordstatPhrase] = []
+    to_update: list[WordstatPhrase] = []
+    now = timezone.now()
+    for phrase, count in normalized_counts.items():
+        row = phrase_map.get(phrase)
+        if row:
+            if row.frequency is None or count > row.frequency:
+                row.frequency = count
+                row.updated_at = now
+                to_update.append(row)
+        else:
+            to_create.append(WordstatPhrase(phrase=phrase, frequency=count))
+
+    if to_create:
+        WordstatPhrase.objects.bulk_create(to_create)
+        created = WordstatPhrase.objects.filter(phrase__in=[row.phrase for row in to_create])
+        for row in created:
+            phrase_map[row.phrase] = row
+
+    if to_update:
+        WordstatPhrase.objects.bulk_update(to_update, ["frequency", "updated_at"])
+
+    return phrase_map
+
+
+def _assign_wordstat_phrases(client: Client, wordstat_map: dict[str, WordstatPhrase]) -> None:
+    if not wordstat_map:
+        return
+    normalized_values = list(wordstat_map.keys())
+    candidates = SemanticPhrase.objects.filter(
+        client=client,
+        phrase_id__isnull=True,
+        normalized_phrase__in=normalized_values,
+    )
+    updates: list[SemanticPhrase] = []
+    for row in candidates:
+        normalized_value = normalize_phrase(row.normalized_phrase or "")
+        wordstat_phrase = wordstat_map.get(normalized_value)
+        if not wordstat_phrase:
+            continue
+        row.phrase_id = wordstat_phrase.id
+        row.updated_at = timezone.now()
+        updates.append(row)
+    if updates:
+        SemanticPhrase.objects.bulk_update(updates, ["phrase", "updated_at"])
 
 
 def _build_article_outline(
@@ -943,6 +1046,169 @@ class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):
             'task_id': task.id,
         })
 
+
+class SemanticGroupViewSet(viewsets.ModelViewSet):
+    """ViewSet for semantic group CRUD operations."""
+
+    serializer_class = SemanticGroupSerializer
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsTenantOwnerOrEditor()]
+        return [IsTenantMember()]
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        queryset = (
+            SemanticGroup.objects.filter(client=client)
+            .annotate(clusters_count=Count("clusters", distinct=True))
+            .order_by("-created_at")
+        )
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        source_filter = self.request.query_params.get("source")
+        if source_filter:
+            queryset = queryset.filter(source=source_filter)
+        return queryset
+
+    def perform_create(self, serializer):
+        client = get_active_client(self.request.user)
+        serializer.save(client=client)
+
+    @action(detail=True, methods=["post"], url_path="generate-clusters", permission_classes=[IsTenantOwnerOrEditor])
+    def generate_clusters(self, request, pk=None):
+        client = get_active_client(request.user)
+        group = get_object_or_404(SemanticGroup.objects.filter(client=client), pk=pk)
+
+        existing_clusters = SemanticCluster.objects.filter(client=client, semantic_group=group)
+        if existing_clusters.exists():
+            serializer = SemanticClusterSerializer(existing_clusters.order_by("-created_at"), many=True)
+            return Response(
+                {
+                    "success": True,
+                    "message": "Кластеры уже созданы",
+                    "clusters_count": existing_clusters.count(),
+                    "clusters": serializer.data,
+                }
+            )
+
+        niche = (client.niche or "").strip()
+        product_service = (client.product_service or "").strip()
+        audience = (client.avatar or "").strip()
+
+        missing_fields: list[str] = []
+        if not niche:
+            missing_fields.append("niche")
+        if not product_service:
+            missing_fields.append("product_service")
+        if not audience:
+            missing_fields.append("avatar")
+
+        if missing_fields:
+            return Response(
+                {"error": "Введите данные проекта", "missing_fields": missing_fields},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_SEMANTIC_CLUSTERS)
+        if limit_response:
+            return limit_response
+
+        generator = AIContentGenerator()
+        result = generator.generate_semantic_clusters_from_group(
+            niche=niche,
+            audience=audience,
+            product=product_service,
+            group_name=group.name,
+            group_description=group.description or "",
+            group_scope=group.scope or "normal",
+            expected_clusters=group.expected_clusters,
+            examples=None,
+            source_books=group.source_books or [],
+            language="ru",
+        )
+        if not result.get("success"):
+            return Response(
+                {
+                    "error": "Не удалось сформировать кластеры",
+                    "details": result.get("error"),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        clusters_payload = result.get("clusters") or []
+        if not isinstance(clusters_payload, list):
+            clusters_payload = []
+
+        whitespace_re = re.compile(r"\s+")
+        seen_names: set[str] = set()
+        to_create: list[SemanticCluster] = []
+        for cluster in clusters_payload:
+            if not isinstance(cluster, dict):
+                continue
+            name = whitespace_re.sub(" ", str(cluster.get("name") or "").strip())
+            if not name:
+                continue
+            normalized = name.lower()
+            if normalized in seen_names:
+                continue
+            seen_names.add(normalized)
+            description = whitespace_re.sub(" ", str(cluster.get("description") or "").strip())
+            main_keyword = whitespace_re.sub(" ", str(cluster.get("main_keyword") or "").strip())
+            intent = str(cluster.get("intent") or "").strip().lower()
+            if intent not in {"info", "commercial", "navigational", "brand"}:
+                intent = ""
+            user_goal = whitespace_re.sub(" ", str(cluster.get("user_goal") or "").strip())
+            cta = whitespace_re.sub(" ", str(cluster.get("cta") or "").strip())
+            priority = cluster.get("priority")
+            priority_value = None
+            if isinstance(priority, (int, float)):
+                priority_value = int(priority)
+            elif isinstance(priority, str):
+                priority_value = {"high": 3, "medium": 2, "low": 1}.get(priority.strip().lower())
+            if priority_value is not None and priority_value <= 0:
+                priority_value = None
+
+            to_create.append(
+                SemanticCluster(
+                    client=client,
+                    semantic_group=group,
+                    name=name[:255],
+                    description=description,
+                    main_keyword=main_keyword[:255],
+                    intent=intent,
+                    user_goal=user_goal,
+                    cta=cta[:255],
+                    priority=priority_value,
+                )
+            )
+
+        if not to_create:
+            return Response(
+                {"error": "AI не вернул валидные кластеры"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        with transaction.atomic():
+            SemanticCluster.objects.bulk_create(to_create)
+            record_generation_event(
+                client,
+                GenerationEvent.EVENT_SEMANTIC_CLUSTERS,
+                meta={"semantic_group_id": group.id, "clusters_count": len(to_create)},
+            )
+
+        created = SemanticCluster.objects.filter(client=client, semantic_group=group).order_by("-created_at")
+        serializer = SemanticClusterSerializer(created, many=True)
+        return Response(
+            {
+                "success": True,
+                "message": f"Создано кластеров: {len(to_create)}",
+                "clusters_count": len(to_create),
+                "clusters": serializer.data,
+            }
+        )
+
     @action(detail=False, methods=['post'], permission_classes=[IsTenantOwnerOrEditor])
     def restart(self, request):
         client = get_active_client(request.user)
@@ -958,6 +1224,1066 @@ class SEOKeywordSetViewSet(viewsets.ReadOnlyModelViewSet):
             'message': f"SEO генерация перезапущена для клиента: {client.name}",
             'task_id': task.id,
         })
+
+
+class SemanticClusterViewSet(mixins.UpdateModelMixin, viewsets.ReadOnlyModelViewSet):
+    """ViewSet for semantic cluster list/detail operations."""
+
+    permission_classes = [IsTenantMember]
+    serializer_class = SemanticClusterSerializer
+    pagination_class = None
+    http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in ("update", "partial_update"):
+            return [IsTenantOwnerOrEditor()]
+        if self.action == "phrases" and self.request.method in ("DELETE", "POST"):
+            return [IsTenantOwnerOrEditor()]
+        if self.action == "remove_phrase":
+            return [IsTenantOwnerOrEditor()]
+        return [IsTenantMember()]
+
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        queryset = SemanticCluster.objects.filter(client=client).annotate(
+            phrases_count=Count("phrases", distinct=True)
+        )
+        group_id = self.request.query_params.get("semantic_group")
+        if group_id:
+            try:
+                group_id_int = int(str(group_id))
+            except (TypeError, ValueError):
+                group_id_int = None
+            if group_id_int:
+                queryset = queryset.filter(semantic_group_id=group_id_int)
+        return queryset.order_by("-priority", "name", "id")
+
+    @action(detail=True, methods=["get", "post", "delete"], url_path="phrases")
+    def phrases(self, request, pk=None):
+        client = get_active_client(request.user)
+        cluster = get_object_or_404(SemanticCluster.objects.filter(client=client), pk=pk)
+        if request.method == "POST":
+            raw_phrases = (
+                request.data.get("phrases")
+                or request.data.get("group")
+                or request.data.get("phrase")
+            )
+            incoming = _parse_phrases(raw_phrases)
+            if not incoming:
+                return Response(
+                    {"error": "Введите фразы для кластера"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            whitespace_re = re.compile(r"\s+")
+            cleaned: list[str] = []
+            seen_norms: set[str] = set()
+            for phrase in incoming:
+                phrase_value = whitespace_re.sub(" ", str(phrase or "").strip())
+                if not phrase_value:
+                    continue
+                normalized = normalize_phrase(phrase_value)
+                if not normalized or normalized in seen_norms:
+                    continue
+                seen_norms.add(normalized)
+                cleaned.append(phrase_value)
+
+            if not cleaned:
+                return Response(
+                    {"error": "Введите фразы для кластера"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            existing_norms: set[str] = set()
+            for phrase_obj in cluster.phrases.all():
+                normalized_value = (
+                    phrase_obj.normalized_phrase
+                    or phrase_obj.raw_phrase
+                    or (phrase_obj.phrase.phrase if phrase_obj.phrase_id else "")
+                )
+                normalized = normalize_phrase(normalized_value)
+                if normalized:
+                    existing_norms.add(normalized)
+
+            new_phrases: list[str] = []
+            new_norms: list[str] = []
+            for phrase_value in cleaned:
+                normalized = normalize_phrase(phrase_value)
+                if normalized in existing_norms:
+                    continue
+                new_phrases.append(phrase_value)
+                new_norms.append(normalized)
+
+            if not new_phrases:
+                return Response(
+                    {"error": "Новых фраз для добавления нет"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            existing_rows = SemanticPhrase.objects.filter(
+                client=client,
+                normalized_phrase__in=new_norms,
+            )
+            existing_map: dict[str, SemanticPhrase] = {}
+            for row in existing_rows:
+                normalized_value = row.normalized_phrase or normalize_phrase(row.raw_phrase or "")
+                if normalized_value:
+                    existing_map[normalize_phrase(normalized_value)] = row
+
+            to_create: list[SemanticPhrase] = []
+            to_update: list[SemanticPhrase] = []
+            now = timezone.now()
+            for phrase_value in new_phrases:
+                normalized = normalize_phrase(phrase_value)
+                existing = existing_map.get(normalized)
+                if existing:
+                    changed = False
+                    if not existing.raw_phrase:
+                        existing.raw_phrase = phrase_value
+                        changed = True
+                    if not existing.normalized_phrase:
+                        existing.normalized_phrase = normalized
+                        changed = True
+                    if changed:
+                        existing.updated_at = now
+                        to_update.append(existing)
+                    continue
+                to_create.append(
+                    SemanticPhrase(
+                        client=client,
+                        raw_phrase=phrase_value,
+                        normalized_phrase=normalized,
+                        type="key",
+                        intent=cluster.intent or "",
+                        source="manual",
+                    )
+                )
+
+            with transaction.atomic():
+                if to_create:
+                    SemanticPhrase.objects.bulk_create(to_create)
+                if to_update:
+                    SemanticPhrase.objects.bulk_update(
+                        to_update,
+                        ["raw_phrase", "normalized_phrase", "updated_at"],
+                    )
+
+                phrase_rows = SemanticPhrase.objects.filter(
+                    client=client,
+                    normalized_phrase__in=new_norms,
+                )
+                phrase_map: dict[str, SemanticPhrase] = {}
+                for row in phrase_rows:
+                    if row.normalized_phrase:
+                        phrase_map[normalize_phrase(row.normalized_phrase)] = row
+
+                main_keyword_norm = normalize_phrase(cluster.main_keyword) if cluster.main_keyword else ""
+                to_link: list[ClusterPhrase] = []
+                for normalized_value in new_norms:
+                    phrase_obj = phrase_map.get(normalized_value)
+                    if not phrase_obj:
+                        continue
+                    role = "main" if main_keyword_norm and normalized_value == main_keyword_norm else "support"
+                    to_link.append(
+                        ClusterPhrase(
+                            cluster=cluster,
+                            phrase=phrase_obj,
+                            role=role,
+                            added_by="manual",
+                        )
+                    )
+                if to_link:
+                    ClusterPhrase.objects.bulk_create(to_link, ignore_conflicts=True)
+
+            wordstat_error: str | None = None
+            wordstat_counts: dict[str, int] = {}
+
+            wordstat_existing = WordstatPhrase.objects.filter(phrase__in=new_norms)
+            wordstat_map_existing: dict[str, WordstatPhrase] = {}
+            for row in wordstat_existing:
+                if row.frequency is not None and row.frequency > 0:
+                    wordstat_map_existing[row.phrase] = row
+
+            phrase_updates: list[SemanticPhrase] = []
+            for normalized_value, phrase_obj in phrase_map.items():
+                if phrase_obj.phrase_id:
+                    continue
+                wordstat_phrase = wordstat_map_existing.get(normalized_value)
+                if wordstat_phrase:
+                    phrase_obj.phrase_id = wordstat_phrase.id
+                    phrase_obj.updated_at = now
+                    phrase_updates.append(phrase_obj)
+            if phrase_updates:
+                SemanticPhrase.objects.bulk_update(phrase_updates, ["phrase", "updated_at"])
+
+            to_check = [
+                phrase_value
+                for phrase_value in new_phrases
+                if normalize_phrase(phrase_value) not in wordstat_map_existing
+            ]
+
+            if to_check:
+                limit_response = _check_wordstat_generation_limit(client, len(to_check))
+                if limit_response:
+                    wordstat_error = str(limit_response.data.get("error") or "Wordstat лимит исчерпан")
+                else:
+                    try:
+                        ws_client = get_wordstat_client()
+                        for phrase_value in to_check:
+                            api_response = ws_client.fetch_top_requests(
+                                phrase=phrase_value,
+                                regions=None,
+                                devices=None,
+                                include_parent=False,
+                            )
+                            base_norm = normalize_phrase(phrase_value)
+                            base_count = None
+                            for item in api_response.get("topRequests") or []:
+                                phrase_text = str(item.get("phrase") or "").strip()
+                                if not phrase_text:
+                                    continue
+                                if normalize_phrase(phrase_text) != base_norm:
+                                    continue
+                                try:
+                                    base_count = int(item.get("count") or 0)
+                                except (TypeError, ValueError):
+                                    base_count = 0
+                                break
+                            if base_count is None:
+                                try:
+                                    base_count = int(api_response.get("totalCount") or 0)
+                                except (TypeError, ValueError):
+                                    base_count = 0
+                            if base_count and base_count > 0:
+                                wordstat_counts[base_norm] = base_count
+
+                            record_generation_event(
+                                client,
+                                GenerationEvent.EVENT_WORDSTAT_QUERY,
+                                meta={"phrases_count": 1, "source": "semantic_cluster_manual"},
+                            )
+                    except WordstatError as exc:
+                        wordstat_error = str(exc)
+                    except Exception:
+                        logger.exception("Wordstat request failed for manual cluster add")
+                        wordstat_error = "Не удалось получить данные Wordstat"
+
+            if wordstat_counts:
+                wordstat_map = _upsert_wordstat_phrases(wordstat_counts, min_frequency=1)
+                _assign_wordstat_phrases(client, wordstat_map)
+
+            phrases = cluster.phrases.annotate(freq=Coalesce("phrase__frequency", 0)).order_by(
+                "-freq", "normalized_phrase", "id"
+            )
+            serializer = SemanticPhraseSerializer(phrases, many=True)
+            payload = {
+                "success": True,
+                "added": len(new_phrases),
+                "message": f"Добавлено фраз: {len(new_phrases)}",
+                "phrases": serializer.data,
+            }
+            if wordstat_error:
+                payload["wordstat_error"] = wordstat_error
+            return Response(payload)
+
+        if request.method == "DELETE":
+            deleted = cluster.cluster_phrases.count()
+            if deleted:
+                cluster.cluster_phrases.all().delete()
+            return Response(
+                {
+                    "success": True,
+                    "deleted": deleted,
+                    "message": f"Удалено фраз: {deleted}",
+                }
+        )
+        phrases = cluster.phrases.annotate(freq=Coalesce("phrase__frequency", 0)).order_by(
+            "-freq", "normalized_phrase", "id"
+        )
+        serializer = SemanticPhraseSerializer(phrases, many=True)
+        return Response(serializer.data)
+
+    @action(
+        detail=True,
+        methods=["delete"],
+        url_path=r"phrases/(?P<phrase_id>\d+)",
+    )
+    def remove_phrase(self, request, pk=None, phrase_id=None):
+        client = get_active_client(request.user)
+        cluster = get_object_or_404(SemanticCluster.objects.filter(client=client), pk=pk)
+        try:
+            phrase_id_int = int(phrase_id)
+        except (TypeError, ValueError):
+            return Response({"error": "Некорректная фраза"}, status=status.HTTP_400_BAD_REQUEST)
+
+        deleted, _ = cluster.cluster_phrases.filter(phrase_id=phrase_id_int).delete()
+        if not deleted:
+            return Response({"error": "Фраза не найдена"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"success": True, "message": "Фраза удалена"})
+
+    @action(detail=True, methods=["post"], url_path="generate-phrases", permission_classes=[IsTenantOwnerOrEditor])
+    def generate_phrases(self, request, pk=None):
+        client = get_active_client(request.user)
+        cluster = get_object_or_404(SemanticCluster.objects.filter(client=client), pk=pk)
+
+        group = cluster.semantic_group
+        if not group:
+            return Response(
+                {"error": "Кластер не привязан к смысловой группе"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_SEMANTIC_PHRASES)
+        if limit_response:
+            return limit_response
+
+        generator = AIContentGenerator()
+        raw_books = group.source_books or []
+        if isinstance(raw_books, list):
+            source_books = raw_books
+        else:
+            source_books = [str(raw_books)] if str(raw_books).strip() else []
+
+        result = generator.generate_semantic_phrases_from_cluster(
+            niche=client.niche or "",
+            product=client.product_service or "",
+            group_name=group.name,
+            group_description=group.description or "",
+            group_source_books=source_books,
+            cluster_name=cluster.name,
+            cluster_description=cluster.description or "",
+            cluster_main_keyword=cluster.main_keyword or "",
+            cluster_intent=cluster.intent or "",
+            cluster_user_goal=cluster.user_goal or "",
+            cluster_cta=cluster.cta or "",
+            language="ru",
+        )
+
+        if not result.get("success"):
+            return Response(
+                {
+                    "error": "Не удалось сформировать фразы",
+                    "details": result.get("error"),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        phrases_payload = result.get("phrases") or []
+        if not isinstance(phrases_payload, list):
+            phrases_payload = []
+
+        whitespace_re = re.compile(r"\s+")
+        seen: set[str] = set()
+        cleaned: list[dict[str, str]] = []
+        for item in phrases_payload:
+            if isinstance(item, dict):
+                raw_phrase = item.get("phrase") or item.get("keyword") or item.get("name") or ""
+                raw_intent = item.get("intent") or ""
+            else:
+                raw_phrase = item
+                raw_intent = ""
+            phrase_text = whitespace_re.sub(" ", str(raw_phrase or "").strip())
+            if not phrase_text:
+                continue
+            normalized = normalize_phrase(phrase_text)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            intent_value = str(raw_intent or "").strip().lower()
+            if intent_value not in {"info", "commercial", "navigational", "brand"}:
+                intent_value = cluster.intent or ""
+            cleaned.append(
+                {
+                    "phrase": phrase_text,
+                    "intent": intent_value,
+                }
+            )
+
+        if not cleaned:
+            return Response(
+                {"error": "AI не вернул валидные фразы"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        normalized_phrases = {normalize_phrase(item["phrase"]) for item in cleaned}
+        existing_rows = SemanticPhrase.objects.filter(
+            client=client, normalized_phrase__in=normalized_phrases
+        )
+        existing_map: dict[str, SemanticPhrase] = {}
+        for row in existing_rows:
+            normalized_value = row.normalized_phrase or normalize_phrase(row.raw_phrase or "")
+            if normalized_value:
+                existing_map[normalized_value] = row
+
+        to_create: list[SemanticPhrase] = []
+        existing_updates: list[SemanticPhrase] = []
+        now = timezone.now()
+        for item in cleaned:
+            normalized = normalize_phrase(item["phrase"])
+            existing = existing_map.get(normalized)
+            if existing:
+                changed = False
+                if not existing.raw_phrase:
+                    existing.raw_phrase = item.get("phrase") or ""
+                    changed = True
+                if not existing.normalized_phrase:
+                    existing.normalized_phrase = normalized
+                    changed = True
+                if changed:
+                    existing.updated_at = now
+                    existing_updates.append(existing)
+                continue
+            to_create.append(
+                SemanticPhrase(
+                    client=client,
+                    raw_phrase=item.get("phrase") or "",
+                    normalized_phrase=normalized,
+                    type="key",
+                    intent=item.get("intent") or cluster.intent or "",
+                    source="ai",
+                )
+            )
+
+        phrase_map: dict[str, SemanticPhrase] = {}
+        with transaction.atomic():
+            if to_create:
+                SemanticPhrase.objects.bulk_create(to_create)
+            if existing_updates:
+                SemanticPhrase.objects.bulk_update(
+                    existing_updates, ["raw_phrase", "normalized_phrase", "updated_at"]
+                )
+
+            rows = SemanticPhrase.objects.filter(client=client, normalized_phrase__in=normalized_phrases)
+            for row in rows:
+                if row.normalized_phrase:
+                    phrase_map[row.normalized_phrase] = row
+
+            main_keyword_norm = normalize_phrase(cluster.main_keyword) if cluster.main_keyword else ""
+            to_link: list[ClusterPhrase] = []
+            for item in cleaned:
+                normalized = normalize_phrase(item["phrase"])
+                phrase_obj = phrase_map.get(normalized)
+                if not phrase_obj:
+                    continue
+                role = "main" if main_keyword_norm and normalized == main_keyword_norm else "support"
+                to_link.append(
+                    ClusterPhrase(
+                        cluster=cluster,
+                        phrase=phrase_obj,
+                        role=role,
+                        added_by="ai",
+                    )
+                )
+            if to_link:
+                ClusterPhrase.objects.bulk_create(to_link, ignore_conflicts=True)
+
+            record_generation_event(
+                client,
+                GenerationEvent.EVENT_SEMANTIC_PHRASES,
+                meta={"semantic_cluster_id": cluster.id, "phrases_count": len(cleaned)},
+            )
+
+        phrase_map_by_raw = {
+            normalize_phrase(row.raw_phrase): row
+            for row in phrase_map.values()
+            if row.raw_phrase
+        }
+
+        try:
+            normalization = normalize_wordstat_phrases_ai(
+                phrases=[item["phrase"] for item in cleaned],
+                language="ru",
+            )
+        except Exception as exc:
+            logger.exception("Wordstat normalization failed for cluster %s: %s", cluster.id, exc)
+            normalization = {"success": False, "error": "exception"}
+
+        normalized_queue: list[str] = []
+        if normalization.get("success"):
+            normalized_items = normalization.get("phrases") or []
+            for item in normalized_items:
+                if not isinstance(item, dict):
+                    continue
+                normalized_value = item.get("normalized_phrase")
+                if normalized_value is None:
+                    continue
+                normalized_value = whitespace_re.sub(" ", str(normalized_value).strip())
+            updates: list[SemanticPhrase] = []
+            seen_norms: set[str] = set()
+            for item in normalized_items:
+                if not isinstance(item, dict):
+                    continue
+                raw_phrase = str(item.get("raw_phrase") or "").strip()
+                if not raw_phrase:
+                    continue
+                normalized_value = item.get("normalized_phrase")
+                if normalized_value is not None:
+                    normalized_value = whitespace_re.sub(" ", str(normalized_value).strip())
+                else:
+                    normalized_value = ""
+                normalized_value = normalize_phrase(normalized_value) if normalized_value else ""
+                comment_value = str(item.get("comment") or "").strip()
+                phrase_obj = phrase_map_by_raw.get(normalize_phrase(raw_phrase)) or phrase_map.get(
+                    normalize_phrase(raw_phrase)
+                )
+                if not phrase_obj:
+                    continue
+                changed = False
+                if raw_phrase and not phrase_obj.raw_phrase:
+                    phrase_obj.raw_phrase = raw_phrase
+                    changed = True
+                if normalized_value and phrase_obj.normalized_phrase != normalized_value:
+                    phrase_obj.normalized_phrase = normalized_value
+                    changed = True
+                if comment_value and phrase_obj.comment != comment_value:
+                    phrase_obj.comment = comment_value
+                    changed = True
+                if changed:
+                    phrase_obj.updated_at = now
+                    updates.append(phrase_obj)
+                normalized_queue_value = normalized_value or phrase_obj.normalized_phrase or ""
+                if normalized_queue_value:
+                    norm_key = normalize_phrase(normalized_queue_value)
+                    if norm_key and norm_key not in seen_norms:
+                        normalized_queue.append(norm_key)
+                        seen_norms.add(norm_key)
+            if updates:
+                SemanticPhrase.objects.bulk_update(
+                    updates,
+                    ["raw_phrase", "normalized_phrase", "comment", "updated_at"],
+                )
+        else:
+            logger.warning(
+                "Wordstat normalization failed for cluster %s: %s",
+                cluster.id,
+                normalization.get("error"),
+            )
+
+        if normalized_queue:
+            normalized_norms = {normalize_phrase(item) for item in normalized_queue if item}
+            cutoff = timezone.now() - timedelta(days=3)
+            recent_results = (
+                WordstatResult.objects.filter(
+                    query__client=client,
+                    query__created_at__gte=cutoff,
+                    result_type="top_request",
+                )
+                .annotate(norm=Lower("phrase"))
+                .filter(norm__in=normalized_norms)
+                .order_by("-query__created_at")
+            )
+            recent_map: dict[str, WordstatResult] = {}
+            for row in recent_results:
+                norm_key = getattr(row, "norm", None)
+                if norm_key and norm_key not in recent_map:
+                    recent_map[str(norm_key)] = row
+
+            needed_queries = sum(1 for norm in normalized_norms if norm and norm not in recent_map)
+            limit_response = _check_wordstat_generation_limit(client, needed_queries)
+            limit_reached = limit_response is not None
+            if limit_reached:
+                logger.warning(
+                    "Wordstat limit reached for cluster %s: needed=%s",
+                    cluster.id,
+                    needed_queries,
+                )
+
+            ws_client = None
+            user_info_data: dict[str, object] = {}
+            if not limit_reached:
+                try:
+                    ws_client = get_wordstat_client()
+                    user_info = ws_client.fetch_user_info()
+                    user_info_data = user_info.get("userInfo") if isinstance(user_info, dict) else {}
+                except Exception as exc:
+                    logger.exception(
+                        "Failed to init Wordstat client for cluster %s: %s",
+                        cluster.id,
+                        exc,
+                    )
+                    ws_client = None
+                    user_info_data = {}
+
+            existing_phrases = list(cluster.phrases.all())
+            existing_phrase_by_norm: dict[str, SemanticPhrase] = {
+                normalize_phrase(item.normalized_phrase or ""): item
+                for item in existing_phrases
+                if item.normalized_phrase
+            }
+            existing_norms: set[str] = set(existing_phrase_by_norm)
+
+            wordstat_candidates: dict[str, int] = {}
+
+            def record_wordstat_candidate(phrase_value: str, count_value) -> None:
+                try:
+                    parsed = int(count_value or 0)
+                except (TypeError, ValueError):
+                    parsed = 0
+                if parsed < WORDSTAT_MIN_FREQUENCY:
+                    return
+                normalized = normalize_phrase(phrase_value)
+                if not normalized:
+                    return
+                current = wordstat_candidates.get(normalized)
+                if current is None or parsed > current:
+                    wordstat_candidates[normalized] = parsed
+
+            for normalized_value in normalized_queue:
+                norm_key = normalize_phrase(normalized_value)
+                if not norm_key:
+                    continue
+
+                base_count: int | None = None
+                cached_row = recent_map.get(norm_key)
+                if cached_row:
+                    base_count = int(cached_row.count or 0)
+                    cached_results = WordstatResult.objects.filter(
+                        query=cached_row.query,
+                        result_type__in=["top_request", "association"],
+                    )
+
+                    to_create_phrases: list[SemanticPhrase] = []
+                    result_candidates: list[tuple[str, str, int]] = []
+                    seen_result_norms: set[str] = set()
+                    for row in cached_results:
+                        phrase_value = str(row.phrase or "").strip()
+                        if not phrase_value:
+                            continue
+                        result_norm = normalize_phrase(phrase_value)
+                        if not result_norm or result_norm in seen_result_norms:
+                            continue
+                        seen_result_norms.add(result_norm)
+
+                        if result_norm == norm_key:
+                            continue
+
+                        if result_norm in existing_norms:
+                            existing_phrase = existing_phrase_by_norm.get(result_norm)
+                            if existing_phrase:
+                                record_wordstat_candidate(phrase_value, row.count)
+                            continue
+
+                        phrase_type = "association" if row.result_type == "association" else "wordstat"
+                        result_candidates.append((phrase_value, phrase_type, int(row.count or 0)))
+
+                    if result_candidates:
+                        for phrase_value, phrase_type, count_value in result_candidates:
+                            record_wordstat_candidate(phrase_value, count_value)
+                            to_create_phrases.append(
+                                SemanticPhrase(
+                                    client=client,
+                                    raw_phrase=phrase_value,
+                                    normalized_phrase=normalize_phrase(phrase_value),
+                                    type=phrase_type,
+                                    source="wordstat",
+                                )
+                            )
+
+                    if to_create_phrases:
+                        SemanticPhrase.objects.bulk_create(to_create_phrases)
+                        created_norms = {
+                            normalize_phrase(item.normalized_phrase or "")
+                            for item in to_create_phrases
+                            if item.normalized_phrase
+                        }
+                        created_rows = SemanticPhrase.objects.filter(
+                            client=client, normalized_phrase__in=created_norms
+                        )
+                        created_map = {
+                            row.normalized_phrase: row
+                            for row in created_rows
+                            if row.normalized_phrase
+                        }
+                        existing_phrase_by_norm.update(created_map)
+                        existing_norms.update(created_map.keys())
+
+                        to_link: list[ClusterPhrase] = []
+                        for phrase_obj in created_map.values():
+                            to_link.append(
+                                ClusterPhrase(
+                                    cluster=cluster,
+                                    phrase=phrase_obj,
+                                    role="support",
+                                    added_by="ai",
+                                )
+                            )
+                        if to_link:
+                            ClusterPhrase.objects.bulk_create(to_link, ignore_conflicts=True)
+                elif ws_client:
+                    try:
+                        aggregated, total_count, responses = _collect_wordstat_data(
+                            ws_client=ws_client,
+                            phrases=[normalized_value],
+                            regions=[],
+                            devices=[],
+                            include_parent=False,
+                        )
+                    except WordstatError as exc:
+                        logger.warning("Wordstat request failed for '%s': %s", normalized_value, exc)
+                        continue
+                    except Exception:
+                        logger.exception("Wordstat request failed for '%s'", normalized_value)
+                        continue
+
+                    request_phrase_value = normalized_value[:255]
+                    raw_response_data = (
+                        responses[0]["response"]
+                        if len(responses) == 1
+                        else {"group_phrases": [normalized_value], "responses": responses}
+                    )
+                    query = WordstatQuery.objects.create(
+                        client=client,
+                        group_name=request_phrase_value,
+                        phrases=[normalized_value],
+                        request_phrase=request_phrase_value,
+                        total_count=total_count,
+                        include_parent=False,
+                        regions=[],
+                        devices=[],
+                        user_login=user_info_data.get("login", ""),
+                        limit_per_second=user_info_data.get("limitPerSecond"),
+                        daily_limit=user_info_data.get("dailyLimit"),
+                        daily_limit_remaining=user_info_data.get("dailyLimitRemaining"),
+                        raw_response=raw_response_data,
+                    )
+
+                    results_to_create: list[WordstatResult] = []
+                    for (phrase_text, result_type), count in sorted(
+                        aggregated.items(), key=lambda item: (-item[1], item[0][0])
+                    ):
+                        results_to_create.append(
+                            WordstatResult(
+                                query=query,
+                                phrase=phrase_text,
+                                count=int(count or 0),
+                                result_type=result_type,
+                            )
+                        )
+
+                    if results_to_create:
+                        WordstatResult.objects.bulk_create(results_to_create)
+
+                    record_generation_event(
+                        client,
+                        GenerationEvent.EVENT_WORDSTAT_QUERY,
+                        meta={"phrases_count": 1, "source": "semantic_cluster"},
+                    )
+
+                    to_create_phrases: list[SemanticPhrase] = []
+                    result_candidates: list[tuple[str, str, int]] = []
+                    seen_result_norms: set[str] = set()
+                    for (phrase_text, result_type), count in aggregated.items():
+                        phrase_value = str(phrase_text or "").strip()
+                        if not phrase_value:
+                            continue
+                        result_norm = normalize_phrase(phrase_value)
+                        if not result_norm or result_norm in seen_result_norms:
+                            continue
+                        seen_result_norms.add(result_norm)
+
+                        if result_norm == norm_key:
+                            base_count = int(count or 0)
+                            continue
+
+                        if result_norm in existing_norms:
+                            existing_phrase = existing_phrase_by_norm.get(result_norm)
+                            if existing_phrase:
+                                record_wordstat_candidate(phrase_value, count)
+                            continue
+
+                        phrase_type = "association" if result_type == "association" else "wordstat"
+                        result_candidates.append((phrase_value, phrase_type, int(count or 0)))
+
+                    if result_candidates:
+                        for phrase_value, phrase_type, count_value in result_candidates:
+                            record_wordstat_candidate(phrase_value, count_value)
+                            to_create_phrases.append(
+                                SemanticPhrase(
+                                    client=client,
+                                    raw_phrase=phrase_value,
+                                    normalized_phrase=normalize_phrase(phrase_value),
+                                    type=phrase_type,
+                                    source="wordstat",
+                                )
+                            )
+
+                    if to_create_phrases:
+                        SemanticPhrase.objects.bulk_create(to_create_phrases)
+                        created_norms = {
+                            normalize_phrase(item.normalized_phrase or "")
+                            for item in to_create_phrases
+                            if item.normalized_phrase
+                        }
+                        created_rows = SemanticPhrase.objects.filter(
+                            client=client, normalized_phrase__in=created_norms
+                        )
+                        created_map = {
+                            row.normalized_phrase: row
+                            for row in created_rows
+                            if row.normalized_phrase
+                        }
+                        existing_phrase_by_norm.update(created_map)
+                        existing_norms.update(created_map.keys())
+
+                        to_link: list[ClusterPhrase] = []
+                        for phrase_obj in created_map.values():
+                            to_link.append(
+                                ClusterPhrase(
+                                    cluster=cluster,
+                                    phrase=phrase_obj,
+                                    role="support",
+                                    added_by="ai",
+                                )
+                            )
+                        if to_link:
+                            ClusterPhrase.objects.bulk_create(to_link, ignore_conflicts=True)
+
+                    if base_count is None:
+                        base_count = int(total_count or 0)
+                else:
+                    continue
+
+                if base_count is not None:
+                    record_wordstat_candidate(norm_key, base_count)
+
+            if wordstat_candidates:
+                wordstat_map = _upsert_wordstat_phrases(wordstat_candidates)
+                _assign_wordstat_phrases(client, wordstat_map)
+
+        created = cluster.phrases.annotate(freq=Coalesce("phrase__frequency", 0)).order_by(
+            "-freq", "normalized_phrase", "id"
+        )
+        serializer = SemanticPhraseSerializer(created, many=True)
+        return Response(
+            {
+                "success": True,
+                "message": f"Создано фраз: {len(cleaned)}",
+                "phrases_count": len(cleaned),
+                "phrases": serializer.data,
+            }
+        )
+
+    @action(detail=True, methods=["post"], url_path="generate-context", permission_classes=[IsTenantOwnerOrEditor])
+    def generate_context(self, request, pk=None):
+        client = get_active_client(request.user)
+        cluster = get_object_or_404(SemanticCluster.objects.filter(client=client), pk=pk)
+
+        existing_lsi_links = cluster.cluster_phrases.filter(role="lsi")
+        if existing_lsi_links.exists():
+            phrases = cluster.phrases.annotate(freq=Coalesce("phrase__frequency", 0)).order_by(
+                "-freq", "normalized_phrase", "id"
+            )
+            serializer = SemanticPhraseSerializer(phrases, many=True)
+            return Response(
+                {
+                    "success": True,
+                    "message": "Контекст уже создан",
+                    "phrases_count": existing_lsi_links.count(),
+                    "phrases": serializer.data,
+                }
+            )
+
+        group = cluster.semantic_group
+        if not group:
+            return Response(
+                {"error": "Кластер не привязан к смысловой группе"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        limit_response = enforce_generation_limit(client, GenerationEvent.EVENT_SEMANTIC_PHRASES)
+        if limit_response:
+            return limit_response
+
+        generator = AIContentGenerator()
+        raw_books = group.source_books or []
+        if isinstance(raw_books, list):
+            source_books = raw_books
+        else:
+            source_books = [str(raw_books)] if str(raw_books).strip() else []
+
+        result = generator.generate_semantic_lsi_from_cluster(
+            niche=client.niche or "",
+            product=client.product_service or "",
+            group_name=group.name,
+            group_description=group.description or "",
+            group_source_books=source_books,
+            cluster_name=cluster.name,
+            cluster_description=cluster.description or "",
+            cluster_main_keyword=cluster.main_keyword or "",
+            cluster_intent=cluster.intent or "",
+            cluster_user_goal=cluster.user_goal or "",
+            language="ru",
+        )
+
+        if not result.get("success"):
+            return Response(
+                {
+                    "error": "Не удалось сформировать контекст",
+                    "details": result.get("error"),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        phrases_payload = result.get("phrases") or []
+        if not isinstance(phrases_payload, list):
+            phrases_payload = []
+
+        whitespace_re = re.compile(r"\s+")
+        seen: set[str] = set()
+        cleaned: list[dict[str, str]] = []
+        for item in phrases_payload:
+            if isinstance(item, dict):
+                raw_phrase = item.get("phrase") or item.get("keyword") or item.get("name") or ""
+            else:
+                raw_phrase = item
+            phrase_text = whitespace_re.sub(" ", str(raw_phrase or "").strip())
+            if not phrase_text:
+                continue
+            normalized = normalize_phrase(phrase_text)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            cleaned.append({"phrase": phrase_text})
+
+        if not cleaned:
+            return Response(
+                {"error": "AI не вернул валидные фразы"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        existing_key_norms: set[str] = set()
+        for link in cluster.cluster_phrases.exclude(role="lsi").select_related("phrase"):
+            phrase_obj = getattr(link, "phrase", None)
+            if phrase_obj:
+                normalized_value = phrase_obj.normalized_phrase or normalize_phrase(
+                    phrase_obj.raw_phrase or ""
+                )
+                if normalized_value:
+                    existing_key_norms.add(normalize_phrase(normalized_value))
+        main_keyword_norm = normalize_phrase(cluster.main_keyword) if cluster.main_keyword else ""
+        if main_keyword_norm:
+            existing_key_norms.add(main_keyword_norm)
+        candidate_norms = {normalize_phrase(item["phrase"]) for item in cleaned}
+        if candidate_norms:
+            key_rows = (
+                SemanticPhrase.objects.filter(client=client, type="key")
+                .filter(normalized_phrase__in=candidate_norms)
+            )
+            for row in key_rows:
+                if row.normalized_phrase:
+                    existing_key_norms.add(normalize_phrase(row.normalized_phrase))
+
+        filtered: list[dict[str, str]] = []
+        for item in cleaned:
+            normalized = normalize_phrase(item["phrase"])
+            if normalized in existing_key_norms:
+                continue
+            filtered.append(item)
+
+        if not filtered:
+            return Response(
+                {"error": "AI вернул только SEO-ключи или дубли"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        normalized_phrases = {normalize_phrase(item["phrase"]) for item in filtered}
+        existing_map: dict[str, SemanticPhrase] = {}
+        if normalized_phrases:
+            existing_rows = (
+                SemanticPhrase.objects.filter(client=client)
+                .filter(normalized_phrase__in=normalized_phrases)
+            )
+            for row in existing_rows:
+                normalized_value = row.normalized_phrase or normalize_phrase(row.raw_phrase or "")
+                if normalized_value:
+                    existing_map[normalize_phrase(normalized_value)] = row
+
+        to_create: list[SemanticPhrase] = []
+        existing_updates: list[SemanticPhrase] = []
+        now = timezone.now()
+        for item in filtered:
+            normalized = normalize_phrase(item["phrase"])
+            existing = existing_map.get(normalized)
+            if existing:
+                changed = False
+                if not existing.raw_phrase:
+                    existing.raw_phrase = item.get("phrase") or ""
+                    changed = True
+                if not existing.normalized_phrase:
+                    existing.normalized_phrase = normalized
+                    changed = True
+                if changed:
+                    existing.updated_at = now
+                    existing_updates.append(existing)
+                continue
+            to_create.append(
+                SemanticPhrase(
+                    client=client,
+                    raw_phrase=item.get("phrase") or "",
+                    normalized_phrase=normalized,
+                    type="lsi",
+                    intent=cluster.intent or "",
+                    source="ai",
+                )
+            )
+
+        with transaction.atomic():
+            if to_create:
+                SemanticPhrase.objects.bulk_create(to_create)
+            if existing_updates:
+                SemanticPhrase.objects.bulk_update(
+                    existing_updates, ["raw_phrase", "normalized_phrase", "updated_at"]
+                )
+
+            phrase_map: dict[str, SemanticPhrase] = {}
+            if normalized_phrases:
+                rows = (
+                    SemanticPhrase.objects.filter(client=client)
+                    .filter(normalized_phrase__in=normalized_phrases)
+                )
+                for row in rows:
+                    if row.normalized_phrase:
+                        phrase_map[normalize_phrase(row.normalized_phrase)] = row
+
+            to_link: list[ClusterPhrase] = []
+            for item in filtered:
+                normalized = normalize_phrase(item["phrase"])
+                phrase_obj = phrase_map.get(normalized)
+                if not phrase_obj:
+                    continue
+                to_link.append(
+                    ClusterPhrase(
+                        cluster=cluster,
+                        phrase=phrase_obj,
+                        role="lsi",
+                        added_by="ai",
+                    )
+                )
+            if to_link:
+                ClusterPhrase.objects.bulk_create(to_link, ignore_conflicts=True)
+
+            record_generation_event(
+                client,
+                GenerationEvent.EVENT_SEMANTIC_PHRASES,
+                meta={"semantic_cluster_id": cluster.id, "phrases_count": len(filtered), "lsi": True},
+            )
+
+        if normalized_phrases:
+            wordstat_map = _get_wordstat_phrase_map(list(normalized_phrases))
+            _assign_wordstat_phrases(client, wordstat_map)
+
+        created = cluster.phrases.annotate(freq=Coalesce("phrase__frequency", 0)).order_by(
+            "-freq", "normalized_phrase", "id"
+        )
+        serializer = SemanticPhraseSerializer(created, many=True)
+        return Response(
+            {
+                "success": True,
+                "message": f"Создано фраз: {len(filtered)}",
+                "phrases_count": len(filtered),
+                "phrases": serializer.data,
+            }
+        )
 
 
 class ProjectSemanticSetViewSet(viewsets.ReadOnlyModelViewSet):
@@ -1651,83 +2977,3 @@ class WordstatResultViewSet(mixins.UpdateModelMixin, viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
         return Response(serializer.data)
-
-    @action(detail=False, methods=["post"], url_path="cluster-favorites")
-    def cluster_favorites(self, request):
-        client = get_active_client(request.user)
-        favorites = list(
-            WordstatResult.objects.filter(query__client=client, result_type="favorite")
-        )
-        if not favorites:
-            return Response({"error": "Нет избранных фраз для кластеризации"}, status=status.HTTP_400_BAD_REQUEST)
-
-        existing_clusters = list(
-            WordstatCluster.objects.filter(client=client).order_by("name", "id")
-        )
-        existing_names = [cluster.name for cluster in existing_clusters]
-
-        unclustered_rows = [item for item in favorites if item.phrase and not item.cluster_id]
-        phrases = [item.phrase for item in unclustered_rows if item.phrase]
-
-        if not phrases:
-            clusters = (
-                WordstatCluster.objects.filter(client=client)
-                .annotate(phrases_count=Count("results", filter=Q(results__result_type="favorite")))
-                .order_by("name", "id")
-            )
-            serializer = WordstatClusterSerializer(clusters, many=True)
-            return Response(
-                {
-                    "success": True,
-                    "message": "Нет фраз без кластера",
-                    "clusters": serializer.data,
-                }
-            )
-
-        clustering_result = cluster_wordstat_phrases(phrases, existing_clusters=existing_names)
-        if not clustering_result.get("success"):
-            return Response(
-                {"error": "Не удалось кластеризовать фразы", "details": clustering_result.get("error")},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        phrase_to_cluster = clustering_result.get("phrase_to_cluster")
-        if not isinstance(phrase_to_cluster, dict):
-            phrase_to_cluster = {}
-
-        clusters_payload = clustering_result.get("clusters")
-        if not isinstance(clusters_payload, list):
-            clusters_payload = []
-
-        cluster_names: list[str] = []
-        for cluster in clusters_payload:
-            if not isinstance(cluster, dict):
-                continue
-            name = str(cluster.get("name") or "").strip()
-            if name and name not in cluster_names:
-                cluster_names.append(name)
-
-        with transaction.atomic():
-            clusters_by_name: dict[str, WordstatCluster] = {c.name: c for c in existing_clusters}
-            for name in cluster_names:
-                if name in clusters_by_name:
-                    continue
-                clusters_by_name[name] = WordstatCluster.objects.create(
-                    client=client,
-                    name=name[:255],
-                )
-
-            to_update: list[WordstatResult] = []
-            for row in unclustered_rows:
-                normalized = normalize_phrase(row.phrase)
-                cluster_name = phrase_to_cluster.get(normalized)
-                if not cluster_name:
-                    continue
-                cluster = clusters_by_name.get(cluster_name)
-                if not cluster:
-                    continue
-                row.cluster = cluster
-                to_update.append(row)
-
-            if to_update:
-                WordstatResult.objects.bulk_update(to_update, ["cluster"])

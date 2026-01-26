@@ -18,6 +18,8 @@ from .views import (
     PostTypeViewSet,
     PostViewSet,
     ProjectSemanticSetViewSet,
+    SemanticClusterViewSet,
+    SemanticGroupViewSet,
     WeeklyContentStrategyViewSet,
     DzenRSSFeedView,
     RefreshTokenView,
@@ -69,6 +71,7 @@ from .views import (
     PaymentSubscriptionView,
     YooKassaWebhookView,
 )
+from .views_clients import ClientDetailView, ClientsListView, TagDetailView, TagsListView, ClientTagsView
 
 app_name = 'api'
 
@@ -85,6 +88,8 @@ router.register(r'social-accounts', SocialAccountViewSet, basename='social-accou
 router.register(r'post-types', PostTypeViewSet, basename='post-type')
 router.register(r'post-tones', PostToneViewSet, basename='post-tone')
 router.register(r'content-strategy', WeeklyContentStrategyViewSet, basename='content-strategy')
+router.register(r'semantic-groups', SemanticGroupViewSet, basename='semantic-group')
+router.register(r'semantic-clusters', SemanticClusterViewSet, basename='semantic-cluster')
 router.register(r'seo-keywords', SEOKeywordSetViewSet, basename='seo-keyword')
 router.register(r'project-semantics', ProjectSemanticSetViewSet, basename='project-semantic-set')
 router.register(r'wordstat', WordstatQueryViewSet, basename='wordstat')
@@ -124,6 +129,11 @@ urlpatterns = [
     path('client/settings/', ClientSettingsView.as_view(), name='client-settings'),
     path('client/expert-books/', ClientExpertBooksView.as_view(), name='client-expert-books'),
     path('client/book-semantics/', ClientBookSemanticsView.as_view(), name='client-book-semantics'),
+    path('clients/', ClientsListView.as_view(), name='map-clients'),
+    path('clients/<int:client_id>/', ClientDetailView.as_view(), name='map-client-detail'),
+    path('tags/', TagsListView.as_view(), name='map-tags'),
+    path('tags/<int:tag_id>/', TagDetailView.as_view(), name='map-tag-detail'),
+    path('client-tags/', ClientTagsView.as_view(), name='map-client-tags'),
     path('weekly-sources/run/', WeeklySourceRunView.as_view(), name='weekly-sources-run'),
     path('project-analyses/run/', ProjectChannelAnalysisRunView.as_view(), name='project-analyses-run'),
 

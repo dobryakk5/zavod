@@ -525,7 +525,8 @@ export type GenerationEventType =
   | 'google_query'
   | 'product'
   | 'product_map'
-  | 'book_search';
+  | 'book_search'
+  | 'semantic_phrases';
 
 export interface GenerationEventSummary {
   counts: Partial<Record<GenerationEventType, number>>;
@@ -595,6 +596,67 @@ export interface SEOKeywordSet {
   prompt_used?: string;
   error_log?: string;
   created_at: string;
+}
+
+export type SemanticGroupScope = 'narrow' | 'normal' | 'wide' | string;
+export type SemanticGroupStatus = 'draft' | 'approved' | 'archived' | string;
+export type SemanticGroupSource = 'ai' | 'manual' | string;
+
+export interface SemanticGroup {
+  id: number;
+  client: number;
+  client_name?: string;
+  parent?: number | null;
+  name: string;
+  description?: string;
+  source_books?: string[];
+  scope: SemanticGroupScope;
+  expected_clusters?: number | null;
+  status: SemanticGroupStatus;
+  source: SemanticGroupSource;
+  clusters_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type SemanticClusterIntent = 'info' | 'commercial' | 'navigational' | 'brand' | string;
+
+export interface SemanticCluster {
+  id: number;
+  client: number;
+  semantic_group: number;
+  name: string;
+  description?: string;
+  main_keyword?: string;
+  intent?: SemanticClusterIntent;
+  user_goal?: string;
+  cta?: string;
+  priority?: number | null;
+  page_type?: string;
+  url?: string;
+  status?: string;
+  phrases_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type SemanticPhraseType = 'key' | 'lsi' | 'wordstat' | 'association' | string;
+
+export interface SemanticPhrase {
+  id: number;
+  client: number;
+  phrase: string;
+  raw_phrase?: string | null;
+  normalized_phrase?: string | null;
+  comment?: string;
+  type: SemanticPhraseType;
+  intent?: SemanticClusterIntent;
+  source?: string;
+  frequency?: number | null;
+  wordstat_id?: number | null;
+  competition?: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export type ProjectSemanticSource = 'expert_books' | string;

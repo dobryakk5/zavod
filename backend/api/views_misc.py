@@ -63,6 +63,8 @@ from .views_products import (
 from .views_seo import (
     ArticleViewSet,
     ProjectSemanticSetViewSet,
+    SemanticClusterViewSet,
+    SemanticGroupViewSet,
     SEOKeywordSetViewSet,
     WordstatClusterViewSet,
     WordstatQueryViewSet,

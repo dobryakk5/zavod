@@ -3,6 +3,7 @@ import { PostsTable } from '@/components/posts/posts-table';
 import { WeeklyPlanTable } from '@/components/posts/weekly-plan-table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ContentStrategyTab } from './content-strategy-tab';
+import ScheduleTabs from '../schedule/schedule-tabs';
 
 export default function PostsPage() {
   return (
@@ -12,6 +13,7 @@ export default function PostsPage() {
         <TabsList>
           <TabsTrigger value="posts">Посты</TabsTrigger>
           <TabsTrigger value="strategy">Контент стратегия</TabsTrigger>
+          <TabsTrigger value="schedule">Расписание</TabsTrigger>
         </TabsList>
         <TabsContent value="posts" className="space-y-4">
           <WeeklyPlanTable />
@@ -21,6 +23,9 @@ export default function PostsPage() {
         </TabsContent>
         <TabsContent value="strategy">
           <ContentStrategyTab />
+        </TabsContent>
+        <TabsContent value="schedule">
+          <ScheduleTabs />
         </TabsContent>
       </Tabs>
     </div>

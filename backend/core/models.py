@@ -1816,6 +1816,220 @@ class ProjectSemanticSet(models.Model):
         return flat_keywords
 
 
+class SemanticGroup(models.Model):
+    """Смысловые группы (карта ниши)."""
+
+    SCOPE_CHOICES = (
+        ("narrow", "Narrow"),
+        ("normal", "Normal"),
+        ("wide", "Wide"),
+    )
+
+    STATUS_CHOICES = (
+        ("draft", "Draft"),
+        ("approved", "Approved"),
+        ("archived", "Archived"),
+    )
+
+    SOURCE_CHOICES = (
+        ("ai", "AI"),
+        ("manual", "Manual"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="semantic_groups")
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    source_books = models.JSONField(default=list, blank=True)
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="children",
+        null=True,
+        blank=True,
+    )
+    scope = models.CharField(max_length=20, choices=SCOPE_CHOICES, blank=True, default="normal")
+    expected_clusters = models.PositiveSmallIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="ai")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "semantic_groups"
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["client", "status"], name="semgrp_client_status_idx"),
+            models.Index(fields=["client", "created_at"], name="semgrp_client_created_idx"),
+        ]
+        verbose_name = "Semantic Group"
+        verbose_name_plural = "Semantic Groups"
+
+    def __str__(self):
+        return f"[{self.client.slug}] {self.name}"
+
+
+class SemanticCluster(models.Model):
+    """SEO-кластеры (интент = страница)."""
+
+    INTENT_CHOICES = (
+        ("info", "Info"),
+        ("commercial", "Commercial"),
+        ("navigational", "Navigational"),
+        ("brand", "Brand"),
+    )
+
+    STATUS_CHOICES = (
+        ("planned", "Planned"),
+        ("in_progress", "In progress"),
+        ("published", "Published"),
+    )
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="semantic_clusters")
+    semantic_group = models.ForeignKey(
+        SemanticGroup,
+        on_delete=models.CASCADE,
+        related_name="clusters",
+    )
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    main_keyword = models.CharField(max_length=255, blank=True)
+    intent = models.CharField(max_length=20, choices=INTENT_CHOICES, blank=True)
+    user_goal = models.TextField(blank=True)
+    cta = models.CharField(max_length=255, blank=True)
+    priority = models.PositiveSmallIntegerField(null=True, blank=True)
+    page_type = models.CharField(max_length=50, blank=True)
+    url = models.URLField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="planned")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    phrases = models.ManyToManyField(
+        "SemanticPhrase",
+        through="ClusterPhrase",
+        related_name="clusters",
+        blank=True,
+    )
+
+    class Meta:
+        db_table = "clusters"
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["client", "semantic_group"], name="semclust_client_group_idx"),
+            models.Index(fields=["client", "status"], name="semclust_client_status_idx"),
+            models.Index(fields=["client", "intent"], name="semclust_client_intent_idx"),
+        ]
+        verbose_name = "Semantic Cluster"
+        verbose_name_plural = "Semantic Clusters"
+
+    def __str__(self):
+        return f"[{self.client.slug}] {self.name}"
+
+
+class WordstatPhrase(models.Model):
+    """Нормализованные Wordstat-фразы (общие для всех клиентов)."""
+
+    phrase = models.TextField(unique=True)
+    frequency = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "wordstat_phrases"
+        ordering = ("phrase", "id")
+        verbose_name = "Wordstat Phrase"
+        verbose_name_plural = "Wordstat Phrases"
+
+    def __str__(self):
+        return self.phrase
+
+
+class SemanticPhrase(models.Model):
+    """Ключевые фразы и LSI."""
+
+    TYPE_CHOICES = (
+        ("key", "Key"),
+        ("lsi", "LSI"),
+        ("wordstat", "Wordstat"),
+        ("association", "Association"),
+    )
+
+    SOURCE_CHOICES = (
+        ("ai", "AI"),
+        ("wordstat", "Wordstat"),
+        ("gsc", "GSC"),
+        ("manual", "Manual"),
+        ("favorite", "Favorite"),
+    )
+
+    INTENT_CHOICES = SemanticCluster.INTENT_CHOICES
+
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="semantic_phrases")
+    phrase = models.ForeignKey(
+        WordstatPhrase,
+        on_delete=models.CASCADE,
+        related_name="semantic_phrases",
+        null=True,
+        blank=True,
+    )
+    raw_phrase = models.TextField(blank=True, null=True)
+    normalized_phrase = models.TextField(blank=True, null=True)
+    comment = models.TextField(blank=True)
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="key")
+    intent = models.CharField(max_length=20, choices=INTENT_CHOICES, blank=True)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="ai")
+    competition = models.PositiveSmallIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "phrases"
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["client", "source"], name="semphr_client_source_idx"),
+            models.Index(fields=["client", "phrase"], name="semphr_client_phrase_idx"),
+        ]
+        verbose_name = "Semantic Phrase"
+        verbose_name_plural = "Semantic Phrases"
+
+    def __str__(self):
+        phrase_text = self.normalized_phrase or self.raw_phrase or (self.phrase.phrase if self.phrase_id else "")
+        return f"[{self.client.slug}] {phrase_text[:80]}"
+
+
+class ClusterPhrase(models.Model):
+    """Связь кластеров с фразами (many-to-many)."""
+
+    ROLE_CHOICES = (
+        ("main", "Main"),
+        ("support", "Support"),
+        ("lsi", "LSI"),
+    )
+
+    ADDED_BY_CHOICES = (
+        ("ai", "AI"),
+        ("manual", "Manual"),
+    )
+
+    cluster = models.ForeignKey(SemanticCluster, on_delete=models.CASCADE, related_name="cluster_phrases")
+    phrase = models.ForeignKey(SemanticPhrase, on_delete=models.CASCADE, related_name="cluster_phrases")
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="support")
+    weight = models.PositiveSmallIntegerField(null=True, blank=True)
+    added_by = models.CharField(max_length=20, choices=ADDED_BY_CHOICES, default="ai")
+
+    class Meta:
+        db_table = "cluster_phrases"
+        unique_together = ("cluster", "phrase")
+        indexes = [
+            models.Index(fields=["cluster", "role"], name="clphr_cluster_role_idx"),
+            models.Index(fields=["phrase"], name="clphr_phrase_idx"),
+        ]
+        verbose_name = "Cluster Phrase"
+        verbose_name_plural = "Cluster Phrases"
+
+    def __str__(self):
+        return f"{self.cluster_id} -> {self.phrase_id}"
+
+
 class WordstatQuery(models.Model):
     """Сохранённый запрос Wordstat и его результаты для конкретного клиента."""
 
@@ -2103,6 +2317,8 @@ class GenerationEvent(models.Model):
     EVENT_WEBSITE_ANALYSIS = "website_analysis"
     EVENT_WEEKLY_COLLECTION = "weekly_collection"
     EVENT_SEO_GROUP = "seo_group"
+    EVENT_SEMANTIC_CLUSTERS = "semantic_clusters"
+    EVENT_SEMANTIC_PHRASES = "semantic_phrases"
     EVENT_WORDSTAT_QUERY = "wordstat_query"
     EVENT_GOOGLE_QUERY = "google_query"
     EVENT_PRODUCT = "product"
@@ -2118,6 +2334,8 @@ class GenerationEvent(models.Model):
         (EVENT_WEBSITE_ANALYSIS, "Website analysis"),
         (EVENT_WEEKLY_COLLECTION, "Weekly collections"),
         (EVENT_SEO_GROUP, "SEO groups"),
+        (EVENT_SEMANTIC_CLUSTERS, "Semantic clusters"),
+        (EVENT_SEMANTIC_PHRASES, "Semantic phrases"),
         (EVENT_WORDSTAT_QUERY, "Wordstat query"),
         (EVENT_GOOGLE_QUERY, "Google query"),
         (EVENT_PRODUCT, "Product generation"),

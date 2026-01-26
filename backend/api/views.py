@@ -24,6 +24,8 @@ from .views_misc import (  # noqa: F401
     ScheduleListView,
     ScheduleViewSet,
     ProjectSemanticSetViewSet,
+    SemanticClusterViewSet,
+    SemanticGroupViewSet,
     SEOKeywordSetViewSet,
     SocialAccountViewSet,
     ProjectChannelAnalysisRunView,

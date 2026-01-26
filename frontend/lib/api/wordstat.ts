@@ -10,12 +10,6 @@ type WordstatRequestPayload = {
   group_name?: string;
 };
 
-type WordstatSeedGroupsResponse = {
-  success: boolean;
-  queries: WordstatQuery[];
-  seed_groups?: Record<string, string[]>;
-};
-
 export const wordstatApi = {
   list: async (): Promise<WordstatQuery[]> => {
     return apiFetch<WordstatQuery[]>('/wordstat/');
@@ -33,12 +27,6 @@ export const wordstatApi = {
     return apiFetch<WordstatQuery>('/wordstat/', {
       method: 'POST',
       body: payload,
-    });
-  },
-
-  generateSeedGroups: async (): Promise<WordstatSeedGroupsResponse> => {
-    return apiFetch<WordstatSeedGroupsResponse>('/wordstat/seed-from-settings/', {
-      method: 'POST',
     });
   },
 
@@ -80,12 +68,6 @@ export const wordstatApi = {
     await apiFetch<void>(`/wordstat-clusters/${clusterId}/`, {
       method: 'PATCH',
       body: { is_main },
-    });
-  },
-
-  clusterFavorites: async (): Promise<{ success: boolean; clusters: WordstatCluster[] }> => {
-    return apiFetch<{ success: boolean; clusters: WordstatCluster[] }>('/wordstat-results/cluster-favorites/', {
-      method: 'POST',
     });
   },
 };

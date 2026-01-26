@@ -170,11 +170,8 @@ export function ClientSettingsForm() {
         if (response.groups_count) {
           details.push(`${response.groups_count} групп`);
         }
-        if (response.keywords_count) {
-          details.push(`${response.keywords_count} ключей`);
-        }
         const suffix = details.length ? ` (${details.join(', ')})` : '';
-        toast.success(`Семантика сохранена${suffix}`);
+        toast.success(`Смысловые группы сохранены${suffix}`);
       } else {
         toast.error(response.error || 'Не удалось собрать семантику');
       }
@@ -524,9 +521,9 @@ Wordstat даст кашу
 
         <div className="space-y-3 rounded-lg border border-dashed border-slate-200 p-4">
           <div>
-            <p className="text-base font-semibold">Генерация SEO групп</p>
+            <p className="text-base font-semibold">Генерация запросов аудитории</p>
             <p className="text-sm text-muted-foreground">
-              Создаёт новый комплект SEO-групп (боли, желания, возражения и ключевые фразы) для текущего клиента.
+              Создаёт новый комплект запросов аудитории (боли, желания, возражения и ключевые фразы) для текущего клиента без SEO.
             </p>
           </div>
           <Button
@@ -541,7 +538,7 @@ Wordstat даст кашу
                 Генерация...
               </>
             ) : (
-              'Создать SEO-подборку'
+              'Создать подборку запросов'
             )}
           </Button>
           {!canEdit && (

@@ -38,7 +38,6 @@ export default function WordstatFavoritesPage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [creatingArticle, setCreatingArticle] = useState<string | null>(null);
-  const [clusterizing, setClusterizing] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [updatingClusterMain, setUpdatingClusterMain] = useState<Record<number, boolean>>({});
 
@@ -305,32 +304,6 @@ export default function WordstatFavoritesPage() {
     setExpandedGroups((prev) => ({ ...prev, [groupKey]: !prev[groupKey] }));
   };
 
-  const handleClusterize = async () => {
-    if (!favorites.length) return;
-    setClusterizing(true);
-    try {
-      await wordstatApi.clusterFavorites();
-      toast.success('Кластеры обновлены');
-      await load();
-    } catch (error) {
-      console.error('Failed to cluster Wordstat favorites', error);
-      if (error instanceof ApiError) {
-        try {
-          const parsed = JSON.parse(error.body || '{}') as { error?: string };
-          if (parsed.error) {
-            toast.error(parsed.error);
-            return;
-          }
-        } catch {
-          // ignore parse errors
-        }
-      }
-      toast.error('Не удалось кластеризовать фразы');
-    } finally {
-      setClusterizing(false);
-    }
-  };
-
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
@@ -345,22 +318,7 @@ export default function WordstatFavoritesPage() {
 
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <CardTitle>Избранные фразы</CardTitle>
-            <Button
-              onClick={() => void handleClusterize()}
-              disabled={loading || clusterizing || favorites.length === 0}
-            >
-              {clusterizing ? (
-                <span className="inline-flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Кластеризуем...
-                </span>
-              ) : (
-                'Кластеризовать'
-              )}
-            </Button>
-          </div>
+          <CardTitle>Избранные фразы</CardTitle>
           <CardDescription>{favorites.length ? `${favorites.length} фраз` : 'Нет отмеченных избранных фраз'}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

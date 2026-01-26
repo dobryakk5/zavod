@@ -21,3 +21,5 @@ export * from './websites';
 export * from './google';
 export * from './articles';
 export * from './telegramTasks';
+export * from './mapClients';
+export * from './mapTags';

@@ -12,6 +12,7 @@ import { ApiError } from '@/lib/api';
 import type { MindMap } from '@/lib/types';
 import { Copy, Loader2, Trash2 } from 'lucide-react';
 import { ClientProductsTab } from './client-products-tab';
+import { ClientsTab } from './clients-tab';
 import { ProductTypesTab } from './product-types-tab';
 import { SalesTab } from './sales-tab';
 
@@ -337,6 +338,7 @@ export default function ProductsPage() {
       <Tabs defaultValue="list" className="space-y-6">
         <TabsList>
           <TabsTrigger value="list">Список продуктов</TabsTrigger>
+          <TabsTrigger value="clients">Клиенты</TabsTrigger>
           <TabsTrigger value="types">Типы продуктов</TabsTrigger>
           <TabsTrigger value="sales">Продажи</TabsTrigger>
           <TabsTrigger value="maps">Продуктовая карта</TabsTrigger>
@@ -344,6 +346,10 @@ export default function ProductsPage() {
 
         <TabsContent value="list">
           <ClientProductsTab />
+        </TabsContent>
+
+        <TabsContent value="clients">
+          <ClientsTab />
         </TabsContent>
 
         <TabsContent value="types">

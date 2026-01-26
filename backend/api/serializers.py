@@ -43,6 +43,9 @@ from core.models import (
     WeeklySalesPlan,
     WeeklyContentStrategy,
     ProjectChannelAnalysisRun,
+    SemanticCluster,
+    SemanticGroup,
+    SemanticPhrase,
 )
 from core.services.product_type_templates import is_system_product_type_name
 from core.telegram_client import normalize_telegram_channel_identifier
@@ -157,6 +160,13 @@ class ScheduleSerializer(serializers.ModelSerializer):
 
         return attrs
 
+    def get_platform(self, obj: Schedule) -> Optional[str]:
+        if obj.connection_id:
+            return obj.connection.provider
+        if obj.social_account_id:
+            return obj.social_account.platform
+        return None
+
 
 class TelegramTaskSerializer(serializers.ModelSerializer):
     class Meta:
@@ -167,14 +177,6 @@ class TelegramTaskSerializer(serializers.ModelSerializer):
             "message_text",
             "received_at",
         ]
-
-    def get_platform(self, obj: Schedule) -> Optional[str]:
-        if obj.connection_id:
-            return obj.connection.provider
-        if obj.social_account_id:
-            return obj.social_account.platform
-        return None
-
 
 class PlatformCountSerializer(serializers.Serializer):
     platform = serializers.CharField()
@@ -563,6 +565,137 @@ class SEOKeywordSetSerializer(serializers.ModelSerializer):
             "prompt_used",
             "error_log",
             "created_at",
+        ]
+
+
+class SemanticGroupSerializer(serializers.ModelSerializer):
+    """Semantic group serializer."""
+
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    clusters_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SemanticGroup
+        fields = [
+            "id",
+            "client",
+            "client_name",
+            "parent",
+            "name",
+            "description",
+            "source_books",
+            "scope",
+            "expected_clusters",
+            "status",
+            "source",
+            "clusters_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "client",
+            "client_name",
+            "clusters_count",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_clusters_count(self, obj: SemanticGroup) -> int:
+        annotated = getattr(obj, "clusters_count", None)
+        if annotated is not None:
+            try:
+                return int(annotated)
+            except (TypeError, ValueError):
+                return 0
+        return obj.clusters.count()
+
+
+class SemanticClusterSerializer(serializers.ModelSerializer):
+    """Semantic cluster serializer."""
+
+    phrases_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SemanticCluster
+        fields = [
+            "id",
+            "client",
+            "semantic_group",
+            "name",
+            "description",
+            "main_keyword",
+            "intent",
+            "user_goal",
+            "cta",
+            "priority",
+            "page_type",
+            "url",
+            "status",
+            "phrases_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "client",
+            "semantic_group",
+            "phrases_count",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_phrases_count(self, obj: SemanticCluster) -> int:
+        annotated = getattr(obj, "phrases_count", None)
+        if annotated is not None:
+            try:
+                return int(annotated)
+            except (TypeError, ValueError):
+                return 0
+        return obj.phrases.count()
+
+
+class SemanticPhraseSerializer(serializers.ModelSerializer):
+    """Semantic phrase serializer."""
+
+    phrase = serializers.SerializerMethodField()
+    normalized_phrase = serializers.CharField(read_only=True)
+    frequency = serializers.IntegerField(source="phrase.frequency", read_only=True)
+    wordstat_id = serializers.IntegerField(source="phrase_id", read_only=True)
+
+    def get_phrase(self, obj: SemanticPhrase) -> str | None:
+        if getattr(obj, "normalized_phrase", None):
+            return obj.normalized_phrase
+        if getattr(obj, "phrase", None) and obj.phrase_id:
+            return obj.phrase.phrase
+        return None
+
+    class Meta:
+        model = SemanticPhrase
+        fields = [
+            "id",
+            "client",
+            "phrase",
+            "raw_phrase",
+            "normalized_phrase",
+            "comment",
+            "type",
+            "intent",
+            "source",
+            "frequency",
+            "wordstat_id",
+            "competition",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "client",
+            "raw_phrase",
+            "normalized_phrase",
+            "wordstat_id",
+            "created_at",
+            "updated_at",
         ]
 
 

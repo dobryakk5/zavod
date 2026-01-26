@@ -3,18 +3,17 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Check, Info, Loader2, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { Check, CheckCircle2, Hammer, Info, Loader2, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import { seoApi } from '@/lib/api/seo';
-import { semanticsApi } from '@/lib/api/semantics';
+import { semanticGroupsApi } from '@/lib/api/semantic-groups';
 import { wordstatApi } from '@/lib/api/wordstat';
 import { googleApi } from '@/lib/api/google';
-import { clientApi } from '@/lib/api/client';
 import type {
   GoogleCompetitorsResolvedRow,
   GoogleCseSearchResult,
-  ProjectSemanticSet,
+  SemanticGroup,
   SEOKeywordSet,
   SEOStatus,
   WordstatQuery
@@ -27,6 +26,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 const GROUP_LABELS: Record<string, string> = {
@@ -90,31 +90,6 @@ function getKeywords(set: SEOKeywordSet): string[] {
   }
   return [];
 }
-
-function getSemanticKeywords(set: ProjectSemanticSet): string[] {
-  if (Array.isArray(set.keywords_list) && set.keywords_list.length) {
-    return set.keywords_list;
-  }
-  if (set.keyword_groups) {
-    return Object.values(set.keyword_groups)
-      .flat()
-      .filter((item): item is string => Boolean(item));
-  }
-  return [];
-}
-
-const getKeywordsCount = (set: { keywords_list: string[]; keyword_groups: Record<string, string[]> }) => {
-  if (Array.isArray(set.keywords_list) && set.keywords_list.length) {
-    return set.keywords_list.length;
-  }
-  return Object.values(set.keyword_groups || {}).reduce((total, arr) => total + (arr?.length || 0), 0);
-};
-
-const splitTextLines = (value?: string | null) =>
-  (value || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
 
 function StatusBadge({ status }: { status: SEOStatus }) {
   return (
@@ -194,20 +169,28 @@ const buildUniqueSnippet = (value: string, maxLen: number = 240) => {
 export default function SEOPageClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'seo' | 'semantics' | 'wordstat' | 'competitors'>('seo');
+  const [activeTab, setActiveTab] = useState<'groups' | 'seo' | 'wordstat' | 'competitors'>('groups');
   const [seoSets, setSeoSets] = useState<SEOKeywordSet[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  const [semanticSets, setSemanticSets] = useState<ProjectSemanticSet[]>([]);
-  const [semanticsLoading, setSemanticsLoading] = useState(true);
-  const [semanticsRefreshing, setSemanticsRefreshing] = useState(false);
+  const [semanticGroups, setSemanticGroups] = useState<SemanticGroup[]>([]);
+  const [semanticGroupsLoading, setSemanticGroupsLoading] = useState(true);
+  const [semanticGroupsRefreshing, setSemanticGroupsRefreshing] = useState(false);
+  const [semanticGroupClustering, setSemanticGroupClustering] = useState<Record<number, boolean>>({});
+  const [creatingSemanticGroup, setCreatingSemanticGroup] = useState(false);
+  const [newSemanticGroup, setNewSemanticGroup] = useState({
+    name: '',
+    description: '',
+    scope: 'normal',
+    expected_clusters: '',
+    status: 'draft',
+  });
   const [wordstatQueries, setWordstatQueries] = useState<WordstatQuery[]>([]);
   const [wordstatLoading, setWordstatLoading] = useState(true);
   const [wordstatRefreshing, setWordstatRefreshing] = useState(false);
   const [wordstatSubmitting, setWordstatSubmitting] = useState(false);
-  const [wordstatSeedGenerating, setWordstatSeedGenerating] = useState(false);
   const [wordstatGroup, setWordstatGroup] = useState('');
   const [selectedQueryId, setSelectedQueryId] = useState<number | null>(null);
   const [phraseCounts, setPhraseCounts] = useState<Record<string, number>>({});
@@ -266,28 +249,28 @@ export default function SEOPageClient() {
     loadSeoSets();
   }, []);
 
-  const loadSemanticSets = async (opts?: { silent?: boolean }) => {
+  const loadSemanticGroups = async (opts?: { silent?: boolean }) => {
     if (opts?.silent) {
-      setSemanticsRefreshing(true);
+      setSemanticGroupsRefreshing(true);
     } else {
-      setSemanticsLoading(true);
+      setSemanticGroupsLoading(true);
     }
     try {
-      const data = await semanticsApi.list({ source: 'expert_books' });
-      setSemanticSets(data);
+      const data = await semanticGroupsApi.list();
+      setSemanticGroups(data);
     } catch (error) {
-      console.error('Failed to load project semantics', error);
-      toast.error('Не удалось загрузить семантику по книгам');
+      console.error('Failed to load semantic groups', error);
+      toast.error('Не удалось загрузить смысловые группы');
     } finally {
-      setSemanticsLoading(false);
+      setSemanticGroupsLoading(false);
       if (opts?.silent) {
-        setSemanticsRefreshing(false);
+        setSemanticGroupsRefreshing(false);
       }
     }
   };
 
   useEffect(() => {
-    loadSemanticSets();
+    loadSemanticGroups();
   }, []);
 
   const loadWordstatQueries = async (opts?: { silent?: boolean }) => {
@@ -373,7 +356,7 @@ export default function SEOPageClient() {
 
   useEffect(() => {
     const tab = (searchParams.get('tab') || '').trim();
-    if (tab === 'competitors' || tab === 'seo' || tab === 'wordstat' || tab === 'semantics') {
+    if (tab === 'competitors' || tab === 'seo' || tab === 'wordstat' || tab === 'groups') {
       setActiveTab(tab as typeof activeTab);
     }
     const q = (searchParams.get('q') || '').trim();
@@ -458,7 +441,77 @@ export default function SEOPageClient() {
   };
 
   const handleRefresh = () => loadSeoSets({ silent: true });
-  const handleSemanticsRefresh = () => loadSemanticSets({ silent: true });
+
+  const handleSemanticGroupsRefresh = () => loadSemanticGroups({ silent: true });
+
+
+  const handleCreateSemanticGroup = async () => {
+    if (!canEdit) return;
+    const name = newSemanticGroup.name.trim();
+    if (!name) {
+      toast.error('Введите название смысловой группы');
+      return;
+    }
+    setCreatingSemanticGroup(true);
+    try {
+      const parsedExpected = newSemanticGroup.expected_clusters
+        ? Number.parseInt(newSemanticGroup.expected_clusters, 10)
+        : null;
+      const payload = {
+        name,
+        description: newSemanticGroup.description.trim(),
+        scope: newSemanticGroup.scope || 'normal',
+        status: newSemanticGroup.status || 'draft',
+        expected_clusters: Number.isNaN(parsedExpected) ? null : parsedExpected,
+        source: 'manual',
+      };
+      const created = await semanticGroupsApi.create(payload);
+      setSemanticGroups((prev) => [created, ...prev]);
+      setNewSemanticGroup({
+        name: '',
+        description: '',
+        scope: 'normal',
+        expected_clusters: '',
+        status: 'draft',
+      });
+      toast.success('Смысловая группа создана');
+    } catch (error) {
+      console.error('Failed to create semantic group', error);
+      toast.error('Не удалось создать смысловую группу');
+    } finally {
+      setCreatingSemanticGroup(false);
+    }
+  };
+
+  const handleGenerateSemanticClusters = async (group: SemanticGroup) => {
+    if (!canEdit) return;
+    if (semanticGroupClustering[group.id]) return;
+    setSemanticGroupClustering((prev) => ({ ...prev, [group.id]: true }));
+    try {
+      const response = await semanticGroupsApi.generateClusters(group.id);
+      toast.success(response.message || 'Кластеры созданы');
+      await loadSemanticGroups({ silent: true });
+    } catch (error) {
+      console.error('Failed to generate semantic clusters', error);
+      if (error instanceof ApiError) {
+        try {
+          const payload = error.body ? JSON.parse(error.body) : null;
+          if (payload?.missing_fields) {
+            setProjectDataDialogOpen(true);
+            return;
+          }
+          if (payload?.error) {
+            toast.error(String(payload.error));
+            return;
+          }
+        } catch {}
+      }
+      const message = error instanceof Error ? error.message : 'Не удалось создать кластеры';
+      toast.error(message);
+    } finally {
+      setSemanticGroupClustering((prev) => ({ ...prev, [group.id]: false }));
+    }
+  };
 
   const fetchWordstatAndRedirect = async (payload: { phrase?: string; phrases?: string[]; group_name?: string }) => {
     const phrase = (payload.phrase || '').trim();
@@ -504,61 +557,6 @@ export default function SEOPageClient() {
   const handleWordstatGroupFetch = () => {
     const phrases = extractPhrases(wordstatGroup);
     fetchWordstatAndRedirect({ phrases });
-  };
-
-  const handleGenerateWordstatSeedGroups = async () => {
-    if (!canEdit || wordstatSeedGenerating) return;
-    setWordstatSeedGenerating(true);
-    try {
-      const settings = await clientApi.getSettings();
-      const niche = (settings.niche || '').trim();
-      const product = (settings.product_service || '').trim();
-      const avatar = (settings.avatar || '').trim();
-      if (!niche || !product || !avatar) {
-        setProjectDataDialogOpen(true);
-        return;
-      }
-
-      const data = await wordstatApi.generateSeedGroups();
-      const created = data.queries || [];
-      if (!created.length) {
-        toast.error('Не удалось создать Wordstat группы');
-        return;
-      }
-
-      setWordstatQueries((prev) => {
-        const existing = new Map(prev.map((item) => [item.id, item]));
-        const merged: WordstatQuery[] = [];
-        created.forEach((item) => {
-          if (!item?.id) return;
-          existing.delete(item.id);
-          merged.push(item);
-        });
-        merged.push(...existing.values());
-        return merged;
-      });
-      setSelectedQueryId(created[0]?.id ?? null);
-      toast.success('Wordstat группы созданы');
-    } catch (error) {
-      console.error('Failed to generate Wordstat seed groups', error);
-      if (error instanceof ApiError) {
-        try {
-          const payload = error.body ? JSON.parse(error.body) : null;
-          if (payload?.missing_fields) {
-            setProjectDataDialogOpen(true);
-            return;
-          }
-          if (payload?.error) {
-            toast.error(String(payload.error));
-            return;
-          }
-        } catch {}
-      }
-      const message = error instanceof Error ? error.message : 'Не удалось создать Wordstat группы';
-      toast.error(message);
-    } finally {
-      setWordstatSeedGenerating(false);
-    }
   };
 
   const rerunWordstatFromText = async (value: string, query?: WordstatQuery) => {
@@ -902,7 +900,7 @@ export default function SEOPageClient() {
           <DialogHeader>
             <DialogTitle>Введите данные проекта</DialogTitle>
             <DialogDescription>
-              Для автогенерации Wordstat заполните нишу, продукт и ЦА в настройках.
+              Для генерации заполните нишу, продукт и ЦА в настройках.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -928,15 +926,191 @@ export default function SEOPageClient() {
 
       <Tabs
         value={activeTab}
-        onValueChange={(value) => setActiveTab(value as 'seo' | 'semantics' | 'wordstat' | 'competitors')}
+        onValueChange={(value) => setActiveTab(value as 'groups' | 'seo' | 'wordstat' | 'competitors')}
         className="space-y-6"
       >
         <TabsList>
-          <TabsTrigger value="seo">SEO группы</TabsTrigger>
-          <TabsTrigger value="semantics">Семантика по книгам</TabsTrigger>
+          <TabsTrigger value="groups">Смыслы</TabsTrigger>
+          <TabsTrigger value="seo">Запросы ЦА</TabsTrigger>
           <TabsTrigger value="wordstat">Wordstat</TabsTrigger>
           <TabsTrigger value="competitors">Конкуренты</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="groups" className="space-y-6">
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-2xl font-semibold">Смыслы</h2>
+                <p className="text-muted-foreground">
+                  Смысловые группы, на которые разбивается тематика проекта. Формируются по книгам и редактируются вручную.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={handleSemanticGroupsRefresh}
+                  disabled={semanticGroupsLoading || semanticGroupsRefreshing}
+                >
+                  <RefreshCw className={`mr-2 h-4 w-4 ${semanticGroupsRefreshing ? 'animate-spin' : ''}`} />
+                  Обновить
+                </Button>
+                <Button variant="outline" onClick={() => router.push('/settings?tab=client')}>
+                  Перейти в настройки
+                </Button>
+              </div>
+            </div>
+            {!canEdit && (
+              <p className="text-sm text-muted-foreground">
+                У вас нет прав на редактирование смысловых групп. Попросите владельца или редактора аккаунта.
+              </p>
+            )}
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Новая смысловая группа</CardTitle>
+              <CardDescription>Добавьте новую группу вручную, если нужно дополнить карту смыслов.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input
+                  placeholder="Название группы"
+                  value={newSemanticGroup.name}
+                  onChange={(e) => setNewSemanticGroup((prev) => ({ ...prev, name: e.target.value }))}
+                  disabled={!canEdit || creatingSemanticGroup}
+                />
+                <div className="grid gap-2 md:grid-cols-2">
+                  <Select
+                    value={newSemanticGroup.scope}
+                    onValueChange={(value) => setNewSemanticGroup((prev) => ({ ...prev, scope: value }))}
+                    disabled={!canEdit || creatingSemanticGroup}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Ширина" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="narrow">Узкая</SelectItem>
+                      <SelectItem value="normal">Средняя</SelectItem>
+                      <SelectItem value="wide">Широкая</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={newSemanticGroup.status}
+                    onValueChange={(value) => setNewSemanticGroup((prev) => ({ ...prev, status: value }))}
+                    disabled={!canEdit || creatingSemanticGroup}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Статус" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">Черновик</SelectItem>
+                      <SelectItem value="approved">Одобрено</SelectItem>
+                      <SelectItem value="archived">Архив</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input
+                  type="number"
+                  placeholder="Ожидаемые кластеры"
+                  value={newSemanticGroup.expected_clusters}
+                  onChange={(e) => setNewSemanticGroup((prev) => ({ ...prev, expected_clusters: e.target.value }))}
+                  disabled={!canEdit || creatingSemanticGroup}
+                />
+              </div>
+              <Textarea
+                placeholder="Описание: что входит и что не входит"
+                value={newSemanticGroup.description}
+                onChange={(e) => setNewSemanticGroup((prev) => ({ ...prev, description: e.target.value }))}
+                disabled={!canEdit || creatingSemanticGroup}
+                className="min-h-[90px]"
+              />
+              <div className="flex justify-end">
+                <Button onClick={handleCreateSemanticGroup} disabled={!canEdit || creatingSemanticGroup}>
+                  {creatingSemanticGroup ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Создаем...
+                    </>
+                  ) : (
+                    'Добавить группу'
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {semanticGroupsLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Загружаем смысловые группы...
+            </div>
+          ) : semanticGroups.length === 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Пока нет данных</CardTitle>
+                <CardDescription>
+                  Сначала соберите семантику по книгам в настройках или добавьте группы вручную.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {semanticGroups.map((group) => {
+                const clustering = Boolean(semanticGroupClustering[group.id]);
+                const hasClusters = (group.clusters_count ?? 0) > 0;
+                return (
+                  <Card
+                    key={group.id}
+                    className="cursor-pointer transition hover:border-slate-300"
+                    onClick={() => router.push(`/seo/group/${group.id}`)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        router.push(`/seo/group/${group.id}`);
+                      }
+                    }}
+                  >
+                    <CardContent className="flex items-start justify-between gap-3 py-4">
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold text-slate-900">{group.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {(group.description || '').trim() || 'Описание не указано'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleGenerateSemanticClusters(group);
+                          }}
+                          disabled={!canEdit || clustering}
+                          title="Создать кластеры"
+                        >
+                          {clustering ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Hammer className="h-4 w-4" />
+                          )}
+                        </Button>
+                        {hasClusters && (
+                          <span title="Кластеры созданы">
+                            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                          </span>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
 
         <TabsContent value="seo" className="space-y-6">
           <div className="flex flex-col gap-2">
@@ -1127,217 +1301,7 @@ export default function SEOPageClient() {
           )}
         </TabsContent>
 
-        <TabsContent value="semantics" className="space-y-6">
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <h2 className="text-2xl font-semibold">Семантика по книгам</h2>
-                <p className="text-muted-foreground">
-                  Семантика, собранная из списка экспертных книг в настройках проекта.
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={handleSemanticsRefresh} disabled={semanticsLoading || semanticsRefreshing}>
-                  <RefreshCw className={`mr-2 h-4 w-4 ${semanticsRefreshing ? 'animate-spin' : ''}`} />
-                  Обновить
-                </Button>
-                <Button variant="outline" onClick={() => router.push('/settings?tab=client')}>
-                  Перейти в настройки
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          {semanticsLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Загружаем семантику...
-            </div>
-          ) : semanticSets.length === 0 ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Пока нет данных</CardTitle>
-                <CardDescription>
-                  Соберите семантику в настройках (раздел «Книги экспертов» → «Собрать семантику по книгам»).
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Button variant="outline" onClick={() => router.push('/settings?tab=client')}>
-                  Перейти в настройки
-                </Button>
-              </CardContent>
-            </Card>
-          ) : (
-            <>
-              {(() => {
-                const latest = semanticSets[0];
-                const keywords = getSemanticKeywords(latest);
-                const keywordGroupsEntries = latest.keyword_groups
-                  ? Object.entries(latest.keyword_groups).filter(([, values]) => Array.isArray(values) && values.length)
-                  : [];
-                const showKeywordGroups = keywordGroupsEntries.length > 0 && keywords.length === 0;
-                const bookLines = splitTextLines(latest.books_text);
-                const keywordLimit = 40;
-                const visibleKeywords = keywords.slice(0, keywordLimit);
-                const keywordsOverflow = keywords.length - visibleKeywords.length;
-                return (
-                  <Card>
-                    <CardHeader className="space-y-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <CardTitle>Последняя семантика</CardTitle>
-                          <CardDescription>Собрана на основе списка экспертных книг.</CardDescription>
-                        </div>
-                        <StatusBadge status={latest.status} />
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Обновлено: {formatDate(latest.created_at)} • {getKeywordsCount(latest)} ключей
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      {bookLines.length ? (
-                        <div>
-                          <p className="text-sm font-semibold">Книги экспертов</p>
-                          <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-slate-600">
-                            {bookLines.slice(0, 6).map((line, idx) => (
-                              <li key={`${line}-${idx}`}>{line}</li>
-                            ))}
-                          </ul>
-                          {bookLines.length > 6 && (
-                            <p className="mt-2 text-xs text-muted-foreground">
-                              и еще {bookLines.length - 6} строк
-                            </p>
-                          )}
-                        </div>
-                      ) : null}
-                      <div>
-                        <p className="text-sm font-semibold">Ключевые фразы</p>
-                        {visibleKeywords.length ? (
-                          <ul className="mt-2 space-y-1 text-sm text-slate-700">
-                            {visibleKeywords.map((keyword, idx) => (
-                              <li key={`${keyword}-${idx}`}>
-                                <button
-                                  type="button"
-                                  onClick={() => fetchWordstatAndRedirect({ phrases: [keyword] })}
-                                  className="text-left text-slate-800 underline-offset-2 hover:underline"
-                                >
-                                  {keyword}
-                                </button>
-                                {typeof phraseCounts[keyword] === 'number' && (
-                                  <span className="ml-2 text-xs text-muted-foreground">
-                                    ({phraseCounts[keyword]} фраз)
-                                  </span>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="text-sm text-muted-foreground">Фразы появятся после завершения генерации.</p>
-                        )}
-                        {keywordsOverflow > 0 && (
-                          <p className="mt-2 text-xs text-muted-foreground">и еще {keywordsOverflow} фраз</p>
-                        )}
-                      </div>
-                      {showKeywordGroups && (
-                        <div className="space-y-2">
-                          <p className="text-sm font-semibold">Группы запросов</p>
-                          <div className="space-y-3 rounded-md border bg-slate-50 p-3">
-                            {keywordGroupsEntries.map(([groupName, values]) => (
-                              <div key={groupName}>
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                  {groupName || 'Группа'}
-                                </p>
-                                <ul className="mt-1 list-disc space-y-1 pl-4 text-sm text-slate-600">
-                                  {values.map((value, index) => (
-                                    <li key={`${groupName}-${value}-${index}`}>{value}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {shouldShowErrorLog(latest) && (
-                        <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">
-                          <p className="font-semibold">Ошибка генерации</p>
-                          <p className="mt-1 whitespace-pre-wrap">{getVisibleErrorLog(latest)}</p>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                );
-              })()}
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>История генераций</CardTitle>
-                  <CardDescription>Последние запуски семантики по книгам</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {semanticSets.slice(0, 10).map((semanticSet) => (
-                    <div
-                      key={semanticSet.id}
-                      className="flex flex-col gap-1 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold">Семантика по книгам</p>
-                          <StatusBadge status={semanticSet.status} />
-                        </div>
-                        <p className="text-xs text-muted-foreground">{formatDate(semanticSet.created_at)}</p>
-                        {shouldShowErrorLog(semanticSet) && (
-                          <p className="text-xs text-red-600">
-                            Ошибка: {getVisibleErrorLog(semanticSet).split('\n')[0]}
-                          </p>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {getKeywordsCount(semanticSet)} фраз
-                      </div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </>
-          )}
-        </TabsContent>
-
         <TabsContent value="wordstat" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Автогенерация Wordstat</CardTitle>
-              <CardDescription>
-                Создаёт 4 группы по 3 seed-запроса, затем по ассоциациям делает дополнительные запросы для каждой группы.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <Button
-                  type="button"
-                  onClick={handleGenerateWordstatSeedGroups}
-                  disabled={!canEdit || wordstatSeedGenerating}
-                >
-                  {wordstatSeedGenerating ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Генерация...
-                    </>
-                  ) : (
-                    'Сгенерировать группы Wordstat'
-                  )}
-                </Button>
-                {!canEdit && (
-                  <p className="text-xs text-muted-foreground">
-                    Доступно владельцу и редактору.
-                  </p>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Мы автоматически создадим группы: Коммерческие, Категорийные, Проблемные, Альтернативные формулировки.
-              </p>
-            </CardContent>
-          </Card>
-
             <Card>
               <CardHeader>
                 <CardTitle>Wordstat</CardTitle>
@@ -1385,7 +1349,6 @@ export default function SEOPageClient() {
                 )}
               </CardContent>
             </Card>
-
           <div className="grid gap-4 lg:grid-cols-3">
             <Card className="lg:col-span-1">
               <CardHeader>

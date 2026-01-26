@@ -18,7 +18,6 @@ const navItems = [
   { href: '/welcome', label: 'Приветствие' },
   { href: '/analytics', label: 'Аналитика' },
   { href: '/posts', label: 'Посты' },
-  { href: '/schedule', label: 'Расписание' },
   { href: '/seo', label: 'SEO' },
   { href: '/articles', label: 'Статьи' },
   { href: '/products', label: 'Продукты' },
