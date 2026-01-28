@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from typing import List, Optional
 
 import requests
@@ -26,6 +27,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 logger = logging.getLogger("backend.core.ai_generator")
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_OPENROUTER_RETRYABLE_STATUS = {500, 502, 503, 504}
 
 
 def _coerce_text(value: object) -> str:
@@ -99,6 +101,29 @@ def _dump_openrouter_payload(data: object, model: str, tag: str) -> Optional[Pat
     return None
 
 
+def _get_openrouter_max_retries() -> int:
+    try:
+        return max(0, int(os.getenv("OPENROUTER_MAX_RETRIES", "2")))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _compute_backoff(attempt: int, base: float = 1.0, cap: float = 6.0) -> float:
+    return min(base * (2 ** attempt), cap)
+
+
+def _compute_retry_delay(response: requests.Response, attempt: int) -> float:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after and retry_after.isdigit():
+        return min(float(retry_after), 10.0)
+    return _compute_backoff(attempt)
+
+
+def _should_retry_on_429() -> bool:
+    flag = (os.getenv("OPENROUTER_RETRY_ON_429") or "").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
 class BaseAIContentGenerator:
     """Transport helpers and API configuration shared by specialized mixins."""
 
@@ -139,28 +164,82 @@ class BaseAIContentGenerator:
         response_format: Optional[dict] = None,
     ) -> Optional[str]:
         """Call OpenRouter chat completions API and return text."""
-        try:
-            payload = {
-                "model": model,
-                "messages": [
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            }
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
 
-            if response_format:
-                payload["response_format"] = response_format
+        if response_format:
+            payload["response_format"] = response_format
 
-            response = requests.post(
-                self.api_url,
-                headers=build_openrouter_headers(
-                    self.api_key,
-                    default_title="Content Factory AI Generator",
-                ),
-                json=payload,
-                timeout=60,
-            )
+        max_retries = _get_openrouter_max_retries()
+        attempt = 0
+        while True:
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers=build_openrouter_headers(
+                        self.api_key,
+                        default_title="Content Factory AI Generator",
+                    ),
+                    json=payload,
+                    timeout=60,
+                )
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                if attempt < max_retries:
+                    delay = _compute_backoff(attempt)
+                    logger.warning(
+                        "OpenRouter request failed for model %s (attempt %s/%s): %s. Retrying in %.1fs",
+                        model,
+                        attempt + 1,
+                        max_retries + 1,
+                        exc,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    attempt += 1
+                    continue
+                logger.error("OpenRouter API request failed for model %s: %s", model, exc)
+                return None
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error(
+                    "Error calling OpenRouter API for model %s: %s",
+                    model,
+                    exc,
+                    exc_info=True,
+                )
+                return None
+
+            if response.status_code == 429 and _should_retry_on_429() and attempt < max_retries:
+                delay = _compute_retry_delay(response, attempt)
+                logger.warning(
+                    "OpenRouter API rate-limited for model %s (attempt %s/%s). Retrying in %.1fs",
+                    model,
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                )
+                time.sleep(delay)
+                attempt += 1
+                continue
+
+            if response.status_code in _OPENROUTER_RETRYABLE_STATUS and attempt < max_retries:
+                delay = _compute_retry_delay(response, attempt)
+                logger.warning(
+                    "OpenRouter API error %s for model %s (attempt %s/%s). Retrying in %.1fs",
+                    response.status_code,
+                    model,
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                )
+                time.sleep(delay)
+                attempt += 1
+                continue
 
             if response.status_code == 200:
                 try:
@@ -230,18 +309,6 @@ class BaseAIContentGenerator:
                     model=model,
                     tag="error",
                 )
-            return None
-
-        except requests.exceptions.Timeout:
-            logger.error("OpenRouter API request timed out for model %s", model)
-            return None
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error(
-                "Error calling OpenRouter API for model %s: %s",
-                model,
-                exc,
-                exc_info=True,
-            )
             return None
 
     def _generate_text_with_fallback(
