@@ -107,10 +107,10 @@ class NoteAdmin(admin.ModelAdmin):
 # Остальные регистрации админ-панели из оригинального кода
 @admin.register(Client)
 class ClientAdmin(admin.ModelAdmin):
-    list_display = ['name', 'slug', 'niche', 'plan', 'created_at']
-    list_filter = ['plan', 'created_at']
+    list_display = ['name', 'slug', 'niche', 'plan']
+    list_filter = ['plan']
     search_fields = ['name', 'slug', 'niche']
-    readonly_fields = ['created_at', 'updated_at']
+    readonly_fields = []
 
 
 @admin.register(ChannelAnalysis)

@@ -313,6 +313,9 @@ class Client(models.Model):
 3. Стиль — современный, динамичный, вдохновляющий. Максимум 3 предложения.
 4. Не добавляй хештеги, кавычки и технические команды."""
 
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
 
 class ChannelAnalysis(models.Model):
     STATUS_PENDING = "pending"
