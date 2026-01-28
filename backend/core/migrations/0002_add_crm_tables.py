@@ -108,23 +108,28 @@ class Migration(migrations.Migration):
             END;
             $$ LANGUAGE plpgsql;
 
-            CREATE TRIGGER IF NOT EXISTS update_crm_clients_updated_at
+            DROP TRIGGER IF EXISTS update_crm_clients_updated_at ON crm_clients;
+            CREATE TRIGGER update_crm_clients_updated_at
                 BEFORE UPDATE ON crm_clients
                 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-            CREATE TRIGGER IF NOT EXISTS update_crm_categories_updated_at
+            DROP TRIGGER IF EXISTS update_crm_categories_updated_at ON crm_client_categories;
+            CREATE TRIGGER update_crm_categories_updated_at
                 BEFORE UPDATE ON crm_client_categories
                 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-            CREATE TRIGGER IF NOT EXISTS update_crm_events_updated_at
+            DROP TRIGGER IF EXISTS update_crm_events_updated_at ON crm_events;
+            CREATE TRIGGER update_crm_events_updated_at
                 BEFORE UPDATE ON crm_events
                 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-            CREATE TRIGGER IF NOT EXISTS update_crm_payments_updated_at
+            DROP TRIGGER IF EXISTS update_crm_payments_updated_at ON crm_payments;
+            CREATE TRIGGER update_crm_payments_updated_at
                 BEFORE UPDATE ON crm_payments
                 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-            CREATE TRIGGER IF NOT EXISTS update_crm_notes_updated_at
+            DROP TRIGGER IF EXISTS update_crm_notes_updated_at ON crm_notes;
+            CREATE TRIGGER update_crm_notes_updated_at
                 BEFORE UPDATE ON crm_notes
                 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
