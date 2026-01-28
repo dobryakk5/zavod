@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import random
 import re
+import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .ai_generator_base import logger
@@ -25,6 +28,45 @@ _SMART_QUOTES_MAP = {
     "‚": "'",
     "‛": "'",
 }
+
+
+def _should_dump_ai_json_debug() -> bool:
+    flag = (os.getenv("AI_JSON_DEBUG_DUMP") or "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    return bool(os.getenv("AI_JSON_DEBUG_DIR") or os.getenv("AI_JSON_DEBUG_PATH"))
+
+
+def _dump_ai_json_debug(raw_response: str, normalized: str, tag: str) -> Optional[Path]:
+    if not _should_dump_ai_json_debug():
+        return None
+
+    path_override = (os.getenv("AI_JSON_DEBUG_PATH") or "").strip()
+    if path_override:
+        path = Path(path_override)
+    else:
+        base_dir = os.getenv("AI_JSON_DEBUG_DIR")
+        if base_dir:
+            dir_path = Path(base_dir)
+        else:
+            dir_path = Path(__file__).resolve().parents[1] / "logs" / "ai_json"
+        dir_path.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"{tag}_{timestamp}.json"
+        path = dir_path / filename
+
+    payload = {
+        "raw_response": raw_response,
+        "normalized": normalized,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, indent=2)
+        return path
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.warning("Failed to dump AI JSON debug payload: %s", exc)
+        return None
 
 
 def _escape_newlines_in_strings(text: str) -> str:
@@ -497,6 +539,11 @@ def _parse_ai_json_response(
                 if parsed is not None:
                     return parsed, sanitized, None
                 continue
+
+    if last_error:
+        dump_path = _dump_ai_json_debug(raw_response, last_text, tag="parse_failed")
+        if dump_path:
+            logger.warning("AI JSON debug payload saved to %s", dump_path)
 
     return None, last_text, last_error
 

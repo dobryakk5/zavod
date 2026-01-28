@@ -229,7 +229,27 @@ def normalize_wordstat_phrases_ai(
             parse_error = None
 
     if parse_error or not isinstance(parsed, dict):
-        logger.error("Wordstat normalization JSON parse failed: %s", parse_error)
+        logger.warning("Wordstat normalization JSON parse failed: %s", parse_error)
+        fallback_items: List[Dict[str, str | None]] = []
+        for phrase in cleaned:
+            cleaned_phrase = _WHITESPACE_RE.sub(" ", str(phrase).strip())
+            if not cleaned_phrase:
+                continue
+            fallback_items.append(
+                {
+                    "raw_phrase": cleaned_phrase,
+                    "normalized_phrase": cleaned_phrase,
+                    "comment": "fallback: ai_json_parse_failed",
+                }
+            )
+        if fallback_items:
+            logger.warning("Wordstat normalization fallback used; returning raw phrases as normalized.")
+            return {
+                "success": True,
+                "phrases": fallback_items,
+                "raw_response": normalized_text,
+                "fallback": "ai_json_parse_failed",
+            }
         return {
             "success": False,
             "error": "ai_json_parse_failed",

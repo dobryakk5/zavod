@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import List, Optional
 
 import requests
 
+from .openrouter_utils import build_openrouter_headers
 from .system_settings import (
     get_default_ai_model,
     get_post_ai_model,
@@ -23,6 +25,78 @@ except ImportError:  # pragma: no cover - optional dependency
     InferenceClient = None  # type: ignore
 
 logger = logging.getLogger("backend.core.ai_generator")
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _coerce_text(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("text", "content", "value"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            text = _coerce_text(item)
+            if text:
+                parts.append(text)
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _extract_openrouter_text(data: object) -> Optional[str]:
+    if not isinstance(data, dict):
+        return None
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return None
+    choice_error = first_choice.get("error")
+    if isinstance(choice_error, dict):
+        message = choice_error.get("message")
+        code = choice_error.get("code")
+        logger.warning("OpenRouter choice error (code=%s): %s", code, message)
+        return None
+
+    message = first_choice.get("message")
+    if isinstance(message, dict):
+        content_text = _coerce_text(message.get("content"))
+        if content_text:
+            cleaned = _THINK_BLOCK_RE.sub("", content_text).strip()
+            if cleaned:
+                return cleaned
+        message_text = _coerce_text(message.get("text"))
+        if message_text:
+            return message_text
+    else:
+        message_text = _coerce_text(message)
+        if message_text:
+            return message_text
+
+    delta = first_choice.get("delta")
+    if isinstance(delta, dict):
+        delta_text = _coerce_text(delta.get("content"))
+        if delta_text:
+            return delta_text
+
+    choice_text = _coerce_text(first_choice.get("text"))
+    if choice_text:
+        return choice_text
+
+    return None
+
+
+def _should_dump_openrouter_debug() -> bool:
+    return False
+
+
+def _dump_openrouter_payload(data: object, model: str, tag: str) -> Optional[Path]:
+    return None
 
 
 class BaseAIContentGenerator:
@@ -80,24 +154,56 @@ class BaseAIContentGenerator:
 
             response = requests.post(
                 self.api_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://zavod-content-factory.com",
-                    "X-Title": "Content Factory AI Generator",
-                },
+                headers=build_openrouter_headers(
+                    self.api_key,
+                    default_title="Content Factory AI Generator",
+                ),
                 json=payload,
                 timeout=60,
             )
 
             if response.status_code == 200:
-                data = response.json()
+                try:
+                    data = response.json()
+                except ValueError:
+                    if _should_dump_openrouter_debug():
+                        _dump_openrouter_payload(
+                            {"status": response.status_code, "text": response.text},
+                            model=model,
+                            tag="invalid_json",
+                        )
+                    logger.error(
+                        "OpenRouter API response for model %s is not valid JSON: %s",
+                        model,
+                        response.text,
+                    )
+                    return None
+
+                content_text = _extract_openrouter_text(data)
+                if content_text:
+                    if response_format:
+                        stripped = content_text.lstrip()
+                        if stripped.startswith(("{", "[", "```")):
+                            return content_text
+                        logger.warning(
+                            "OpenRouter response for model %s ignored: expected JSON but got text",
+                            model,
+                        )
+                    else:
+                        return content_text
+
                 choices = data.get("choices")
                 if isinstance(choices, list) and choices:
-                    message = choices[0].get("message") or {}
-                    content = message.get("content")
-                    if isinstance(content, str) and content.strip():
-                        return content.strip()
+                    dump_path = _dump_openrouter_payload(
+                        data,
+                        model=model,
+                        tag="missing_content",
+                    )
+                    if dump_path:
+                        logger.warning(
+                            "OpenRouter debug payload saved to %s",
+                            dump_path,
+                        )
                     logger.error(
                         "OpenRouter API response for model %s is missing message content: %s",
                         model,
@@ -118,6 +224,12 @@ class BaseAIContentGenerator:
                 model,
                 response.text,
             )
+            if _should_dump_openrouter_debug():
+                _dump_openrouter_payload(
+                    {"status": response.status_code, "text": response.text},
+                    model=model,
+                    tag="error",
+                )
             return None
 
         except requests.exceptions.Timeout:
@@ -208,6 +320,12 @@ class BaseAIContentGenerator:
         fallback_models: List[str] = []
         if allow_fallback and fallback_model and fallback_model != selected_model:
             fallback_models.append(fallback_model)
+        if allow_fallback and response_format:
+            json_fallback_env = os.getenv("OPENROUTER_JSON_FALLBACK_MODEL") or ""
+            for candidate in json_fallback_env.split(","):
+                normalized = candidate.strip()
+                if normalized and normalized != selected_model and normalized not in fallback_models:
+                    fallback_models.append(normalized)
 
         return self._generate_text_with_fallback(
             prompt=prompt,

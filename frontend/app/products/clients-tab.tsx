@@ -75,6 +75,10 @@ export function ClientsTab() {
   const clientDraftsRef = useRef(clientDrafts);
   const tagDraftsRef = useRef(tagDrafts);
 
+  const openClientWindow = useCallback((clientId: number) => {
+    window.open(`/client/${clientId}`, '_blank', 'noopener');
+  }, []);
+
   useEffect(() => {
     clientDraftsRef.current = clientDrafts;
   }, [clientDrafts]);
@@ -544,33 +548,6 @@ export function ClientsTab() {
     <div className="space-y-6">
       <div className="space-y-2">
         <h2 className="text-2xl font-semibold">Клиенты</h2>
-        <p className="text-sm text-muted-foreground">
-          Сводка по целям, болям и опыту клиентов. Данные синхронизируются с таблицами clients, tags и client_tags.
-        </p>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle>Клиенты</CardTitle>
-            <CardDescription>Всего в базе</CardDescription>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{totalClients}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Теги</CardTitle>
-            <CardDescription>Всего категорий</CardDescription>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{totalTags}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Назначения</CardTitle>
-            <CardDescription>Всего связок клиент - тег</CardDescription>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{totalAssignments}</CardContent>
-        </Card>
       </div>
 
       {error && (
@@ -675,7 +652,23 @@ export function ClientsTab() {
                 filteredClients.map((client) => {
                 const row = clientRows.find((item) => item.client.id === client.id);
                 return (
-                  <Card key={client.id}>
+                  <Card
+                    key={client.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={(event) => {
+                      const target = event.target as HTMLElement | null;
+                      if (target?.closest('input,textarea,button,a,select')) return;
+                      openClientWindow(client.id);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        openClientWindow(client.id);
+                      }
+                    }}
+                    className="cursor-pointer transition hover:shadow-sm"
+                  >
                     <CardContent className="p-4">
                       <div className="grid gap-4 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
                         <div className="space-y-2">
@@ -739,6 +732,35 @@ export function ClientsTab() {
               )}
             </div>
           )}
+
+          <div className="space-y-3 pt-2">
+            <p className="text-sm text-muted-foreground">
+              Сводка по целям, болям и опыту клиентов. Данные синхронизируются с таблицами clients, tags и client_tags.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Клиенты</CardTitle>
+                  <CardDescription>Всего в базе</CardDescription>
+                </CardHeader>
+                <CardContent className="text-2xl font-semibold">{totalClients}</CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Теги</CardTitle>
+                  <CardDescription>Всего категорий</CardDescription>
+                </CardHeader>
+                <CardContent className="text-2xl font-semibold">{totalTags}</CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Назначения</CardTitle>
+                  <CardDescription>Всего связок клиент - тег</CardDescription>
+                </CardHeader>
+                <CardContent className="text-2xl font-semibold">{totalAssignments}</CardContent>
+              </Card>
+            </div>
+          </div>
         </TabsContent>
 
         <TabsContent value="categories" className="space-y-4">

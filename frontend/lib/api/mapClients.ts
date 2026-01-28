@@ -12,6 +12,10 @@ export const mapClientsApi = {
     return apiFetch<MapClient[]>('/clients/');
   },
 
+  detail: async (id: number | string): Promise<MapClient> => {
+    return apiFetch<MapClient>(`/clients/${id}/`);
+  },
+
   create: async (payload: { name: string }) => {
     return apiFetch<MapClient>('/clients/', {
       method: 'POST',

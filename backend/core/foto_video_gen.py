@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 
+from .openrouter_utils import build_openrouter_headers
 from .system_settings import (
     get_image_generation_model,
     get_image_generation_timeout,
@@ -1052,12 +1053,10 @@ def _generate_image_openrouter(
 
         response = requests.post(
             api_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://zavod-content-factory.com",
-                "X-Title": "Content Factory Image Generator"
-            },
+            headers=build_openrouter_headers(
+                api_key,
+                default_title="Content Factory Image Generator",
+            ),
             json=request_payload,
             timeout=image_timeout
         )

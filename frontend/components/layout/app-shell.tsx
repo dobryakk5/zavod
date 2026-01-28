@@ -21,6 +21,7 @@ const navItems = [
   { href: '/seo', label: 'SEO' },
   { href: '/articles', label: 'Статьи' },
   { href: '/products', label: 'Продукты' },
+  { href: '/clients', label: 'Клиенты' },
   { href: '/settings', label: 'Настройки' }
 ];
 

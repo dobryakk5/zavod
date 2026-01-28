@@ -1398,11 +1398,13 @@ class SemanticClusterViewSet(mixins.UpdateModelMixin, viewsets.ReadOnlyModelView
             wordstat_error: str | None = None
             wordstat_counts: dict[str, int] = {}
 
-            wordstat_existing = WordstatPhrase.objects.filter(phrase__in=new_norms)
+            wordstat_existing = WordstatPhrase.objects.filter(
+                phrase__in=new_norms,
+                frequency__gte=WORDSTAT_MIN_FREQUENCY,
+            )
             wordstat_map_existing: dict[str, WordstatPhrase] = {}
             for row in wordstat_existing:
-                if row.frequency is not None and row.frequency > 0:
-                    wordstat_map_existing[row.phrase] = row
+                wordstat_map_existing[row.phrase] = row
 
             phrase_updates: list[SemanticPhrase] = []
             for normalized_value, phrase_obj in phrase_map.items():
@@ -1429,6 +1431,21 @@ class SemanticClusterViewSet(mixins.UpdateModelMixin, viewsets.ReadOnlyModelView
                 else:
                     try:
                         ws_client = get_wordstat_client()
+
+                        def record_wordstat_count(phrase_text: str, count_value) -> None:
+                            normalized = normalize_phrase(phrase_text)
+                            if not normalized:
+                                return
+                            try:
+                                parsed = int(count_value or 0)
+                            except (TypeError, ValueError):
+                                parsed = 0
+                            if parsed <= 0:
+                                return
+                            current = wordstat_counts.get(normalized)
+                            if current is None or parsed > current:
+                                wordstat_counts[normalized] = parsed
+
                         for phrase_value in to_check:
                             api_response = ws_client.fetch_top_requests(
                                 phrase=phrase_value,
@@ -1442,20 +1459,26 @@ class SemanticClusterViewSet(mixins.UpdateModelMixin, viewsets.ReadOnlyModelView
                                 phrase_text = str(item.get("phrase") or "").strip()
                                 if not phrase_text:
                                     continue
-                                if normalize_phrase(phrase_text) != base_norm:
+                                record_wordstat_count(phrase_text, item.get("count"))
+                                if base_norm and normalize_phrase(phrase_text) == base_norm and base_count is None:
+                                    try:
+                                        base_count = int(item.get("count") or 0)
+                                    except (TypeError, ValueError):
+                                        base_count = 0
+
+                            for item in api_response.get("associations") or []:
+                                phrase_text = str(item.get("phrase") or "").strip()
+                                if not phrase_text:
                                     continue
-                                try:
-                                    base_count = int(item.get("count") or 0)
-                                except (TypeError, ValueError):
-                                    base_count = 0
-                                break
+                                record_wordstat_count(phrase_text, item.get("count"))
+
                             if base_count is None:
                                 try:
                                     base_count = int(api_response.get("totalCount") or 0)
                                 except (TypeError, ValueError):
                                     base_count = 0
-                            if base_count and base_count > 0:
-                                wordstat_counts[base_norm] = base_count
+                            if base_norm and base_count and base_count > 0:
+                                record_wordstat_count(base_norm, base_count)
 
                             record_generation_event(
                                 client,
@@ -1469,7 +1492,7 @@ class SemanticClusterViewSet(mixins.UpdateModelMixin, viewsets.ReadOnlyModelView
                         wordstat_error = "Не удалось получить данные Wordstat"
 
             if wordstat_counts:
-                wordstat_map = _upsert_wordstat_phrases(wordstat_counts, min_frequency=1)
+                wordstat_map = _upsert_wordstat_phrases(wordstat_counts)
                 _assign_wordstat_phrases(client, wordstat_map)
 
             phrases = cluster.phrases.annotate(freq=Coalesce("phrase__frequency", 0)).order_by(
