@@ -2693,3 +2693,6 @@ class Note(models.Model):
 
     def __str__(self):
         return self.title or f"Заметка от {self.created_at.date()}"
+
+
+    Client.add_to_class('updated_at', models.DateTimeField(auto_now=True))
