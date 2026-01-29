@@ -6,9 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { ApiError, apiFetch } from '@/lib/api';
-import { mapClientsApi, type MapClient } from '@/lib/api/mapClients';
+import { mapContactsApi, type MapClient } from '@/lib/api/mapContacts';
 import { mapTagsApi, type MapTag, type TagType } from '@/lib/api/mapTags';
-import { Trash2 } from 'lucide-react';
+import { Trash2, X } from 'lucide-react';
 
 type ClientDraft = {
   name: string;
@@ -55,7 +55,9 @@ export function ClientsTab() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, boolean>>({});
 
-  const [createClientName, setCreateClientName] = useState('');
+  const [createClientInput, setCreateClientInput] = useState('');
+  const [createClientChips, setCreateClientChips] = useState<string[]>([]);
+  const [createClientError, setCreateClientError] = useState('');
   const [creatingClient, setCreatingClient] = useState(false);
 
   const [createTagType, setCreateTagType] = useState<TagType>('goal');
@@ -73,7 +75,7 @@ export function ClientsTab() {
   const tagDraftsRef = useRef(tagDrafts);
 
   const openClientWindow = useCallback((clientId: number) => {
-    window.open(`/client/${clientId}`, '_blank', 'noopener');
+    window.open(`/contact/${clientId}`, '_blank', 'noopener');
   }, []);
 
   useEffect(() => {
@@ -150,7 +152,7 @@ export function ClientsTab() {
     setError(null);
     try {
       const [clientsData, tagsData] = await Promise.all([
-        mapClientsApi.list(),
+        mapContactsApi.list(),
         mapTagsApi.list()
       ]);
 
@@ -168,7 +170,7 @@ export function ClientsTab() {
         syncTagDrafts([]);
         setError(null);
       } else {
-        setError('Не удалось загрузить клиентов и теги. Проверьте API /clients/ и /tags/.');
+        setError('Не удалось загрузить клиентов и теги. Проверьте API /crm/contacts/ и /crm/tags/.');
       }
     } finally {
       setLoading(false);
@@ -261,7 +263,7 @@ export function ClientsTab() {
     });
 
     try {
-      const updated = await mapClientsApi.update(clientId, { name });
+      const updated = await mapContactsApi.update(clientId, { name });
       setClients((prev) => prev.map((client) => (client.id === clientId ? { ...client, name: updated.name ?? name } : client)));
       setClientDrafts((prev) => {
         const existing = prev[clientId];
@@ -410,9 +412,9 @@ export function ClientsTab() {
     });
 
     try {
-      await apiFetch('/client-tags/', {
+      await apiFetch('/crm/contact-tags/', {
         method: exists ? 'DELETE' : 'POST',
-        body: { clientId, tagId: tag.id }
+        body: { contactId: clientId, tagId: tag.id }
       });
     } catch (err) {
       console.error('Failed to update client tag', err);
@@ -429,18 +431,85 @@ export function ClientsTab() {
     }
   };
 
+  const normalizeClientName = (value: string) => value.trim().replace(/\s+/g, ' ');
+
+  const addClientNames = (rawNames: string[]) => {
+    const cleaned = rawNames
+      .map((item) => normalizeClientName(item))
+      .filter((item) => item.length > 0);
+    if (cleaned.length === 0) return;
+    setCreateClientChips((prev) => {
+      const existing = new Set(prev.map((item) => item.toLowerCase()));
+      const next = [...prev];
+      cleaned.forEach((item) => {
+        const key = item.toLowerCase();
+        if (!existing.has(key)) {
+          existing.add(key);
+          next.push(item);
+        }
+      });
+      return next;
+    });
+    setCreateClientError('');
+  };
+
+  const handleClientPaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = event.clipboardData.getData('text');
+    if (!text) return;
+    event.preventDefault();
+    addClientNames(text.split(/\r?\n|\t/));
+    setCreateClientInput('');
+  };
+
+  const handleClientKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault();
+      addClientNames([createClientInput]);
+      setCreateClientInput('');
+      return;
+    }
+    if (event.key === 'Backspace' && createClientInput.length === 0 && createClientChips.length > 0) {
+      event.preventDefault();
+      setCreateClientChips((prev) => prev.slice(0, -1));
+    }
+  };
+
+  const handleClientBlur = () => {
+    if (createClientInput.trim().length === 0) return;
+    addClientNames([createClientInput]);
+    setCreateClientInput('');
+  };
+
+  const removeClientChip = (value: string) => {
+    setCreateClientChips((prev) => prev.filter((item) => item !== value));
+  };
+
   const handleCreateClient = async () => {
-    const name = createClientName.trim();
-    if (!name || creatingClient) return;
+    const pendingInput = normalizeClientName(createClientInput);
+    const names = [...createClientChips, ...(pendingInput ? [pendingInput] : [])];
+    if (names.length === 0 || creatingClient) {
+      setCreateClientError('Введите хотя бы одно имя.');
+      return;
+    }
     setCreatingClient(true);
     setError(null);
     try {
-      const created = await mapClientsApi.create({ name });
-      const normalized = normalizeClient(created);
-      const next = [normalized, ...clients];
-      setClients(next);
-      syncClientDrafts(next);
-      setCreateClientName('');
+      const results = await Promise.allSettled(names.map((name) => mapContactsApi.create({ name })));
+      const created = results
+        .filter((result): result is PromiseFulfilledResult<MapClient> => result.status === 'fulfilled')
+        .map((result) => normalizeClient(result.value));
+      if (created.length > 0) {
+        const next = [...created, ...clients];
+        setClients(next);
+        syncClientDrafts(next);
+        setCreateClientInput('');
+        setCreateClientChips([]);
+        setCreateClientError('');
+      }
+      const failedCount = results.length - created.length;
+      if (failedCount > 0) {
+        toast.error(`Не удалось создать клиентов: ${failedCount}`);
+      }
     } catch (err) {
       console.error('Failed to create client', err);
       setError('Не удалось создать клиента.');
@@ -461,7 +530,7 @@ export function ClientsTab() {
       return next;
     });
     try {
-      await mapClientsApi.delete(client.id);
+      await mapContactsApi.delete(client.id);
     } catch (err) {
       console.error('Failed to delete client', err);
       toast.error('Не удалось удалить клиента.');
@@ -570,17 +639,48 @@ export function ClientsTab() {
 
           <div className="flex flex-col gap-3 rounded-xl border bg-card/70 p-4 shadow-sm">
             <div className="flex flex-wrap items-center gap-3">
-              <Input
-                placeholder="Новый клиент"
-                value={createClientName}
-                onChange={(e) => setCreateClientName(e.target.value)}
-                className="w-full max-w-sm"
-              />
-              <Button onClick={handleCreateClient} disabled={creatingClient || !createClientName.trim()}>
+              <div
+                className={`flex min-h-10 w-full max-w-xl flex-wrap items-center gap-2 rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 max-h-32 overflow-y-auto ${
+                  createClientError ? 'border-red-500 focus-within:ring-red-500' : ''
+                }`}
+              >
+                {createClientChips.map((chip) => (
+                  <span
+                    key={chip}
+                    className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-foreground"
+                  >
+                    <span className="max-w-[12rem] truncate">{chip}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeClientChip(chip)}
+                      className="rounded-full p-0.5 text-muted-foreground transition hover:text-foreground"
+                      aria-label={`Удалить ${chip}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+                <input
+                  value={createClientInput}
+                  onChange={(e) => setCreateClientInput(e.target.value)}
+                  onKeyDown={handleClientKeyDown}
+                  onPaste={handleClientPaste}
+                  onBlur={handleClientBlur}
+                  placeholder={createClientChips.length === 0 ? 'Введите имя или вставьте столбец' : ''}
+                  className="min-w-[180px] flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+              <Button
+                onClick={handleCreateClient}
+                disabled={creatingClient || (createClientChips.length === 0 && createClientInput.trim().length === 0)}
+              >
                 {creatingClient ? 'Создание…' : 'Добавить клиента'}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">Введите название и нажмите «Добавить клиента»</p>
+            <p className="text-xs text-muted-foreground">Вставьте столбец из Excel — каждое имя станет тегом.</p>
+            {createClientError ? (
+              <p className="text-xs text-red-500">{createClientError}</p>
+            ) : null}
           </div>
 
           {loading ? (

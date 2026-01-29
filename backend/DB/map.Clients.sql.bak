@@ -1,5 +1,5 @@
 -- 1. Клиенты
-CREATE TABLE contacs (
+CREATE TABLE clients (
     id          SERIAL PRIMARY KEY,
     name        TEXT NOT NULL,
     created_at  TIMESTAMP DEFAULT now()
@@ -15,18 +15,18 @@ CREATE TABLE tags (
 );
 
 -- 3. Связь клиент ↔ теги
-CREATE TABLE contac_tags (
-    contac_id  INTEGER NOT NULL REFERENCES contacs(id) ON DELETE CASCADE,
+CREATE TABLE client_tags (
+    client_id  INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     tag_id     INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-    PRIMARY KEY (contac_id, tag_id)
+    PRIMARY KEY (client_id, tag_id)
 );
 
 -- =====================================================
 -- 1. Все теги конкретного клиента
 -- =====================================================
-CREATE OR REPLACE FUNCTION get_contac_tags(p_contac_id INTEGER)
+CREATE OR REPLACE FUNCTION get_client_tags(p_client_id INTEGER)
 RETURNS TABLE (
-    contac_name TEXT,
+    client_name TEXT,
     tag_type    TEXT,
     tag_value   TEXT
 )
@@ -38,10 +38,10 @@ BEGIN
         c.name,
         t.type,
         t.value
-    FROM contacs c
-    JOIN contac_tags ct ON ct.contac_id = c.id
+    FROM clients c
+    JOIN client_tags ct ON ct.client_id = c.id
     JOIN tags t ON t.id = ct.tag_id
-    WHERE c.id = p_contac_id;
+    WHERE c.id = p_client_id;
 END;
 $$;
 
@@ -50,13 +50,13 @@ $$;
 -- 2. Клиенты по конкретному тегу
 -- (цель / боль / опыт)
 -- =====================================================
-CREATE OR REPLACE FUNCTION get_contacs_by_tag(
+CREATE OR REPLACE FUNCTION get_clients_by_tag(
     p_tag_type TEXT,
     p_tag_value TEXT
 )
 RETURNS TABLE (
-    contac_id   INTEGER,
-    contac_name TEXT
+    client_id   INTEGER,
+    client_name TEXT
 )
 LANGUAGE plpgsql
 AS $$
@@ -65,8 +65,8 @@ BEGIN
     SELECT DISTINCT
         c.id,
         c.name
-    FROM contacs c
-    JOIN contac_tags ct ON ct.contac_id = c.id
+    FROM clients c
+    JOIN client_tags ct ON ct.client_id = c.id
     JOIN tags t ON t.id = ct.tag_id
     WHERE t.type = p_tag_type
       AND t.value = p_tag_value;
@@ -82,7 +82,7 @@ CREATE OR REPLACE FUNCTION get_tag_statistics()
 RETURNS TABLE (
     tag_type      TEXT,
     tag_value     TEXT,
-    contacs_count INTEGER
+    clients_count INTEGER
 )
 LANGUAGE plpgsql
 AS $$
@@ -91,10 +91,10 @@ BEGIN
     SELECT
         t.type,
         t.value,
-        COUNT(ct.contac_id)::INTEGER AS contacs_count
+        COUNT(ct.client_id)::INTEGER AS clients_count
     FROM tags t
-    LEFT JOIN contac_tags ct ON ct.tag_id = t.id
+    LEFT JOIN client_tags ct ON ct.tag_id = t.id
     GROUP BY t.type, t.value
-    ORDER BY t.type, contacs_count DESC;
+    ORDER BY t.type, clients_count DESC;
 END;
 $$;

@@ -1,11 +1,8 @@
 import { apiFetch } from '../api';
-import type { TagType } from './mapTags';
+import type { MapClient } from './mapClients';
+import type { MapTag } from './mapTags';
 
-export type MapClient = {
-  id: number;
-  name: string;
-  tags?: Partial<Record<TagType, number[]>>;
-};
+export type { MapClient } from './mapClients';
 
 export const mapContactsApi = {
   list: async (): Promise<MapClient[]> => {
@@ -33,6 +30,22 @@ export const mapContactsApi = {
   delete: async (id: number | string) => {
     return apiFetch<void>(`/crm/contacts/${id}/`, {
       method: 'DELETE'
+    });
+  }
+};
+
+export const contactTagsApi = {
+  assign: async (contactId: number | string, tagId: number | string) => {
+    return apiFetch<{ success: boolean }>('/crm/contact-tags/', {
+      method: 'POST',
+      body: { contactId, tagId }
+    });
+  },
+
+  remove: async (contactId: number | string, tagId: number | string) => {
+    return apiFetch<void>('/crm/contact-tags/', {
+      method: 'DELETE',
+      body: { contactId, tagId }
     });
   }
 };

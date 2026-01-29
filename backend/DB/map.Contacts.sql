@@ -1,5 +1,5 @@
--- 1. Клиенты
-CREATE TABLE contacs (
+-- 1. Контакты
+CREATE TABLE contacts (
     id          SERIAL PRIMARY KEY,
     name        TEXT NOT NULL,
     created_at  TIMESTAMP DEFAULT now()
@@ -14,19 +14,21 @@ CREATE TABLE tags (
     UNIQUE (type, value)
 );
 
--- 3. Связь клиент ↔ теги
-CREATE TABLE contac_tags (
-    contac_id  INTEGER NOT NULL REFERENCES contacs(id) ON DELETE CASCADE,
+-- 3. Связь контакт ↔ теги
+CREATE TABLE contact_tags (
+    contact_id  INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
     tag_id     INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-    PRIMARY KEY (contac_id, tag_id)
+    PRIMARY KEY (contact_id, tag_id)
 );
 
 -- =====================================================
--- 1. Все теги конкретного клиента
+-- 1. Все теги конкретного контакта
 -- =====================================================
-CREATE OR REPLACE FUNCTION get_contac_tags(p_contac_id INTEGER)
+DROP FUNCTION IF EXISTS get_contact_tags(INTEGER);
+
+CREATE OR REPLACE FUNCTION get_contact_tags(p_contact_id INTEGER)
 RETURNS TABLE (
-    contac_name TEXT,
+    contact_name TEXT,
     tag_type    TEXT,
     tag_value   TEXT
 )
@@ -38,25 +40,27 @@ BEGIN
         c.name,
         t.type,
         t.value
-    FROM contacs c
-    JOIN contac_tags ct ON ct.contac_id = c.id
+    FROM contacts c
+    JOIN contact_tags ct ON ct.contact_id = c.id
     JOIN tags t ON t.id = ct.tag_id
-    WHERE c.id = p_contac_id;
+    WHERE c.id = p_contact_id;
 END;
 $$;
 
 
 -- =====================================================
--- 2. Клиенты по конкретному тегу
+-- 2. Контакты по конкретному тегу
 -- (цель / боль / опыт)
 -- =====================================================
-CREATE OR REPLACE FUNCTION get_contacs_by_tag(
+DROP FUNCTION IF EXISTS get_contacts_by_tag(TEXT, TEXT);
+
+CREATE OR REPLACE FUNCTION get_contacts_by_tag(
     p_tag_type TEXT,
     p_tag_value TEXT
 )
 RETURNS TABLE (
-    contac_id   INTEGER,
-    contac_name TEXT
+    contact_id   INTEGER,
+    contact_name TEXT
 )
 LANGUAGE plpgsql
 AS $$
@@ -65,8 +69,8 @@ BEGIN
     SELECT DISTINCT
         c.id,
         c.name
-    FROM contacs c
-    JOIN contac_tags ct ON ct.contac_id = c.id
+    FROM contacts c
+    JOIN contact_tags ct ON ct.contact_id = c.id
     JOIN tags t ON t.id = ct.tag_id
     WHERE t.type = p_tag_type
       AND t.value = p_tag_value;
@@ -76,13 +80,15 @@ $$;
 
 -- =====================================================
 -- 3. Статистика по тегам
--- (сколько клиентов на каждый тег)
+-- (сколько контактов на каждый тег)
 -- =====================================================
+DROP FUNCTION IF EXISTS get_tag_statistics();
+
 CREATE OR REPLACE FUNCTION get_tag_statistics()
 RETURNS TABLE (
     tag_type      TEXT,
     tag_value     TEXT,
-    contacs_count INTEGER
+    contacts_count INTEGER
 )
 LANGUAGE plpgsql
 AS $$
@@ -91,10 +97,10 @@ BEGIN
     SELECT
         t.type,
         t.value,
-        COUNT(ct.contac_id)::INTEGER AS contacs_count
+        COUNT(ct.contact_id)::INTEGER AS contacts_count
     FROM tags t
-    LEFT JOIN contac_tags ct ON ct.tag_id = t.id
+    LEFT JOIN contact_tags ct ON ct.tag_id = t.id
     GROUP BY t.type, t.value
-    ORDER BY t.type, contacs_count DESC;
+    ORDER BY t.type, contacts_count DESC;
 END;
 $$;

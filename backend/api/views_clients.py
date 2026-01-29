@@ -56,7 +56,7 @@ def _normalize_tag_ids(value: Any) -> List[int]:
         return []
     return [int(item) for item in value]
 
-def _serialize_client_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _serialize_contact_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": row.get("id"),
         "name": row.get("name") or "",
@@ -68,7 +68,7 @@ def _serialize_client_row(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _fetch_client(schema: str, client_id: int) -> Dict[str, Any] | None:
+def _fetch_contact(schema: str, contact_id: int) -> Dict[str, Any] | None:
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -78,19 +78,19 @@ def _fetch_client(schema: str, client_id: int) -> Dict[str, Any] | None:
                 COALESCE(ARRAY_AGG(t.id) FILTER (WHERE t.type = 'goal'), ARRAY[]::int[]) AS goal_tags,
                 COALESCE(ARRAY_AGG(t.id) FILTER (WHERE t.type = 'pain'), ARRAY[]::int[]) AS pain_tags,
                 COALESCE(ARRAY_AGG(t.id) FILTER (WHERE t.type = 'experience'), ARRAY[]::int[]) AS experience_tags
-            FROM {schema}.clients c
-            LEFT JOIN {schema}.client_tags ct ON ct.client_id = c.id
-            LEFT JOIN {schema}.tags t ON t.id = ct.tag_id
+            FROM {schema}.contacts c
+            LEFT JOIN {schema}.contact_tags ct ON ct.contact_id = c.id
+            LEFT JOIN {schema}.crm_tags t ON t.id = ct.tag_id
             WHERE c.id = %s
             GROUP BY c.id, c.name
             """,
-            [client_id],
+            [contact_id],
         )
         row = cursor.fetchone()
         if not row:
             return None
         columns = [col[0] for col in cursor.description]
-        return _serialize_client_row(dict(zip(columns, row)))
+        return _serialize_contact_row(dict(zip(columns, row)))
 
 
 def _fetch_tag(schema: str, tag_id: int) -> Dict[str, Any] | None:
@@ -98,7 +98,7 @@ def _fetch_tag(schema: str, tag_id: int) -> Dict[str, Any] | None:
         cursor.execute(
             f"""
             SELECT id, type, value
-            FROM {schema}.tags
+            FROM {schema}.crm_tags
             WHERE id = %s
             """,
             [tag_id],
@@ -110,7 +110,7 @@ def _fetch_tag(schema: str, tag_id: int) -> Dict[str, Any] | None:
         return dict(zip(columns, row))
 
 
-class ClientsListView(APIView):
+class ContactsListView(APIView):
     permission_classes = [IsTenantMember]
 
     def get_permissions(self):
@@ -129,9 +129,9 @@ class ClientsListView(APIView):
                     COALESCE(ARRAY_AGG(t.id) FILTER (WHERE t.type = 'goal'), ARRAY[]::int[]) AS goal_tags,
                     COALESCE(ARRAY_AGG(t.id) FILTER (WHERE t.type = 'pain'), ARRAY[]::int[]) AS pain_tags,
                     COALESCE(ARRAY_AGG(t.id) FILTER (WHERE t.type = 'experience'), ARRAY[]::int[]) AS experience_tags
-                FROM {schema}.clients c
-                LEFT JOIN {schema}.client_tags ct ON ct.client_id = c.id
-                LEFT JOIN {schema}.tags t ON t.id = ct.tag_id
+                FROM {schema}.contacts c
+                LEFT JOIN {schema}.contact_tags ct ON ct.contact_id = c.id
+                LEFT JOIN {schema}.crm_tags t ON t.id = ct.tag_id
                 GROUP BY c.id, c.name
                 ORDER BY c.name ASC
                 """
@@ -140,7 +140,7 @@ class ClientsListView(APIView):
 
         payload = []
         for row in rows:
-            payload.append(_serialize_client_row(row))
+            payload.append(_serialize_contact_row(row))
 
         return Response(payload)
 
@@ -149,44 +149,51 @@ class ClientsListView(APIView):
         schema = _map_schema()
         with connection.cursor() as cursor:
             cursor.execute(
-                f"INSERT INTO {schema}.clients (name) VALUES (%s) RETURNING id",
+                f"INSERT INTO {schema}.contacts (name) VALUES (%s) RETURNING id",
                 [name],
             )
             row = cursor.fetchone()
-        client_id = row[0] if row else None
-        if not client_id:
-            return Response({"error": "Не удалось создать клиента."}, status=status.HTTP_400_BAD_REQUEST)
-        created = _fetch_client(schema, int(client_id))
+        contact_id = row[0] if row else None
+        if not contact_id:
+            return Response({"error": "Не удалось создать контакт."}, status=status.HTTP_400_BAD_REQUEST)
+        created = _fetch_contact(schema, int(contact_id))
         if not created:
-            created = {"id": int(client_id), "name": name, "tags": {"goal": [], "pain": [], "experience": []}}
+            created = {"id": int(contact_id), "name": name, "tags": {"goal": [], "pain": [], "experience": []}}
         return Response(created, status=status.HTTP_201_CREATED)
 
 
-class ClientDetailView(APIView):
-    permission_classes = [IsTenantOwnerOrEditor]
+class ContactDetailView(APIView):
+    permission_classes = [IsTenantMember]
 
-    def patch(self, request, client_id: int):
+    def get(self, request, contact_id: int):
+        schema = _map_schema()
+        contact = _fetch_contact(schema, int(contact_id))
+        if not contact:
+            return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(contact)
+
+    def patch(self, request, contact_id: int):
         name = _coerce_text(request.data.get("name"), "name")
         schema = _map_schema()
         with connection.cursor() as cursor:
             cursor.execute(
-                f"UPDATE {schema}.clients SET name = %s WHERE id = %s",
-                [name, client_id],
+                f"UPDATE {schema}.contacts SET name = %s WHERE id = %s",
+                [name, contact_id],
             )
             if cursor.rowcount == 0:
-                return Response({"error": "Клиент не найден."}, status=status.HTTP_404_NOT_FOUND)
+                return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
 
-        updated = _fetch_client(schema, int(client_id))
+        updated = _fetch_contact(schema, int(contact_id))
         if not updated:
-            return Response({"error": "Клиент не найден."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
         return Response(updated)
 
-    def delete(self, request, client_id: int):
+    def delete(self, request, contact_id: int):
         schema = _map_schema()
         with connection.cursor() as cursor:
-            cursor.execute(f"DELETE FROM {schema}.clients WHERE id = %s", [client_id])
+            cursor.execute(f"DELETE FROM {schema}.contacts WHERE id = %s", [contact_id])
             if cursor.rowcount == 0:
-                return Response({"error": "Клиент не найден."}, status=status.HTTP_404_NOT_FOUND)
+                return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -204,7 +211,7 @@ class TagsListView(APIView):
             cursor.execute(
                 f"""
                 SELECT id, type, value
-                FROM {schema}.tags
+                FROM {schema}.crm_tags
                 ORDER BY type ASC, value ASC
                 """
             )
@@ -218,7 +225,7 @@ class TagsListView(APIView):
         schema = _map_schema()
         with connection.cursor() as cursor:
             cursor.execute(
-                f"SELECT 1 FROM {schema}.tags WHERE type = %s AND value = %s",
+                f"SELECT 1 FROM {schema}.crm_tags WHERE type = %s AND value = %s",
                 [tag_type, value],
             )
             if cursor.fetchone():
@@ -226,7 +233,7 @@ class TagsListView(APIView):
 
             try:
                 cursor.execute(
-                    f"INSERT INTO {schema}.tags (type, value) VALUES (%s, %s) RETURNING id, type, value",
+                    f"INSERT INTO {schema}.crm_tags (type, value) VALUES (%s, %s) RETURNING id, type, value",
                     [tag_type, value],
                 )
             except IntegrityError:
@@ -263,7 +270,7 @@ class TagDetailView(APIView):
             cursor.execute(
                 f"""
                 SELECT 1
-                FROM {schema}.tags
+                FROM {schema}.crm_tags
                 WHERE type = %s AND value = %s AND id <> %s
                 """,
                 [next_type, next_value, tag_id],
@@ -273,7 +280,7 @@ class TagDetailView(APIView):
 
             try:
                 cursor.execute(
-                    f"UPDATE {schema}.tags SET type = %s, value = %s WHERE id = %s RETURNING id, type, value",
+                    f"UPDATE {schema}.crm_tags SET type = %s, value = %s WHERE id = %s RETURNING id, type, value",
                     [next_type, next_value, tag_id],
                 )
             except IntegrityError:
@@ -288,49 +295,49 @@ class TagDetailView(APIView):
     def delete(self, request, tag_id: int):
         schema = _map_schema()
         with connection.cursor() as cursor:
-            cursor.execute(f"DELETE FROM {schema}.tags WHERE id = %s", [tag_id])
+            cursor.execute(f"DELETE FROM {schema}.crm_tags WHERE id = %s", [tag_id])
             if cursor.rowcount == 0:
                 return Response({"error": "Тег не найден."}, status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class ClientTagsView(APIView):
+class ContactTagsView(APIView):
     permission_classes = [IsTenantOwnerOrEditor]
 
     def post(self, request):
-        client_id = _coerce_int(request.data.get("clientId") or request.data.get("client_id"), "clientId")
+        contact_id = _coerce_int(request.data.get("contactId") or request.data.get("contact_id"), "contactId")
         tag_id = _coerce_int(request.data.get("tagId") or request.data.get("tag_id"), "tagId")
 
         schema = _map_schema()
         with connection.cursor() as cursor:
-            cursor.execute(f"SELECT 1 FROM {schema}.clients WHERE id = %s", [client_id])
+            cursor.execute(f"SELECT 1 FROM {schema}.contacts WHERE id = %s", [contact_id])
             if cursor.fetchone() is None:
-                return Response({"error": "Клиент не найден."}, status=status.HTTP_404_NOT_FOUND)
+                return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
 
-            cursor.execute(f"SELECT 1 FROM {schema}.tags WHERE id = %s", [tag_id])
+            cursor.execute(f"SELECT 1 FROM {schema}.crm_tags WHERE id = %s", [tag_id])
             if cursor.fetchone() is None:
                 return Response({"error": "Тег не найден."}, status=status.HTTP_404_NOT_FOUND)
 
             cursor.execute(
                 f"""
-                INSERT INTO {schema}.client_tags (client_id, tag_id)
+                INSERT INTO {schema}.contact_tags (contact_id, tag_id)
                 VALUES (%s, %s)
                 ON CONFLICT DO NOTHING
                 """,
-                [client_id, tag_id],
+                [contact_id, tag_id],
             )
 
         return Response({"success": True}, status=status.HTTP_200_OK)
 
     def delete(self, request):
-        client_id = _coerce_int(request.data.get("clientId") or request.data.get("client_id"), "clientId")
+        contact_id = _coerce_int(request.data.get("contactId") or request.data.get("contact_id"), "contactId")
         tag_id = _coerce_int(request.data.get("tagId") or request.data.get("tag_id"), "tagId")
 
         schema = _map_schema()
         with connection.cursor() as cursor:
             cursor.execute(
-                f"DELETE FROM {schema}.client_tags WHERE client_id = %s AND tag_id = %s",
-                [client_id, tag_id],
+                f"DELETE FROM {schema}.contact_tags WHERE contact_id = %s AND tag_id = %s",
+                [contact_id, tag_id],
             )
 
         return Response(status=status.HTTP_204_NO_CONTENT)

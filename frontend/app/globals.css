@@ -34,3 +34,18 @@ body {
 * {
   box-sizing: border-box;
 }
+
+input[type="datetime-local"] {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  display: none;
+  -webkit-appearance: none;
+}
+
+input[type="datetime-local"]::-webkit-inner-spin-button {
+  display: none;
+  -webkit-appearance: none;
+}

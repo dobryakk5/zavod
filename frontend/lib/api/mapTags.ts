@@ -10,25 +10,25 @@ export type MapTag = {
 
 export const mapTagsApi = {
   list: async (): Promise<MapTag[]> => {
-    return apiFetch<MapTag[]>('/tags/');
+    return apiFetch<MapTag[]>('/crm/tags/');
   },
 
   create: async (payload: { type: TagType; value: string }) => {
-    return apiFetch<MapTag>('/tags/', {
+    return apiFetch<MapTag>('/crm/tags/', {
       method: 'POST',
       body: payload
     });
   },
 
   update: async (id: number | string, payload: Partial<{ type: TagType; value: string }>) => {
-    return apiFetch<MapTag>(`/tags/${id}/`, {
+    return apiFetch<MapTag>(`/crm/tags/${id}/`, {
       method: 'PATCH',
       body: payload
     });
   },
 
   delete: async (id: number | string) => {
-    return apiFetch<void>(`/tags/${id}/`, {
+    return apiFetch<void>(`/crm/tags/${id}/`, {
       method: 'DELETE'
     });
   }

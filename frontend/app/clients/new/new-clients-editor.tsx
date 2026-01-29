@@ -9,13 +9,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { CalendarIcon, PlusIcon, EditIcon, TrashIcon, UsersIcon, DollarSignIcon, ClockIcon } from 'lucide-react';
+import { CalendarIcon, PlusIcon, EditIcon, TrashIcon, UsersIcon, DollarSignIcon, ClockIcon, XIcon } from 'lucide-react';
 
 // Типы данных для новой CRM-схемы с иерархией
 type Client = {
   id: number;
-  first_name: string;
-  last_name: string;
+  name: string;
   email: string;
   phone: string;
   category_id: number;
@@ -100,11 +99,11 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
     
     // Временные данные для демонстрации с иерархией
     const mockClients: Client[] = [
-      { id: 1, first_name: 'ООО', last_name: 'Крупный Клиент', email: 'contact@bigcompany.ru', phone: '+74951234500', category_id: 1, status: 'active', photo_url: '', notes: 'Основной корпоративный клиент', parent_id: null },
-      { id: 2, first_name: 'Иван', last_name: 'Петров', email: 'ivan.petrov@bigcompany.ru', phone: '+74951234501', category_id: 1, status: 'active', photo_url: '', notes: 'Главный специалист', parent_id: 1 },
-      { id: 3, first_name: 'Мария', last_name: 'Сидорова', email: 'maria.sidorova@bigcompany.ru', phone: '+74951234502', category_id: 1, status: 'active', photo_url: '', notes: 'Менеджер проекта', parent_id: 1 },
-      { id: 4, first_name: 'Алексей', last_name: 'Козлов', email: 'alexey.kozlov@bigcompany.ru', phone: '+74951234503', category_id: 2, status: 'active', photo_url: '', notes: 'Технический специалист', parent_id: 1 },
-      { id: 5, first_name: 'ИП', last_name: 'Частный Предприниматель', email: 'contact@businessman.ru', phone: '+74951234600', category_id: 2, status: 'active', photo_url: '', notes: 'Частный клиент', parent_id: null },
+      { id: 1, name: 'ООО Крупный Клиент', email: 'contact@bigcompany.ru', phone: '+74951234500', category_id: 1, status: 'active', photo_url: '', notes: 'Основной корпоративный клиент', parent_id: null },
+      { id: 2, name: 'Иван Петров', email: 'ivan.petrov@bigcompany.ru', phone: '+74951234501', category_id: 1, status: 'active', photo_url: '', notes: 'Главный специалист', parent_id: 1 },
+      { id: 3, name: 'Мария Сидорова', email: 'maria.sidorova@bigcompany.ru', phone: '+74951234502', category_id: 1, status: 'active', photo_url: '', notes: 'Менеджер проекта', parent_id: 1 },
+      { id: 4, name: 'Алексей Козлов', email: 'alexey.kozlov@bigcompany.ru', phone: '+74951234503', category_id: 2, status: 'active', photo_url: '', notes: 'Технический специалист', parent_id: 1 },
+      { id: 5, name: 'ИП Частный Предприниматель', email: 'contact@businessman.ru', phone: '+74951234600', category_id: 2, status: 'active', photo_url: '', notes: 'Частный клиент', parent_id: null },
     ];
 
     const mockEventTypes: EventType[] = [
@@ -145,7 +144,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   };
 
   const getClientFullName = (client: Client) => {
-    return `${client.first_name} ${client.last_name}`;
+    return client.name;
   };
 
   // Функция для получения родительского клиента
@@ -179,7 +178,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
               </DialogHeader>
               <NewClientForm
                 clients={clients}
-                onSave={(newClient) => setClients([...clients, newClient])}
+                onSave={(newClients) => setClients((prev) => [...prev, ...newClients])}
               />
             </DialogContent>
           </Dialog>
@@ -236,7 +235,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
                       {client ? (
                         client.parent_id ? (
                           <>
-                            <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.first_name} → </span>
+                            <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.name} → </span>
                             {getClientFullName(client)}
                           </>
                         ) : (
@@ -257,7 +256,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
                         variant={
                           event.status === 'scheduled' ? 'default' :
                           event.status === 'completed' ? 'secondary' :
-                          event.status === 'cancelled' ? 'destructive' : 'outline'
+                          'outline'
                         }
                       >
                         {event.status === 'scheduled' ? 'Запланировано' :
@@ -382,7 +381,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
                       {client ? (
                         client.parent_id ? (
                           <>
-                            <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.first_name} → </span>
+                            <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.name} → </span>
                             {getClientFullName(client)}
                           </>
                         ) : (
@@ -502,10 +501,11 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
 // Формы для добавления новых элементов
 function NewClientForm({ clients, onSave }: {
   clients: Client[],
-  onSave: (client: Client) => void
+  onSave: (clients: Client[]) => void
 }) {
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
+  const [nameInput, setNameInput] = useState('');
+  const [nameChips, setNameChips] = useState<string[]>([]);
+  const [nameError, setNameError] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [categoryId, setCategoryId] = useState(1); // Default to first category
@@ -513,12 +513,72 @@ function NewClientForm({ clients, onSave }: {
   const [notes, setNotes] = useState('');
   const [parentId, setParentId] = useState<number | null>(null); // Добавлено поле для выбора родительского клиента
 
+  const normalizeName = (value: string) => value.trim().replace(/\s+/g, ' ');
+
+  const addNames = (rawNames: string[]) => {
+    const cleaned = rawNames
+      .map((item) => normalizeName(item))
+      .filter((item) => item.length > 0);
+    if (cleaned.length === 0) return;
+    setNameChips((prev) => {
+      const existing = new Set(prev.map((item) => item.toLowerCase()));
+      const next = [...prev];
+      cleaned.forEach((item) => {
+        const key = item.toLowerCase();
+        if (!existing.has(key)) {
+          existing.add(key);
+          next.push(item);
+        }
+      });
+      return next;
+    });
+    setNameError('');
+  };
+
+  const handlePasteNames = (event: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = event.clipboardData.getData('text');
+    if (!text) return;
+    event.preventDefault();
+    addNames(text.split(/\r?\n|\t/));
+    setNameInput('');
+  };
+
+  const handleNameKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault();
+      addNames([nameInput]);
+      setNameInput('');
+      return;
+    }
+    if (event.key === 'Backspace' && nameInput.length === 0 && nameChips.length > 0) {
+      event.preventDefault();
+      setNameChips((prev) => prev.slice(0, -1));
+    }
+  };
+
+  const handleNameBlur = () => {
+    if (nameInput.trim().length === 0) return;
+    addNames([nameInput]);
+    setNameInput('');
+  };
+
+  const removeChip = (value: string) => {
+    setNameChips((prev) => prev.filter((item) => item !== value));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const newClient: Client = {
-      id: Date.now(), // В реальном приложении это будет ID из базы данных
-      first_name: firstName,
-      last_name: lastName,
+    const pendingInput = normalizeName(nameInput);
+    const namesToCreate = [...nameChips, ...(pendingInput ? [pendingInput] : [])];
+    if (namesToCreate.length === 0) {
+      setNameError('Введите хотя бы одно имя.');
+      return;
+    }
+
+    const baseId = Date.now();
+    const newClients: Client[] = namesToCreate.map((clientName, index) => ({
+      id: baseId + index, // В реальном приложении это будет ID из базы данных
+      name: clientName,
       email,
       phone,
       category_id: categoryId,
@@ -526,30 +586,57 @@ function NewClientForm({ clients, onSave }: {
       photo_url: '',
       notes,
       parent_id: parentId // Добавлено поле parent_id
-    };
-    onSave(newClient);
+    }));
+
+    onSave(newClients);
+    setNameInput('');
+    setNameChips([]);
+    setNameError('');
+    setEmail('');
+    setPhone('');
+    setNotes('');
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="firstName">Имя</Label>
-        <Input 
-          id="firstName" 
-          value={firstName} 
-          onChange={(e) => setFirstName(e.target.value)} 
-          required 
-        />
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="lastName">Фамилия</Label>
-        <Input 
-          id="lastName" 
-          value={lastName} 
-          onChange={(e) => setLastName(e.target.value)} 
-          required 
-        />
+        <Label htmlFor="name-input">Имя</Label>
+        <div
+          className={`flex min-h-10 w-full flex-wrap items-center gap-2 rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 ${nameError ? 'border-red-500 focus-within:ring-red-500' : ''} max-h-32 overflow-y-auto`}
+        >
+          {nameChips.map((chip) => (
+            <span
+              key={chip}
+              className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-foreground"
+            >
+              <span className="max-w-[12rem] truncate">{chip}</span>
+              <button
+                type="button"
+                onClick={() => removeChip(chip)}
+                className="rounded-full p-0.5 text-muted-foreground transition hover:text-foreground"
+                aria-label={`Удалить ${chip}`}
+              >
+                <XIcon className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          <input
+            id="name-input"
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            onKeyDown={handleNameKeyDown}
+            onPaste={handlePasteNames}
+            onBlur={handleNameBlur}
+            placeholder={nameChips.length === 0 ? 'Введите имя или вставьте столбец' : ''}
+            className="min-w-[160px] flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-muted-foreground"
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Вставьте столбец из Excel — каждое имя станет отдельным тегом.
+        </p>
+        {nameError ? (
+          <p className="text-xs text-red-500">{nameError}</p>
+        ) : null}
       </div>
       
       <div className="space-y-2">
@@ -964,11 +1051,11 @@ function NewNoteForm({ clients, onSave }: {
 
 // Вспомогательные функции
 const getClientFullName = (client: Client) => {
-  return `${client.first_name} ${client.last_name}`;
+  return client.name;
 };
 
 const getParentClientName = (client: Client, allClients: Client[]): string => {
   if (!client.parent_id) return '';
   const parent = allClients.find(c => c.id === client.parent_id);
-  return parent ? `${parent.first_name} ${parent.last_name}` : '';
+  return parent ? parent.name : '';
 };

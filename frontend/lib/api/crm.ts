@@ -1,0 +1,296 @@
+// API service for CRM functionality (contacts, events, payments, notes)
+import { apiFetch } from '../api';
+
+// Types for the map CRM system
+export type Contact = {
+  id: number;
+  name: string;
+  email: string;
+  phone: string;
+  category_id: number | null;
+  status: 'active' | 'inactive' | 'archived';
+  photo_url: string;
+  notes: string;
+  parent_id: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Tag = {
+  id: number;
+  type: 'goal' | 'pain' | 'experience';
+  value: string;
+  created_at: string;
+};
+
+export type ContactTag = {
+  contact_id: number;
+  tag_id: number;
+  type: 'goal' | 'pain' | 'experience';
+  value: string;
+  description: string;
+};
+
+export type EventType = {
+  id: number;
+  name: string;
+  description: string;
+  duration_minutes: number;
+  color: string;
+  created_at: string;
+};
+
+export type Event = {
+  id: number;
+  contact_id: number;
+  event_type_id: number | null;
+  title: string;
+  description: string;
+  start_time: string;
+  end_time: string;
+  location: string;
+  status: 'scheduled' | 'completed' | 'cancelled' | 'no_show';
+  notes: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Payment = {
+  id: number;
+  contact_id: number;
+  product_id: number | null;
+  amount: number;
+  currency: string;
+  status: 'pending' | 'paid' | 'failed' | 'refunded';
+  payment_method: string;
+  transaction_id: string;
+  description: string;
+  planned_at: string | null;
+  paid_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Note = {
+  id: number;
+  contact_id: number;
+  title: string;
+  content: string;
+  is_important: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+// API functions for contacts
+export const crmContactsApi = {
+  list: async (): Promise<Contact[]> => {
+    return apiFetch<Contact[]>('/crm/contacts/');
+  },
+
+  detail: async (id: number | string): Promise<Contact> => {
+    return apiFetch<Contact>(`/crm/contacts/${id}/`);
+  },
+
+  create: async (data: Omit<Contact, 'id' | 'created_at' | 'updated_at'>): Promise<Contact> => {
+    return apiFetch<Contact>('/crm/contacts/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  update: async (id: number | string, data: Partial<Omit<Contact, 'id' | 'created_at' | 'updated_at'>>): Promise<Contact> => {
+    return apiFetch<Contact>(`/crm/contacts/${id}/`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  delete: async (id: number | string): Promise<void> => {
+    return apiFetch<void>(`/crm/contacts/${id}/`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+// API functions for tags
+export const crmTagsApi = {
+  list: async (): Promise<Tag[]> => {
+    return apiFetch<Tag[]>('/crm/tags/');
+  },
+
+  detail: async (id: number | string): Promise<Tag> => {
+    return apiFetch<Tag>(`/crm/tags/${id}/`);
+  },
+
+  create: async (data: Omit<Tag, 'id' | 'created_at'>): Promise<Tag> => {
+    return apiFetch<Tag>('/crm/tags/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  update: async (id: number | string, data: Partial<Omit<Tag, 'id' | 'created_at'>>): Promise<Tag> => {
+    return apiFetch<Tag>(`/crm/tags/${id}/`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  delete: async (id: number | string): Promise<void> => {
+    return apiFetch<void>(`/crm/tags/${id}/`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+// API functions for contact-tags relationships
+export const crmContactTagsApi = {
+  list: async (contactId: number | string): Promise<ContactTag[]> => {
+    return apiFetch<ContactTag[]>(`/crm/contact-tags/?contact_id=${contactId}`);
+  },
+
+  create: async (data: { contact_id: number; tag_id: number }): Promise<{ success: boolean }> => {
+    return apiFetch<{ success: boolean }>('/crm/contact-tags/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  upsert: async (data: { contact_id: number; tag_id: number; description?: string | null }): Promise<{ success: boolean }> => {
+    return apiFetch<{ success: boolean }>('/crm/contact-tags/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  delete: async (data: { contact_id: number; tag_id: number }): Promise<void> => {
+    return apiFetch<void>('/crm/contact-tags/', {
+      method: 'DELETE',
+      body: data,
+    });
+  },
+};
+
+// API functions for event types
+export const crmEventTypesApi = {
+  list: async (): Promise<EventType[]> => {
+    return apiFetch<EventType[]>('/crm/event-types/');
+  },
+
+  detail: async (id: number | string): Promise<EventType> => {
+    return apiFetch<EventType>(`/crm/event-types/${id}/`);
+  },
+
+  create: async (data: Omit<EventType, 'id' | 'created_at'>): Promise<EventType> => {
+    return apiFetch<EventType>('/crm/event-types/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  update: async (id: number | string, data: Partial<Omit<EventType, 'id' | 'created_at'>>): Promise<EventType> => {
+    return apiFetch<EventType>(`/crm/event-types/${id}/`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  delete: async (id: number | string): Promise<void> => {
+    return apiFetch<void>(`/crm/event-types/${id}/`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+// API functions for events
+export const crmEventsApi = {
+  list: async (): Promise<Event[]> => {
+    return apiFetch<Event[]>('/crm/events/');
+  },
+
+  detail: async (id: number | string): Promise<Event> => {
+    return apiFetch<Event>(`/crm/events/${id}/`);
+  },
+
+  create: async (data: Omit<Event, 'id' | 'created_at' | 'updated_at'>): Promise<Event> => {
+    return apiFetch<Event>('/crm/events/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  update: async (id: number | string, data: Partial<Omit<Event, 'id' | 'created_at' | 'updated_at'>>): Promise<Event> => {
+    return apiFetch<Event>(`/crm/events/${id}/`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  delete: async (id: number | string): Promise<void> => {
+    return apiFetch<void>(`/crm/events/${id}/`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+// API functions for payments
+export const crmPaymentsApi = {
+  list: async (): Promise<Payment[]> => {
+    return apiFetch<Payment[]>('/crm/payments/');
+  },
+
+  detail: async (id: number | string): Promise<Payment> => {
+    return apiFetch<Payment>(`/crm/payments/${id}/`);
+  },
+
+  create: async (data: Omit<Payment, 'id' | 'created_at' | 'updated_at'>): Promise<Payment> => {
+    return apiFetch<Payment>('/crm/payments/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  update: async (id: number | string, data: Partial<Omit<Payment, 'id' | 'created_at' | 'updated_at'>>): Promise<Payment> => {
+    return apiFetch<Payment>(`/crm/payments/${id}/`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  delete: async (id: number | string): Promise<void> => {
+    return apiFetch<void>(`/crm/payments/${id}/`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+// API functions for notes
+export const crmNotesApi = {
+  list: async (): Promise<Note[]> => {
+    return apiFetch<Note[]>('/crm/notes/');
+  },
+
+  detail: async (id: number | string): Promise<Note> => {
+    return apiFetch<Note>(`/crm/notes/${id}/`);
+  },
+
+  create: async (data: Omit<Note, 'id' | 'created_at' | 'updated_at'>): Promise<Note> => {
+    return apiFetch<Note>('/crm/notes/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  update: async (id: number | string, data: Partial<Omit<Note, 'id' | 'created_at' | 'updated_at'>>): Promise<Note> => {
+    return apiFetch<Note>(`/crm/notes/${id}/`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  delete: async (id: number | string): Promise<void> => {
+    return apiFetch<void>(`/crm/notes/${id}/`, {
+      method: 'DELETE',
+    });
+  },
+};
