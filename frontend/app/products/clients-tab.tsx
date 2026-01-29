@@ -5,9 +5,6 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ApiError, apiFetch } from '@/lib/api';
 import { mapClientsApi, type MapClient } from '@/lib/api/mapClients';
 import { mapTagsApi, type MapTag, type TagType } from '@/lib/api/mapTags';
@@ -556,13 +553,12 @@ export function ClientsTab() {
         </div>
       )}
 
-      <Tabs defaultValue="clients" className="space-y-6">
-        <TabsList>
-          <TabsTrigger value="clients">Список клиентов</TabsTrigger>
-          <TabsTrigger value="categories">Категории</TabsTrigger>
-        </TabsList>
+      <div className="space-y-6">
+        <div className="space-y-2">
+          <h2 className="text-2xl font-semibold">Список клиентов</h2>
+        </div>
 
-        <TabsContent value="clients" className="space-y-4">
+        <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm text-muted-foreground">
               Отметьте теги для каждого клиента. Изменения сохраняются сразу.
@@ -761,156 +757,8 @@ export function ClientsTab() {
               </Card>
             </div>
           </div>
-        </TabsContent>
-
-        <TabsContent value="categories" className="space-y-4">
-          <div className="flex flex-col gap-3 rounded-xl border bg-card/70 p-4 shadow-sm">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="w-full max-w-[220px]">
-                <Select value={createTagType} onValueChange={(value) => setCreateTagType(value as TagType)}>
-                  <SelectTrigger className="h-9">
-                    <SelectValue placeholder="Категория" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TAG_TYPES.map((type) => (
-                      <SelectItem key={type} value={type}>
-                        {TAG_LABELS[type]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Input
-                placeholder="Название тега"
-                value={createTagValue}
-                onChange={(e) => setCreateTagValue(e.target.value)}
-                className="w-full max-w-sm"
-              />
-              <Button onClick={handleCreateTag} disabled={creatingTag || !createTagValue.trim()}>
-                {creatingTag ? 'Создание…' : 'Добавить тег'}
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">Введите тег и категорию, затем нажмите «Добавить тег»</p>
-          </div>
-
-          {loading ? (
-            <p className="text-sm text-muted-foreground">Загружаем категории...</p>
-          ) : tags.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Теги пока не добавлены.</p>
-          ) : (
-            <div className="rounded-xl border bg-card/70 shadow-sm">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Категория</TableHead>
-                    <TableHead>Тег</TableHead>
-                    <TableHead className="w-[120px]">Клиентов</TableHead>
-                    <TableHead className="text-right">Действия</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tagRows.map(({ tag, type, value, saving, error: rowError }) => (
-                    <TableRow key={tag.id}>
-                      <TableCell className="w-[180px]">
-                        <Select
-                          value={type}
-                          onValueChange={(nextType) => {
-                            const existing = tagDraftsRef.current[tag.id] ?? {
-                              type: tag.type,
-                              value: tag.value ?? '',
-                              dirty: false,
-                              saving: false,
-                              error: null,
-                              revision: 0
-                            };
-                            const nextRevision = existing.revision + 1;
-                            setTagDrafts((prev) => ({
-                              ...prev,
-                              [tag.id]: {
-                                ...existing,
-                                type: nextType as TagType,
-                                dirty: true,
-                                error: null,
-                                revision: nextRevision
-                              }
-                            }));
-                            void saveTagDraft(tag.id, {
-                              type: nextType as TagType,
-                              value,
-                              revision: nextRevision,
-                              dirty: true
-                            });
-                          }}
-                        >
-                          <SelectTrigger className="h-9">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {TAG_TYPES.map((tagType) => (
-                              <SelectItem key={tagType} value={tagType}>
-                                {TAG_LABELS[tagType]}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          value={value}
-                          onChange={(e) => {
-                            const nextValue = e.target.value;
-                            setTagDrafts((prev) => {
-                              const existing = prev[tag.id] ?? {
-                                type: tag.type,
-                                value: tag.value ?? '',
-                                dirty: false,
-                                saving: false,
-                                error: null,
-                                revision: 0
-                              };
-                              return {
-                                ...prev,
-                                [tag.id]: {
-                                  ...existing,
-                                  value: nextValue,
-                                  dirty: true,
-                                  error: null,
-                                  revision: existing.revision + 1
-                                }
-                              };
-                            });
-                          }}
-                          onBlur={() => void saveTagDraft(tag.id)}
-                          className="h-9"
-                          aria-invalid={rowError ? true : undefined}
-                        />
-                        {rowError ? <div className="mt-1 text-xs text-destructive">{rowError}</div> : null}
-                        {saving ? <div className="mt-1 text-xs text-muted-foreground">Сохранение…</div> : null}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {tagStats[tag.id] ?? 0}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => void handleDeleteTag(tag)}
-                          aria-label="Удалить тег"
-                          title="Удалить тег"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </TabsContent>
-      </Tabs>
+        </div>
+      </div>
     </div>
   );
 }

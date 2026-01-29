@@ -6,20 +6,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { CalendarIcon, PlusIcon, EditIcon, TrashIcon, UsersIcon, DollarSignIcon, ClockIcon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
+import { CalendarIcon, PlusIcon, EditIcon, TrashIcon, UsersIcon, DollarSignIcon, ClockIcon } from 'lucide-react';
 
 // Типы данных для новой CRM-схемы с иерархией
-type ClientCategory = {
-  id: number;
-  name: string;
-  description: string;
-  color: string;
-};
-
 type Client = {
   id: number;
   first_name: string;
@@ -72,17 +64,34 @@ type Note = {
   title: string;
   content: string;
   is_important: boolean;
+  created_at?: string;
 };
 
-export default function NewClientsEditor() {
+type Category = {
+  id: number;
+  name: string;
+  description: string;
+  color: string;
+};
+
+const PREDEFINED_CATEGORIES: Category[] = [
+  { id: 1, name: 'VIP', description: 'Премиум клиенты', color: '#FFD700' },
+  { id: 2, name: 'Стандарт', description: 'Регулярные клиенты', color: '#4A90E2' },
+  { id: 3, name: 'Новички', description: 'Клиенты на пробном периоде', color: '#50C878' },
+  { id: 4, name: 'Потенциальные', description: 'Лиды в воронке продаж', color: '#FFA500' }
+];
+
+type Props = {
+  activeTab?: 'clients' | 'categories' | 'events' | 'payments' | 'notes';
+};
+
+export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   const [clients, setClients] = useState<Client[]>([]);
-  const [categories, setCategories] = useState<ClientCategory[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [eventTypes, setEventTypes] = useState<EventType[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expandedClients, setExpandedClients] = useState<number[]>([]); // Для отслеживания развернутых родительских клиентов
 
   // Заглушка для API-вызовов - в реальном приложении здесь будет обращение к бэкенду
   useEffect(() => {
@@ -90,13 +99,6 @@ export default function NewClientsEditor() {
     // Например: fetch('/api/crm/clients').then(r => r.json()).then(setClients);
     
     // Временные данные для демонстрации с иерархией
-    const mockCategories: ClientCategory[] = [
-      { id: 1, name: 'VIP', description: 'Премиум клиенты с индивидуальным подходом', color: '#FFD700' },
-      { id: 2, name: 'Стандарт', description: 'Регулярные клиенты', color: '#4A90E2' },
-      { id: 3, name: 'Новички', description: 'Клиенты на пробном периоде', color: '#50C878' },
-      { id: 4, name: 'Потенциальные', description: 'Лиды в воронке продаж', color: '#FFA500' },
-    ];
-
     const mockClients: Client[] = [
       { id: 1, first_name: 'ООО', last_name: 'Крупный Клиент', email: 'contact@bigcompany.ru', phone: '+74951234500', category_id: 1, status: 'active', photo_url: '', notes: 'Основной корпоративный клиент', parent_id: null },
       { id: 2, first_name: 'Иван', last_name: 'Петров', email: 'ivan.petrov@bigcompany.ru', phone: '+74951234501', category_id: 1, status: 'active', photo_url: '', notes: 'Главный специалист', parent_id: 1 },
@@ -122,11 +124,10 @@ export default function NewClientsEditor() {
     ];
 
     const mockNotes: Note[] = [
-      { id: 1, client_id: 1, title: 'Предпочтения', content: 'Любит утренние встречи, предпочитает формальный стиль общения', is_important: true },
-      { id: 2, client_id: 2, title: 'Прогресс', content: 'Хорошо реагирует на практику, быстро принимает изменения', is_important: false },
+      { id: 1, client_id: 1, title: 'Предпочтения', content: 'Любит утренние встречи, предпочитает формальный стиль общения', is_important: true, created_at: '2026-01-25T10:00:00' },
+      { id: 2, client_id: 2, title: 'Прогресс', content: 'Хорошо реагирует на практику, быстро принимает изменения', is_important: false, created_at: '2026-01-26T14:30:00' },
     ];
 
-    setCategories(mockCategories);
     setClients(mockClients);
     setEventTypes(mockEventTypes);
     setEvents(mockEvents);
@@ -140,24 +141,11 @@ export default function NewClientsEditor() {
   }
 
   const getClientCategory = (categoryId: number) => {
-    return categories.find(cat => cat.id === categoryId) || null;
+    return PREDEFINED_CATEGORIES.find(cat => cat.id === categoryId) || null;
   };
 
   const getClientFullName = (client: Client) => {
     return `${client.first_name} ${client.last_name}`;
-  };
-
-  const toggleExpandClient = (clientId: number) => {
-    if (expandedClients.includes(clientId)) {
-      setExpandedClients(expandedClients.filter(id => id !== clientId));
-    } else {
-      setExpandedClients([...expandedClients, clientId]);
-    }
-  };
-
-  // Функция для получения дочерних клиентов
-  const getChildClients = (parentId: number) => {
-    return clients.filter(client => client.parent_id === parentId);
   };
 
   // Функция для получения родительского клиента
@@ -169,508 +157,358 @@ export default function NewClientsEditor() {
     return null;
   };
 
-  // Функция для проверки, является ли клиент родительским
-  const isParentClient = (client: Client) => {
-    return clients.some(c => c.parent_id === client.id);
-  };
-
-  return (
-    <div className="container mx-auto py-6">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">CRM-система для управления клиентами</h1>
-        <p className="text-muted-foreground mt-2">
-          Управление клиентами, событиями, платежами и заметками
-        </p>
+  // Render only the active tab content
+  if (activeTab === 'clients') {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-semibold">Список клиентов</h2>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button>
+                <PlusIcon className="mr-2 h-4 w-4" />
+                Добавить клиента
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Добавить нового клиента</DialogTitle>
+                <DialogDescription>
+                  Заполните информацию о новом клиенте
+                </DialogDescription>
+              </DialogHeader>
+              <NewClientForm
+                clients={clients}
+                onSave={(newClient) => setClients([...clients, newClient])}
+              />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
+    );
+  } else if (activeTab === 'events') {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-semibold">События и встречи</h2>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button>
+                <PlusIcon className="mr-2 h-4 w-4" />
+                Назначить встречу
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Назначить новое событие</DialogTitle>
+                <DialogDescription>
+                  Запланируйте встречу или мероприятие для клиента
+                </DialogDescription>
+              </DialogHeader>
+              <NewEventForm
+                clients={clients}
+                eventTypes={eventTypes}
+                onSave={(newEvent) => setEvents([...events, newEvent])}
+              />
+            </DialogContent>
+          </Dialog>
+        </div>
 
-      <Tabs defaultValue="clients" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5">
-          <TabsTrigger value="clients">Клиенты</TabsTrigger>
-          <TabsTrigger value="events">События</TabsTrigger>
-          <TabsTrigger value="payments">Платежи</TabsTrigger>
-          <TabsTrigger value="notes">Заметки</TabsTrigger>
-          <TabsTrigger value="categories">Категории</TabsTrigger>
-        </TabsList>
-
-        {/* Вкладка "Клиенты" */}
-        <TabsContent value="clients" className="space-y-6">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-semibold">Список клиентов</h2>
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button>
-                  <PlusIcon className="mr-2 h-4 w-4" />
-                  Добавить клиента
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Добавить нового клиента</DialogTitle>
-                  <DialogDescription>
-                    Заполните информацию о новом клиенте
-                  </DialogDescription>
-                </DialogHeader>
-                <NewClientForm 
-                  categories={categories} 
-                  clients={clients} 
-                  onSave={(newClient) => setClients([...clients, newClient])} 
-                />
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          <div className="grid gap-6">
-            {clients
-              .filter(client => client.parent_id === null) // Показываем только родительские клиенты
-              .map((client) => {
-                const category = getClientCategory(client.category_id);
-                const childClients = getChildClients(client.id);
-                const isExpanded = expandedClients.includes(client.id);
-                
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Клиент</TableHead>
+                <TableHead>Тип события</TableHead>
+                <TableHead>Дата и время</TableHead>
+                <TableHead>Статус</TableHead>
+                <TableHead>Место</TableHead>
+                <TableHead>Действия</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {events.map((event) => {
+                const client = clients.find(c => c.id === event.client_id);
+                const eventType = eventTypes.find(et => et.id === event.event_type_id);
                 return (
-                  <div key={client.id}>
-                    <Card className="overflow-hidden">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center">
-                            {isParentClient(client) && (
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                onClick={() => toggleExpandClient(client.id)}
-                                className="mr-2 h-6 w-6 p-0"
-                              >
-                                {isExpanded ? (
-                                  <ChevronDownIcon className="h-4 w-4" />
-                                ) : (
-                                  <ChevronRightIcon className="h-4 w-4" />
-                                )}
-                              </Button>
-                            )}
-                            <CardTitle className="text-xl">{getClientFullName(client)}</CardTitle>
-                          </div>
-                          <Badge 
-                            variant="outline" 
-                            style={{ borderColor: category?.color, color: category?.color }}
-                          >
-                            {category?.name}
-                          </Badge>
-                        </div>
-                        <CardDescription>
-                          {client.email} • {client.phone}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="flex items-center justify-between">
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            client.status === 'active' ? 'bg-green-100 text-green-800' :
-                            client.status === 'inactive' ? 'bg-yellow-100 text-yellow-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {client.status === 'active' ? 'Активный' : 
-                             client.status === 'inactive' ? 'Неактивный' : 'В архиве'}
-                          </span>
-                          <div className="flex space-x-2">
-                            <Button variant="outline" size="sm">
-                              <EditIcon className="h-4 w-4" />
-                            </Button>
-                            <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
-                              <TrashIcon className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
-                        {client.notes && (
-                          <p className="mt-3 text-sm text-muted-foreground line-clamp-2">{client.notes}</p>
-                        )}
-                      </CardContent>
-                    </Card>
-                    
-                    {/* Отображение дочерних клиентов */}
-                    {isExpanded && childClients.length > 0 && (
-                      <div className="ml-8 mt-4 space-y-4">
-                        <h3 className="text-lg font-medium">Дочерние клиенты</h3>
-                        <div className="grid gap-4 md:grid-cols-2">
-                          {childClients.map((childClient) => {
-                            const childCategory = getClientCategory(childClient.category_id);
-                            return (
-                              <Card key={childClient.id} className="border-l-4 border-l-blue-500">
-                                <CardHeader className="pb-2">
-                                  <div className="flex items-center justify-between">
-                                    <CardTitle className="text-lg">{getClientFullName(childClient)}</CardTitle>
-                                    <Badge 
-                                      variant="outline" 
-                                      style={{ borderColor: childCategory?.color, color: childCategory?.color }}
-                                    >
-                                      {childCategory?.name}
-                                    </Badge>
-                                  </div>
-                                  <CardDescription>
-                                    {childClient.email} • {childClient.phone}
-                                  </CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                  <div className="flex items-center justify-between">
-                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                      childClient.status === 'active' ? 'bg-green-100 text-green-800' :
-                                      childClient.status === 'inactive' ? 'bg-yellow-100 text-yellow-800' :
-                                      'bg-gray-100 text-gray-800'
-                                    }`}>
-                                      {childClient.status === 'active' ? 'Активный' : 
-                                       childClient.status === 'inactive' ? 'Неактивный' : 'В архиве'}
-                                    </span>
-                                    <div className="flex space-x-2">
-                                      <Button variant="outline" size="sm">
-                                        <EditIcon className="h-4 w-4" />
-                                      </Button>
-                                      <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
-                                        <TrashIcon className="h-4 w-4" />
-                                      </Button>
-                                    </div>
-                                  </div>
-                                  {childClient.notes && (
-                                    <p className="mt-2 text-sm text-muted-foreground line-clamp-2">{childClient.notes}</p>
-                                  )}
-                                </CardContent>
-                              </Card>
-                            );
-                          })}
-                        </div>
+                  <TableRow key={event.id}>
+                    <TableCell className="font-medium">
+                      {client ? (
+                        client.parent_id ? (
+                          <>
+                            <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.first_name} → </span>
+                            {getClientFullName(client)}
+                          </>
+                        ) : (
+                          getClientFullName(client)
+                        )
+                      ) : 'Неизвестный'}
+                    </TableCell>
+                    <TableCell>
+                      <Badge style={{ backgroundColor: eventType?.color + '40', color: eventType?.color }}>
+                        {eventType?.name}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {new Date(event.start_time).toLocaleString('ru-RU')}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          event.status === 'scheduled' ? 'default' :
+                          event.status === 'completed' ? 'secondary' :
+                          event.status === 'cancelled' ? 'destructive' : 'outline'
+                        }
+                      >
+                        {event.status === 'scheduled' ? 'Запланировано' :
+                         event.status === 'completed' ? 'Завершено' :
+                         event.status === 'cancelled' ? 'Отменено' : 'Не явился'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{event.location}</TableCell>
+                    <TableCell>
+                      <div className="flex space-x-2">
+                        <Button variant="outline" size="sm">
+                          <EditIcon className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
+                          <TrashIcon className="h-4 w-4" />
+                        </Button>
                       </div>
-                    )}
-                  </div>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
-            
-            {/* Отображение клиентов без родителя */}
-            {clients.filter(client => client.parent_id === null).length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
-                Нет клиентов для отображения
-              </div>
-            )}
-          </div>
-        </TabsContent>
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+    );
+  } else if (activeTab === 'categories') {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-semibold">Категории клиентов</h2>
+          <Button variant="outline" size="sm" disabled>
+            Добавить категорию
+          </Button>
+        </div>
 
-        {/* Вкладка "События" */}
-        <TabsContent value="events" className="space-y-6">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-semibold">События и встречи</h2>
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button>
-                  <PlusIcon className="mr-2 h-4 w-4" />
-                  Назначить встречу
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Назначить новое событие</DialogTitle>
-                  <DialogDescription>
-                    Запланируйте встречу или мероприятие для клиента
-                  </DialogDescription>
-                </DialogHeader>
-                <NewEventForm 
-                  clients={clients} 
-                  eventTypes={eventTypes} 
-                  onSave={(newEvent) => setEvents([...events, newEvent])} 
-                />
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Клиент</TableHead>
-                  <TableHead>Тип события</TableHead>
-                  <TableHead>Дата и время</TableHead>
-                  <TableHead>Статус</TableHead>
-                  <TableHead>Место</TableHead>
-                  <TableHead>Действия</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {events.map((event) => {
-                  const client = clients.find(c => c.id === event.client_id);
-                  const eventType = eventTypes.find(et => et.id === event.event_type_id);
-                  return (
-                    <TableRow key={event.id}>
-                      <TableCell className="font-medium">
-                        {client ? (
-                          client.parent_id ? (
-                            <>
-                              <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.first_name} → </span>
-                              {getClientFullName(client)}
-                            </>
-                          ) : (
-                            getClientFullName(client)
-                          )
-                        ) : 'Неизвестный'}
-                      </TableCell>
-                      <TableCell>
-                        <Badge style={{ backgroundColor: eventType?.color + '40', color: eventType?.color }}>
-                          {eventType?.name}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {new Date(event.start_time).toLocaleString('ru-RU')}
-                      </TableCell>
-                      <TableCell>
-                        <Badge 
-                          variant={
-                            event.status === 'scheduled' ? 'default' :
-                            event.status === 'completed' ? 'secondary' :
-                            event.status === 'cancelled' ? 'destructive' : 'outline'
-                          }
-                        >
-                          {event.status === 'scheduled' ? 'Запланировано' : 
-                           event.status === 'completed' ? 'Завершено' : 
-                           event.status === 'cancelled' ? 'Отменено' : 'Не явился'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{event.location}</TableCell>
-                      <TableCell>
-                        <div className="flex space-x-2">
-                          <Button variant="outline" size="sm">
-                            <EditIcon className="h-4 w-4" />
-                          </Button>
-                          <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
-                            <TrashIcon className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </TabsContent>
-
-        {/* Вкладка "Платежи" */}
-        <TabsContent value="payments" className="space-y-6">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-semibold">Платежи</h2>
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button>
-                  <PlusIcon className="mr-2 h-4 w-4" />
-                  Добавить платеж
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Добавить новый платеж</DialogTitle>
-                  <DialogDescription>
-                    Зарегистрируйте платеж от клиента
-                  </DialogDescription>
-                </DialogHeader>
-                <NewPaymentForm 
-                  clients={clients} 
-                  onSave={(newPayment) => setPayments([...payments, newPayment])} 
-                />
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Клиент</TableHead>
-                  <TableHead>Сумма</TableHead>
-                  <TableHead>Статус</TableHead>
-                  <TableHead>Метод</TableHead>
-                  <TableHead>Дата оплаты</TableHead>
-                  <TableHead>Действия</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {payments.map((payment) => {
-                  const client = clients.find(c => c.id === payment.client_id);
-                  return (
-                    <TableRow key={payment.id}>
-                      <TableCell className="font-medium">
-                        {client ? (
-                          client.parent_id ? (
-                            <>
-                              <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.first_name} → </span>
-                              {getClientFullName(client)}
-                            </>
-                          ) : (
-                            getClientFullName(client)
-                          )
-                        ) : 'Неизвестный'}
-                      </TableCell>
-                      <TableCell className="font-semibold">{payment.amount} {payment.currency}</TableCell>
-                      <TableCell>
-                        <Badge 
-                          variant={
-                            payment.status === 'paid' ? 'secondary' :
-                            payment.status === 'pending' ? 'default' :
-                            payment.status === 'refunded' ? 'outline' : 'destructive'
-                          }
-                        >
-                          {payment.status === 'paid' ? 'Оплачено' : 
-                           payment.status === 'pending' ? 'В ожидании' : 
-                           payment.status === 'refunded' ? 'Возврат' : 'Ошибка'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{payment.payment_method}</TableCell>
-                      <TableCell>
-                        {payment.paid_at ? new Date(payment.paid_at).toLocaleDateString('ru-RU') : '-'}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex space-x-2">
-                          <Button variant="outline" size="sm">
-                            <EditIcon className="h-4 w-4" />
-                          </Button>
-                          <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
-                            <TrashIcon className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </TabsContent>
-
-        {/* Вкладка "Заметки" */}
-        <TabsContent value="notes" className="space-y-6">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-semibold">Заметки</h2>
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button>
-                  <PlusIcon className="mr-2 h-4 w-4" />
-                  Добавить заметку
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Добавить новую заметку</DialogTitle>
-                  <DialogDescription>
-                    Добавьте важную информацию о клиенте
-                  </DialogDescription>
-                </DialogHeader>
-                <NewNoteForm 
-                  clients={clients} 
-                  onSave={(newNote) => setNotes([...notes, newNote])} 
-                />
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          <div className="grid gap-6">
-            {notes.map((note) => {
-              const client = clients.find(c => c.id === note.client_id);
-              return (
-                <Card key={note.id}>
-                  <CardHeader>
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <CardTitle className="text-lg">{note.title || 'Без заголовка'}</CardTitle>
-                        <CardDescription>
-                          {client ? (
-                            client.parent_id ? (
-                              <>
-                                <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.first_name} → </span>
-                                {getClientFullName(client)}
-                              </>
-                            ) : (
-                              getClientFullName(client)
-                            )
-                          ) : 'Неизвестный клиент'} • {new Date(note.created_at || Date.now()).toLocaleDateString('ru-RU')}
-                        </CardDescription>
-                      </div>
-                      {note.is_important && (
-                        <Badge variant="destructive">Важно</Badge>
-                      )}
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm text-muted-foreground whitespace-pre-line">{note.content}</p>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        </TabsContent>
-
-        {/* Вкладка "Категории" */}
-        <TabsContent value="categories" className="space-y-6">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-semibold">Категории клиентов</h2>
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button>
-                  <PlusIcon className="mr-2 h-4 w-4" />
-                  Добавить категорию
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Добавить новую категорию</DialogTitle>
-                  <DialogDescription>
-                    Создайте новую категорию для сегментации клиентов
-                  </DialogDescription>
-                </DialogHeader>
-                <NewCategoryForm onSave={(newCategory) => setCategories([...categories, newCategory])} />
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {categories.map((category) => (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {PREDEFINED_CATEGORIES.map((category) => {
+            const count = clients.filter((client) => client.category_id === category.id).length;
+            return (
               <Card key={category.id}>
-                <CardHeader>
+                <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-lg">{category.name}</CardTitle>
-                    <div 
-                      className="w-4 h-4 rounded-full border" 
-                      style={{ backgroundColor: category.color }}
-                    ></div>
+                    <Badge
+                      variant="outline"
+                      style={{ borderColor: category.color, color: category.color }}
+                    >
+                      {count}
+                    </Badge>
                   </div>
-                  <CardDescription>
-                      {category.description}
-                  </CardDescription>
+                  <CardDescription>{category.description}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-sm text-muted-foreground">
-                    Клиентов в категории: {clients.filter(c => c.category_id === category.id).length}
+                  <div
+                    className="h-2 w-full rounded-full"
+                    style={{ backgroundColor: `${category.color}33` }}
+                  >
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${Math.min(100, (count / Math.max(clients.length, 1)) * 100)}%`,
+                        backgroundColor: category.color
+                      }}
+                    />
                   </div>
-                  <div className="flex justify-end mt-4 space-x-2">
-                    <Button variant="outline" size="sm">
-                      <EditIcon className="h-4 w-4" />
-                    </Button>
-                    <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
-                      <TrashIcon className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {clients.length === 0 ? 'Нет клиентов' : `Доля: ${Math.round((count / clients.length) * 100)}%`}
+                  </p>
                 </CardContent>
               </Card>
-            ))}
-          </div>
-        </TabsContent>
-      </Tabs>
+            );
+          })}
+        </div>
+      </div>
+    );
+  } else if (activeTab === 'payments') {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-semibold">Платежи</h2>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button>
+                <PlusIcon className="mr-2 h-4 w-4" />
+                Добавить платеж
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Добавить новый платеж</DialogTitle>
+                <DialogDescription>
+                  Зарегистрируйте платеж от клиента
+                </DialogDescription>
+              </DialogHeader>
+              <NewPaymentForm
+                clients={clients}
+                onSave={(newPayment) => setPayments([...payments, newPayment])}
+              />
+            </DialogContent>
+          </Dialog>
+        </div>
+
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Клиент</TableHead>
+                <TableHead>Сумма</TableHead>
+                <TableHead>Статус</TableHead>
+                <TableHead>Метод</TableHead>
+                <TableHead>Дата оплаты</TableHead>
+                <TableHead>Действия</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {payments.map((payment) => {
+                const client = clients.find(c => c.id === payment.client_id);
+                return (
+                  <TableRow key={payment.id}>
+                    <TableCell className="font-medium">
+                      {client ? (
+                        client.parent_id ? (
+                          <>
+                            <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.first_name} → </span>
+                            {getClientFullName(client)}
+                          </>
+                        ) : (
+                          getClientFullName(client)
+                        )
+                      ) : 'Неизвестный'}
+                    </TableCell>
+                    <TableCell className="font-semibold">{payment.amount} {payment.currency}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          payment.status === 'paid' ? 'secondary' :
+                          payment.status === 'pending' ? 'default' :
+                          payment.status === 'refunded' ? 'outline' : 'destructive'
+                        }
+                      >
+                        {payment.status === 'paid' ? 'Оплачено' :
+                         payment.status === 'pending' ? 'В ожидании' :
+                         payment.status === 'refunded' ? 'Возврат' : 'Ошибка'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{payment.payment_method}</TableCell>
+                    <TableCell>
+                      {payment.paid_at ? new Date(payment.paid_at).toLocaleDateString('ru-RU') : '-'}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex space-x-2">
+                        <Button variant="outline" size="sm">
+                          <EditIcon className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
+                          <TrashIcon className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+    );
+  } else if (activeTab === 'notes') {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-semibold">Заметки</h2>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button>
+                <PlusIcon className="mr-2 h-4 w-4" />
+                Добавить заметку
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Добавить новую заметку</DialogTitle>
+                <DialogDescription>
+                  Добавьте важную информацию о клиенте
+                </DialogDescription>
+              </DialogHeader>
+              <NewNoteForm
+                clients={clients}
+                onSave={(newNote) => setNotes([...notes, newNote])}
+              />
+            </DialogContent>
+          </Dialog>
+        </div>
+
+        <div className="grid gap-6">
+          {notes.map((note) => {
+            const client = clients.find(c => c.id === note.client_id);
+            return (
+              <Card key={note.id}>
+                <CardHeader>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <CardTitle className="text-lg">{note.title || 'Без заголовка'}</CardTitle>
+                      <CardDescription>
+                        {client ? (
+                          client.parent_id ? (
+                            <>
+                              <span className="text-muted-foreground text-sm">{getParentClientName(client, clients)} → </span>
+                              {getClientFullName(client)}
+                            </>
+                          ) : (
+                            getClientFullName(client)
+                          )
+                        ) : 'Неизвестный клиент'} • {new Date(note.created_at || Date.now()).toLocaleDateString('ru-RU')}
+                      </CardDescription>
+                    </div>
+                    {note.is_important && (
+                      <Badge variant="destructive">Важно</Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground whitespace-pre-line">{note.content}</p>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // Default fallback
+  return (
+    <div className="text-center py-8 text-muted-foreground">
+      Выберите вкладку для просмотра содержимого
     </div>
   );
 }
 
 // Формы для добавления новых элементов
-function NewClientForm({ categories, clients, onSave }: { 
-  categories: ClientCategory[], 
+function NewClientForm({ clients, onSave }: {
   clients: Client[],
-  onSave: (client: Client) => void 
+  onSave: (client: Client) => void
 }) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [categoryId, setCategoryId] = useState(categories[0]?.id || 1);
+  const [categoryId, setCategoryId] = useState(1); // Default to first category
   const [status, setStatus] = useState<'active' | 'inactive' | 'archived'>('active');
   const [notes, setNotes] = useState('');
   const [parentId, setParentId] = useState<number | null>(null); // Добавлено поле для выбора родительского клиента
@@ -740,7 +578,7 @@ function NewClientForm({ categories, clients, onSave }: {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {categories.map((category) => (
+            {PREDEFINED_CATEGORIES.map((category) => (
               <SelectItem key={category.id} value={category.id.toString()}>
                 {category.name}
               </SelectItem>
@@ -1057,7 +895,8 @@ function NewNoteForm({ clients, onSave }: {
       client_id: clientId,
       title,
       content,
-      is_important: isImportant
+      is_important: isImportant,
+      created_at: new Date().toISOString()
     };
     onSave(newNote);
   };
@@ -1119,67 +958,6 @@ function NewNoteForm({ clients, onSave }: {
       </div>
       
       <Button type="submit" className="w-full">Добавить заметку</Button>
-    </form>
-  );
-}
-
-function NewCategoryForm({ onSave }: { onSave: (category: ClientCategory) => void }) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [color, setColor] = useState('#4A90E2');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const newCategory: ClientCategory = {
-      id: Date.now(),
-      name,
-      description,
-      color
-    };
-    onSave(newCategory);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-2">
-        <Label htmlFor="name">Название</Label>
-        <Input 
-          id="name" 
-          value={name} 
-          onChange={(e) => setName(e.target.value)} 
-          required 
-        />
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="description">Описание</Label>
-        <Input 
-          id="description" 
-          value={description} 
-          onChange={(e) => setDescription(e.target.value)} 
-        />
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="color">Цвет</Label>
-        <div className="flex items-center space-x-2">
-          <input 
-            type="color" 
-            id="color" 
-            value={color} 
-            onChange={(e) => setColor(e.target.value)} 
-            className="w-12 h-10 border rounded cursor-pointer"
-          />
-          <Input 
-            value={color} 
-            onChange={(e) => setColor(e.target.value)} 
-            className="w-24"
-            maxLength={7}
-          />
-        </div>
-      </div>
-      
-      <Button type="submit" className="w-full">Добавить категорию</Button>
     </form>
   );
 }
