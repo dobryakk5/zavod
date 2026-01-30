@@ -1,40 +1,41 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Calendar, DollarSign, FileText, Users } from 'lucide-react';
-import { crmContactsApi, crmEventsApi, crmNotesApi, crmPaymentsApi } from '@/lib/api/crm';
+import { Calendar } from 'lucide-react';
+import { crmContactsApi, crmEventsApi } from '@/lib/api/crm';
 import { ClientsTab } from '../products/clients-tab';
 import { CategoriesTab } from '../products/categories-tab';
-import { CategoriesDisplay } from '../products/categories-display';
 import NewClientsEditor from './new/new-clients-editor';
 import ClientsSchedule from './clients-schedule';
 
 type ClientsStats = {
-  totalClients: number;
-  activeClients: number;
-  notesCount: number;
   upcomingEvents: number;
-  paidThisMonth: number;
+  nextEvents: Array<{
+    id: number;
+    title: string;
+    start_time: string;
+    contactName: string;
+    contactId: number;
+  }>;
 };
 
 const emptyStats: ClientsStats = {
-  totalClients: 0,
-  activeClients: 0,
-  notesCount: 0,
   upcomingEvents: 0,
-  paidThisMonth: 0,
+  nextEvents: [],
 };
 
-function formatNumber(value: number | null) {
-  if (value === null) return '—';
-  return value.toLocaleString('ru-RU');
-}
-
-function formatCurrency(value: number | null) {
-  if (value === null) return '—';
-  return `${value.toLocaleString('ru-RU')} ₽`;
+function formatEventTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export default function ClientsPage() {
@@ -50,40 +51,38 @@ export default function ClientsPage() {
       setStatsError(null);
 
       try {
-        const [contacts, events, payments, notes] = await Promise.all([
+        const [contacts, events] = await Promise.all([
           crmContactsApi.list(),
           crmEventsApi.list(),
-          crmPaymentsApi.list(),
-          crmNotesApi.list(),
         ]);
 
         if (!isActive) return;
 
         const now = new Date();
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-        const upcomingEvents = events.filter((event) => {
-          if (event.status !== 'scheduled') return false;
-          const startDate = new Date(event.start_time);
-          return !Number.isNaN(startDate.getTime()) && startDate >= now;
-        }).length;
-
-        const paidThisMonth = payments.reduce((sum, payment) => {
-          if (payment.status !== 'paid') return sum;
-          const paidAt = payment.paid_at ?? payment.created_at;
-          const paidDate = paidAt ? new Date(paidAt) : null;
-          if (!paidDate || Number.isNaN(paidDate.getTime())) return sum;
-          if (paidDate < monthStart || paidDate >= monthEnd) return sum;
-          return sum + Number(payment.amount || 0);
-        }, 0);
+        const contactsById = new Map(contacts.map((contact) => [contact.id, contact.name]));
+        const upcomingEventsSorted = events
+          .filter((event) => {
+            if (event.status !== 'scheduled') return false;
+            const startDate = new Date(event.start_time);
+            return !Number.isNaN(startDate.getTime()) && startDate >= now;
+          })
+          .sort((a, b) => {
+            const aTime = new Date(a.start_time).getTime();
+            const bTime = new Date(b.start_time).getTime();
+            return aTime - bTime;
+          });
+        const nextEvents = upcomingEventsSorted.slice(0, 2).map((event) => ({
+          id: event.id,
+          title: event.title || 'Встреча',
+          start_time: event.start_time,
+          contactName: contactsById.get(event.contact_id) || `Клиент #${event.contact_id}`,
+          contactId: event.contact_id,
+        }));
 
         setStats({
-          totalClients: contacts.length,
-          activeClients: contacts.filter((contact) => contact.status === 'active').length,
-          notesCount: notes.length,
-          upcomingEvents,
-          paidThisMonth,
+          upcomingEvents: nextEvents.length,
+          nextEvents,
         });
       } catch (err) {
         if (!isActive) return;
@@ -107,19 +106,14 @@ export default function ClientsPage() {
     if (statsLoading || statsError) {
       return {
         totalClients: null,
-        activeClients: null,
-        notesCount: null,
         upcomingEvents: null,
-        paidThisMonth: null,
+        nextEvents: [],
       };
     }
 
     return {
-      totalClients: stats.totalClients,
-      activeClients: stats.activeClients,
-      notesCount: stats.notesCount,
       upcomingEvents: stats.upcomingEvents,
-      paidThisMonth: stats.paidThisMonth,
+      nextEvents: stats.nextEvents,
     };
   }, [stats, statsError, statsLoading]);
 
@@ -135,70 +129,40 @@ export default function ClientsPage() {
         )}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 mb-8">
+      <div className="mb-8">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Всего клиентов</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {formatNumber(displayStats.totalClients)}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {displayStats.activeClients === null
-                ? 'активных клиентов'
-                : `${formatNumber(displayStats.activeClients)} активных клиентов`}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Заметки</CardTitle>
-            <FileText className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {formatNumber(displayStats.notesCount)}
-            </div>
-            <p className="text-xs text-muted-foreground">заметок</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">События</CardTitle>
+            <CardTitle className="text-sm font-medium">Ближайшие встречи</CardTitle>
             <Calendar className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {formatNumber(displayStats.upcomingEvents)}
-            </div>
-            <p className="text-xs text-muted-foreground">предстоящих встреч</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Платежи</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {formatCurrency(displayStats.paidThisMonth)}
-            </div>
-            <p className="text-xs text-muted-foreground">в этом месяце</p>
+            {displayStats.nextEvents.length > 0 && (
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {displayStats.nextEvents.map((event) => (
+                  <div key={event.id}>
+                    {formatEventTime(event.start_time)} · {event.title} ·{' '}
+                    <Link
+                      href={`/contact/${event.contactId}`}
+                      className="text-blue-600 hover:underline"
+                    >
+                      {event.contactName}
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            )}
+            {displayStats.nextEvents.length === 0 && (
+              <p className="text-xs text-muted-foreground">Нет запланированных встреч</p>
+            )}
           </CardContent>
         </Card>
       </div>
 
       <Tabs defaultValue="clients" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="clients">Клиенты</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
           <TabsTrigger value="categories">Теги</TabsTrigger>
-          <TabsTrigger value="groups">Категории</TabsTrigger>
           <TabsTrigger value="payments">Платежи</TabsTrigger>
         </TabsList>
 
@@ -217,12 +181,6 @@ export default function ClientsPage() {
         <TabsContent value="categories" className="space-y-6">
           <div className="bg-white rounded-lg p-6">
             <CategoriesTab />
-          </div>
-        </TabsContent>
-
-        <TabsContent value="groups" className="space-y-6">
-          <div className="bg-white rounded-lg p-6">
-            <CategoriesDisplay />
           </div>
         </TabsContent>
 

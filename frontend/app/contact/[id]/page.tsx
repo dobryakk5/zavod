@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -101,8 +102,64 @@ type ContactTag = {
   description: string;
 };
 
+const buildGoogleCalendarLink = ({
+  title,
+  description,
+  location,
+  start,
+  end,
+}: {
+  title: string;
+  description?: string;
+  location?: string;
+  start: Date;
+  end: Date;
+}) => {
+  const format = (d: Date) =>
+    d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: title,
+    dates: `${format(start)}/${format(end)}`,
+    details: description || '',
+    location: location || '',
+  });
+
+  return `https://www.google.com/calendar/render?${params.toString()}`;
+};
+
+const buildAppleCalendarLink = ({
+  title,
+  description,
+  location,
+  start,
+  end,
+  uid,
+}: {
+  title: string;
+  description?: string;
+  location?: string;
+  start: Date;
+  end: Date;
+  uid?: string;
+}) => {
+  const params = new URLSearchParams({
+    title,
+    description: description || '',
+    location: location || '',
+    start: start.toISOString(),
+    end: end.toISOString(),
+  });
+  if (uid) {
+    params.set('uid', uid);
+  }
+  return `/api/calendar/ics?${params.toString()}`;
+};
+
 export default function ContactDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const contactId = parseInt(id, 10);
   
   const [contact, setContact] = useState<Contact | null>(null);
@@ -155,11 +212,19 @@ export default function ContactDetailPage() {
   const [newPaymentPaid, setNewPaymentPaid] = useState(false);
   const [newPaymentProductId, setNewPaymentProductId] = useState<string>('none');
   const [savingPayment, setSavingPayment] = useState(false);
+  const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'payments' | 'notes'>('overview');
   const tagTypeLabels: Record<ContactTag['type'], string> = {
     goal: 'Цель',
     pain: 'Боль',
     experience: 'Опыт',
   };
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'overview' || tab === 'schedule' || tab === 'payments' || tab === 'notes') {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
 
   // Load contact data
   useEffect(() => {
@@ -579,7 +644,7 @@ export default function ContactDetailPage() {
         </Badge>
       </div>
 
-      <Tabs defaultValue="overview" className="space-y-6">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-6">
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="overview">Обзор</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
@@ -1036,41 +1101,100 @@ export default function ContactDetailPage() {
             <CardContent>
               {events.length > 0 ? (
                 <div className="space-y-4">
-                  {events.map((event) => (
-                    <Card key={event.id} className="p-4">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h3 className="font-semibold">{event.title}</h3>
-                          {eventTypesById.get(event.event_type_id ?? -1)?.name && (
-                            <p className="text-sm text-muted-foreground">
-                              {eventTypesById.get(event.event_type_id ?? -1)?.name}
-                            </p>
-                          )}
-                          {event.description && (
-                            <p className="text-sm text-muted-foreground">{event.description}</p>
-                          )}
-                          <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
-                            <span>{new Date(event.start_time).toLocaleString('ru-RU')}</span>
-                            <span>→</span>
-                            <span>{new Date(event.end_time).toLocaleString('ru-RU')}</span>
-                            <span>•</span>
-                            <span>{event.location}</span>
+                  {events.map((event) => {
+                    const startDate = new Date(event.start_time);
+                    const endDate = new Date(event.end_time);
+                    const hasValidDates =
+                      !Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime());
+                    const title = event.title || 'Встреча';
+                    const googleLink = hasValidDates
+                      ? buildGoogleCalendarLink({
+                        title,
+                        description: event.description || '',
+                        location: event.location || '',
+                        start: startDate,
+                        end: endDate,
+                      })
+                      : null;
+                    const appleLink = hasValidDates
+                      ? buildAppleCalendarLink({
+                        title,
+                        description: event.description || '',
+                        location: event.location || '',
+                        start: startDate,
+                        end: endDate,
+                        uid: `contact-${contactId}-event-${event.id}`,
+                      })
+                      : null;
+
+                    return (
+                      <Card key={event.id} className="p-4">
+                        <div className="flex justify-between items-start gap-4">
+                          <div>
+                            <h3 className="font-semibold">{event.title}</h3>
+                            {eventTypesById.get(event.event_type_id ?? -1)?.name && (
+                              <p className="text-sm text-muted-foreground">
+                                {eventTypesById.get(event.event_type_id ?? -1)?.name}
+                              </p>
+                            )}
+                            {event.description && (
+                              <p className="text-sm text-muted-foreground">{event.description}</p>
+                            )}
+                            <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+                              <span>{new Date(event.start_time).toLocaleString('ru-RU')}</span>
+                              <span>→</span>
+                              <span>{new Date(event.end_time).toLocaleString('ru-RU')}</span>
+                              <span>•</span>
+                              <span>{event.location}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            {googleLink && appleLink && (
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                  >
+                                    Синхронизация
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent side="top" align="end" className="w-40 p-2">
+                                  <div className="flex flex-col gap-1 text-xs">
+                                    <a
+                                      href={googleLink}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="rounded px-2 py-1 hover:bg-muted"
+                                    >
+                                      Google
+                                    </a>
+                                    <a
+                                      href={appleLink}
+                                      className="rounded px-2 py-1 hover:bg-muted"
+                                    >
+                                      Apple
+                                    </a>
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            )}
+                            <Badge 
+                              variant={
+                                event.status === 'scheduled' ? 'default' : 
+                                event.status === 'completed' ? 'secondary' : 
+                                event.status === 'cancelled' ? 'destructive' : 'outline'
+                              }
+                            >
+                              {event.status === 'scheduled' ? 'Запланировано' : 
+                               event.status === 'completed' ? 'Завершено' : 
+                               event.status === 'cancelled' ? 'Отменено' : 'Не явился'}
+                            </Badge>
                           </div>
                         </div>
-                        <Badge 
-                          variant={
-                            event.status === 'scheduled' ? 'default' : 
-                            event.status === 'completed' ? 'secondary' : 
-                            event.status === 'cancelled' ? 'destructive' : 'outline'
-                          }
-                        >
-                          {event.status === 'scheduled' ? 'Запланировано' : 
-                           event.status === 'completed' ? 'Завершено' : 
-                           event.status === 'cancelled' ? 'Отменено' : 'Не явился'}
-                        </Badge>
-                      </div>
-                    </Card>
-                  ))}
+                      </Card>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="text-center text-muted-foreground py-8">Нет запланированных событий</p>

@@ -612,30 +612,13 @@ export function ClientsTab() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <h2 className="text-2xl font-semibold">Клиенты</h2>
-      </div>
-
       {error && (
         <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </div>
       )}
-
       <div className="space-y-6">
-        <div className="space-y-2">
-          <h2 className="text-2xl font-semibold">Список клиентов</h2>
-        </div>
-
         <div className="space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              Отметьте теги для каждого клиента. Изменения сохраняются сразу.
-            </p>
-            <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={loading}>
-              {loading ? 'Обновляем...' : 'Обновить'}
-            </Button>
-          </div>
 
           <div className="flex flex-col gap-3 rounded-xl border bg-card/70 p-4 shadow-sm">
             <div className="flex flex-wrap items-center gap-3">

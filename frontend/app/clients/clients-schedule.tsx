@@ -121,7 +121,7 @@ function EventCard({ item, compact = false }: { item: CalendarEventItem; compact
           <div className="space-y-1">
             <CardTitle className={cn('font-medium', compact ? 'text-xs' : 'text-sm')}>
               <Link
-                href={`/contact/${item.contactId}`}
+                href={`/contact/${item.contactId}?tab=schedule`}
                 className="hover:underline focus-visible:underline focus-visible:outline-none"
               >
                 {item.title}
