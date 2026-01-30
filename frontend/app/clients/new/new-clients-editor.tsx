@@ -248,7 +248,6 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
                 <TableHead>Клиент</TableHead>
                 <TableHead>Сумма</TableHead>
                 <TableHead>Статус</TableHead>
-                <TableHead>Метод</TableHead>
                 <TableHead>Дата оплаты</TableHead>
                 <TableHead>Действия</TableHead>
               </TableRow>
@@ -284,7 +283,6 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
                          payment.status === 'refunded' ? 'Возврат' : 'Ошибка'}
                       </Badge>
                     </TableCell>
-                    <TableCell>{payment.payment_method}</TableCell>
                     <TableCell>
                       {payment.paid_at ? new Date(payment.paid_at).toLocaleDateString('ru-RU') : '-'}
                     </TableCell>

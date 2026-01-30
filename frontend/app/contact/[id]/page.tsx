@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -160,6 +160,7 @@ const buildAppleCalendarLink = ({
 export default function ContactDetailPage() {
   const { id } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const contactId = parseInt(id, 10);
   
   const [contact, setContact] = useState<Contact | null>(null);
@@ -1128,7 +1129,19 @@ export default function ContactDetailPage() {
                       : null;
 
                     return (
-                      <Card key={event.id} className="p-4">
+                      <Card
+                        key={event.id}
+                        className="p-4 transition-colors hover:bg-muted/50 cursor-pointer"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => router.push(`/meet/${event.id}`)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            router.push(`/meet/${event.id}`);
+                          }
+                        }}
+                      >
                         <div className="flex justify-between items-start gap-4">
                           <div>
                             <h3 className="font-semibold">{event.title}</h3>
@@ -1155,8 +1168,9 @@ export default function ContactDetailPage() {
                                   <button
                                     type="button"
                                     className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                    onClick={(e) => e.stopPropagation()}
                                   >
-                                    Синхронизация
+                                    Добавить в календарь
                                   </button>
                                 </PopoverTrigger>
                                 <PopoverContent side="top" align="end" className="w-40 p-2">
@@ -1166,12 +1180,14 @@ export default function ContactDetailPage() {
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="rounded px-2 py-1 hover:bg-muted"
+                                      onClick={(e) => e.stopPropagation()}
                                     >
                                       Google
                                     </a>
                                     <a
                                       href={appleLink}
                                       className="rounded px-2 py-1 hover:bg-muted"
+                                      onClick={(e) => e.stopPropagation()}
                                     >
                                       Apple
                                     </a>
