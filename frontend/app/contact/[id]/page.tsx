@@ -151,7 +151,7 @@ export default function ContactDetailPage() {
   const editEventTypeInputRef = useRef<HTMLInputElement | null>(null);
   const [newPaymentAmount, setNewPaymentAmount] = useState('');
   const [newPaymentCurrency, setNewPaymentCurrency] = useState('RUB');
-  const [newPaymentPlannedAt, setNewPaymentPlannedAt] = useState('');
+  const [newPaymentPlannedAt, setNewPaymentPlannedAt] = useState(getDefaultEventStart);
   const [newPaymentPaid, setNewPaymentPaid] = useState(false);
   const [newPaymentProductId, setNewPaymentProductId] = useState<string>('none');
   const [savingPayment, setSavingPayment] = useState(false);
@@ -347,7 +347,7 @@ export default function ContactDetailPage() {
     }
     const amountValue = Number(newPaymentAmount);
     const amount = Number.isFinite(amountValue) ? amountValue : 0;
-    const plannedAtPayload = newPaymentPlannedAt ? `${newPaymentPlannedAt}T00:00:00` : null;
+    const plannedAtPayload = newPaymentPlannedAt || null;
     const paidAtPayload = newPaymentPaid
       ? plannedAtPayload || new Date().toISOString()
       : null;
@@ -370,7 +370,7 @@ export default function ContactDetailPage() {
       setPayments((prev) => [created, ...prev]);
       setNewPaymentAmount('');
       setNewPaymentCurrency('RUB');
-      setNewPaymentPlannedAt('');
+      setNewPaymentPlannedAt(getDefaultEventStart());
       setNewPaymentPaid(false);
       setNewPaymentProductId('none');
       toast.success('Платёж добавлен');
@@ -1087,7 +1087,7 @@ export default function ContactDetailPage() {
             </CardHeader>
             <CardContent>
               <form onSubmit={handleCreatePayment} className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-[3fr_3fr_1fr]">
                   <div className="space-y-2">
                     <Label htmlFor="payment-amount">Сумма</Label>
                     <Input
@@ -1101,21 +1101,22 @@ export default function ContactDetailPage() {
                     />
                   </div>
                   <div className="space-y-2">
+                    <Label htmlFor="payment-planned-at">Плановая дата оплаты</Label>
+                    <Input
+                      id="payment-planned-at"
+                      type="datetime-local"
+                      value={newPaymentPlannedAt}
+                      onChange={(e) => setNewPaymentPlannedAt(e.target.value)}
+                      placeholder="Завтра в 12:00"
+                    />
+                  </div>
+                  <div className="space-y-2">
                     <Label htmlFor="payment-currency">Валюта</Label>
                     <Input
                       id="payment-currency"
                       value={newPaymentCurrency}
                       onChange={(e) => setNewPaymentCurrency(e.target.value)}
                       placeholder="RUB"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="payment-planned-at">Плановая дата оплаты</Label>
-                    <Input
-                      id="payment-planned-at"
-                      type="date"
-                      value={newPaymentPlannedAt}
-                      onChange={(e) => setNewPaymentPlannedAt(e.target.value)}
                     />
                   </div>
                 </div>
@@ -1162,49 +1163,63 @@ export default function ContactDetailPage() {
             <CardContent>
               {payments.length > 0 ? (
                 <div className="space-y-4">
-                  {payments.map((payment) => (
-                    <Card key={payment.id} className="p-4">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <h3 className="font-semibold">{payment.amount} {payment.currency}</h3>
-                          {payment.product_id && productsById.get(payment.product_id)?.name && (
-                            <p className="text-sm text-muted-foreground">
-                              {productsById.get(payment.product_id)?.name}
-                            </p>
-                          )}
-                          <p className="text-sm text-muted-foreground">{payment.description}</p>
-                          <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-muted-foreground">
-                            <span>{payment.payment_method || 'Не указан способ оплаты'}</span>
-                            <span>•</span>
-                            <span>ID: {payment.transaction_id || '—'}</span>
-                            {payment.planned_at && (
-                              <>
-                                <span>•</span>
-                                <span>План: {new Date(payment.planned_at).toLocaleDateString('ru-RU')}</span>
-                              </>
+                  {payments.map((payment) => {
+                    const metaItems: Array<{ key: string; content: string }> = [];
+
+                    if (payment.payment_method) {
+                      metaItems.push({ key: 'method', content: payment.payment_method });
+                    }
+                    if (payment.transaction_id) {
+                      metaItems.push({ key: 'txn', content: `ID: ${payment.transaction_id}` });
+                    }
+                    if (payment.planned_at) {
+                      metaItems.push({
+                        key: 'planned',
+                        content: `План: ${new Date(payment.planned_at).toLocaleDateString('ru-RU')}`,
+                      });
+                    }
+                    if (payment.paid_at) {
+                      metaItems.push({
+                        key: 'paid',
+                        content: `Оплачено: ${new Date(payment.paid_at).toLocaleDateString('ru-RU')}`,
+                      });
+                    }
+
+                    return (
+                      <Card key={payment.id} className="p-4">
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <h3 className="font-semibold">{payment.amount} {payment.currency}</h3>
+                            {payment.product_id && productsById.get(payment.product_id)?.name && (
+                              <p className="text-sm text-muted-foreground">
+                                {productsById.get(payment.product_id)?.name}
+                              </p>
                             )}
-                            {payment.paid_at && (
-                              <>
-                                <span>•</span>
-                                <span>Оплачено: {new Date(payment.paid_at).toLocaleDateString('ru-RU')}</span>
-                              </>
-                            )}
+                            <p className="text-sm text-muted-foreground">{payment.description}</p>
+                            <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-muted-foreground">
+                              {metaItems.map((item, index) => (
+                                <span key={item.key}>
+                                  {item.content}
+                                  {index < metaItems.length - 1 && <span className="mx-2">•</span>}
+                                </span>
+                              ))}
+                            </div>
                           </div>
+                          <Badge 
+                            variant={
+                              payment.status === 'paid' ? 'secondary' : 
+                              payment.status === 'pending' ? 'default' : 
+                              payment.status === 'refunded' ? 'outline' : 'destructive'
+                            }
+                          >
+                            {payment.status === 'paid' ? 'Оплачено' : 
+                             payment.status === 'pending' ? 'В ожидании' : 
+                             payment.status === 'refunded' ? 'Возвращено' : 'Ошибка'}
+                          </Badge>
                         </div>
-                        <Badge 
-                          variant={
-                            payment.status === 'paid' ? 'secondary' : 
-                            payment.status === 'pending' ? 'default' : 
-                            payment.status === 'refunded' ? 'outline' : 'destructive'
-                          }
-                        >
-                          {payment.status === 'paid' ? 'Оплачено' : 
-                           payment.status === 'pending' ? 'В ожидании' : 
-                           payment.status === 'refunded' ? 'Возвращено' : 'Ошибка'}
-                        </Badge>
-                      </div>
-                    </Card>
-                  ))}
+                      </Card>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="text-center text-muted-foreground py-8">Нет платежей</p>

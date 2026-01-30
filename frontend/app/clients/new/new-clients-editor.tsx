@@ -9,7 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { CalendarIcon, PlusIcon, EditIcon, TrashIcon, UsersIcon, DollarSignIcon, ClockIcon, XIcon } from 'lucide-react';
+import { PlusIcon, EditIcon, TrashIcon, XIcon } from 'lucide-react';
+import { crmContactsApi, crmPaymentsApi } from '@/lib/api/crm';
 
 // Типы данных для новой CRM-схемы с иерархией
 type Client = {
@@ -17,53 +18,29 @@ type Client = {
   name: string;
   email: string;
   phone: string;
-  category_id: number;
+  category_id: number | null;
   status: 'active' | 'inactive' | 'archived';
   photo_url: string;
   notes: string;
   parent_id: number | null; // Добавлено поле для связи с родительским клиентом
-};
-
-type EventType = {
-  id: number;
-  name: string;
-  description: string;
-  duration_minutes: number;
-  color: string;
-};
-
-type Event = {
-  id: number;
-  client_id: number;
-  event_type_id: number;
-  title: string;
-  description: string;
-  start_time: string; // ISO string
-  end_time: string; // ISO string
-  location: string;
-  status: 'scheduled' | 'completed' | 'cancelled' | 'no_show';
-  notes: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 type Payment = {
   id: number;
-  client_id: number;
+  contact_id: number;
+  product_id: number | null;
   amount: number;
   currency: string;
   status: 'pending' | 'paid' | 'failed' | 'refunded';
   payment_method: string;
   transaction_id: string;
   description: string;
-  paid_at: string | null; // ISO string
-};
-
-type Note = {
-  id: number;
-  client_id: number;
-  title: string;
-  content: string;
-  is_important: boolean;
+  planned_at?: string | null;
+  paid_at?: string | null; // ISO string
   created_at?: string;
+  updated_at?: string;
 };
 
 type Category = {
@@ -81,58 +58,47 @@ const PREDEFINED_CATEGORIES: Category[] = [
 ];
 
 type Props = {
-  activeTab?: 'clients' | 'categories' | 'events' | 'payments' | 'notes';
+  activeTab?: 'clients' | 'categories' | 'payments';
 };
 
 export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   const [clients, setClients] = useState<Client[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
-  const [eventTypes, setEventTypes] = useState<EventType[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
-  const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Заглушка для API-вызовов - в реальном приложении здесь будет обращение к бэкенду
   useEffect(() => {
-    // Здесь должны быть вызовы API для получения данных
-    // Например: fetch('/api/crm/clients').then(r => r.json()).then(setClients);
-    
-    // Временные данные для демонстрации с иерархией
-    const mockClients: Client[] = [
-      { id: 1, name: 'ООО Крупный Клиент', email: 'contact@bigcompany.ru', phone: '+74951234500', category_id: 1, status: 'active', photo_url: '', notes: 'Основной корпоративный клиент', parent_id: null },
-      { id: 2, name: 'Иван Петров', email: 'ivan.petrov@bigcompany.ru', phone: '+74951234501', category_id: 1, status: 'active', photo_url: '', notes: 'Главный специалист', parent_id: 1 },
-      { id: 3, name: 'Мария Сидорова', email: 'maria.sidorova@bigcompany.ru', phone: '+74951234502', category_id: 1, status: 'active', photo_url: '', notes: 'Менеджер проекта', parent_id: 1 },
-      { id: 4, name: 'Алексей Козлов', email: 'alexey.kozlov@bigcompany.ru', phone: '+74951234503', category_id: 2, status: 'active', photo_url: '', notes: 'Технический специалист', parent_id: 1 },
-      { id: 5, name: 'ИП Частный Предприниматель', email: 'contact@businessman.ru', phone: '+74951234600', category_id: 2, status: 'active', photo_url: '', notes: 'Частный клиент', parent_id: null },
-    ];
+    let isActive = true;
 
-    const mockEventTypes: EventType[] = [
-      { id: 1, name: 'Индивидуальная сессия', description: 'Персональная коуч-сессия', duration_minutes: 60, color: '#4A90E2' },
-      { id: 2, name: 'Групповая сессия', description: 'Групповой коучинг', duration_minutes: 90, color: '#9B59B6' },
-      { id: 3, name: 'Первая консультация', description: 'Вводная встреча с новым клиентом', duration_minutes: 45, color: '#50C878' },
-    ];
+    const loadData = async () => {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const [contactsData, paymentsData] = await Promise.all([
+          crmContactsApi.list(),
+          crmPaymentsApi.list(),
+        ]);
 
-    const mockEvents: Event[] = [
-      { id: 1, client_id: 1, event_type_id: 1, title: 'Консультация по стратегии', description: 'Обсуждение долгосрочной стратегии', start_time: '2026-02-01T10:00:00', end_time: '2026-02-01T11:00:00', location: 'Онлайн', status: 'scheduled', notes: '' },
-      { id: 2, client_id: 2, event_type_id: 3, title: 'Первая встреча', description: 'Знакомство и обсуждение целей', start_time: '2026-01-30T14:00:00', end_time: '2026-01-30T14:45:00', location: 'Офис', status: 'completed', notes: 'Клиент заинтересован в индивидуальной программе' },
-    ];
+        if (!isActive) return;
 
-    const mockPayments: Payment[] = [
-      { id: 1, client_id: 1, amount: 15000, currency: 'RUB', status: 'paid', payment_method: 'card', transaction_id: 'txn_12345', description: 'Оплата за 10 сессий', paid_at: '2026-01-25T12:00:00' },
-      { id: 2, client_id: 2, amount: 5000, currency: 'RUB', status: 'pending', payment_method: 'transfer', transaction_id: 'txn_67890', description: 'Предоплата за первую сессию', paid_at: null },
-    ];
+        setClients(contactsData);
+        setPayments(paymentsData);
+      } catch (err) {
+        if (!isActive) return;
+        console.error('Failed to load CRM contacts/payments', err);
+        setLoadError('Не удалось загрузить клиентов или платежи. Проверьте API /crm/contacts/ и /crm/payments/.');
+      } finally {
+        if (isActive) {
+          setLoading(false);
+        }
+      }
+    };
 
-    const mockNotes: Note[] = [
-      { id: 1, client_id: 1, title: 'Предпочтения', content: 'Любит утренние встречи, предпочитает формальный стиль общения', is_important: true, created_at: '2026-01-25T10:00:00' },
-      { id: 2, client_id: 2, title: 'Прогресс', content: 'Хорошо реагирует на практику, быстро принимает изменения', is_important: false, created_at: '2026-01-26T14:30:00' },
-    ];
+    void loadData();
 
-    setClients(mockClients);
-    setEventTypes(mockEventTypes);
-    setEvents(mockEvents);
-    setPayments(mockPayments);
-    setNotes(mockNotes);
-    setLoading(false);
+    return () => {
+      isActive = false;
+    };
   }, []);
 
   if (loading) {
@@ -160,6 +126,9 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   if (activeTab === 'clients') {
     return (
       <div className="space-y-6">
+        {loadError && (
+          <p className="text-sm text-red-500">{loadError}</p>
+        )}
         <div className="flex justify-between items-center">
           <h2 className="text-2xl font-semibold">Список клиентов</h2>
           <Dialog>
@@ -178,114 +147,23 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
               </DialogHeader>
               <NewClientForm
                 clients={clients}
-                onSave={(newClients) => setClients((prev) => [...prev, ...newClients])}
+                onSave={(newClients) =>
+                  setClients((prev) =>
+                    [...newClients, ...prev].sort((a, b) => a.name.localeCompare(b.name, 'ru-RU'))
+                  )
+                }
               />
             </DialogContent>
           </Dialog>
-        </div>
-      </div>
-    );
-  } else if (activeTab === 'events') {
-    return (
-      <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <h2 className="text-2xl font-semibold">События и встречи</h2>
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button>
-                <PlusIcon className="mr-2 h-4 w-4" />
-                Назначить встречу
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Назначить новое событие</DialogTitle>
-                <DialogDescription>
-                  Запланируйте встречу или мероприятие для клиента
-                </DialogDescription>
-              </DialogHeader>
-              <NewEventForm
-                clients={clients}
-                eventTypes={eventTypes}
-                onSave={(newEvent) => setEvents([...events, newEvent])}
-              />
-            </DialogContent>
-          </Dialog>
-        </div>
-
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Клиент</TableHead>
-                <TableHead>Тип события</TableHead>
-                <TableHead>Дата и время</TableHead>
-                <TableHead>Статус</TableHead>
-                <TableHead>Место</TableHead>
-                <TableHead>Действия</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {events.map((event) => {
-                const client = clients.find(c => c.id === event.client_id);
-                const eventType = eventTypes.find(et => et.id === event.event_type_id);
-                return (
-                  <TableRow key={event.id}>
-                    <TableCell className="font-medium">
-                      {client ? (
-                        client.parent_id ? (
-                          <>
-                            <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.name} → </span>
-                            {getClientFullName(client)}
-                          </>
-                        ) : (
-                          getClientFullName(client)
-                        )
-                      ) : 'Неизвестный'}
-                    </TableCell>
-                    <TableCell>
-                      <Badge style={{ backgroundColor: eventType?.color + '40', color: eventType?.color }}>
-                        {eventType?.name}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {new Date(event.start_time).toLocaleString('ru-RU')}
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          event.status === 'scheduled' ? 'default' :
-                          event.status === 'completed' ? 'secondary' :
-                          'outline'
-                        }
-                      >
-                        {event.status === 'scheduled' ? 'Запланировано' :
-                         event.status === 'completed' ? 'Завершено' :
-                         event.status === 'cancelled' ? 'Отменено' : 'Не явился'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{event.location}</TableCell>
-                    <TableCell>
-                      <div className="flex space-x-2">
-                        <Button variant="outline" size="sm">
-                          <EditIcon className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
-                          <TrashIcon className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
         </div>
       </div>
     );
   } else if (activeTab === 'categories') {
     return (
       <div className="space-y-6">
+        {loadError && (
+          <p className="text-sm text-red-500">{loadError}</p>
+        )}
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-semibold">Категории клиентов</h2>
           <Button variant="outline" size="sm" disabled>
@@ -336,6 +214,9 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   } else if (activeTab === 'payments') {
     return (
       <div className="space-y-6">
+        {loadError && (
+          <p className="text-sm text-red-500">{loadError}</p>
+        )}
         <div className="flex justify-between items-center">
           <h2 className="text-2xl font-semibold">Платежи</h2>
           <Dialog>
@@ -354,7 +235,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
               </DialogHeader>
               <NewPaymentForm
                 clients={clients}
-                onSave={(newPayment) => setPayments([...payments, newPayment])}
+                onSave={(newPayment) => setPayments((prev) => [newPayment, ...prev])}
               />
             </DialogContent>
           </Dialog>
@@ -374,7 +255,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
             </TableHeader>
             <TableBody>
               {payments.map((payment) => {
-                const client = clients.find(c => c.id === payment.client_id);
+                const client = clients.find(c => c.id === payment.contact_id);
                 return (
                   <TableRow key={payment.id}>
                     <TableCell className="font-medium">
@@ -425,69 +306,6 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
         </div>
       </div>
     );
-  } else if (activeTab === 'notes') {
-    return (
-      <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <h2 className="text-2xl font-semibold">Заметки</h2>
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button>
-                <PlusIcon className="mr-2 h-4 w-4" />
-                Добавить заметку
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Добавить новую заметку</DialogTitle>
-                <DialogDescription>
-                  Добавьте важную информацию о клиенте
-                </DialogDescription>
-              </DialogHeader>
-              <NewNoteForm
-                clients={clients}
-                onSave={(newNote) => setNotes([...notes, newNote])}
-              />
-            </DialogContent>
-          </Dialog>
-        </div>
-
-        <div className="grid gap-6">
-          {notes.map((note) => {
-            const client = clients.find(c => c.id === note.client_id);
-            return (
-              <Card key={note.id}>
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <CardTitle className="text-lg">{note.title || 'Без заголовка'}</CardTitle>
-                      <CardDescription>
-                        {client ? (
-                          client.parent_id ? (
-                            <>
-                              <span className="text-muted-foreground text-sm">{getParentClientName(client, clients)} → </span>
-                              {getClientFullName(client)}
-                            </>
-                          ) : (
-                            getClientFullName(client)
-                          )
-                        ) : 'Неизвестный клиент'} • {new Date(note.created_at || Date.now()).toLocaleDateString('ru-RU')}
-                      </CardDescription>
-                    </div>
-                    {note.is_important && (
-                      <Badge variant="destructive">Важно</Badge>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground whitespace-pre-line">{note.content}</p>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      </div>
-    );
   }
 
   // Default fallback
@@ -506,6 +324,8 @@ function NewClientForm({ clients, onSave }: {
   const [nameInput, setNameInput] = useState('');
   const [nameChips, setNameChips] = useState<string[]>([]);
   const [nameError, setNameError] = useState('');
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [categoryId, setCategoryId] = useState(1); // Default to first category
@@ -566,7 +386,7 @@ function NewClientForm({ clients, onSave }: {
     setNameChips((prev) => prev.filter((item) => item !== value));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const pendingInput = normalizeName(nameInput);
     const namesToCreate = [...nameChips, ...(pendingInput ? [pendingInput] : [])];
@@ -575,26 +395,38 @@ function NewClientForm({ clients, onSave }: {
       return;
     }
 
-    const baseId = Date.now();
-    const newClients: Client[] = namesToCreate.map((clientName, index) => ({
-      id: baseId + index, // В реальном приложении это будет ID из базы данных
-      name: clientName,
-      email,
-      phone,
-      category_id: categoryId,
-      status,
-      photo_url: '',
-      notes,
-      parent_id: parentId // Добавлено поле parent_id
-    }));
-
-    onSave(newClients);
-    setNameInput('');
-    setNameChips([]);
+    setIsSubmitting(true);
+    setSubmitError(null);
     setNameError('');
-    setEmail('');
-    setPhone('');
-    setNotes('');
+
+    try {
+      const createdClients = await Promise.all(
+        namesToCreate.map((clientName) =>
+          crmContactsApi.create({
+            name: clientName,
+            email,
+            phone,
+            category_id: categoryId,
+            status,
+            photo_url: '',
+            notes,
+            parent_id: parentId,
+          })
+        )
+      );
+
+      onSave(createdClients);
+      setNameInput('');
+      setNameChips([]);
+      setEmail('');
+      setPhone('');
+      setNotes('');
+    } catch (err) {
+      console.error('Failed to create clients', err);
+      setSubmitError('Не удалось создать клиента. Проверьте API /crm/contacts/.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -636,6 +468,9 @@ function NewClientForm({ clients, onSave }: {
         </p>
         {nameError ? (
           <p className="text-xs text-red-500">{nameError}</p>
+        ) : null}
+        {submitError ? (
+          <p className="text-xs text-red-500">{submitError}</p>
         ) : null}
       </div>
       
@@ -720,129 +555,9 @@ function NewClientForm({ clients, onSave }: {
         />
       </div>
       
-      <Button type="submit" className="w-full">Добавить клиента</Button>
-    </form>
-  );
-}
-
-function NewEventForm({ clients, eventTypes, onSave }: { 
-  clients: Client[], 
-  eventTypes: EventType[], 
-  onSave: (event: Event) => void 
-}) {
-  const [clientId, setClientId] = useState(clients[0]?.id || 1);
-  const [eventTypeId, setEventTypeId] = useState(eventTypes[0]?.id || 1);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [startTime, setStartTime] = useState(new Date().toISOString().slice(0, 16));
-  const [location, setLocation] = useState('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // Рассчитываем end_time на основе duration_minutes из типа события
-    const eventType = eventTypes.find(et => et.id === eventTypeId);
-    const duration = eventType?.duration_minutes || 60;
-    const endTime = new Date(startTime);
-    endTime.setMinutes(endTime.getMinutes() + duration);
-    
-    const newEvent: Event = {
-      id: Date.now(),
-      client_id: clientId,
-      event_type_id: eventTypeId,
-      title,
-      description,
-      start_time: startTime,
-      end_time: endTime.toISOString(),
-      location,
-      status: 'scheduled',
-      notes: ''
-    };
-    
-    onSave(newEvent);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-2">
-        <Label htmlFor="client">Клиент</Label>
-        <Select value={clientId.toString()} onValueChange={(val) => setClientId(Number(val))}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {clients.map((client) => (
-              <SelectItem key={client.id} value={client.id.toString()}>
-                {client.parent_id ? (
-                  <>
-                    <span className="text-muted-foreground text-sm">{getParentClientName(client, clients)} → </span>
-                    {getClientFullName(client)}
-                  </>
-                ) : (
-                  getClientFullName(client)
-                )}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="eventType">Тип события</Label>
-        <Select value={eventTypeId.toString()} onValueChange={(val) => setEventTypeId(Number(val))}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {eventTypes.map((type) => (
-              <SelectItem key={type.id} value={type.id.toString()}>
-                {type.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="title">Название</Label>
-        <Input 
-          id="title" 
-          value={title} 
-          onChange={(e) => setTitle(e.target.value)} 
-          required 
-        />
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="description">Описание</Label>
-        <Input 
-          id="description" 
-          value={description} 
-          onChange={(e) => setDescription(e.target.value)} 
-        />
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="startTime">Дата и время начала</Label>
-        <Input 
-          id="startTime" 
-          type="datetime-local" 
-          value={startTime} 
-          onChange={(e) => setStartTime(e.target.value)} 
-          required 
-        />
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="location">Место проведения</Label>
-        <Input 
-          id="location" 
-          value={location} 
-          onChange={(e) => setLocation(e.target.value)} 
-        />
-      </div>
-      
-      <Button type="submit" className="w-full">Назначить встречу</Button>
+      <Button type="submit" className="w-full" disabled={isSubmitting}>
+        {isSubmitting ? 'Сохраняем...' : 'Добавить клиента'}
+      </Button>
     </form>
   );
 }
@@ -851,36 +566,73 @@ function NewPaymentForm({ clients, onSave }: {
   clients: Client[], 
   onSave: (payment: Payment) => void 
 }) {
-  const [clientId, setClientId] = useState(clients[0]?.id || 1);
+  const [clientId, setClientId] = useState<number | null>(clients[0]?.id ?? null);
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('RUB');
   const [status, setStatus] = useState<'pending' | 'paid' | 'failed' | 'refunded'>('pending');
   const [paymentMethod, setPaymentMethod] = useState('');
   const [description, setDescription] = useState('');
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (clients.length === 0) {
+      if (clientId !== null) setClientId(null);
+      return;
+    }
+    if (clientId === null || !clients.some((client) => client.id === clientId)) {
+      setClientId(clients[0].id);
+    }
+  }, [clients, clientId]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newPayment: Payment = {
-      id: Date.now(),
-      client_id: clientId,
-      amount: parseFloat(amount),
-      currency,
-      status,
-      payment_method: paymentMethod,
-      transaction_id: 'txn_' + Date.now().toString(),
-      description,
-      paid_at: status === 'paid' ? new Date().toISOString() : null
-    };
-    onSave(newPayment);
+    if (!clientId) {
+      setSubmitError('Выберите клиента для платежа.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    try {
+      const created = await crmPaymentsApi.create({
+        contact_id: clientId,
+        product_id: null,
+        amount: parseFloat(amount),
+        currency,
+        status,
+        payment_method: paymentMethod,
+        transaction_id: 'txn_' + Date.now().toString(),
+        description,
+        planned_at: null,
+        paid_at: status === 'paid' ? new Date().toISOString() : null,
+      });
+
+      onSave(created);
+      setAmount('');
+      setCurrency('RUB');
+      setStatus('pending');
+      setPaymentMethod('');
+      setDescription('');
+    } catch (err) {
+      console.error('Failed to create payment', err);
+      setSubmitError('Не удалось создать платеж. Проверьте API /crm/payments/.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="client">Клиент</Label>
-        <Select value={clientId.toString()} onValueChange={(val) => setClientId(Number(val))}>
+        <Select
+          value={clientId ? clientId.toString() : ''}
+          onValueChange={(val) => setClientId(val ? Number(val) : null)}
+        >
           <SelectTrigger>
-            <SelectValue />
+            <SelectValue placeholder="Выберите клиента" />
           </SelectTrigger>
           <SelectContent>
             {clients.map((client) => (
@@ -961,90 +713,12 @@ function NewPaymentForm({ clients, onSave }: {
         />
       </div>
       
-      <Button type="submit" className="w-full">Добавить платеж</Button>
-    </form>
-  );
-}
-
-function NewNoteForm({ clients, onSave }: { 
-  clients: Client[], 
-  onSave: (note: Note) => void 
-}) {
-  const [clientId, setClientId] = useState(clients[0]?.id || 1);
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [isImportant, setIsImportant] = useState(false);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const newNote: Note = {
-      id: Date.now(),
-      client_id: clientId,
-      title,
-      content,
-      is_important: isImportant,
-      created_at: new Date().toISOString()
-    };
-    onSave(newNote);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-2">
-        <Label htmlFor="client">Клиент</Label>
-        <Select value={clientId.toString()} onValueChange={(val) => setClientId(Number(val))}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {clients.map((client) => (
-              <SelectItem key={client.id} value={client.id.toString()}>
-                {client.parent_id ? (
-                  <>
-                    <span className="text-muted-foreground text-sm">{getParentClientName(client, clients)} → </span>
-                    {getClientFullName(client)}
-                  </>
-                ) : (
-                  getClientFullName(client)
-                )}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="title">Заголовок</Label>
-        <Input 
-          id="title" 
-          value={title} 
-          onChange={(e) => setTitle(e.target.value)} 
-        />
-      </div>
-      
-      <div className="space-y-2">
-        <Label htmlFor="content">Содержание</Label>
-        <textarea 
-          id="content" 
-          value={content} 
-          onChange={(e) => setContent(e.target.value)} 
-          className="w-full p-2 border rounded-md min-h-[100px]"
-          required
-        />
-      </div>
-      
-      <div className="flex items-center space-x-2">
-        <input 
-          type="checkbox" 
-          id="isImportant" 
-          checked={isImportant} 
-          onChange={(e) => setIsImportant(e.target.checked)} 
-          className="h-4 w-4"
-        />
-        <Label htmlFor="isImportant">Важная заметка</Label>
-      </div>
-      
-      <Button type="submit" className="w-full">Добавить заметку</Button>
+      {submitError ? (
+        <p className="text-xs text-red-500">{submitError}</p>
+      ) : null}
+      <Button type="submit" className="w-full" disabled={isSubmitting || clients.length === 0}>
+        {isSubmitting ? 'Сохраняем...' : 'Добавить платеж'}
+      </Button>
     </form>
   );
 }
