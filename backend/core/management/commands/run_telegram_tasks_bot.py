@@ -38,8 +38,9 @@ from core.telegram_bot.dependencies import get_telegram_user_service, init_depen
 logger = logging.getLogger(__name__)
 debug_logger = logging.getLogger('telegram_bot_debug')
 router = Router()
-SUPPORT_CHAT = "@pavel_architect"
+SUPPORT_CHAT = -5038963606  # Групповой чат для уведомлений поддержки
 MEETINGS_BUTTON_TEXT = "Встречи"
+
 SCHEDULE_LOOKAHEAD_DAYS = 60
 CALLBACK_IGNORE = "ignore"
 CALLBACK_MEETING_RESCHEDULE = "meeting_reschedule"
@@ -74,6 +75,17 @@ class MeetingFlowStates(StatesGroup):
     waiting_for_date = State()
     waiting_for_time = State()
     waiting_for_confirmation = State()
+
+
+class SupportFlowStates(StatesGroup):
+    waiting_for_message = State()
+
+
+class ServiceLevelStates(StatesGroup):
+    waiting_for_rating = State()
+    waiting_for_improvement = State()
+
+
 
 
 def _map_schema() -> str:
@@ -609,7 +621,10 @@ def _format_meetings(events: list[dict]) -> str:
 
 def _main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=MEETINGS_BUTTON_TEXT)]],
+        keyboard=[
+            [KeyboardButton(text=MEETINGS_BUTTON_TEXT)],
+            [KeyboardButton(text="📊 Уровень сервиса")]
+        ],
         resize_keyboard=True,
         one_time_keyboard=False,
     )
@@ -825,75 +840,116 @@ async def handle_start_without_deeplink(message: Message) -> None:
     )
 
 
-@router.message(~(F.text.startswith("/") | F.caption.startswith("/")))
-async def handle_message(message: Message) -> None:
-    debug_logger.debug(f"Received message: {message.model_dump()}")
-
-    if message.chat.type != "private":
-        debug_logger.debug(f"Message from non-private chat, ignoring. Chat type: {message.chat.type}")
-        return
-
-    from_user = message.from_user
-    if from_user is None:
-        debug_logger.warning("Message has no from_user, ignoring")
-        return
-
-    debug_logger.info(f"Processing message from user: {from_user.username} (ID: {from_user.id})")
-
-    message_text = (message.text or message.caption or "").strip()
-    if not message_text:
-        debug_logger.warning("Received message with empty text, ignoring")
-        return
-
-    if message_text.strip().lower() == MEETINGS_BUTTON_TEXT.lower():
-        await _send_meetings(message)
-        return
-
-    debug_logger.info(f"Received message text: '{message_text[:50]}...' from user {from_user.username}")
-
-    received_at = message.date or timezone.now()
-    if timezone.is_naive(received_at):
-        received_at = timezone.make_aware(received_at)
-
-    try:
-        stored = await sync_to_async(_store_task, thread_sensitive=True)(
-            telegram_id=from_user.id,
-            username=from_user.username,
-            message_id=message.message_id,
-            message_text=message_text,
-            received_at=received_at,
-        )
-        if stored:
-            debug_logger.info(f"Successfully stored task for user {from_user.username}")
-        else:
-            await message.answer(
-                "❗️Ваш аккаунт ещё не привязан к клиенту.\n"
-                "Пожалуйста, используйте персональную ссылку от администратора."
-            )
-            debug_logger.info("No active tenant binding for user %s", from_user.id)
-    except Exception:
-        logger.exception("Failed to store Telegram task (user_id=%s)", from_user.id)
-
-
 @router.message(Command("support"))
-async def handle_support(message: Message, bot: Bot) -> None:
+async def handle_support(message: Message, bot: Bot, command: CommandObject, state: FSMContext) -> None:
+    """Обработчик команды /support - отправляет обращение в групповой чат поддержки"""
     debug_logger.info(f"Received /support command from user: {message.from_user.username if message.from_user else 'Unknown'}")
 
     if message.chat.type != "private":
         debug_logger.debug(f"Support command from non-private chat, ignoring. Chat type: {message.chat.type}")
         return
 
-    try:
-        await bot.forward_message(
-            chat_id=SUPPORT_CHAT,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id,
+    # Проверяем, есть ли текст после команды
+    support_text = command.args if command and command.args else None
+    
+    if support_text:
+        # Если текст есть - сразу отправляем
+        await _send_support_message(message, bot, support_text)
+    else:
+        # Если текста нет - переводим в режим ожидания сообщения
+        await state.set_state(SupportFlowStates.waiting_for_message)
+        await message.answer(
+            "📝 Опишите вашу проблему или вопрос в следующем сообщении.\n\n"
+            "Или используйте: /support ваш текст\n\n"
+            "Для отмены отправьте /cancel"
         )
-        await message.answer("Сообщение отправлено в поддержку.")
-        debug_logger.info(f"Successfully forwarded support message from {message.from_user.username if message.from_user else 'Unknown'}")
+
+
+@router.message(SupportFlowStates.waiting_for_message)
+async def handle_support_message(message: Message, bot: Bot, state: FSMContext) -> None:
+    """Обработчик текста обращения в поддержку"""
+    if message.text and message.text.startswith('/cancel'):
+        await state.clear()
+        await message.answer("❌ Обращение отменено.")
+        return
+    
+    if not message.text:
+        await message.answer("⚠️ Пожалуйста, отправьте текстовое сообщение.")
+        return
+    
+    await _send_support_message(message, bot, message.text)
+    await state.clear()
+
+
+async def _send_support_message(message: Message, bot: Bot, support_text: str) -> None:
+    """Вспомогательная функция для отправки сообщения в поддержку"""
+    # Формируем информативное сообщение для группового чата
+    user_info = []
+    if message.from_user:
+        if message.from_user.username:
+            user_info.append(f"@{message.from_user.username}")
+        if message.from_user.first_name or message.from_user.last_name:
+            full_name = " ".join(filter(None, [message.from_user.first_name, message.from_user.last_name]))
+            user_info.append(f"({full_name})")
+    
+    user_str = " ".join(user_info) if user_info else "Неизвестный пользователь"
+    user_id = message.from_user.id if message.from_user else None
+    
+    # Добавляем скрытый маркер с user_id в конец сообщения
+    hidden_marker = f"\n\n<code>[USER_ID:{user_id}]</code>" if user_id else ""
+    
+    notification_text = (
+        "🆘 <b>Новое обращение в поддержку</b>\n\n"
+        f"👤 <b>Пользователь:</b> {user_str}\n"
+        f"💬 <b>Сообщение:</b>\n{support_text}"
+        f"{hidden_marker}"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=SUPPORT_CHAT,
+            text=notification_text,
+            parse_mode="HTML"
+        )
+        
+        await message.answer("✅ Ваше обращение отправлено в поддержку. Мы скоро с вами свяжемся!")
+        debug_logger.info(f"Successfully sent support notification from {message.from_user.username if message.from_user else 'Unknown'}")
     except Exception:
-        logger.exception("Failed to forward support message (chat_id=%s)", message.chat.id)
-        await message.answer("Не удалось отправить сообщение в поддержку.")
+        logger.exception("Failed to send support notification (chat_id=%s)", message.chat.id)
+        await message.answer("❌ Не удалось отправить сообщение в поддержку. Попробуйте позже или напишите напрямую @Pavel_Architect")
+
+
+@router.message(~(F.text.startswith("/") | F.caption.startswith("/")))
+async def handle_message(message: Message, state: FSMContext) -> None:
+    """Глобальный обработчик - показывает меню"""
+    if message.chat.type != "private":
+        return
+
+    from_user = message.from_user
+    if from_user is None:
+        return
+
+    message_text = (message.text or message.caption or "").strip()
+    if not message_text:
+        return
+
+    # Обработка кнопки "Встречи"
+    if message_text.strip().lower() == MEETINGS_BUTTON_TEXT.lower():
+        await _send_meetings(message)
+        return
+    
+    # Обработка кнопки "Уровень сервиса"
+    if message_text.strip() == "📊 Уровень сервиса":
+        await _start_service_level_survey(message, state)
+        return
+
+    # Для остальных сообщений показываем меню
+    await message.answer(
+        "Используйте меню для выбора действия:",
+        reply_markup=_main_menu()
+    )
+
+
 
 
 @router.message(Command("meetings"))
@@ -902,6 +958,236 @@ async def handle_meetings(message: Message) -> None:
         return
 
     await _send_meetings(message)
+
+
+@router.message(Command("level"))
+async def handle_level_command(message: Message, state: FSMContext) -> None:
+    """Обработчик команды /level"""
+    if message.chat.type != "private":
+        return
+    
+    await _start_service_level_survey(message, state)
+
+
+async def _start_service_level_survey(message: Message, state: FSMContext | None = None) -> None:
+    """Начало опроса об уровне сервиса"""
+    if state:
+        await state.set_state(ServiceLevelStates.waiting_for_rating)
+    
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1", callback_data="rating:1"),
+                InlineKeyboardButton(text="2", callback_data="rating:2"),
+                InlineKeyboardButton(text="3", callback_data="rating:3"),
+                InlineKeyboardButton(text="4", callback_data="rating:4"),
+                InlineKeyboardButton(text="5", callback_data="rating:5"),
+            ],
+            [
+                InlineKeyboardButton(text="6", callback_data="rating:6"),
+                InlineKeyboardButton(text="7", callback_data="rating:7"),
+                InlineKeyboardButton(text="8", callback_data="rating:8"),
+                InlineKeyboardButton(text="9", callback_data="rating:9"),
+                InlineKeyboardButton(text="10", callback_data="rating:10"),
+            ],
+            [
+                InlineKeyboardButton(text="❌ Отменить", callback_data="service_cancel"),
+            ]
+        ]
+    )
+    
+    await message.answer(
+        "📊 <b>Оценка уровня сервиса</b>\n\n"
+        "Пожалуйста, оцените качество наших встреч и услуг по шкале от 1 до 10:",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("rating:"))
+async def handle_rating_selection(callback: CallbackQuery, state: FSMContext) -> None:
+    """Обработчик выбора оценки"""
+    if not callback.data or not callback.message:
+        return
+    
+    rating = int(callback.data.split(":")[1])
+    await state.update_data(rating=rating)
+    await state.set_state(ServiceLevelStates.waiting_for_improvement)
+    
+    await callback.message.edit_text(
+        f"📊 <b>Оценка уровня сервиса</b>\n\n"
+        f"Ваша оценка: <b>{rating}/10</b>\n\n"
+        "Что бы вы хотели улучшить в работе на встречах?\n"
+        "Напишите ваши пожелания или нажмите 'Пропустить':",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="⏩ Пропустить", callback_data="improvement_skip")],
+                [InlineKeyboardButton(text="❌ Отменить", callback_data="service_cancel")]
+            ]
+        )
+    )
+    await callback.answer()
+
+
+@router.message(ServiceLevelStates.waiting_for_improvement)
+async def handle_improvement_text(message: Message, bot: Bot, state: FSMContext) -> None:
+    """Обработчик текста пожеланий по улучшению"""
+    if not message.text:
+        await message.answer("⚠️ Пожалуйста, отправьте текстовое сообщение или нажмите 'Пропустить'.")
+        return
+    
+    data = await state.get_data()
+    rating = data.get("rating", 0)
+    improvement_text = message.text
+    
+    await _save_service_level_feedback(message, bot, rating, improvement_text)
+    await state.clear()
+
+
+@router.callback_query(F.data == "improvement_skip")
+async def handle_improvement_skip(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
+    """Обработчик пропуска пожеланий"""
+    if not callback.message:
+        return
+    
+    data = await state.get_data()
+    rating = data.get("rating", 0)
+    
+    await _save_service_level_feedback(callback.message, bot, rating, None)
+    await state.clear()
+    await callback.answer()
+
+
+@router.callback_query(F.data == "service_cancel")
+async def handle_service_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """Обработчик отмены опроса"""
+    if not callback.message:
+        return
+    
+    await state.clear()
+    await callback.message.edit_text("❌ Опрос отменён.")
+    await callback.answer()
+
+
+async def _save_service_level_feedback(message: Message, bot: Bot, rating: int, improvement: str | None) -> None:
+    """Сохранение отзыва об уровне сервиса"""
+    from_user = message.from_user
+    if not from_user:
+        return
+    
+    # Формируем текст для сохранения в tasks
+    feedback_text = f"[Оценка сервиса: {rating}/10]"
+    if improvement:
+        feedback_text += f"\nПожелания: {improvement}"
+    else:
+        feedback_text += "\nПожелания: не указаны"
+    
+    received_at = message.date or timezone.now()
+    if timezone.is_naive(received_at):
+        received_at = timezone.make_aware(received_at)
+    
+    try:
+        # Сохраняем как задачу
+        stored = await sync_to_async(_store_task, thread_sensitive=True)(
+            telegram_id=from_user.id,
+            username=from_user.username,
+            message_id=message.message_id,
+            message_text=feedback_text,
+            received_at=received_at,
+        )
+        
+        if stored:
+            response_text = "✅ Спасибо за ваш вклад в наше общее дело!"
+            
+            if isinstance(message, Message):
+                await message.answer(response_text)
+            else:
+                # Если это callback message
+                await message.edit_text(response_text, reply_markup=None)
+            
+            debug_logger.info(f"Service level feedback saved: rating={rating}, user={from_user.username}")
+        else:
+            error_text = (
+                "❗️Ваш аккаунт ещё не привязан к клиенту.\n"
+                "Пожалуйста, используйте персональную ссылку от администратора."
+            )
+            if isinstance(message, Message):
+                await message.answer(error_text)
+            else:
+                await message.edit_text(error_text, reply_markup=None)
+    except Exception:
+        logger.exception("Failed to save service level feedback (user_id=%s)", from_user.id)
+        error_text = "❌ Не удалось сохранить отзыв. Попробуйте позже."
+        if isinstance(message, Message):
+            await message.answer(error_text)
+        else:
+            await message.edit_text(error_text, reply_markup=None)
+
+
+@router.message(Command("meetings"))
+async def handle_meetings(message: Message) -> None:
+    if message.chat.type != "private":
+        return
+
+    await _send_meetings(message)
+
+
+@router.message(F.chat.type.in_(["group", "supergroup"]))
+async def handle_any_group_message(message: Message) -> None:
+    """Диагностический обработчик для всех групповых сообщений"""
+    debug_logger.info(
+        f"Group message received: chat_id={message.chat.id}, "
+        f"chat_type={message.chat.type}, "
+        f"has_reply={message.reply_to_message is not None}, "
+        f"text={message.text[:50] if message.text else 'no text'}"
+    )
+    debug_logger.info(f"SUPPORT_CHAT constant value: {SUPPORT_CHAT}")
+    debug_logger.info(f"Match: {message.chat.id == SUPPORT_CHAT}")
+
+
+@router.message(F.chat.id == SUPPORT_CHAT, F.reply_to_message)
+async def handle_support_reply(message: Message, bot: Bot) -> None:
+    """Обработчик ответов в групповом чате поддержки"""
+    debug_logger.info(f"Received reply in support chat from {message.from_user.username if message.from_user else 'Unknown'}")
+    
+    if not message.reply_to_message:
+        debug_logger.warning("No reply_to_message found")
+        return
+    
+    if not message.text:
+        debug_logger.warning("No text in reply message")
+        return
+    
+    # Извлекаем user_id из текста сообщения, на которое отвечают
+    replied_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+    debug_logger.info(f"Replied message text: {replied_text[:100]}...")
+    
+    # Ищем паттерн [USER_ID:123456]
+    import re
+    match = re.search(r'\[USER_ID:(\d+)\]', replied_text)
+    
+    if not match:
+        debug_logger.warning(f"No USER_ID found in replied message. Full text: {replied_text}")
+        await message.reply("⚠️ Не найден ID пользователя в этом сообщении. Возможно, это старое обращение.")
+        return
+    
+    user_chat_id = int(match.group(1))
+    debug_logger.info(f"Extracted user_chat_id: {user_chat_id}")
+    
+    try:
+        # Отправляем ответ пользователю
+        sent = await bot.send_message(
+            chat_id=user_chat_id,
+            text=f"💬 <b>Ответ от поддержки:</b>\n\n{message.text}",
+            parse_mode="HTML"
+        )
+        # Подтверждаем отправку в группе
+        await message.reply("✅ Ответ отправлен пользователю")
+        debug_logger.info(f"Support reply sent successfully to user_id={user_chat_id}, message_id={sent.message_id}")
+    except Exception as e:
+        logger.exception("Failed to send support reply to user_id=%s", user_chat_id)
+        await message.reply(f"❌ Не удалось отправить ответ пользователю: {e}")
 
 
 @router.callback_query(F.data.startswith(f"{CALLBACK_MEETING_RESCHEDULE}:"))
@@ -1428,6 +1714,7 @@ async def _run_bot(token: str) -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="meetings", description="Показать запланированные встречи"),
+            BotCommand(command="level", description="Оценить уровень сервиса"),
             BotCommand(command="support", description="Связаться с поддержкой"),
         ],
         scope=BotCommandScopeAllPrivateChats(),
