@@ -55,6 +55,16 @@ export type Event = {
   updated_at: string;
 };
 
+export type AvailabilityEvent = {
+  id: number;
+  tenant_id: number;
+  start_time: string;
+  duration_minutes: number;
+  repeat_type: 0 | 1 | 2 | 3;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Payment = {
   id: number;
   contact_id: number;
@@ -79,6 +89,15 @@ export type Note = {
   is_important: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type ContactTelegramInfo = {
+  contact_id: number;
+  tenant_id: number;
+  telegram_chat_id: number | null;
+  tg_name: string | null;
+  is_connected: boolean;
+  link: string;
 };
 
 // API functions for contacts
@@ -109,6 +128,10 @@ export const crmContactsApi = {
     return apiFetch<void>(`/crm/contacts/${id}/`, {
       method: 'DELETE',
     });
+  },
+
+  telegramLink: async (id: number | string): Promise<ContactTelegramInfo> => {
+    return apiFetch<ContactTelegramInfo>(`/crm/contacts/${id}/telegram-link/`);
   },
 };
 
@@ -228,6 +251,36 @@ export const crmEventsApi = {
 
   delete: async (id: number | string): Promise<void> => {
     return apiFetch<void>(`/crm/events/${id}/`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+export const crmAvailabilityEventsApi = {
+  list: async (): Promise<AvailabilityEvent[]> => {
+    return apiFetch<AvailabilityEvent[]>('/crm/availability-events/');
+  },
+
+  detail: async (id: number | string): Promise<AvailabilityEvent> => {
+    return apiFetch<AvailabilityEvent>(`/crm/availability-events/${id}/`);
+  },
+
+  create: async (data: { start_time: string; duration_minutes: number; repeat_type: AvailabilityEvent['repeat_type'] }): Promise<AvailabilityEvent> => {
+    return apiFetch<AvailabilityEvent>('/crm/availability-events/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  update: async (id: number | string, data: Partial<{ start_time: string; duration_minutes: number; repeat_type: AvailabilityEvent['repeat_type'] }>): Promise<AvailabilityEvent> => {
+    return apiFetch<AvailabilityEvent>(`/crm/availability-events/${id}/`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  delete: async (id: number | string): Promise<void> => {
+    return apiFetch<void>(`/crm/availability-events/${id}/`, {
       method: 'DELETE',
     });
   },

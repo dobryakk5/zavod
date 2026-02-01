@@ -14,7 +14,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.models import TelegramTask, UserTenantBinding
+from core.services.tenant_service import TenantService
+
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
+from .utils import get_active_client
 
 User = get_user_model()
 
@@ -125,6 +129,19 @@ def _serialize_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "location": row.get("location") or "",
         "status": row.get("status") or "scheduled",
         "notes": row.get("notes") or "",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _serialize_availability_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Serialize availability event row from database to API format."""
+    return {
+        "id": row.get("id"),
+        "tenant_id": row.get("tenant_id"),
+        "start_time": row.get("start_time"),
+        "duration_minutes": row.get("duration_minutes"),
+        "repeat_type": row.get("repeat_type"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
@@ -261,6 +278,31 @@ def _fetch_event(schema: str, event_id: int) -> Dict[str, Any] | None:
             return None
         columns = [col[0] for col in cursor.description]
         return _serialize_event_row(dict(zip(columns, row)))
+
+
+def _fetch_availability_event(schema: str, tenant_id: int, event_id: int) -> Dict[str, Any] | None:
+    """Fetch a single availability event by tenant + ID from the specified schema."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT
+                id,
+                tenant_id,
+                start_time,
+                duration_minutes,
+                repeat_type,
+                created_at,
+                updated_at
+            FROM {schema}.events
+            WHERE tenant_id = %s AND id = %s
+            """,
+            [tenant_id, event_id],
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        columns = [col[0] for col in cursor.description]
+        return _serialize_availability_event_row(dict(zip(columns, row)))
 
 
 def _fetch_event_type(schema: str, event_type_id: int) -> Dict[str, Any] | None:
@@ -515,6 +557,63 @@ class ContactDetailView(APIView):
             if cursor.rowcount == 0:
                 return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ContactTelegramLinkView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get(self, request, contact_id: int):
+        schema = _map_schema()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT 1 FROM {schema}.contacts WHERE id = %s",
+                [contact_id],
+            )
+            if cursor.fetchone() is None:
+                return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+        client = get_active_client(request.user)
+        tenant_service = TenantService()
+        try:
+            link = tenant_service.generate_telegram_link(client.id, contact_id=contact_id)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        binding_qs = (
+            UserTenantBinding.objects.filter(tenant=client, contact_id=contact_id)
+            .order_by("-bound_at", "-id")
+        )
+        binding = binding_qs.filter(is_active=True).first() or binding_qs.first()
+
+        telegram_chat_id = None
+        tg_name = None
+        is_connected = False
+        if binding is not None:
+            telegram_chat_id = binding.telegram_chat_id
+            is_connected = bool(binding.is_active)
+            task = (
+                TelegramTask.objects.filter(
+                    client=client,
+                    telegram_user_id=telegram_chat_id,
+                )
+                .order_by("-received_at", "-id")
+                .first()
+            )
+            if task and task.tg_name:
+                tg_name = task.tg_name
+            else:
+                tg_name = f"tg_{telegram_chat_id}"
+
+        return Response(
+            {
+                "contact_id": int(contact_id),
+                "tenant_id": client.id,
+                "telegram_chat_id": telegram_chat_id,
+                "tg_name": tg_name,
+                "is_connected": is_connected,
+                "link": link,
+            }
+        )
 
 
 class TagsListView(APIView):
@@ -1017,6 +1116,147 @@ class EventDetailView(APIView):
             cursor.execute(f"DELETE FROM {schema}.crm_events WHERE id = %s", [event_id])
             if cursor.rowcount == 0:
                 return Response({"error": "Событие не найдено."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AvailabilityEventsListView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def get(self, request):
+        schema = _map_schema()
+        client = get_active_client(request.user)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT
+                    id,
+                    tenant_id,
+                    start_time,
+                    duration_minutes,
+                    repeat_type,
+                    created_at,
+                    updated_at
+                FROM {schema}.events
+                WHERE tenant_id = %s
+                ORDER BY start_time DESC
+                """,
+                [client.id],
+            )
+            rows = _fetch_all(cursor)
+
+        payload = []
+        for row in rows:
+            payload.append(_serialize_availability_event_row(row))
+
+        return Response(payload)
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        start_time = _coerce_text(request.data.get("start_time"), "start_time")
+        duration_minutes = _coerce_int(request.data.get("duration_minutes", 60), "duration_minutes")
+        repeat_type = _coerce_int(request.data.get("repeat_type", 0), "repeat_type")
+        if repeat_type not in {0, 1, 2, 3}:
+            raise ValidationError({"repeat_type": "Недопустимое значение."})
+
+        schema = _map_schema()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO {schema}.events
+                (tenant_id, start_time, duration_minutes, repeat_type)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+                """,
+                [client.id, start_time, duration_minutes, repeat_type],
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return Response({"error": "Не удалось создать доступное время."}, status=status.HTTP_400_BAD_REQUEST)
+
+        event_id = row[0]
+        created = _fetch_availability_event(schema, client.id, int(event_id))
+        if not created:
+            created = {
+                "id": int(event_id),
+                "tenant_id": client.id,
+                "start_time": start_time,
+                "duration_minutes": duration_minutes,
+                "repeat_type": repeat_type,
+                "created_at": None,
+                "updated_at": None,
+            }
+        return Response(created, status=status.HTTP_201_CREATED)
+
+
+class AvailabilityEventDetailView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get(self, request, event_id: int):
+        schema = _map_schema()
+        client = get_active_client(request.user)
+        event = _fetch_availability_event(schema, client.id, int(event_id))
+        if not event:
+            return Response({"error": "Доступное время не найдено."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(event)
+
+    def patch(self, request, event_id: int):
+        schema = _map_schema()
+        client = get_active_client(request.user)
+        updates = []
+        params = []
+
+        if "start_time" in request.data:
+            updates.append("start_time = %s")
+            params.append(_coerce_text(request.data.get("start_time"), "start_time"))
+
+        if "duration_minutes" in request.data:
+            updates.append("duration_minutes = %s")
+            params.append(_coerce_int(request.data.get("duration_minutes"), "duration_minutes"))
+
+        if "repeat_type" in request.data:
+            repeat_type = _coerce_int(request.data.get("repeat_type"), "repeat_type")
+            if repeat_type not in {0, 1, 2, 3}:
+                raise ValidationError({"repeat_type": "Недопустимое значение."})
+            updates.append("repeat_type = %s")
+            params.append(repeat_type)
+
+        if not updates:
+            return Response({"error": "Нет данных для обновления."}, status=status.HTTP_400_BAD_REQUEST)
+
+        params.extend([client.id, event_id])
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE {schema}.events
+                SET {', '.join(updates)}, updated_at = NOW()
+                WHERE tenant_id = %s AND id = %s
+                """,
+                params,
+            )
+            if cursor.rowcount == 0:
+                return Response({"error": "Доступное время не найдено."}, status=status.HTTP_404_NOT_FOUND)
+
+        updated = _fetch_availability_event(schema, client.id, int(event_id))
+        if not updated:
+            return Response({"error": "Доступное время не найдено."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(updated)
+
+    def delete(self, request, event_id: int):
+        schema = _map_schema()
+        client = get_active_client(request.user)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"DELETE FROM {schema}.events WHERE tenant_id = %s AND id = %s",
+                [client.id, event_id],
+            )
+            if cursor.rowcount == 0:
+                return Response({"error": "Доступное время не найдено."}, status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

@@ -80,6 +80,7 @@ from .views_tgstat import (
 from .views_map_crm import (
     ContactsListView,
     ContactDetailView,
+    ContactTelegramLinkView,
     TagsListView,
     TagDetailView,
     ContactTagsView,
@@ -87,6 +88,8 @@ from .views_map_crm import (
     EventTypeDetailView,
     EventsListView,
     EventDetailView,
+    AvailabilityEventsListView,
+    AvailabilityEventDetailView,
     PaymentsListView,
     PaymentDetailView,
     NotesListView,
@@ -189,6 +192,7 @@ urlpatterns = [
     # CRM endpoints
     path('crm/contacts/', ContactsListView.as_view(), name='crm-contacts-list'),
     path('crm/contacts/<int:contact_id>/', ContactDetailView.as_view(), name='crm-contact-detail'),
+    path('crm/contacts/<int:contact_id>/telegram-link/', ContactTelegramLinkView.as_view(), name='crm-contact-telegram-link'),
     path('crm/tags/', TagsListView.as_view(), name='crm-tags-list'),
     path('crm/tags/<int:tag_id>/', TagDetailView.as_view(), name='crm-tag-detail'),
     path('crm/contact-tags/', ContactTagsView.as_view(), name='crm-contact-tags'),
@@ -196,6 +200,8 @@ urlpatterns = [
     path('crm/event-types/<int:event_type_id>/', EventTypeDetailView.as_view(), name='crm-event-type-detail'),
     path('crm/events/', EventsListView.as_view(), name='crm-events-list'),
     path('crm/events/<int:event_id>/', EventDetailView.as_view(), name='crm-event-detail'),
+    path('crm/availability-events/', AvailabilityEventsListView.as_view(), name='crm-availability-events-list'),
+    path('crm/availability-events/<int:event_id>/', AvailabilityEventDetailView.as_view(), name='crm-availability-event-detail'),
     path('crm/payments/', PaymentsListView.as_view(), name='crm-payments-list'),
     path('crm/payments/<int:payment_id>/', PaymentDetailView.as_view(), name='crm-payment-detail'),
     path('crm/notes/', NotesListView.as_view(), name='crm-notes-list'),

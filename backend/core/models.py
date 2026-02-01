@@ -2512,6 +2512,28 @@ class MindNodePosition(models.Model):
         db_table = 'map"."mind_node_positions'
 
 
+class UserTenantBinding(models.Model):
+    tenant = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        db_column="tenant_id",
+        related_name="telegram_user_bindings",
+    )
+    telegram_chat_id = models.BigIntegerField()
+    contact_id = models.IntegerField(blank=True, null=True)
+    bound_at = models.DateTimeField(default=timezone.now)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."user_tenant_binding'
+        unique_together = ("telegram_chat_id", "tenant")
+        ordering = ("-bound_at", "-id")
+
+    def __str__(self):
+        return f"{self.telegram_chat_id} -> {self.tenant_id}"
+
+
 class TelegramTask(models.Model):
     client = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="client_id", related_name="telegram_tasks")
     tg_name = models.TextField()

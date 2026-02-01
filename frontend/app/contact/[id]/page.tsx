@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -13,6 +14,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
   CalendarIcon, 
+  CheckIcon,
+  Copy,
   DollarSignIcon, 
   FileTextIcon, 
   UserIcon, 
@@ -21,7 +24,8 @@ import {
   XIcon 
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { crmContactsApi, crmEventTypesApi, crmEventsApi, crmPaymentsApi, crmNotesApi, crmContactTagsApi } from '@/lib/api/crm';
+import { ApiError } from '@/lib/api';
+import { crmContactsApi, crmEventTypesApi, crmEventsApi, crmPaymentsApi, crmNotesApi, crmContactTagsApi, type ContactTelegramInfo } from '@/lib/api/crm';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 
 // Define types
@@ -214,6 +218,9 @@ export default function ContactDetailPage() {
   const [newPaymentProductId, setNewPaymentProductId] = useState<string>('none');
   const [savingPayment, setSavingPayment] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'payments' | 'notes'>('overview');
+  const [telegramInfo, setTelegramInfo] = useState<ContactTelegramInfo | null>(null);
+  const [telegramInfoError, setTelegramInfoError] = useState<string | null>(null);
+  const [telegramDialogOpen, setTelegramDialogOpen] = useState(false);
   const tagTypeLabels: Record<ContactTag['type'], string> = {
     goal: 'Цель',
     pain: 'Боль',
@@ -232,14 +239,40 @@ export default function ContactDetailPage() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [contactData, eventTypesData, productsData, eventsData, paymentsData, notesData, contactTagsData] = await Promise.all([
+        const telegramInfoPromise = crmContactsApi
+          .telegramLink(contactId)
+          .then((data) => ({ data, error: null as string | null }))
+          .catch((err) => {
+            let message = 'Не удалось получить ссылку.';
+            if (err instanceof ApiError) {
+              if (err.body) {
+                try {
+                  const parsed = JSON.parse(err.body);
+                  if (parsed && typeof parsed.error === 'string') {
+                    message = parsed.error;
+                  } else {
+                    message = err.body;
+                  }
+                } catch {
+                  message = err.body;
+                }
+              } else {
+                message = `Ошибка ${err.status}`;
+              }
+            } else if (err instanceof Error && err.message) {
+              message = err.message;
+            }
+            return { data: null as ContactTelegramInfo | null, error: message };
+          });
+        const [contactData, eventTypesData, productsData, eventsData, paymentsData, notesData, contactTagsData, telegramInfoData] = await Promise.all([
           crmContactsApi.detail(contactId),
           crmEventTypesApi.list(),
           clientProductsApi.list(),
           crmEventsApi.list(),
           crmPaymentsApi.list(),
           crmNotesApi.list(),
-          crmContactTagsApi.list(contactId)
+          crmContactTagsApi.list(contactId),
+          telegramInfoPromise,
         ]);
 
         setContact(contactData);
@@ -251,6 +284,8 @@ export default function ContactDetailPage() {
         setPayments(paymentsData.filter(payment => payment.contact_id === contactId));
         setNotes(notesData.filter(note => note.contact_id === contactId));
         setContactTags(contactTagsData);
+        setTelegramInfo(telegramInfoData.data);
+        setTelegramInfoError(telegramInfoData.error);
         setTagDescriptions(
           contactTagsData.reduce<Record<number, string>>((acc, tag) => {
             acc[tag.tag_id] = tag.description || '';
@@ -305,6 +340,24 @@ export default function ContactDetailPage() {
         description: 'Не удалось обновить данные',
       });
     }
+  };
+
+  const handleCopyTelegramLink = async () => {
+    const link = telegramInfo?.link;
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = link;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+    setTelegramDialogOpen(false);
   };
 
   const handleCancelEdit = () => {
@@ -752,6 +805,34 @@ export default function ContactDetailPage() {
                       </Button>
                     </div>
                   )}
+                </div>
+
+                <div className="space-y-[1px]">
+                  <div className="flex items-center justify-between">
+                    <Label>Telegram</Label>
+                    <div className="flex items-center gap-2">
+                      <span>
+                        {telegramInfo?.tg_name
+                          ? (telegramInfo.tg_name.startsWith('@') ? telegramInfo.tg_name : `@${telegramInfo.tg_name}`)
+                          : 'Не подключен'}
+                      </span>
+                      {telegramInfo?.is_connected && (
+                        <span className="inline-flex h-9 w-9 items-center justify-center">
+                          <CheckIcon className="h-4 w-4 text-emerald-500" />
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="h-auto px-0 text-xs text-muted-foreground"
+                      onClick={() => setTelegramDialogOpen(true)}
+                    >
+                      Подключить клиента к боту
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1450,6 +1531,31 @@ export default function ContactDetailPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={telegramDialogOpen} onOpenChange={setTelegramDialogOpen}>
+        <DialogContent className="sm:max-w-md bg-white text-black dark:bg-white dark:text-black dark:border-gray-200 [&>button]:text-black dark:[&>button]:text-black">
+          <DialogHeader>
+            <DialogTitle className="text-black dark:text-black">Подключение к Telegram</DialogTitle>
+            <DialogDescription className="text-black dark:text-black">
+              Отправьте эту ссылку для подключения к телеграм боту.
+            </DialogDescription>
+          </DialogHeader>
+          {telegramInfoError ? (
+            <div className="rounded-md border border-black/10 bg-white p-3 text-sm text-black dark:border-black/10 dark:bg-white dark:text-black break-all">
+              {telegramInfoError}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleCopyTelegramLink}
+              className="flex w-full items-start justify-between gap-3 rounded-md border border-black/10 bg-white p-3 text-left text-sm text-black transition hover:bg-gray-50 dark:border-black/10 dark:bg-white dark:text-black dark:hover:bg-gray-50"
+            >
+              <span className="break-all">{telegramInfo?.link || 'Ссылка недоступна.'}</span>
+              <Copy className="mt-0.5 h-4 w-4 shrink-0 text-black/60" />
+            </button>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

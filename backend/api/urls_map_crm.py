@@ -2,6 +2,7 @@ from django.urls import path
 from .views_map_crm import (
     ContactsListView,
     ContactDetailView,
+    ContactTelegramLinkView,
     TagsListView,
     TagDetailView,
     ContactTagsView,
@@ -9,6 +10,8 @@ from .views_map_crm import (
     EventTypeDetailView,
     EventsListView,
     EventDetailView,
+    AvailabilityEventsListView,
+    AvailabilityEventDetailView,
     PaymentsListView,
     PaymentDetailView,
     NotesListView,
@@ -19,6 +22,7 @@ urlpatterns = [
     # Contacts endpoints
     path('contacts/', ContactsListView.as_view(), name='map-contacts-list'),
     path('contacts/<int:contact_id>/', ContactDetailView.as_view(), name='map-contact-detail'),
+    path('contacts/<int:contact_id>/telegram-link/', ContactTelegramLinkView.as_view(), name='map-contact-telegram-link'),
     
     # Tags endpoints
     path('tags/', TagsListView.as_view(), name='map-tags-list'),
@@ -34,6 +38,10 @@ urlpatterns = [
     # Events endpoints
     path('events/', EventsListView.as_view(), name='map-events-list'),
     path('events/<int:event_id>/', EventDetailView.as_view(), name='map-event-detail'),
+
+    # Availability events endpoints
+    path('availability-events/', AvailabilityEventsListView.as_view(), name='map-availability-events-list'),
+    path('availability-events/<int:event_id>/', AvailabilityEventDetailView.as_view(), name='map-availability-event-detail'),
     
     # Payments endpoints
     path('payments/', PaymentsListView.as_view(), name='map-payments-list'),
