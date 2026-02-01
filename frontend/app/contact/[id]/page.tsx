@@ -26,7 +26,15 @@ import {
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import { crmContactsApi, crmEventTypesApi, crmEventsApi, crmPaymentsApi, crmNotesApi, crmContactTagsApi, type ContactTelegramInfo } from '@/lib/api/crm';
+import { clientApi } from '@/lib/api/client';
 import { clientProductsApi } from '@/lib/api/clientProducts';
+import {
+  DEFAULT_TENANT_TIMEZONE,
+  formatInTenantTimezone,
+  formatTenantDateTimeInput,
+  localDateTimeStringToUtcISOString,
+  normalizeTenantTimezone,
+} from '@/lib/timezone';
 
 // Define types
 type Contact = {
@@ -186,14 +194,25 @@ export default function ContactDetailPage() {
   const [savingNote, setSavingNote] = useState(false);
   const [newEventTitle, setNewEventTitle] = useState('');
   const [newEventDescription, setNewEventDescription] = useState('');
-  const getDefaultEventStart = () => {
-    const now = new Date();
-    const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 12, 0, 0, 0);
-    return new Date(nextDay.getTime() - nextDay.getTimezoneOffset() * 60000)
-      .toISOString()
-      .slice(0, 16);
+  const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
+  const getDefaultEventStart = (tz: string) => {
+    const normalizedTz = normalizeTenantTimezone(tz);
+    const nowUtc = new Date().toISOString();
+    const nowLocal = formatTenantDateTimeInput(nowUtc, normalizedTz);
+    if (!nowLocal) return '';
+    const [datePart] = nowLocal.split('T');
+    if (!datePart) return '';
+    const [year, month, day] = datePart.split('-').map((part) => Number(part));
+    if (!year || !month || !day) return '';
+    const nextDay = new Date(year, month - 1, day + 1, 12, 0, 0, 0);
+    const yyyy = String(nextDay.getFullYear()).padStart(4, '0');
+    const mm = String(nextDay.getMonth() + 1).padStart(2, '0');
+    const dd = String(nextDay.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}T12:00`;
   };
-  const [newEventStart, setNewEventStart] = useState(getDefaultEventStart);
+  const defaultEventStartRef = useRef(getDefaultEventStart(DEFAULT_TENANT_TIMEZONE));
+  const defaultPaymentStartRef = useRef(defaultEventStartRef.current);
+  const [newEventStart, setNewEventStart] = useState(defaultEventStartRef.current);
   const [newEventDuration, setNewEventDuration] = useState('60');
   const [newEventEnd, setNewEventEnd] = useState('');
   const [newEventLocation, setNewEventLocation] = useState('');
@@ -213,7 +232,7 @@ export default function ContactDetailPage() {
   const editEventTypeInputRef = useRef<HTMLInputElement | null>(null);
   const [newPaymentAmount, setNewPaymentAmount] = useState('');
   const [newPaymentCurrency, setNewPaymentCurrency] = useState('RUB');
-  const [newPaymentPlannedAt, setNewPaymentPlannedAt] = useState(getDefaultEventStart);
+  const [newPaymentPlannedAt, setNewPaymentPlannedAt] = useState(defaultPaymentStartRef.current);
   const [newPaymentPaid, setNewPaymentPaid] = useState(false);
   const [newPaymentProductId, setNewPaymentProductId] = useState<string>('none');
   const [savingPayment, setSavingPayment] = useState(false);
@@ -233,6 +252,31 @@ export default function ContactDetailPage() {
       setActiveTab(tab);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    const loadTimezone = async () => {
+      try {
+        const settings = await clientApi.getSettings();
+        setTenantTimezone(normalizeTenantTimezone(settings.timezone));
+      } catch (err) {
+        console.error('Failed to load client timezone:', err);
+        setTenantTimezone(DEFAULT_TENANT_TIMEZONE);
+      }
+    };
+    loadTimezone();
+  }, []);
+
+  useEffect(() => {
+    const nextDefault = getDefaultEventStart(tenantTimezone);
+    if (newEventStart === defaultEventStartRef.current) {
+      setNewEventStart(nextDefault);
+    }
+    if (newPaymentPlannedAt === defaultPaymentStartRef.current) {
+      setNewPaymentPlannedAt(nextDefault);
+    }
+    defaultEventStartRef.current = nextDefault;
+    defaultPaymentStartRef.current = nextDefault;
+  }, [tenantTimezone]);
 
   // Load contact data
   useEffect(() => {
@@ -407,17 +451,16 @@ export default function ContactDetailPage() {
     const title = newEventTitle.trim() || 'Встреча';
     const durationRaw = Number(newEventDuration);
     const durationValue = Number.isFinite(durationRaw) && durationRaw > 0 ? durationRaw : 60;
-    const toLocalInput = (date: Date) =>
-      new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-        .toISOString()
-        .slice(0, 16);
-    let startDate = newEventStart ? new Date(newEventStart) : new Date();
-    if (Number.isNaN(startDate.getTime())) {
-      startDate = new Date();
+    const startPayload = newEventStart
+      ? localDateTimeStringToUtcISOString(newEventStart, tenantTimezone)
+      : '';
+    const endPayload = newEventEnd
+      ? localDateTimeStringToUtcISOString(newEventEnd, tenantTimezone)
+      : '';
+    if (!startPayload || !endPayload) {
+      toast.error('Некорректная дата или время встречи');
+      return;
     }
-    const startPayload = newEventStart || toLocalInput(startDate);
-    const computedEnd = new Date(startDate.getTime() + durationValue * 60000);
-    const endPayload = newEventEnd || toLocalInput(computedEnd);
     setSavingEvent(true);
     try {
       const created = await crmEventsApi.create({
@@ -639,17 +682,20 @@ export default function ContactDetailPage() {
       setNewEventEnd('');
       return;
     }
-    const end = new Date(newEventStart);
-    end.setMinutes(end.getMinutes() + durationValue);
-    if (Number.isNaN(end.getTime())) {
+    const startUtcIso = localDateTimeStringToUtcISOString(newEventStart, tenantTimezone);
+    if (!startUtcIso) {
       setNewEventEnd('');
       return;
     }
-    const local = new Date(end.getTime() - end.getTimezoneOffset() * 60000)
-      .toISOString()
-      .slice(0, 16);
-    setNewEventEnd(local);
-  }, [newEventStart, newEventDuration]);
+    const endUtc = new Date(startUtcIso);
+    if (Number.isNaN(endUtc.getTime())) {
+      setNewEventEnd('');
+      return;
+    }
+    endUtc.setMinutes(endUtc.getMinutes() + durationValue);
+    const endLocal = formatTenantDateTimeInput(endUtc, tenantTimezone);
+    setNewEventEnd(endLocal);
+  }, [newEventStart, newEventDuration, tenantTimezone]);
 
   if (loading) {
     return (
@@ -1235,9 +1281,9 @@ export default function ContactDetailPage() {
                               <p className="text-sm text-muted-foreground">{event.description}</p>
                             )}
                             <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
-                              <span>{new Date(event.start_time).toLocaleString('ru-RU')}</span>
+                              <span>{formatInTenantTimezone(event.start_time, tenantTimezone, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                               <span>→</span>
-                              <span>{new Date(event.end_time).toLocaleString('ru-RU')}</span>
+                              <span>{formatInTenantTimezone(event.end_time, tenantTimezone, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                               <span>•</span>
                               <span>{event.location}</span>
                             </div>
@@ -1396,13 +1442,13 @@ export default function ContactDetailPage() {
                     if (payment.planned_at) {
                       metaItems.push({
                         key: 'planned',
-                        content: `План: ${new Date(payment.planned_at).toLocaleDateString('ru-RU')}`,
+                        content: `План: ${formatInTenantTimezone(payment.planned_at, tenantTimezone, { year: 'numeric', month: '2-digit', day: '2-digit' })}`,
                       });
                     }
                     if (payment.paid_at) {
                       metaItems.push({
                         key: 'paid',
-                        content: `Оплачено: ${new Date(payment.paid_at).toLocaleDateString('ru-RU')}`,
+                        content: `Оплачено: ${formatInTenantTimezone(payment.paid_at, tenantTimezone, { year: 'numeric', month: '2-digit', day: '2-digit' })}`,
                       });
                     }
 
@@ -1517,7 +1563,7 @@ export default function ContactDetailPage() {
                             {note.content}
                           </p>
                           <p className="text-xs text-muted-foreground mt-2">
-                            {new Date(note.created_at).toLocaleString('ru-RU')}
+                            {formatInTenantTimezone(note.created_at, tenantTimezone, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                           </p>
                         </div>
                       </div>

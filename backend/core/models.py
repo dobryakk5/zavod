@@ -30,7 +30,7 @@ class Client(models.Model):
         help_text='Например "доставка пиццы" или "онлайн-курс по йоге"',
     )
     slug = models.SlugField(unique=True)
-    timezone = models.CharField(max_length=64, default="Europe/Helsinki")
+    timezone = models.CharField(max_length=64, default="Europe/Moscow")
 
     # AI Analysis settings
     ai_analysis_channel_url = models.CharField(

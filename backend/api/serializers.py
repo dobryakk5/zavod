@@ -911,6 +911,22 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["slug", "last_image_generation_at", "last_video_generation_at"]  # slug is readonly
 
+    def validate_timezone(self, value: str | None) -> str:
+        if value is None:
+            return "Europe/Moscow"
+        normalized = str(value).strip()
+        if not normalized:
+            return "Europe/Moscow"
+        routing = {
+            "Europe/Moscow UTC+3": "Europe/Moscow",
+            "UTC+0": "UTC",
+            "Europe/Helsinki UTC+2/UTC+3": "Europe/Helsinki",
+            "Europe/London UTC+0/UTC+1": "Europe/London",
+            "America/New_York UTC-5/UTC-4": "America/New_York",
+            "Asia/Tokyo UTC+9": "Asia/Tokyo",
+        }
+        return routing.get(normalized, normalized)
+
     def validate_telegram_client_channel(self, value: str | None) -> str:
         if not value:
             return ""

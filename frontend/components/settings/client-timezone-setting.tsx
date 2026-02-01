@@ -10,16 +10,33 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-const DEFAULT_TIMEZONE_OPTIONS = [
-  'UTC',
-  'Europe/Helsinki',
-  'Europe/Moscow',
-  'Europe/London',
-  'America/New_York',
-  'Asia/Tokyo',
+const DEFAULT_TIMEZONE_VALUE = 'Europe/Moscow';
+const TIMEZONE_ROUTING = [
+  { value: 'Europe/Moscow', label: 'Europe/Moscow UTC+3' },
+  { value: 'UTC', label: 'UTC+0' },
+  { value: 'Europe/Helsinki', label: 'Europe/Helsinki UTC+2/UTC+3' },
+  { value: 'Europe/London', label: 'Europe/London UTC+0/UTC+1' },
+  { value: 'America/New_York', label: 'America/New_York UTC-5/UTC-4' },
+  { value: 'Asia/Tokyo', label: 'Asia/Tokyo UTC+9' },
 ] as const;
 
 const normalizeTimezone = (value?: string | null) => (value ?? '').trim();
+
+const resolveTimezoneValue = (value?: string | null) => {
+  const normalized = normalizeTimezone(value);
+  if (!normalized) {
+    return '';
+  }
+  const direct = TIMEZONE_ROUTING.find((item) => item.value === normalized);
+  if (direct) {
+    return direct.value;
+  }
+  const mapped = TIMEZONE_ROUTING.find((item) => item.label === normalized);
+  if (mapped) {
+    return mapped.value;
+  }
+  return normalized;
+};
 
 export function ClientTimezoneSetting() {
   const { canEdit } = useRole();
@@ -30,10 +47,10 @@ export function ClientTimezoneSetting() {
 
   const isDirty = useMemo(() => timezone !== initialTimezone, [timezone, initialTimezone]);
   const timezoneOptions = useMemo(() => {
-    const candidate = normalizeTimezone(timezone);
-    const base = [...DEFAULT_TIMEZONE_OPTIONS] as string[];
-    if (candidate && !base.includes(candidate)) {
-      return [candidate, ...base];
+    const candidate = resolveTimezoneValue(timezone);
+    const base = [...TIMEZONE_ROUTING] as { value: string; label: string }[];
+    if (candidate && !base.some((item) => item.value === candidate)) {
+      return [{ value: candidate, label: candidate }, ...base];
     }
     return base;
   }, [timezone]);
@@ -42,9 +59,10 @@ export function ClientTimezoneSetting() {
     setLoading(true);
     try {
       const data = await clientApi.getSettings();
-      const currentTimezone = normalizeTimezone(data.timezone);
-      setTimezone(currentTimezone);
-      setInitialTimezone(currentTimezone);
+      const currentTimezone = resolveTimezoneValue(data.timezone);
+      const nextTimezone = currentTimezone || DEFAULT_TIMEZONE_VALUE;
+      setTimezone(nextTimezone);
+      setInitialTimezone(nextTimezone);
     } catch (error) {
       console.error(error);
       toast.error('Не удалось загрузить часовой пояс');
@@ -96,9 +114,9 @@ export function ClientTimezoneSetting() {
               <SelectValue placeholder="Выберите часовой пояс" />
             </SelectTrigger>
             <SelectContent>
-              {timezoneOptions.map((value) => (
-                <SelectItem key={value} value={value}>
-                  {value}
+              {timezoneOptions.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
                 </SelectItem>
               ))}
             </SelectContent>

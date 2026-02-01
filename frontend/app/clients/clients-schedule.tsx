@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { EditIcon, TrashIcon } from 'lucide-react';
@@ -10,7 +10,17 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { ApiError } from '@/lib/api';
+import { clientApi } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
+import {
+  DEFAULT_TENANT_TIMEZONE,
+  formatInTenantTimezone,
+  formatTimeRangeInTenantTimezone,
+  formatTenantOffsetLabel,
+  normalizeTenantTimezone,
+  tenantDateToUtcISOString,
+  toTenantDate,
+} from '@/lib/timezone';
 import { useCalendarDnD } from './useCalendarDnD';
 import {
   crmAvailabilityEventsApi,
@@ -68,24 +78,19 @@ const statusVariants: Record<Event['status'], 'default' | 'secondary' | 'destruc
   no_show: 'outline',
 };
 
-function formatTimeRange(start: string, end: string) {
-  const startDate = new Date(start);
-  if (Number.isNaN(startDate.getTime())) return '';
-  const startTime = startDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  const endDate = new Date(end);
-  if (Number.isNaN(endDate.getTime())) return startTime;
-  const endTime = endDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  return startTime === endTime ? startTime : `${startTime}–${endTime}`;
+function formatTimeRange(start: string, end: string, timeZone: string) {
+  return formatTimeRangeInTenantTimezone(start, end, timeZone);
 }
 
 function eventToCalendarItem(
   event: Event,
   contactsById: Map<number, Contact>,
-  eventTypesById: Map<number, EventType>
+  eventTypesById: Map<number, EventType>,
+  timeZone: string
 ): CalendarEventItem | null {
-  const startDate = new Date(event.start_time);
+  const startDate = toTenantDate(event.start_time, timeZone);
   if (Number.isNaN(startDate.getTime())) return null;
-  const endDate = new Date(event.end_time);
+  const endDate = toTenantDate(event.end_time, timeZone);
   const endTimestamp = Number.isNaN(endDate.getTime())
     ? startDate.getTime() + 60 * 60 * 1000
     : endDate.getTime();
@@ -96,7 +101,7 @@ function eventToCalendarItem(
     eventId: event.id,
     contactId: event.contact_id,
     title: event.title || 'Встреча',
-    time: formatTimeRange(event.start_time, event.end_time),
+    time: formatTimeRange(event.start_time, event.end_time, timeZone),
     contactName,
     status: event.status,
     location: event.location,
@@ -109,22 +114,33 @@ function eventToCalendarItem(
   };
 }
 
-function formatAvailabilityTimeFromDate(startDate: Date, durationMinutes: number) {
+function formatTenantLocalDate(
+  date: Date,
+  timeZone: string,
+  options: Intl.DateTimeFormatOptions
+) {
+  const utcValue = tenantDateToUtcISOString(date, timeZone);
+  if (!utcValue) return '';
+  return formatInTenantTimezone(utcValue, timeZone, options);
+}
+
+function formatAvailabilityTimeFromDate(startDate: Date, durationMinutes: number, timeZone: string) {
   if (Number.isNaN(startDate.getTime())) return '';
-  const startTime = startDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const startTime = formatTenantLocalDate(startDate, timeZone, { hour: '2-digit', minute: '2-digit' });
   if (!durationMinutes || Number.isNaN(durationMinutes)) return startTime;
   const endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
   if (Number.isNaN(endDate.getTime())) return startTime;
-  const endTime = endDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const endTime = formatTenantLocalDate(endDate, timeZone, { hour: '2-digit', minute: '2-digit' });
   return startTime === endTime ? startTime : `${startTime}–${endTime}`;
 }
 
 function buildAvailabilityOccurrence(
   item: AvailabilityEvent,
   occurrenceDate: Date,
-  occurrenceKey: string
+  occurrenceKey: string,
+  timeZone: string
 ): CalendarAvailabilityItem | null {
-  const baseStart = new Date(item.start_time);
+  const baseStart = toTenantDate(item.start_time, timeZone);
   if (Number.isNaN(baseStart.getTime())) return null;
   const startDate = new Date(occurrenceDate);
   startDate.setHours(baseStart.getHours(), baseStart.getMinutes(), baseStart.getSeconds(), 0);
@@ -132,7 +148,7 @@ function buildAvailabilityOccurrence(
     id: `availability-${item.id}-${occurrenceKey}`,
     availabilityId: item.id,
     startDate,
-    time: formatAvailabilityTimeFromDate(startDate, item.duration_minutes),
+    time: formatAvailabilityTimeFromDate(startDate, item.duration_minutes, timeZone),
     startTimestamp: startDate.getTime(),
     durationMinutes: item.duration_minutes,
     repeatType: item.repeat_type,
@@ -305,35 +321,38 @@ function WeekViewContent({
   onDayClick,
   onItemEdit,
   onEventDrop,
+  timeZone,
 }: {
   weekDates: Date[];
   itemsByDate: ItemsByDate;
   onDayClick?: DayClickHandler;
   onItemEdit?: (item: CalendarItem) => void;
   onEventDrop?: EventDropHandler;
+  timeZone: string;
 }) {
-  const todayKey = formatKey(new Date());
+  const todayKey = formatKey(toTenantDate(new Date(), timeZone));
   const weekItems = weekDates.flatMap((date) => itemsByDate[formatKey(date)] || []);
   const { startHour, endHour } = getCalendarHourRange(weekItems);
   const hours = Array.from({ length: Math.max(1, endHour - startHour) }, (_, i) => startHour + i);
   const totalMinutes = hours.length * 60;
   const pxPerMinute = WEEK_HOUR_ROW_HEIGHT / 60;
   const dnd = useCalendarDnD({ startHour, pxPerMinute, slotMinutes: SLOT_MINUTES });
+  const offsetLabel = formatTenantOffsetLabel(timeZone);
 
   return (
     <div className="min-w-[1000px] rounded-lg border border-slate-200 overflow-hidden">
       <div className="grid grid-cols-[72px_repeat(7,1fr)] border-b border-slate-200 bg-white">
-        <div className="px-2 py-2 text-xs text-slate-400">GMT+03</div>
+        <div className="px-2 py-2 text-xs text-slate-400">{offsetLabel}</div>
         {weekDates.map((d) => {
           const k = formatKey(d);
           const isToday = todayKey === k;
           return (
             <div key={k} className="border-l border-slate-200 py-2 text-center -ml-px">
               <div className="text-[10px] uppercase tracking-wide text-slate-400">
-                {d.toLocaleDateString('ru-RU', { weekday: 'short' })}
+                {formatTenantLocalDate(d, timeZone, { weekday: 'short' })}
               </div>
               <div className={cn('mt-1 text-sm font-semibold', isToday && 'text-blue-600')}>
-                {d.getDate()}
+                {formatTenantLocalDate(d, timeZone, { day: 'numeric' })}
               </div>
             </div>
           );
@@ -476,7 +495,13 @@ function WeekViewContent({
                     ) : (
                       <div className="space-y-1">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="truncate font-medium text-slate-900">{item.contactName}</div>
+                          <Link
+                            href={`/contact/${item.contactId}?tab=schedule`}
+                            className="truncate font-medium text-slate-900 hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {item.contactName}
+                          </Link>
                           <button
                             type="button"
                             className="inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
@@ -510,6 +535,7 @@ function MonthViewContent({
   onDayClick,
   showAvailability,
   onItemEdit,
+  timeZone,
 }: {
   monthDates: Date[];
   itemsByDate: ItemsByDate;
@@ -517,8 +543,9 @@ function MonthViewContent({
   onDayClick?: DayClickHandler;
   showAvailability: boolean;
   onItemEdit: (item: CalendarItem) => void;
+  timeZone: string;
 }) {
-  const todayKey = formatKey(new Date());
+  const todayKey = formatKey(toTenantDate(new Date(), timeZone));
 
   return (
     <div className="min-w-[1000px] space-y-2">
@@ -547,13 +574,13 @@ function MonthViewContent({
             <div key={k} className={containerClass} onClick={() => onDayClick?.(d)}>
               <div className="flex items-center justify-between mb-2">
                 <div className={cn('text-xs font-medium', isToday && 'text-blue-600')}>
-                  {d.getDate()}
+                  {formatTenantLocalDate(d, timeZone, { day: 'numeric' })}
                 </div>
               </div>
 
               <div className="space-y-1 text-xs">
                 {visibleItems.slice(0, 3).map((item) => {
-                  const timeLabel = new Date(item.startTimestamp).toLocaleTimeString('ru-RU', {
+                  const timeLabel = formatTenantLocalDate(new Date(item.startTimestamp), timeZone, {
                     hour: '2-digit',
                     minute: '2-digit',
                   });
@@ -595,12 +622,14 @@ function DayViewContent({
   onDayClick,
   onItemEdit,
   onEventDrop,
+  timeZone,
 }: {
   cursor: Date;
   itemsByDate: ItemsByDate;
   onDayClick?: DayClickHandler;
   onItemEdit?: (item: CalendarItem) => void;
   onEventDrop?: EventDropHandler;
+  timeZone: string;
 }) {
   const k = formatKey(cursor);
   const items = itemsByDate[k] || [];
@@ -612,17 +641,18 @@ function DayViewContent({
   dayStart.setHours(startHour, 0, 0, 0);
   const dayStartMs = dayStart.getTime();
   const dnd = useCalendarDnD({ startHour, pxPerMinute, slotMinutes: SLOT_MINUTES });
+  const offsetLabel = formatTenantOffsetLabel(timeZone);
 
   return (
     <div className="min-w-[600px] rounded-lg border border-slate-200 overflow-hidden">
       <div className="grid grid-cols-[72px_1fr] border-b border-slate-200 bg-white">
-        <div className="px-2 py-2 text-xs text-slate-400">GMT+03</div>
+        <div className="px-2 py-2 text-xs text-slate-400">{offsetLabel}</div>
         <div className="py-2 text-center">
           <div className="text-[10px] uppercase tracking-wide text-slate-400">
-            {cursor.toLocaleDateString('ru-RU', { weekday: 'short' })}
+            {formatTenantLocalDate(cursor, timeZone, { weekday: 'short' })}
           </div>
           <div className="mt-1 text-sm font-semibold text-slate-900">
-            {cursor.getDate()}
+            {formatTenantLocalDate(cursor, timeZone, { day: 'numeric' })}
           </div>
         </div>
       </div>
@@ -779,7 +809,9 @@ function DayViewContent({
 export default function ClientsSchedule() {
   const router = useRouter();
   const [view, setView] = useState<ViewMode>('week');
-  const [cursor, setCursor] = useState<Date>(new Date());
+  const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
+  const cursorInitializedRef = useRef(false);
+  const [cursor, setCursor] = useState<Date>(() => toTenantDate(new Date(), DEFAULT_TENANT_TIMEZONE));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
@@ -804,24 +836,34 @@ export default function ClientsSchedule() {
   const [monthEditDeleting, setMonthEditDeleting] = useState(false);
   const [monthEditError, setMonthEditError] = useState<string | null>(null);
 
+  const normalizedTimezone = useMemo(() => normalizeTenantTimezone(tenantTimezone), [tenantTimezone]);
   const weekDates = useMemo(() => generateWeekDates(cursor), [cursor]);
   const monthDates = useMemo(() => generateMonthDates(cursor), [cursor]);
+
+  useEffect(() => {
+    if (!cursorInitializedRef.current) {
+      setCursor(toTenantDate(new Date(), normalizedTimezone));
+      cursorInitializedRef.current = true;
+    }
+  }, [normalizedTimezone]);
 
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       setError(null);
       try {
-        const [eventsData, contactsData, eventTypesData, availabilityData] = await Promise.all([
+        const [eventsData, contactsData, eventTypesData, availabilityData, settingsData] = await Promise.all([
           crmEventsApi.list(),
           crmContactsApi.list(),
           crmEventTypesApi.list(),
           crmAvailabilityEventsApi.list(),
+          clientApi.getSettings(),
         ]);
         setEvents(eventsData);
         setContacts(contactsData);
         setEventTypes(eventTypesData);
         setAvailabilityEvents(availabilityData);
+        setTenantTimezone(normalizeTenantTimezone(settingsData.timezone));
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
           router.push('/login');
@@ -847,7 +889,7 @@ export default function ClientsSchedule() {
     const eventTypesById = new Map(eventTypes.map((eventType) => [eventType.id, eventType]));
 
     events.forEach((event) => {
-      const item = eventToCalendarItem(event, contactsById, eventTypesById);
+      const item = eventToCalendarItem(event, contactsById, eventTypesById, normalizedTimezone);
       if (!item) return;
       const key = formatKey(new Date(item.startTimestamp));
       if (!map[key]) map[key] = [];
@@ -855,7 +897,7 @@ export default function ClientsSchedule() {
     });
 
     availabilityEvents.forEach((event) => {
-      const baseStart = new Date(event.start_time);
+      const baseStart = toTenantDate(event.start_time, normalizedTimezone);
       if (Number.isNaN(baseStart.getTime())) return;
       const baseDateKey = formatKey(baseStart);
       const baseDay = new Date(baseStart);
@@ -879,7 +921,7 @@ export default function ClientsSchedule() {
         }
 
         if (!matches) return;
-        const item = buildAvailabilityOccurrence(event, date, dateKey);
+        const item = buildAvailabilityOccurrence(event, date, dateKey, normalizedTimezone);
         if (!item) return;
         if (!map[dateKey]) map[dateKey] = [];
         map[dateKey].push(item);
@@ -907,7 +949,7 @@ export default function ClientsSchedule() {
     });
 
     return map;
-  }, [events, contacts, eventTypes, availabilityEvents, view, cursor, weekDates, monthDates]);
+  }, [events, contacts, eventTypes, availabilityEvents, view, cursor, weekDates, monthDates, normalizedTimezone]);
 
   function prev() {
     const nextCursor = new Date(cursor);
@@ -958,13 +1000,7 @@ export default function ClientsSchedule() {
 
 
   function formatLocalDateTime(value: Date) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, '0');
-    const day = String(value.getDate()).padStart(2, '0');
-    const hours = String(value.getHours()).padStart(2, '0');
-    const minutes = String(value.getMinutes()).padStart(2, '0');
-    const seconds = String(value.getSeconds()).padStart(2, '0');
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    return tenantDateToUtcISOString(value, normalizedTimezone);
   }
 
   function formatDateInput(value: Date) {
@@ -1064,8 +1100,8 @@ export default function ClientsSchedule() {
   async function handleEventDrop(eventId: number, targetDate: Date, targetMinutes: number) {
     const eventItem = events.find((item) => item.id === eventId);
     if (!eventItem) return;
-    const startDate = new Date(eventItem.start_time);
-    const endDate = new Date(eventItem.end_time);
+    const startDate = toTenantDate(eventItem.start_time, normalizedTimezone);
+    const endDate = toTenantDate(eventItem.end_time, normalizedTimezone);
     const durationMinutes = Number.isNaN(endDate.getTime())
       ? 60
       : Math.max(15, Math.round((endDate.getTime() - startDate.getTime()) / 60000) || 60);
@@ -1132,7 +1168,7 @@ export default function ClientsSchedule() {
 
     const startMinutes = hours * 60 + minutes;
     const conflict = availabilityEvents.some((item) => {
-      const itemStart = new Date(item.start_time);
+      const itemStart = toTenantDate(item.start_time, normalizedTimezone);
       if (Number.isNaN(itemStart.getTime())) return false;
 
       const itemMinutes = itemStart.getHours() * 60 + itemStart.getMinutes();
@@ -1230,10 +1266,10 @@ export default function ClientsSchedule() {
             </Button>
             <div className="px-3 py-1 text-sm font-medium min-w-[200px] text-center">
               {view === 'month'
-                ? cursor.toLocaleString('ru-RU', { month: 'long', year: 'numeric' })
+                ? formatTenantLocalDate(cursor, normalizedTimezone, { month: 'long', year: 'numeric' })
                 : view === 'week'
-                ? `${weekDates[0].toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} — ${weekDates[6].toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}`
-                : cursor.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
+                ? `${formatTenantLocalDate(weekDates[0], normalizedTimezone, { day: 'numeric', month: 'short' })} — ${formatTenantLocalDate(weekDates[6], normalizedTimezone, { day: 'numeric', month: 'short' })}`
+                : formatTenantLocalDate(cursor, normalizedTimezone, { day: 'numeric', month: 'long', year: 'numeric' })}
             </div>
             <Button onClick={next} size="sm" variant="outline">
               &rarr;
@@ -1250,6 +1286,7 @@ export default function ClientsSchedule() {
             onDayClick={openAvailability}
             onItemEdit={openMonthEdit}
             onEventDrop={handleEventDrop}
+            timeZone={normalizedTimezone}
           />
         )}
         {view === 'month' && (
@@ -1260,6 +1297,7 @@ export default function ClientsSchedule() {
             onDayClick={openAvailability}
             showAvailability={showAvailabilityInMonth}
             onItemEdit={openMonthEdit}
+            timeZone={normalizedTimezone}
           />
         )}
         {view === 'day' && (
@@ -1269,6 +1307,7 @@ export default function ClientsSchedule() {
             onDayClick={openAvailability}
             onItemEdit={openMonthEdit}
             onEventDrop={handleEventDrop}
+            timeZone={normalizedTimezone}
           />
         )}
       </div>
@@ -1295,10 +1334,10 @@ export default function ClientsSchedule() {
           <DialogHeader>
             <DialogTitle>
               {availabilityDate
-                ? `${availabilityDate.toLocaleDateString('ru-RU', {
+                ? `${formatTenantLocalDate(availabilityDate, normalizedTimezone, {
                     day: 'numeric',
                     month: 'long',
-                  })} - ${availabilityDate.toLocaleDateString('ru-RU', { weekday: 'long' })}`
+                  })} - ${formatTenantLocalDate(availabilityDate, normalizedTimezone, { weekday: 'long' })}`
                 : 'Доступное время'}
             </DialogTitle>
           </DialogHeader>

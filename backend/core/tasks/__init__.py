@@ -93,6 +93,9 @@ from .products import (
 from .scheduling import (
     auto_schedule_story_posts,
 )
+from .meeting_reminders import (
+    send_meeting_reminders,
+)
 
 __all__ = [
     # Publishing (2)
@@ -154,4 +157,7 @@ __all__ = [
 
     # Scheduling (1)
     'auto_schedule_story_posts',
+
+    # CRM reminders (1)
+    'send_meeting_reminders',
 ]

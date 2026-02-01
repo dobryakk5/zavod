@@ -194,12 +194,17 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERYD_HIJACK_ROOT_LOGGER = False
 SCHEDULES_POLL_SECONDS = int(os.getenv("SCHEDULES_POLL_SECONDS", "60"))
+MEETING_REMINDERS_POLL_SECONDS = int(os.getenv("MEETING_REMINDERS_POLL_SECONDS", "60"))
 PROJECT_CHANNEL_ANALYSIS_HOUR = int(os.getenv("PROJECT_CHANNEL_ANALYSIS_HOUR", "9"))
 PROJECT_CHANNEL_ANALYSIS_MINUTE = int(os.getenv("PROJECT_CHANNEL_ANALYSIS_MINUTE", "0"))
 CELERY_BEAT_SCHEDULE = {
     "process-due-schedules": {
         "task": "core.tasks.publishing.process_due_schedules",
         "schedule": timedelta(seconds=SCHEDULES_POLL_SECONDS),
+    },
+    "meeting-reminders": {
+        "task": "core.tasks.meeting_reminders.send_meeting_reminders",
+        "schedule": timedelta(seconds=MEETING_REMINDERS_POLL_SECONDS),
     },
     "project-channel-analysis-daily": {
         "task": "core.tasks.channel_analysis.schedule_project_channel_analysis_daily",

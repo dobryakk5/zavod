@@ -12,11 +12,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { ApiError } from '@/lib/api';
 import { crmContactsApi, crmEventsApi, crmEventTypesApi, type Contact, type Event, type EventType } from '@/lib/api/crm';
-
-const toLocalInput = (date: Date) =>
-  new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-    .toISOString()
-    .slice(0, 16);
+import { clientApi } from '@/lib/api/client';
+import {
+  DEFAULT_TENANT_TIMEZONE,
+  formatTenantDateTimeInput,
+  localDateTimeStringToUtcISOString,
+  normalizeTenantTimezone,
+} from '@/lib/timezone';
 
 export default function MeetEditPage() {
   const { id } = useParams<{ id: string }>();
@@ -37,6 +39,7 @@ export default function MeetEditPage() {
   const [eventLocation, setEventLocation] = useState('');
   const [eventDescription, setEventDescription] = useState('');
   const [eventTypeId, setEventTypeId] = useState<string>('none');
+  const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
 
   const eventStartInputRef = useRef<HTMLInputElement | null>(null);
   const eventEndInputRef = useRef<HTMLInputElement | null>(null);
@@ -46,6 +49,19 @@ export default function MeetEditPage() {
     eventTypes.forEach((item) => map.set(item.id, item));
     return map;
   }, [eventTypes]);
+
+  useEffect(() => {
+    const loadTimezone = async () => {
+      try {
+        const settings = await clientApi.getSettings();
+        setTenantTimezone(normalizeTenantTimezone(settings.timezone));
+      } catch (err) {
+        console.error('Failed to load client timezone:', err);
+        setTenantTimezone(DEFAULT_TENANT_TIMEZONE);
+      }
+    };
+    loadTimezone();
+  }, []);
 
   useEffect(() => {
     const loadData = async () => {
@@ -73,10 +89,10 @@ export default function MeetEditPage() {
         const startDate = new Date(eventData.start_time);
         const endDate = new Date(eventData.end_time);
         if (!Number.isNaN(startDate.getTime())) {
-          setEventStart(toLocalInput(startDate));
+          setEventStart(formatTenantDateTimeInput(startDate, tenantTimezone));
         }
         if (!Number.isNaN(endDate.getTime())) {
-          setEventEnd(toLocalInput(endDate));
+          setEventEnd(formatTenantDateTimeInput(endDate, tenantTimezone));
         }
 
         if (!Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime())) {
@@ -103,7 +119,7 @@ export default function MeetEditPage() {
     };
 
     loadData();
-  }, [eventId, router]);
+  }, [eventId, router, tenantTimezone]);
 
   useEffect(() => {
     if (!eventStart) {
@@ -115,14 +131,19 @@ export default function MeetEditPage() {
       setEventEnd('');
       return;
     }
-    const end = new Date(eventStart);
-    end.setMinutes(end.getMinutes() + durationValue);
-    if (Number.isNaN(end.getTime())) {
+    const startUtc = localDateTimeStringToUtcISOString(eventStart, tenantTimezone);
+    if (!startUtc) {
       setEventEnd('');
       return;
     }
-    setEventEnd(toLocalInput(end));
-  }, [eventStart, eventDuration]);
+    const endUtc = new Date(startUtc);
+    endUtc.setMinutes(endUtc.getMinutes() + durationValue);
+    if (Number.isNaN(endUtc.getTime())) {
+      setEventEnd('');
+      return;
+    }
+    setEventEnd(formatTenantDateTimeInput(endUtc, tenantTimezone));
+  }, [eventStart, eventDuration, tenantTimezone]);
 
   const handleSave = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -133,18 +154,19 @@ export default function MeetEditPage() {
       return;
     }
 
-    const startDate = new Date(eventStart);
-    if (Number.isNaN(startDate.getTime())) {
+    const startUtc = localDateTimeStringToUtcISOString(eventStart, tenantTimezone);
+    if (!startUtc) {
       toast.error('Некорректная дата начала');
       return;
     }
 
-    let endPayload = eventEnd;
+    let endPayload = eventEnd ? localDateTimeStringToUtcISOString(eventEnd, tenantTimezone) : '';
     if (!endPayload) {
       const durationValue = Number(eventDuration);
       const safeDuration = Number.isFinite(durationValue) && durationValue > 0 ? durationValue : 60;
-      const computedEnd = new Date(startDate.getTime() + safeDuration * 60000);
-      endPayload = toLocalInput(computedEnd);
+      const computedEnd = new Date(startUtc);
+      computedEnd.setMinutes(computedEnd.getMinutes() + safeDuration);
+      endPayload = computedEnd.toISOString();
     }
 
     setSaving(true);
@@ -152,7 +174,7 @@ export default function MeetEditPage() {
       await crmEventsApi.update(eventId, {
         title: eventTitle.trim() || 'Встреча',
         description: eventDescription.trim(),
-        start_time: eventStart,
+        start_time: startUtc,
         end_time: endPayload,
         location: eventLocation.trim(),
         event_type_id: eventTypeId === 'none' ? null : Number(eventTypeId),

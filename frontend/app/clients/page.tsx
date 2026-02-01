@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Calendar } from 'lucide-react';
 import { crmContactsApi, crmEventsApi } from '@/lib/api/crm';
+import { clientApi } from '@/lib/api/client';
+import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezone } from '@/lib/timezone';
 import { ClientsTab } from '../products/clients-tab';
 import { CategoriesTab } from '../products/categories-tab';
 import NewClientsEditor from './new/new-clients-editor';
@@ -27,10 +29,8 @@ const emptyStats: ClientsStats = {
   nextEvents: [],
 };
 
-function formatEventTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString('ru-RU', {
+function formatEventTime(value: string, timeZone: string) {
+  return formatInTenantTimezone(value, timeZone, {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
@@ -42,6 +42,7 @@ export default function ClientsPage() {
   const [stats, setStats] = useState<ClientsStats>(emptyStats);
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState<string | null>(null);
+  const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
 
   useEffect(() => {
     let isActive = true;
@@ -51,13 +52,15 @@ export default function ClientsPage() {
       setStatsError(null);
 
       try {
-        const [contacts, events] = await Promise.all([
+        const [contacts, events, settings] = await Promise.all([
           crmContactsApi.list(),
           crmEventsApi.list(),
+          clientApi.getSettings(),
         ]);
 
         if (!isActive) return;
 
+        setTenantTimezone(normalizeTenantTimezone(settings.timezone));
         const now = new Date();
 
         const contactsById = new Map(contacts.map((contact) => [contact.id, contact.name]));
@@ -140,7 +143,7 @@ export default function ClientsPage() {
               <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                 {displayStats.nextEvents.map((event) => (
                   <div key={event.id}>
-                    {formatEventTime(event.start_time)} · {event.title} ·{' '}
+                    {formatEventTime(event.start_time, tenantTimezone)} · {event.title} ·{' '}
                     <Link
                       href={`/contact/${event.contactId}`}
                       className="text-blue-600 hover:underline"

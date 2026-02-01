@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime
 from typing import Any, Dict, List
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -21,6 +23,7 @@ from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .utils import get_active_client
 
 User = get_user_model()
+UTC_TZ = ZoneInfo("UTC")
 
 
 def _map_schema() -> str:
@@ -47,6 +50,40 @@ def _coerce_text(value: Any, field_name: str) -> str:
     if not text:
         raise ValidationError({field_name: "Поле обязательно."})
     return text
+
+
+def _parse_datetime(value: Any, field_name: str) -> datetime:
+    if value is None or value == "":
+        raise ValidationError({field_name: "Поле обязательно."})
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            raise ValidationError({field_name: "Поле обязательно."})
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise ValidationError({field_name: f"Некорректная дата: {exc}"}) from exc
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC_TZ)
+    return dt.astimezone(UTC_TZ)
+
+
+def _coerce_datetime_utc(value: Any, field_name: str) -> datetime:
+    return _parse_datetime(value, field_name).replace(tzinfo=None)
+
+
+def _serialize_datetime_utc(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC_TZ)
+        return value.astimezone(UTC_TZ)
+    return value
 
 
 def _fetch_all(cursor) -> List[Dict[str, Any]]:
@@ -124,13 +161,13 @@ def _serialize_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "event_type_id": row.get("event_type_id"),
         "title": row.get("title") or "",
         "description": row.get("description") or "",
-        "start_time": row.get("start_time"),
-        "end_time": row.get("end_time"),
+        "start_time": _serialize_datetime_utc(row.get("start_time")),
+        "end_time": _serialize_datetime_utc(row.get("end_time")),
         "location": row.get("location") or "",
         "status": row.get("status") or "scheduled",
         "notes": row.get("notes") or "",
-        "created_at": row.get("created_at"),
-        "updated_at": row.get("updated_at"),
+        "created_at": _serialize_datetime_utc(row.get("created_at")),
+        "updated_at": _serialize_datetime_utc(row.get("updated_at")),
     }
 
 
@@ -139,11 +176,11 @@ def _serialize_availability_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": row.get("id"),
         "tenant_id": row.get("tenant_id"),
-        "start_time": row.get("start_time"),
+        "start_time": _serialize_datetime_utc(row.get("start_time")),
         "duration_minutes": row.get("duration_minutes"),
         "repeat_type": row.get("repeat_type"),
-        "created_at": row.get("created_at"),
-        "updated_at": row.get("updated_at"),
+        "created_at": _serialize_datetime_utc(row.get("created_at")),
+        "updated_at": _serialize_datetime_utc(row.get("updated_at")),
     }
 
 
@@ -999,8 +1036,8 @@ class EventsListView(APIView):
         event_type_id = request.data.get("event_type_id")
         title = _coerce_text(request.data.get("title"), "title")
         description = request.data.get("description", "")
-        start_time = request.data.get("start_time")
-        end_time = request.data.get("end_time")
+        start_time = _coerce_datetime_utc(request.data.get("start_time"), "start_time")
+        end_time = _coerce_datetime_utc(request.data.get("end_time"), "end_time")
         location = request.data.get("location", "")
         status_val = request.data.get("status", "scheduled")
         notes = request.data.get("notes", "")
@@ -1074,11 +1111,11 @@ class EventDetailView(APIView):
 
         if "start_time" in request.data:
             updates.append("start_time = %s")
-            params.append(request.data["start_time"])
+            params.append(_coerce_datetime_utc(request.data["start_time"], "start_time"))
 
         if "end_time" in request.data:
             updates.append("end_time = %s")
-            params.append(request.data["end_time"])
+            params.append(_coerce_datetime_utc(request.data["end_time"], "end_time"))
 
         if "location" in request.data:
             updates.append("location = %s")
@@ -1157,7 +1194,7 @@ class AvailabilityEventsListView(APIView):
 
     def post(self, request):
         client = get_active_client(request.user)
-        start_time = _coerce_text(request.data.get("start_time"), "start_time")
+        start_time = _coerce_datetime_utc(request.data.get("start_time"), "start_time")
         duration_minutes = _coerce_int(request.data.get("duration_minutes", 60), "duration_minutes")
         repeat_type = _coerce_int(request.data.get("repeat_type", 0), "repeat_type")
         if repeat_type not in {0, 1, 2, 3}:
@@ -1213,7 +1250,7 @@ class AvailabilityEventDetailView(APIView):
 
         if "start_time" in request.data:
             updates.append("start_time = %s")
-            params.append(_coerce_text(request.data.get("start_time"), "start_time"))
+            params.append(_coerce_datetime_utc(request.data.get("start_time"), "start_time"))
 
         if "duration_minutes" in request.data:
             updates.append("duration_minutes = %s")

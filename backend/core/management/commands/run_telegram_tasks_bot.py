@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -69,6 +70,7 @@ MONTH_NAMES_RU = [
     "Декабрь",
 ]
 WEEKDAY_SHORT_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+UTC_TZ = ZoneInfo("UTC")
 
 
 class MeetingFlowStates(StatesGroup):
@@ -100,20 +102,44 @@ def _fetch_all(cursor) -> list[dict]:
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
-def _ensure_aware(dt: datetime) -> datetime:
-    if timezone.is_naive(dt):
-        return timezone.make_aware(dt, timezone.get_current_timezone())
-    return dt
+def _resolve_timezone(name: str | None):
+    tz_name = (name or "").strip() or "Europe/Moscow"
+    try:
+        return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("Europe/Moscow")
 
 
-def _format_dt(dt: datetime) -> str:
-    local_dt = timezone.localtime(_ensure_aware(dt))
+def _to_tenant_local(dt: datetime, tenant_tz: ZoneInfo) -> datetime:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC_TZ)
+    return dt.astimezone(tenant_tz)
+
+
+def _to_utc(dt: datetime, tenant_tz: ZoneInfo) -> datetime:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tenant_tz)
+    return dt.astimezone(UTC_TZ)
+
+
+def _to_utc_naive(dt: datetime, tenant_tz: ZoneInfo | None = None) -> datetime:
+    if dt.tzinfo is None:
+        if tenant_tz is None:
+            dt = dt.replace(tzinfo=UTC_TZ)
+        else:
+            dt = dt.replace(tzinfo=tenant_tz)
+    dt = dt.astimezone(UTC_TZ)
+    return dt.replace(tzinfo=None)
+
+
+def _format_dt(dt: datetime, tenant_tz: ZoneInfo) -> str:
+    local_dt = _to_tenant_local(dt, tenant_tz)
     return local_dt.strftime("%d.%m.%Y %H:%M")
 
 
-def _format_time_range(start: datetime, end: datetime) -> str:
-    start_local = timezone.localtime(_ensure_aware(start))
-    end_local = timezone.localtime(_ensure_aware(end))
+def _format_time_range(start: datetime, end: datetime, tenant_tz: ZoneInfo) -> str:
+    start_local = _to_tenant_local(start, tenant_tz)
+    end_local = _to_tenant_local(end, tenant_tz)
     if start_local.date() != end_local.date():
         return f"{start_local.strftime('%d.%m.%Y %H:%M')}–{end_local.strftime('%d.%m.%Y %H:%M')}"
     return f"{start_local.strftime('%d.%m.%Y %H:%M')}–{end_local.strftime('%H:%M')}"
@@ -282,7 +308,8 @@ def _get_busy_events(contact_ids: list[int], exclude_event_id: int | None) -> li
     if not contact_ids:
         return []
     schema = _map_schema()
-    params: list = [contact_ids, timezone.now()]
+    now_utc_naive = timezone.now().astimezone(UTC_TZ).replace(tzinfo=None)
+    params: list = [contact_ids, now_utc_naive]
     exclude_sql = ""
     if exclude_event_id is not None:
         exclude_sql = "AND id <> %s"
@@ -303,9 +330,14 @@ def _get_busy_events(contact_ids: list[int], exclude_event_id: int | None) -> li
         return _fetch_all(cursor)
 
 
-def _get_contact_busy_dates(contact_id: int, exclude_event_id: int | None = None) -> set[date]:
+def _get_contact_busy_dates(
+    contact_id: int,
+    tenant_tz: ZoneInfo,
+    exclude_event_id: int | None = None,
+) -> set[date]:
     schema = _map_schema()
-    params: list = [contact_id, timezone.now()]
+    now_utc_naive = timezone.now().astimezone(UTC_TZ).replace(tzinfo=None)
+    params: list = [contact_id, now_utc_naive]
     exclude_sql = ""
     if exclude_event_id is not None:
         exclude_sql = "AND id <> %s"
@@ -327,8 +359,8 @@ def _get_contact_busy_dates(contact_id: int, exclude_event_id: int | None = None
 
     dates: set[date] = set()
     for row in rows:
-        start_dt = timezone.localtime(_ensure_aware(row["start_time"]))
-        end_dt = timezone.localtime(_ensure_aware(row["end_time"]))
+        start_dt = _to_tenant_local(row["start_time"], tenant_tz)
+        end_dt = _to_tenant_local(row["end_time"], tenant_tz)
         current = start_dt.date()
         end_date = end_dt.date()
         while current <= end_date:
@@ -337,9 +369,9 @@ def _get_contact_busy_dates(contact_id: int, exclude_event_id: int | None = None
     return dates
 
 
-def _availability_matches_date(item: dict, check_date: date) -> bool:
-    base_start = _ensure_aware(item["start_time"])
-    base_date = timezone.localtime(base_start).date()
+def _availability_matches_date(item: dict, check_date: date, tenant_tz: ZoneInfo) -> bool:
+    base_start = _to_tenant_local(item["start_time"], tenant_tz)
+    base_date = base_start.date()
     if check_date < base_date:
         return False
     repeat_type = int(item.get("repeat_type") or 0)
@@ -357,22 +389,25 @@ def _build_slots_for_date(
     availability_events: list[dict],
     busy_events: list[dict],
     *,
+    tenant_tz: ZoneInfo,
     required_duration_minutes: int | None = None,
 ) -> list[dict]:
-    now_local = timezone.localtime(timezone.now())
+    now_local = timezone.now().astimezone(UTC_TZ).astimezone(tenant_tz)
     slots: list[dict] = []
     for item in availability_events:
-        if not _availability_matches_date(item, check_date):
+        if not _availability_matches_date(item, check_date, tenant_tz):
             continue
         duration_minutes = int(item.get("duration_minutes") or 0)
         if required_duration_minutes is not None and duration_minutes < required_duration_minutes:
             continue
         slot_duration = required_duration_minutes or duration_minutes or 60
 
-        base_start = timezone.localtime(_ensure_aware(item["start_time"]))
+        base_start = _to_tenant_local(item["start_time"], tenant_tz)
         start_dt = datetime.combine(check_date, base_start.timetz())
-        if timezone.is_naive(start_dt):
-            start_dt = timezone.make_aware(start_dt, timezone.get_current_timezone())
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=tenant_tz)
+        else:
+            start_dt = start_dt.astimezone(tenant_tz)
         end_dt = start_dt + timedelta(minutes=slot_duration)
 
         if end_dt <= now_local:
@@ -380,8 +415,8 @@ def _build_slots_for_date(
 
         overlaps = False
         for busy in busy_events:
-            busy_start = timezone.localtime(_ensure_aware(busy["start_time"]))
-            busy_end = timezone.localtime(_ensure_aware(busy["end_time"]))
+            busy_start = _to_tenant_local(busy["start_time"], tenant_tz)
+            busy_end = _to_tenant_local(busy["end_time"], tenant_tz)
             if start_dt < busy_end and end_dt > busy_start:
                 overlaps = True
                 break
@@ -405,6 +440,7 @@ def _get_available_dates(
     tenant_id: int,
     contact_id: int,
     *,
+    tz_name: str | None,
     required_duration_minutes: int | None = None,
     exclude_event_id: int | None = None,
 ) -> list[date]:
@@ -414,7 +450,8 @@ def _get_available_dates(
     contact_ids = _get_tenant_contact_ids(tenant_id, contact_id)
     busy_events = _get_busy_events(contact_ids, exclude_event_id)
 
-    today = timezone.localdate()
+    tenant_tz = _resolve_timezone(tz_name)
+    today = timezone.now().astimezone(UTC_TZ).astimezone(tenant_tz).date()
     available_dates: list[date] = []
     for offset in range(SCHEDULE_LOOKAHEAD_DAYS + 1):
         check_date = today + timedelta(days=offset)
@@ -422,6 +459,7 @@ def _get_available_dates(
             check_date,
             availability_events,
             busy_events,
+            tenant_tz=tenant_tz,
             required_duration_minutes=required_duration_minutes,
         )
         if slots:
@@ -434,6 +472,7 @@ def _get_slots_for_date(
     contact_id: int,
     check_date: date,
     *,
+    tz_name: str | None,
     required_duration_minutes: int | None = None,
     exclude_event_id: int | None = None,
 ) -> list[dict]:
@@ -442,10 +481,12 @@ def _get_slots_for_date(
         return []
     contact_ids = _get_tenant_contact_ids(tenant_id, contact_id)
     busy_events = _get_busy_events(contact_ids, exclude_event_id)
+    tenant_tz = _resolve_timezone(tz_name)
     return _build_slots_for_date(
         check_date,
         availability_events,
         busy_events,
+        tenant_tz=tenant_tz,
         required_duration_minutes=required_duration_minutes,
     )
 
@@ -495,8 +536,8 @@ def _get_default_event_type_id() -> int | None:
 
 def _update_event_time(event_id: int, contact_id: int, start_dt: datetime, end_dt: datetime) -> bool:
     schema = _map_schema()
-    start_local = timezone.localtime(_ensure_aware(start_dt)).replace(tzinfo=None)
-    end_local = timezone.localtime(_ensure_aware(end_dt)).replace(tzinfo=None)
+    start_local = _to_utc_naive(start_dt)
+    end_local = _to_utc_naive(end_dt)
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -518,8 +559,8 @@ def _create_event(
     event_type_id: int | None,
 ) -> int | None:
     schema = _map_schema()
-    start_local = timezone.localtime(_ensure_aware(start_dt)).replace(tzinfo=None)
-    end_local = timezone.localtime(_ensure_aware(end_dt)).replace(tzinfo=None)
+    start_local = _to_utc_naive(start_dt)
+    end_local = _to_utc_naive(end_dt)
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -561,9 +602,10 @@ def _get_scheduled_meetings(telegram_id: int, limit: int = 10) -> dict:
         return {"error": "no_binding"}
     if not binding.contact_id:
         return {"error": "no_contact"}
+    client_timezone = (getattr(binding.tenant, "timezone", "") or "").strip()
 
     schema = _map_schema()
-    now = timezone.now()
+    now = timezone.now().astimezone(UTC_TZ).replace(tzinfo=None)
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -587,20 +629,19 @@ def _get_scheduled_meetings(telegram_id: int, limit: int = 10) -> dict:
         )
         events = _fetch_all(cursor)
 
-    return {"events": events}
+    return {"events": events, "timezone": client_timezone}
 
 
-def _format_meetings(events: list[dict]) -> str:
+def _format_meetings(events: list[dict], tz_name: str | None = None) -> str:
     if not events:
         return "Запланированных встреч нет."
 
     header = "Ближайшая встреча:" if len(events) == 1 else "Запланированные встречи:"
     lines = [header, ""]
+    tz = _resolve_timezone(tz_name)
     for idx, event in enumerate(events, 1):
-        start_time = _ensure_aware(event["start_time"])
-        end_time = _ensure_aware(event["end_time"])
-        start_local = timezone.localtime(start_time)
-        end_local = timezone.localtime(end_time)
+        start_local = _to_tenant_local(event["start_time"], tz)
+        end_local = _to_tenant_local(event["end_time"], tz)
         date_str = start_local.strftime("%d.%m.%Y")
         time_str = start_local.strftime("%H:%M")
         end_str = end_local.strftime("%H:%M")
@@ -662,7 +703,8 @@ async def _send_meetings(message: Message) -> None:
         return
 
     events = result.get("events") or []
-    reply = _format_meetings(events)
+    tz_name = result.get("timezone")
+    reply = _format_meetings(events, tz_name)
     event_id = events[0]["id"] if events else None
     await message.answer(reply, reply_markup=_meeting_actions_keyboard(event_id))
 
@@ -677,7 +719,8 @@ def _date_prompt_text(data: dict) -> str:
             if old_start_raw
             else None
         )
-        old_start_str = _format_dt(old_start) if old_start else ""
+        tenant_tz = _resolve_timezone(data.get("timezone"))
+        old_start_str = _format_dt(old_start, tenant_tz) if old_start else ""
         return (
             "На какую дату перенести?\n\n"
             f"📝 {title}\n"
@@ -689,6 +732,7 @@ def _date_prompt_text(data: dict) -> str:
 def _confirmation_text(data: dict, new_start: datetime) -> str:
     flow = data.get("flow")
     title = (data.get("event_title") or "Встреча").strip() or "Встреча"
+    tenant_tz = _resolve_timezone(data.get("timezone"))
     if flow == "reschedule":
         old_start_raw = data.get("old_start")
         old_start = (
@@ -696,17 +740,17 @@ def _confirmation_text(data: dict, new_start: datetime) -> str:
             if old_start_raw
             else None
         )
-        old_start_str = _format_dt(old_start) if old_start else ""
+        old_start_str = _format_dt(old_start, tenant_tz) if old_start else ""
         return (
             "Подтвердите перенос:\n\n"
             f"📝 {title}\n\n"
             f"Было: {old_start_str}\n"
-            f"Стало: {_format_dt(new_start)}"
+            f"Стало: {_format_dt(new_start, tenant_tz)}"
         )
     return (
         "Подтвердите запись:\n\n"
         f"📝 {title}\n"
-        f"Дата и время: {_format_dt(new_start)}"
+        f"Дата и время: {_format_dt(new_start, tenant_tz)}"
     )
 
 
@@ -1222,15 +1266,17 @@ async def handle_reschedule_start(callback: CallbackQuery, state: FSMContext) ->
 
     duration_minutes = 60
     try:
-        start_dt = _ensure_aware(event["start_time"])
-        end_dt = _ensure_aware(event["end_time"])
+        start_dt = _to_utc(event["start_time"], UTC_TZ)
+        end_dt = _to_utc(event["end_time"], UTC_TZ)
         duration_minutes = max(15, int((end_dt - start_dt).total_seconds() // 60) or 60)
     except Exception:
         duration_minutes = 60
 
+    tenant_tz_name = (getattr(binding.tenant, "timezone", "") or "").strip()
     available_dates = await sync_to_async(_get_available_dates, thread_sensitive=True)(
         binding.tenant_id,
         binding.contact_id,
+        tz_name=tenant_tz_name,
         required_duration_minutes=duration_minutes,
         exclude_event_id=event_id,
     )
@@ -1247,6 +1293,7 @@ async def handle_reschedule_start(callback: CallbackQuery, state: FSMContext) ->
 
     marked_dates = await sync_to_async(_get_contact_busy_dates, thread_sensitive=True)(
         binding.contact_id,
+        _resolve_timezone(tenant_tz_name),
         None,
     )
     available_dates_sorted = sorted(available_dates)
@@ -1258,13 +1305,14 @@ async def handle_reschedule_start(callback: CallbackQuery, state: FSMContext) ->
         contact_id=binding.contact_id,
         event_id=event_id,
         event_title=event.get("title") or "Встреча",
-        old_start=_ensure_aware(event["start_time"]).isoformat(),
-        old_end=_ensure_aware(event["end_time"]).isoformat(),
+        old_start=_to_utc(event["start_time"], UTC_TZ).isoformat(),
+        old_end=_to_utc(event["end_time"], UTC_TZ).isoformat(),
         required_duration=duration_minutes,
         available_dates=[d.isoformat() for d in available_dates_sorted],
         marked_dates=[d.isoformat() for d in sorted(marked_dates)],
         calendar_year=initial_date.year,
         calendar_month=initial_date.month,
+        timezone=tenant_tz_name,
     )
     await state.set_state(MeetingFlowStates.waiting_for_date)
 
@@ -1300,9 +1348,11 @@ async def handle_new_meeting_start(callback: CallbackQuery, state: FSMContext) -
         await callback.answer("Контакт не найден. Попросите администратора обновить ссылку.", show_alert=True)
         return
 
+    tenant_tz_name = (getattr(binding.tenant, "timezone", "") or "").strip()
     available_dates = await sync_to_async(_get_available_dates, thread_sensitive=True)(
         binding.tenant_id,
         binding.contact_id,
+        tz_name=tenant_tz_name,
     )
     if not available_dates:
         await _safe_edit_message(
@@ -1317,6 +1367,7 @@ async def handle_new_meeting_start(callback: CallbackQuery, state: FSMContext) -
 
     marked_dates = await sync_to_async(_get_contact_busy_dates, thread_sensitive=True)(
         binding.contact_id,
+        _resolve_timezone(tenant_tz_name),
         None,
     )
     available_dates_sorted = sorted(available_dates)
@@ -1331,6 +1382,7 @@ async def handle_new_meeting_start(callback: CallbackQuery, state: FSMContext) -
         marked_dates=[d.isoformat() for d in sorted(marked_dates)],
         calendar_year=initial_date.year,
         calendar_month=initial_date.month,
+        timezone=tenant_tz_name,
     )
     await state.set_state(MeetingFlowStates.waiting_for_date)
 
@@ -1448,6 +1500,7 @@ async def handle_calendar_select(callback: CallbackQuery, state: FSMContext) -> 
 
     tenant_id = data.get("tenant_id")
     contact_id = data.get("contact_id")
+    tz_name = data.get("timezone")
     if not tenant_id or not contact_id:
         await callback.answer("Не удалось определить клиента.", show_alert=True)
         return
@@ -1459,6 +1512,7 @@ async def handle_calendar_select(callback: CallbackQuery, state: FSMContext) -> 
         tenant_id,
         contact_id,
         selected_date,
+        tz_name=tz_name,
         required_duration_minutes=required_duration,
         exclude_event_id=event_id,
     )
@@ -1508,9 +1562,9 @@ async def handle_time_select(callback: CallbackQuery, state: FSMContext) -> None
         return
     duration_minutes = int(slot.get("duration") or 60)
 
-    start_dt = datetime.combine(selected_date, chosen_time)
-    if timezone.is_naive(start_dt):
-        start_dt = timezone.make_aware(start_dt, timezone.get_current_timezone())
+    tenant_tz = _resolve_timezone(data.get("timezone"))
+    start_dt_local = datetime.combine(selected_date, chosen_time).replace(tzinfo=tenant_tz)
+    start_dt = start_dt_local.astimezone(UTC_TZ)
     end_dt = start_dt + timedelta(minutes=duration_minutes)
 
     await state.update_data(
@@ -1558,11 +1612,13 @@ async def handle_meeting_confirm(callback: CallbackQuery, state: FSMContext) -> 
     contact_id = data.get("contact_id")
     event_id = data.get("event_id")
     required_duration = data.get("required_duration")
+    tz_name = data.get("timezone")
 
     slots = await sync_to_async(_get_slots_for_date, thread_sensitive=True)(
         tenant_id,
         contact_id,
         selected_date,
+        tz_name=tz_name,
         required_duration_minutes=required_duration,
         exclude_event_id=event_id,
     )
@@ -1577,6 +1633,7 @@ async def handle_meeting_confirm(callback: CallbackQuery, state: FSMContext) -> 
         return
 
     flow = data.get("flow")
+    tenant_tz = _resolve_timezone(tz_name)
     if flow == "reschedule":
         updated = await sync_to_async(_update_event_time, thread_sensitive=True)(
             event_id,
@@ -1600,8 +1657,8 @@ async def handle_meeting_confirm(callback: CallbackQuery, state: FSMContext) -> 
             callback.message,
             "✅ Встреча успешно перенесена!\n\n"
             f"📝 {(data.get('event_title') or 'Встреча')}\n"
-            f"Было: {_format_dt(old_start) if old_start else '—'}\n"
-            f"Стало: {_format_dt(new_start)}",
+            f"Было: {_format_dt(old_start, tenant_tz) if old_start else '—'}\n"
+            f"Стало: {_format_dt(new_start, tenant_tz)}",
             reply_markup=None,
         )
         await state.clear()
@@ -1629,7 +1686,7 @@ async def handle_meeting_confirm(callback: CallbackQuery, state: FSMContext) -> 
         callback.message,
         "✅ Встреча успешно запланирована!\n\n"
         f"📝 {(data.get('event_title') or 'Встреча')}\n"
-        f"📅 {_format_dt(new_start)}",
+        f"📅 {_format_dt(new_start, tenant_tz)}",
         reply_markup=None,
     )
     await state.clear()

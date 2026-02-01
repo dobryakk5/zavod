@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Badge } from '@/components/ui/badge';
 import { PlusIcon, EditIcon, TrashIcon, XIcon } from 'lucide-react';
 import { crmContactsApi, crmPaymentsApi } from '@/lib/api/crm';
+import { clientApi } from '@/lib/api/client';
+import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezone } from '@/lib/timezone';
 
 // Типы данных для новой CRM-схемы с иерархией
 type Client = {
@@ -66,6 +68,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
 
   useEffect(() => {
     let isActive = true;
@@ -83,6 +86,15 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
 
         setClients(contactsData);
         setPayments(paymentsData);
+        try {
+          const settings = await clientApi.getSettings();
+          if (!isActive) return;
+          setTenantTimezone(normalizeTenantTimezone(settings.timezone));
+        } catch (settingsError) {
+          console.warn('Failed to load tenant timezone for CRM editor', settingsError);
+          if (!isActive) return;
+          setTenantTimezone(DEFAULT_TENANT_TIMEZONE);
+        }
       } catch (err) {
         if (!isActive) return;
         console.error('Failed to load CRM contacts/payments', err);
@@ -284,7 +296,13 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {payment.paid_at ? new Date(payment.paid_at).toLocaleDateString('ru-RU') : '-'}
+                      {payment.paid_at
+                        ? formatInTenantTimezone(payment.paid_at, tenantTimezone, {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                          })
+                        : '-'}
                     </TableCell>
                     <TableCell>
                       <div className="flex space-x-2">
