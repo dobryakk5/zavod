@@ -60,7 +60,7 @@ const getTimeZoneOffsetMinutes = (date: Date, timeZone: string) => {
     Number(parts.minute),
     Number(parts.second)
   );
-  return (asUTC - date.getTime()) / 60000;
+  return Math.round((asUTC - date.getTime()) / 60000);
 };
 
 const parseLocalDateTime = (value: string): DateParts | null => {
