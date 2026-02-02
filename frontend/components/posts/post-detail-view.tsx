@@ -5,7 +5,7 @@ import type { SyntheticEvent } from 'react';
 import { postsApi } from '@/lib/api/posts';
 import { schedulesApi } from '@/lib/api/schedules';
 import { ApiError } from '@/lib/api';
-import { useClient } from '@/lib/hooks';
+import { useClient, useTenantTimezone } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,7 @@ import { ChevronLeft, ChevronRight, Trash2, Loader2 } from 'lucide-react';
 import { sanitizeRichText } from '@/lib/sanitize-html';
 import { highlightPhrasesInHtml } from '@/lib/highlight-html';
 import Link from 'next/link';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Черновик',
@@ -122,6 +123,7 @@ interface PostDetailViewProps {
 
 export function PostDetailView({ postId }: PostDetailViewProps) {
   const { data: clientInfo } = useClient();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const role = clientInfo?.role ?? null;
   const canEdit = role === 'owner' || role === 'editor';
   const clientSlug = clientInfo?.client?.slug;
@@ -684,7 +686,7 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
                   >
                     <div>
                       <p className="font-medium">
-                        {new Date(schedule.scheduled_at).toLocaleString('ru-RU', {
+                        {formatInTenantTimezone(schedule.scheduled_at, tenantTimezone, {
                           day: 'numeric',
                           month: 'long',
                           year: 'numeric',
@@ -941,10 +943,28 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
 
         <div className="text-sm text-gray-500 space-y-1">
           {post.created_at && (
-            <p>Создан: {new Date(post.created_at).toLocaleString('ru-RU')}</p>
+            <p>
+              Создан:{' '}
+              {formatInTenantTimezone(post.created_at, tenantTimezone, {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </p>
           )}
           {post.scheduled_time && (
-            <p>Запланировано на: {new Date(post.scheduled_time).toLocaleString('ru-RU')}</p>
+            <p>
+              Запланировано на:{' '}
+              {formatInTenantTimezone(post.scheduled_time, tenantTimezone, {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </p>
           )}
         </div>
       </div>

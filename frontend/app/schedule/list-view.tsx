@@ -7,9 +7,12 @@ import { schedulesApi } from '@/lib/api/schedules';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import type { Schedule } from '@/lib/types';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 export default function ScheduleListView() {
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [items, setItems] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,12 +75,12 @@ export default function ScheduleListView() {
                     <Badge variant="outline">{item.platform}</Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {new Date(item.scheduled_at).toLocaleString('ru-RU', {
+                    {formatInTenantTimezone(item.scheduled_at, tenantTimezone, {
                       day: 'numeric',
                       month: 'long',
                       year: 'numeric',
                       hour: '2-digit',
-                      minute: '2-digit'
+                      minute: '2-digit',
                     })}
                   </TableCell>
                   <TableCell>

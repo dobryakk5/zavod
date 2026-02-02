@@ -5,9 +5,12 @@ import { useRouter } from 'next/navigation';
 import { ApiError } from '@/lib/api';
 import { telegramTasksApi } from '@/lib/api/telegramTasks';
 import type { TelegramTask } from '@/lib/types';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 export default function ScheduleTasksView() {
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [items, setItems] = useState<TelegramTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,14 +50,14 @@ export default function ScheduleTasksView() {
       {!loading && items.length > 0 && (
         <div className="space-y-3">
           {items.map((item) => (
-            <div key={item.id} className="rounded-lg border p-3">
+              <div key={item.id} className="rounded-lg border p-3">
               <div className="text-xs text-muted-foreground">
-                {new Date(item.received_at).toLocaleString('ru-RU', {
+                {formatInTenantTimezone(item.received_at, tenantTimezone, {
                   day: 'numeric',
                   month: 'long',
                   year: 'numeric',
                   hour: '2-digit',
-                  minute: '2-digit'
+                  minute: '2-digit',
                 })}
                 {item.tg_name ? ` • @${item.tg_name}` : ''}
               </div>

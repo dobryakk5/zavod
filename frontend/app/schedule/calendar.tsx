@@ -1,6 +1,6 @@
 'use client';
 
-import React, {useState, useMemo, useEffect} from 'react';
+import React, {useState, useMemo, useEffect, useRef} from 'react';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Button} from '@/components/ui/button';
 import {Badge} from '@/components/ui/badge';
@@ -10,6 +10,14 @@ import {useRouter} from 'next/navigation';
 import type {Schedule} from '@/lib/types';
 import {cn} from '@/lib/utils';
 import Link from 'next/link';
+import {useTenantTimezone} from '@/lib/hooks';
+import {
+  DEFAULT_TENANT_TIMEZONE,
+  formatInTenantTimezone,
+  normalizeTenantTimezone,
+  tenantDateToUtcISOString,
+  toTenantDate,
+} from '@/lib/timezone';
 
 // dnd-kit
 import {
@@ -132,7 +140,31 @@ function startOfWeek(d: Date){
   return x;
 }
 
-function formatKey(d: Date){ return d.toISOString().slice(0,10); }
+function formatKey(d: Date){
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateKey(value: string){
+  const [yearRaw, monthRaw, dayRaw] = value.split('-');
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  if (!year || !month || !day) return null;
+  return {year, month, day};
+}
+
+function formatTenantLocalDate(
+  date: Date,
+  timeZone: string,
+  options: Intl.DateTimeFormatOptions
+) {
+  const utcValue = tenantDateToUtcISOString(date, timeZone);
+  if (!utcValue) return '';
+  return formatInTenantTimezone(utcValue, timeZone, options);
+}
 
 function generateWeekDates(refDate: Date){
   const start = startOfWeek(refDate);
@@ -148,9 +180,11 @@ function generateMonthDates(refDate: Date){
   return Array.from({length:cells}).map((_,i)=>{ const c = new Date(start); c.setDate(start.getDate()+i); return c; });
 }
 
-function scheduleToCalendarItem(schedule: ScheduleItem): CalendarItem {
-  const date = new Date(schedule.scheduled_at);
-  const time = date.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
+function scheduleToCalendarItem(schedule: ScheduleItem, timeZone: string): CalendarItem {
+  const time = formatInTenantTimezone(schedule.scheduled_at, timeZone, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 
   return {
     id: `schedule-${schedule.id}`,
@@ -167,10 +201,11 @@ function scheduleToCalendarItem(schedule: ScheduleItem): CalendarItem {
 type WeekViewProps = {
   weekDates: Date[];
   itemsByDate: ItemsByDate;
+  timeZone: string;
 };
 
-function WeekViewContent({weekDates, itemsByDate}: WeekViewProps){
-  const todayKey = formatKey(new Date());
+function WeekViewContent({weekDates, itemsByDate, timeZone}: WeekViewProps){
+  const todayKey = formatKey(toTenantDate(new Date(), timeZone));
 
   return (
     <div className="min-w-[1000px] grid grid-cols-7 gap-4">
@@ -187,7 +222,7 @@ function WeekViewContent({weekDates, itemsByDate}: WeekViewProps){
           <DroppableContainer key={k} id={k} className={containerClass}>
             <div className="flex items-center justify-between mb-2">
               <div className={`text-sm font-medium ${isToday ? 'text-blue-600' : ''}`}>
-                {d.toLocaleDateString('ru-RU',{weekday:'short', day:'numeric'})}
+                {formatTenantLocalDate(d, timeZone, {weekday:'short', day:'numeric'})}
               </div>
               <div className="text-xs text-slate-500">{items.length}</div>
             </div>
@@ -206,10 +241,11 @@ type MonthViewProps = {
   monthDates: Date[];
   itemsByDate: ItemsByDate;
   cursor: Date;
+  timeZone: string;
 };
 
-function MonthViewContent({monthDates, itemsByDate, cursor}: MonthViewProps){
-  const todayKey = formatKey(new Date());
+function MonthViewContent({monthDates, itemsByDate, cursor, timeZone}: MonthViewProps){
+  const todayKey = formatKey(toTenantDate(new Date(), timeZone));
 
   return (
     <div className="min-w-[1000px]">
@@ -242,7 +278,7 @@ function MonthViewContent({monthDates, itemsByDate, cursor}: MonthViewProps){
             >
               <div className="flex items-center justify-between mb-2">
                 <div className={`text-xs font-medium ${isToday ? 'text-blue-600' : ''}`}>
-                  {d.getDate()}
+                  {formatTenantLocalDate(d, timeZone, {day:'numeric'})}
                 </div>
                 {items.length > 0 && (
                   <div className="text-xs text-slate-500">{items.length}</div>
@@ -268,9 +304,10 @@ function MonthViewContent({monthDates, itemsByDate, cursor}: MonthViewProps){
 type DayViewProps = {
   cursor: Date;
   itemsByDate: ItemsByDate;
+  timeZone: string;
 };
 
-function DayViewContent({cursor, itemsByDate}: DayViewProps){
+function DayViewContent({cursor, itemsByDate, timeZone}: DayViewProps){
   const k = formatKey(cursor);
   const items = itemsByDate[k] || [];
 
@@ -279,7 +316,7 @@ function DayViewContent({cursor, itemsByDate}: DayViewProps){
       <DroppableContainer id={k} className="rounded-lg p-4 bg-white border min-h-[300px]">
         <div className="flex items-center justify-between mb-4">
           <div className="text-lg font-semibold">
-            {cursor.toLocaleDateString('ru-RU',{weekday:'long', day:'numeric', month:'long'})}
+            {formatTenantLocalDate(cursor, timeZone, {weekday:'long', day:'numeric', month:'long'})}
           </div>
           <div className="text-sm text-slate-500">{items.length} публикаций</div>
         </div>
@@ -300,8 +337,11 @@ function DayViewContent({cursor, itemsByDate}: DayViewProps){
 
 export default function ContentCalendarPage(){
   const router = useRouter();
+  const {timezone: tenantTimezone, loading: tenantTimezoneLoading} = useTenantTimezone();
+  const normalizedTimezone = useMemo(() => normalizeTenantTimezone(tenantTimezone), [tenantTimezone]);
   const [view, setView] = useState<'week' | 'month' | 'day'>('week');
-  const [cursor, setCursor] = useState<Date>(new Date());
+  const cursorInitializedRef = useRef(false);
+  const [cursor, setCursor] = useState<Date>(() => toTenantDate(new Date(), DEFAULT_TENANT_TIMEZONE));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
@@ -309,6 +349,14 @@ export default function ContentCalendarPage(){
 
   const weekDates = useMemo(()=> generateWeekDates(cursor), [cursor]);
   const monthDates = useMemo(()=> generateMonthDates(cursor), [cursor]);
+
+  useEffect(() => {
+    if (tenantTimezoneLoading) return;
+    if (!cursorInitializedRef.current) {
+      setCursor(toTenantDate(new Date(), normalizedTimezone));
+      cursorInitializedRef.current = true;
+    }
+  }, [normalizedTimezone, tenantTimezoneLoading]);
 
   // Load schedules from API
   useEffect(() => {
@@ -344,14 +392,14 @@ export default function ContentCalendarPage(){
 
     // Distribute schedules into dates
     schedules.forEach(schedule => {
-      const date = new Date(schedule.scheduled_at);
+      const date = toTenantDate(schedule.scheduled_at, normalizedTimezone);
       const key = formatKey(date);
       if (!map[key]) map[key] = [];
-      map[key].push(scheduleToCalendarItem(schedule));
+      map[key].push(scheduleToCalendarItem(schedule, normalizedTimezone));
     });
 
     return map;
-  }, [schedules, view, cursor, weekDates, monthDates]);
+  }, [schedules, view, cursor, weekDates, monthDates, normalizedTimezone]);
 
   const activeItem = useMemo(() => {
     if (!activeId) return null;
@@ -427,12 +475,19 @@ export default function ContentCalendarPage(){
     if (!item) return;
 
     // Update the schedule with new date
-    const newDate = new Date(toKey);
-    const originalTime = item.time || '12:00';
-    const [hours, minutes] = originalTime.split(':');
-    newDate.setHours(parseInt(hours), parseInt(minutes));
+    const dateParts = parseDateKey(toKey);
+    if (!dateParts) return;
 
-    const newDateIso = newDate.toISOString();
+    const originalTime = item.time || '12:00';
+    const [hoursRaw, minutesRaw] = originalTime.split(':');
+    const hours = Number(hoursRaw);
+    const minutes = Number(minutesRaw);
+    const safeHours = Number.isFinite(hours) ? hours : 12;
+    const safeMinutes = Number.isFinite(minutes) ? minutes : 0;
+    const newDate = new Date(dateParts.year, dateParts.month - 1, dateParts.day, safeHours, safeMinutes, 0, 0);
+
+    const newDateIso = tenantDateToUtcISOString(newDate, normalizedTimezone);
+    if (!newDateIso) return;
 
     // Optimistically update UI so the post moves instantly
     setSchedules(prev =>
@@ -491,10 +546,10 @@ export default function ContentCalendarPage(){
             <Button onClick={prev} size="sm" variant="outline">&larr;</Button>
             <div className="px-3 py-1 text-sm font-medium min-w-[200px] text-center">
               {view==='month'
-                ? cursor.toLocaleString('ru-RU',{month:'long', year:'numeric'})
+                ? formatTenantLocalDate(cursor, normalizedTimezone, {month:'long', year:'numeric'})
                 : view==='week'
-                ? `${weekDates[0].toLocaleDateString('ru-RU', {day:'numeric', month:'short'})} — ${weekDates[6].toLocaleDateString('ru-RU', {day:'numeric', month:'short'})}`
-                : cursor.toLocaleDateString('ru-RU', {day:'numeric', month:'long', year:'numeric'})
+                ? `${formatTenantLocalDate(weekDates[0], normalizedTimezone, {day:'numeric', month:'short'})} — ${formatTenantLocalDate(weekDates[6], normalizedTimezone, {day:'numeric', month:'short'})}`
+                : formatTenantLocalDate(cursor, normalizedTimezone, {day:'numeric', month:'long', year:'numeric'})
               }
             </div>
             <Button onClick={next} size="sm" variant="outline">&rarr;</Button>
@@ -511,17 +566,18 @@ export default function ContentCalendarPage(){
       >
         <div className="overflow-x-auto">
           {view==='week' && (
-            <WeekViewContent weekDates={weekDates} itemsByDate={itemsByDate} />
+            <WeekViewContent weekDates={weekDates} itemsByDate={itemsByDate} timeZone={normalizedTimezone} />
           )}
           {view==='month' && (
             <MonthViewContent
               monthDates={monthDates}
               itemsByDate={itemsByDate}
               cursor={cursor}
+              timeZone={normalizedTimezone}
             />
           )}
           {view==='day' && (
-            <DayViewContent cursor={cursor} itemsByDate={itemsByDate} />
+            <DayViewContent cursor={cursor} itemsByDate={itemsByDate} timeZone={normalizedTimezone} />
           )}
         </div>
         <DragOverlay>

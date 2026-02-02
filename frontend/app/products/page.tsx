@@ -14,9 +14,13 @@ import { Copy, Loader2, Trash2 } from 'lucide-react';
 import { ClientProductsTab } from './client-products-tab';
 import { ProductTypesTab } from './product-types-tab';
 import { SalesTab } from './sales-tab';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
-const formatDate = (iso?: string) =>
-  iso ? new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium' }).format(new Date(iso)) : '—';
+const formatDate = (iso: string | undefined, timeZone: string) =>
+  iso
+    ? formatInTenantTimezone(iso, timeZone, { dateStyle: 'medium' }) || '—'
+    : '—';
 
 type MapDraft = {
   title: string;
@@ -29,6 +33,7 @@ type MapDraft = {
 
 export default function ProductsPage() {
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [maps, setMaps] = useState<MindMap[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -475,7 +480,9 @@ export default function ProductsPage() {
                         />
                         {saving ? <div className="mt-1 text-xs text-muted-foreground">Сохранение…</div> : null}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(map.updated_at)}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatDate(map.updated_at, tenantTimezone)}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="inline-flex items-center gap-1">
                           <Button

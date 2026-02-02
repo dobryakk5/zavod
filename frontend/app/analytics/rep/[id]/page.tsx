@@ -5,6 +5,8 @@ import { useParams, useRouter } from 'next/navigation';
 import { Loader2, ArrowLeft, ChevronDown } from 'lucide-react';
 import { analyticsApi, type WeeklySourceBatch, type WeeklySourceReport } from '@/lib/api/analytics';
 import { Button } from '@/components/ui/button';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 const statusLabels: Record<WeeklySourceReport['status'], string> = {
   pending: 'В очереди',
@@ -45,6 +47,7 @@ const inferContentType = (report: WeeklySourceReport, url?: string | null): stri
 export default function WeeklyBatchPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [batch, setBatch] = useState<WeeklySourceBatch | null>(null);
   const [loading, setLoading] = useState(true);
   const [openReports, setOpenReports] = useState<Record<number, boolean>>({});
@@ -84,7 +87,12 @@ export default function WeeklyBatchPage() {
           <h1 className="text-2xl font-bold">Отчёт #{params?.id}</h1>
           {batch && (
             <p className="text-sm text-muted-foreground">
-              Неделя с {new Date(batch.week_start).toLocaleDateString('ru-RU')}
+              Неделя с{' '}
+              {formatInTenantTimezone(batch.week_start, tenantTimezone, {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+              })}
             </p>
           )}
         </div>
@@ -103,7 +111,12 @@ export default function WeeklyBatchPage() {
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <p className="text-sm font-semibold">
-                  Неделя с {new Date(batch.week_start).toLocaleDateString('ru-RU')}
+                  Неделя с{' '}
+                  {formatInTenantTimezone(batch.week_start, tenantTimezone, {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                  })}
                 </p>
                 <p className="text-xs text-muted-foreground">ID: {batch.id}</p>
               </div>
@@ -125,7 +138,12 @@ export default function WeeklyBatchPage() {
                   {report.source_type} · {report.source_value}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Неделя с {new Date(report.week_start).toLocaleDateString('ru-RU')}
+                  Неделя с{' '}
+                  {formatInTenantTimezone(report.week_start, tenantTimezone, {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                  })}
                 </p>
               </div>
               <span className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -156,7 +174,11 @@ export default function WeeklyBatchPage() {
                       <div className="space-y-2">
                         {report.links.map((link, idx) => {
                           const dateLabel = link.date
-                            ? new Date(link.date).toLocaleDateString('ru-RU')
+                            ? formatInTenantTimezone(link.date, tenantTimezone, {
+                                year: 'numeric',
+                                month: '2-digit',
+                                day: '2-digit',
+                              })
                             : 'Без даты';
                           const contentType = inferContentType(report, link.url);
                           const durationLabel =

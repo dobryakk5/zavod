@@ -15,18 +15,27 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useRole } from '@/lib/hooks';
+import { useRole, useTenantTimezone } from '@/lib/hooks';
 import { vkApi } from '@/lib/api/vk';
 import { toast } from 'sonner';
 import { ExternalLink, RefreshCw, Trash2 } from 'lucide-react';
 import type { VkIntegration } from '@/lib/types';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
-const formatDateTime = (value?: string | null) => {
+const formatDateTime = (value: string | null | undefined, timeZone: string) => {
   if (!value) {
     return '—';
   }
   try {
-    return new Date(value).toLocaleString('ru-RU');
+    return (
+      formatInTenantTimezone(value, timeZone, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      }) || value
+    );
   } catch {
     return value;
   }
@@ -56,6 +65,7 @@ const formatStatus = (status?: string): { label: string; className: string } => 
 
 export function VkIntegrationsPanel() {
   const { canEdit } = useRole();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [integrations, setIntegrations] = useState<VkIntegration[]>([]);
   const [loading, setLoading] = useState(false);
   const [targetGroup, setTargetGroup] = useState('');
@@ -195,7 +205,7 @@ export function VkIntegrationsPanel() {
                       {statusMeta.label}
                     </Badge>
                   </TableCell>
-                  <TableCell>{formatDateTime(integration.last_published_at)}</TableCell>
+                  <TableCell>{formatDateTime(integration.last_published_at, tenantTimezone)}</TableCell>
                   <TableCell className="text-right">
                     {canEdit ? (
                       <div className="flex justify-end gap-2">

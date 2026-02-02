@@ -11,7 +11,7 @@ import { TrendCard } from '@/components/trends/trend-card';
 import { ArrowLeft, Edit, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
-import { useRole } from '@/lib/hooks';
+import { useRole, useTenantTimezone } from '@/lib/hooks';
 import type { TopicDetail, TrendItem } from '@/lib/types';
 
 type TopicRouteParams = { id: string };
@@ -27,6 +27,7 @@ interface TopicPageProps {
 export default function TopicPage({ params }: TopicPageProps) {
   const router = useRouter();
   const { canEdit } = useRole();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [topic, setTopic] = useState<TopicDetail | null>(null);
   const [trends, setTrends] = useState<TrendItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -190,7 +191,7 @@ export default function TopicPage({ params }: TopicPageProps) {
         {!loading && trends.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {trends.map((trend) => (
-              <TrendCard key={trend.id} trend={trend} />
+              <TrendCard key={trend.id} trend={trend} timeZone={tenantTimezone} />
             ))}
           </div>
         )}

@@ -10,9 +10,13 @@ import { MindMap, type MindMapEdgeDatum, type MindMapNodeDatum } from '@/compone
 import type { MindNodeData } from '@/components/mind-map-node';
 import { mindMapsApi } from '@/lib/api/mindmaps';
 import type { MindEdge, MindMapDetail, MindNode } from '@/lib/types';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
-const formatDateTime = (iso?: string) =>
-  iso ? new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso)) : '—';
+const formatDateTime = (iso: string | undefined, timeZone: string) =>
+  iso
+    ? formatInTenantTimezone(iso, timeZone, { dateStyle: 'medium', timeStyle: 'short' }) || '—'
+    : '—';
 
 const fallbackPosition = (index: number) => ({
   x: 140 + (index % 4) * 160,
@@ -54,6 +58,7 @@ const toGraphEdges = (edges: MindEdge[]): MindMapEdgeDatum[] =>
 export default function MindMapPage() {
   const { mapId } = useParams<{ mapId: string }>();
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [data, setData] = useState<MindMapDetail | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -107,7 +112,7 @@ export default function MindMapPage() {
               <div className="grid w-full gap-1 sm:grid-cols-[1fr_auto] sm:items-baseline">
                 <p className="text-muted-foreground italic">{data.description}</p>
                 <span className="justify-self-end whitespace-nowrap text-sm text-muted-foreground">
-                  Обновлено: {formatDateTime(lastSavedAt ?? data.updated_at)}
+                  Обновлено: {formatDateTime(lastSavedAt ?? data.updated_at, tenantTimezone)}
                 </span>
               </div>
             </div>

@@ -19,6 +19,8 @@ import { clientProductsApi } from '@/lib/api/clientProducts';
 import { productTypesApi } from '@/lib/api/productTypes';
 import { sanitizeRichText } from '@/lib/sanitize-html';
 import { highlightPhrasesInHtml } from '@/lib/highlight-html';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 const STATUS_LABELS: Record<ArticleStatus, string> = {
   wordstat: 'Wordstat',
@@ -40,15 +42,16 @@ const STATUS_STYLES: Record<ArticleStatus, string> = {
   failed: 'bg-red-100 text-red-800',
 };
 
-function formatDate(value?: string | null) {
+function formatDate(value: string | null | undefined, timeZone: string) {
   if (!value) return '—';
   try {
-    return new Date(value).toLocaleString('ru-RU', {
+    return formatInTenantTimezone(value, timeZone, {
       day: '2-digit',
       month: 'short',
+      year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-    });
+    }) || value;
   } catch {
     return value;
   }
@@ -256,6 +259,7 @@ function ToggleList({
 export default function ArticleDetailPageClient() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const articleId = Number(params.id);
   const [loading, setLoading] = useState(true);
   const [article, setArticle] = useState<Article | null>(null);
@@ -808,7 +812,9 @@ export default function ArticleDetailPageClient() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold">{article.wordstat}</h1>
-          <div className="text-sm text-muted-foreground">{formatDate(article.created_at)}</div>
+          <div className="text-sm text-muted-foreground">
+            {formatDate(article.created_at, tenantTimezone)}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {savingChoices ? <span className="text-xs text-muted-foreground">Сохранение…</span> : null}

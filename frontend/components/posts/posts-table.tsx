@@ -10,6 +10,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { formatTemplateDisplayName } from '@/lib/utils';
 import { Clapperboard, Image as ImageIcon, Loader2 } from 'lucide-react';
 import { subscribeToPostGenerationComplete, subscribeToPostGenerationStart } from '@/lib/post-generation-events';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 export type Post = {
   id: number;
@@ -51,6 +53,7 @@ const PLATFORM_OPTIONS = [
 export function PostsTable() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [posts, setPosts] = useState<Post[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -272,15 +275,14 @@ export function PostsTable() {
               </TableRow>
             ))}
             {posts.map((post) => {
-              const scheduledAt = post.next_scheduled_at ? new Date(post.next_scheduled_at) : null;
-              const scheduledLabel = scheduledAt
-                ? scheduledAt.toLocaleString('ru-RU', {
-                  day: '2-digit',
-                  month: '2-digit',
-                  year: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
+              const scheduledLabel = post.next_scheduled_at
+                ? formatInTenantTimezone(post.next_scheduled_at, tenantTimezone, {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  }) || 'не запланировано'
                 : 'не запланировано';
 
               return (

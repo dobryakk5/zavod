@@ -4,12 +4,14 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Badge } from '@/components/ui/badge';
 import { GenerateFromTrendMenu } from './generate-from-trend-menu';
 import type { TrendItem } from '@/lib/types';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 interface TrendCardProps {
   trend: TrendItem;
+  timeZone: string;
 }
 
-export function TrendCard({ trend }: TrendCardProps) {
+export function TrendCard({ trend, timeZone }: TrendCardProps) {
   return (
     <Card>
       <CardHeader>
@@ -42,7 +44,13 @@ export function TrendCard({ trend }: TrendCardProps) {
       </CardContent>
       <CardFooter className="flex items-center justify-between">
         <span className="text-xs text-gray-500">
-          {trend.discovered_at && new Date(trend.discovered_at).toLocaleDateString('ru-RU')}
+          {trend.discovered_at
+            ? formatInTenantTimezone(trend.discovered_at, timeZone, {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+              })
+            : ''}
         </span>
         <GenerateFromTrendMenu trendId={trend.id} />
       </CardFooter>

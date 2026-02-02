@@ -22,6 +22,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 type AnalyticsDetailPageProps = {
   params: Promise<{ analysisId: string }>;
@@ -79,6 +81,7 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
       : (params as unknown as { analysisId: string });
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const shareToken = searchParams.get('share_token') || undefined;
   const isSharedView = Boolean(shareToken);
   const [analysis, setAnalysis] = useState<ChannelAnalysisDetail | null>(null);
@@ -87,7 +90,14 @@ export default function AnalysisDetailPage({ params }: AnalyticsDetailPageProps)
   const [isSharing, setIsSharing] = useState(false);
   const [clientProfile, setClientProfile] = useState<AudienceProfile | null>(null);
   const formatNumber = (value?: number | null) => (value ?? 0).toLocaleString('ru-RU');
-  const formatDateTime = (value: string) => new Date(value).toLocaleString('ru-RU');
+  const formatDateTime = (value: string) =>
+    formatInTenantTimezone(value, tenantTimezone, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
 
   useEffect(() => {
     let isMounted = true;

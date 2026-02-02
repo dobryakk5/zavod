@@ -13,12 +13,17 @@ import { clientProductsApi } from '@/lib/api/clientProducts';
 import { mindMapsApi } from '@/lib/api/mindmaps';
 import { productTypesApi } from '@/lib/api/productTypes';
 import { Copy, Loader2, Trash2 } from 'lucide-react';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
-const formatDate = (iso?: string) =>
-  iso ? new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium' }).format(new Date(iso)) : '—';
+const formatDate = (iso: string | undefined, timeZone: string) =>
+  iso
+    ? formatInTenantTimezone(iso, timeZone, { dateStyle: 'medium' }) || '—'
+    : '—';
 
 export function ClientProductsTab() {
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [products, setProducts] = useState<ClientProduct[]>([]);
   const [types, setTypes] = useState<Array<{ id: number; name: string }>>([]);
   const [loading, setLoading] = useState(false);
@@ -309,7 +314,9 @@ export function ClientProductsTab() {
                   <TableCell className="font-medium">{product.name}</TableCell>
                   <TableCell className="text-muted-foreground">{product.product_type_name || '—'}</TableCell>
                   <TableCell className="text-muted-foreground">{product.short_description || '—'}</TableCell>
-                  <TableCell className="text-muted-foreground">{formatDate(product.updated_at)}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {formatDate(product.updated_at, tenantTimezone)}
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="inline-flex items-center gap-1">
                       <Button

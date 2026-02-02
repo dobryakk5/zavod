@@ -16,7 +16,8 @@ import {
 import { websitesApi, type WebsiteScan, type WebsiteScanStatus } from '@/lib/api/websites';
 import { clientApi } from '@/lib/api/client';
 import type { ClientSettings } from '@/lib/types';
-import { useRole } from '@/lib/hooks';
+import { useRole, useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -161,7 +162,7 @@ const SOURCE_FIELD_CONFIG: Array<{
   },
 ];
 
-function MyProjectTab() {
+function MyProjectTab({ timeZone }: { timeZone: string }) {
   const { canEdit } = useRole();
   const [channels, setChannels] = useState<ProjectChannelFields>({
     project_telegram_channel: '',
@@ -650,7 +651,13 @@ function MyProjectTab() {
                                   </div>
                                 </TableCell>
                                 <TableCell className="text-sm text-gray-600">
-                                  {post.published_at ? new Date(post.published_at).toLocaleDateString('ru-RU') : '—'}
+                                  {post.published_at
+                                    ? formatInTenantTimezone(post.published_at, timeZone, {
+                                        year: 'numeric',
+                                        month: '2-digit',
+                                        day: '2-digit',
+                                      })
+                                    : '—'}
                                 </TableCell>
                               </TableRow>
                             ))}
@@ -784,7 +791,11 @@ function MyProjectTab() {
                               <g key={`x-${run.run_id}`}>
                                 <line x1={x} y1={padding.top} x2={x} y2={padding.top + plotHeight} stroke="#f3f4f6" />
                                 <text x={x} y={padding.top + plotHeight + 18} textAnchor="middle" className="fill-gray-400 text-[10px]">
-                                  {new Date(run.created_at).toLocaleDateString('ru-RU')}
+                                  {formatInTenantTimezone(run.created_at, timeZone, {
+                                    year: 'numeric',
+                                    month: '2-digit',
+                                    day: '2-digit',
+                                  })}
                                 </text>
                               </g>
                             );
@@ -860,7 +871,7 @@ function MyProjectTab() {
   );
 }
 
-function WeeklySourcesTab() {
+function WeeklySourcesTab({ timeZone }: { timeZone: string }) {
   const { canEdit } = useRole();
   const [sources, setSources] = useState<SourceFields>({
     telegram_source_channels: '',
@@ -1003,7 +1014,12 @@ function WeeklySourcesTab() {
               >
                 <div className="space-y-1">
                   <p className="font-medium text-slate-900">
-                    Неделя с {new Date(batch.week_start).toLocaleDateString('ru-RU')}
+                    Неделя с{' '}
+                    {formatInTenantTimezone(batch.week_start, timeZone, {
+                      year: 'numeric',
+                      month: '2-digit',
+                      day: '2-digit',
+                    })}
                   </p>
                   <p className="text-xs text-muted-foreground">ID подборки: {batch.id}</p>
                 </div>
@@ -1072,9 +1088,10 @@ function WeeklySourcesTab() {
 
 type WebsiteTabProps = {
   isActive: boolean;
+  timeZone: string;
 };
 
-function WebsiteTab({ isActive }: WebsiteTabProps) {
+function WebsiteTab({ isActive, timeZone }: WebsiteTabProps) {
   const { canEdit } = useRole();
   const router = useRouter();
   const [baseUrl, setBaseUrl] = useState('');
@@ -1367,7 +1384,13 @@ function WebsiteTab({ isActive }: WebsiteTabProps) {
                         </div>
                       )}
                     </TableCell>
-                    <TableCell className="text-sm text-gray-600">{new Date(item.created_at).toLocaleDateString('ru-RU')}</TableCell>
+                    <TableCell className="text-sm text-gray-600">
+                      {formatInTenantTimezone(item.created_at, timeZone, {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                      })}
+                    </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         <Button
@@ -1414,6 +1437,7 @@ function WebsiteTab({ isActive }: WebsiteTabProps) {
 }
 
 export default function AnalyticsPageClient() {
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [channelUrl, setChannelUrl] = useState('');
   const [channelType, setChannelType] = useState<ChannelAnalysisRecord['channel_type']>('telegram');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -1655,7 +1679,13 @@ export default function AnalyticsPageClient() {
                           )}
                         </TableCell>
                         <TableCell className="text-sm text-gray-600">
-                          {new Date(item.created_at).toLocaleString('ru-RU')}
+                          {formatInTenantTimezone(item.created_at, tenantTimezone, {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
                         </TableCell>
                         <TableCell className="text-right">
                           <Button
@@ -1681,15 +1711,15 @@ export default function AnalyticsPageClient() {
         </TabsContent>
 
         <TabsContent value="project">
-          <MyProjectTab />
+          <MyProjectTab timeZone={tenantTimezone} />
         </TabsContent>
 
         <TabsContent value="weekly">
-          <WeeklySourcesTab />
+          <WeeklySourcesTab timeZone={tenantTimezone} />
         </TabsContent>
 
         <TabsContent value="website">
-          <WebsiteTab isActive={activeTab === 'website'} />
+          <WebsiteTab isActive={activeTab === 'website'} timeZone={tenantTimezone} />
         </TabsContent>
       </Tabs>
     </div>

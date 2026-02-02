@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ApiError } from '@/lib/api';
 import { weeklySalesApi, type WeeklySalesPlan } from '@/lib/api/weeklySales';
 import { Trash2 } from 'lucide-react';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone, tenantDateToUtcISOString, toTenantDate } from '@/lib/timezone';
 
 type SalesWeekRow = {
   rowId: string;
@@ -26,11 +28,17 @@ type SalesMonthGroup = {
   rows: SalesWeekRow[];
 };
 
-const monthFormatter = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' });
-const weekFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short' });
-const timeFormatter = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
-
 const padNumber = (value: number) => String(value).padStart(2, '0');
+
+const formatTenantLocalDate = (
+  date: Date,
+  timeZone: string,
+  options: Intl.DateTimeFormatOptions,
+) => {
+  const utcValue = tenantDateToUtcISOString(date, timeZone);
+  if (!utcValue) return '—';
+  return formatInTenantTimezone(utcValue, timeZone, options) || '—';
+};
 
 const toDateInputValue = (value: Date) =>
   `${value.getFullYear()}-${padNumber(value.getMonth() + 1)}-${padNumber(value.getDate())}`;
@@ -45,20 +53,20 @@ const addDays = (value: Date, days: number) => {
   return next;
 };
 
-const formatWeekLabel = (start: string) => {
+const formatWeekLabel = (start: string, timeZone: string) => {
   if (!start) return '—';
   const startDate = parseDate(start);
   if (!isValidDate(startDate)) return '—';
   const endDate = addDays(startDate, 6);
-  const startLabel = weekFormatter.format(startDate);
-  const endLabel = weekFormatter.format(endDate);
+  const startLabel = formatTenantLocalDate(startDate, timeZone, { day: '2-digit', month: 'short' });
+  const endLabel = formatTenantLocalDate(endDate, timeZone, { day: '2-digit', month: 'short' });
   return `${startLabel} — ${endLabel}`;
 };
 
-const formatMonthLabel = (monthKey: string) => {
+const formatMonthLabel = (monthKey: string, timeZone: string) => {
   const monthDate = parseDate(`${monthKey}-01`);
   if (!isValidDate(monthDate)) return 'Без даты';
-  return monthFormatter.format(monthDate);
+  return formatTenantLocalDate(monthDate, timeZone, { month: 'long', year: 'numeric' });
 };
 
 const sortRows = (rows: SalesWeekRow[]) =>
@@ -69,13 +77,13 @@ const sortRows = (rows: SalesWeekRow[]) =>
     return a.weekStart.localeCompare(b.weekStart);
   });
 
-const groupByMonth = (rows: SalesWeekRow[]) => {
+const groupByMonth = (rows: SalesWeekRow[], timeZone: string) => {
   const sorted = sortRows(rows);
   const grouped: SalesMonthGroup[] = [];
 
   for (const row of sorted) {
     const monthKey = row.weekStart && row.weekStart.length >= 7 ? row.weekStart.slice(0, 7) : 'unknown';
-    const label = monthKey === 'unknown' ? 'Без даты' : formatMonthLabel(monthKey);
+    const label = monthKey === 'unknown' ? 'Без даты' : formatMonthLabel(monthKey, timeZone);
     const last = grouped[grouped.length - 1];
     if (!last || last.key !== monthKey) {
       grouped.push({
@@ -91,8 +99,8 @@ const groupByMonth = (rows: SalesWeekRow[]) => {
   return grouped;
 };
 
-const getCurrentWeekStart = () => {
-  const today = new Date();
+const getCurrentWeekStart = (timeZone: string) => {
+  const today = toTenantDate(new Date(), timeZone);
   const dayIndex = (today.getDay() + 6) % 7;
   const monday = new Date(today);
   monday.setDate(today.getDate() - dayIndex);
@@ -165,9 +173,11 @@ const validateRows = (rows: SalesWeekRow[]) => {
 };
 
 export function SalesTab() {
+  const { timezone: tenantTimezone, loading: tenantTimezoneLoading } = useTenantTimezone();
   const [rows, setRows] = useState<SalesWeekRow[]>([]);
   const [deletedIds, setDeletedIds] = useState<number[]>([]);
-  const [newWeekStart, setNewWeekStart] = useState(getCurrentWeekStart);
+  const newWeekInitializedRef = useRef(false);
+  const [newWeekStart, setNewWeekStart] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -175,7 +185,15 @@ export function SalesTab() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const groups = useMemo(() => groupByMonth(rows), [rows]);
+  const groups = useMemo(() => groupByMonth(rows, tenantTimezone), [rows, tenantTimezone]);
+
+  useEffect(() => {
+    if (tenantTimezoneLoading) return;
+    if (!newWeekInitializedRef.current) {
+      setNewWeekStart(getCurrentWeekStart(tenantTimezone));
+      newWeekInitializedRef.current = true;
+    }
+  }, [tenantTimezone, tenantTimezoneLoading]);
 
   useEffect(() => {
     const load = async () => {
@@ -266,7 +284,9 @@ export function SalesTab() {
       setRows(sortRows(nextRows));
       setDeletedIds([]);
       setDirty(false);
-      setSavedAt(timeFormatter.format(new Date()));
+      setSavedAt(
+        formatInTenantTimezone(new Date(), tenantTimezone, { hour: '2-digit', minute: '2-digit' }) || null
+      );
     } catch (err) {
       console.error('Failed to save weekly sales', err);
       if (err instanceof ApiError) {
@@ -387,7 +407,9 @@ export function SalesTab() {
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
-                        <div className="text-xs text-muted-foreground">{formatWeekLabel(row.weekStart)}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatWeekLabel(row.weekStart, tenantTimezone)}
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell>

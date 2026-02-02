@@ -12,10 +12,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 export default function WordstatDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [query, setQuery] = useState<WordstatQuery | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -274,7 +277,15 @@ export default function WordstatDetailPage() {
         <CardHeader>
           <CardTitle>Wordstat запрос</CardTitle>
           <CardDescription>
-            {query ? `Создано: ${new Date(query.created_at).toLocaleString('ru-RU')}` : 'Пожалуйста, подождите'}
+            {query
+              ? `Создано: ${formatInTenantTimezone(query.created_at, tenantTimezone, {
+                  year: 'numeric',
+                  month: '2-digit',
+                  day: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}`
+              : 'Пожалуйста, подождите'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

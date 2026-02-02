@@ -2,3 +2,4 @@
 export * from './useClient';
 export * from './useRole';
 export * from './useCanGenerateVideo';
+export * from './useTenantTimezone';

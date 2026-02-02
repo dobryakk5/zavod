@@ -481,7 +481,7 @@ export default function ContactDetailPage() {
       );
       setNewEventTitle('');
       setNewEventDescription('');
-      setNewEventStart(getDefaultEventStart());
+      setNewEventStart(getDefaultEventStart(tenantTimezone));
       setNewEventDuration('60');
       setNewEventEnd('');
       setNewEventLocation('');
@@ -532,7 +532,7 @@ export default function ContactDetailPage() {
       setPayments((prev) => [created, ...prev]);
       setNewPaymentAmount('');
       setNewPaymentCurrency('RUB');
-      setNewPaymentPlannedAt(getDefaultEventStart());
+      setNewPaymentPlannedAt(getDefaultEventStart(tenantTimezone));
       setNewPaymentPaid(false);
       setNewPaymentProductId('none');
       toast.success('Платёж добавлен');

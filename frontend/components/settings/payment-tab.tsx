@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { ArrowUpRight, CheckCircle, Clock3, RefreshCcw, XCircle } from 'lucide-react';
 import { ApiError, apiFetch } from '@/lib/api';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -81,6 +83,7 @@ const parsePlanLines = (description?: string) => {
 
 export function PaymentTab() {
   const searchParams = useSearchParams();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [planId, setPlanId] = useState<string | null>(null);
   const [plans, setPlans] = useState<PaymentPlan[]>([]);
   const [plansLoading, setPlansLoading] = useState(true);
@@ -383,7 +386,11 @@ export function PaymentTab() {
 
   const subscriptionName = subscription?.plan_name || 'Ознакомительный';
   const subscriptionUntil = subscription?.expires_at
-    ? new Date(subscription.expires_at).toLocaleDateString('ru-RU')
+    ? formatInTenantTimezone(subscription.expires_at, tenantTimezone, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      })
     : '';
 
   return (

@@ -18,7 +18,8 @@ import type {
   SEOStatus,
   WordstatQuery
 } from '@/lib/types';
-import { useRole } from '@/lib/hooks';
+import { useRole, useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -65,15 +66,16 @@ const STATUS_STYLES: Record<SEOStatus, string> = {
 
 const GROUP_ORDER = ['seo_keywords', 'seo_pains', 'seo_desires', 'seo_objections', 'seo_avatar', 'legacy'];
 
-function formatDate(value?: string | null) {
+function formatDate(value: string | null | undefined, timeZone: string) {
   if (!value) return '—';
   try {
-    return new Date(value).toLocaleString('ru-RU', {
+    return formatInTenantTimezone(value, timeZone, {
       day: '2-digit',
       month: 'short',
+      year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-    });
+    }) || value;
   } catch {
     return value;
   }
@@ -169,6 +171,7 @@ const buildUniqueSnippet = (value: string, maxLen: number = 240) => {
 export default function SEOPageClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [activeTab, setActiveTab] = useState<'groups' | 'seo' | 'wordstat' | 'competitors'>('groups');
   const [seoSets, setSeoSets] = useState<SEOKeywordSet[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1196,7 +1199,7 @@ export default function SEOPageClient() {
                           </div>
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          Обновлено: {formatDate(latest.created_at)}
+                          Обновлено: {formatDate(latest.created_at, tenantTimezone)}
                           {latest.topic_name ? ` • Тема: ${latest.topic_name}` : ''}
                         </div>
                       </CardHeader>
@@ -1276,7 +1279,7 @@ export default function SEOPageClient() {
                           <StatusBadge status={seoSet.status} />
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          {formatDate(seoSet.created_at)}
+                          {formatDate(seoSet.created_at, tenantTimezone)}
                           {seoSet.topic_name ? ` • ${seoSet.topic_name}` : ''}
                         </p>
                         {shouldShowErrorLog(seoSet) && (
@@ -1448,7 +1451,7 @@ export default function SEOPageClient() {
                             </div>
                             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                               <span>
-                                {formatDate(query.created_at)} • {query.total_count} показов
+                                {formatDate(query.created_at, tenantTimezone)} • {query.total_count} показов
                               </span>
                               <div className="flex gap-2">
                                 <Button

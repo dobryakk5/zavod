@@ -13,6 +13,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useTenantTimezone } from '@/lib/hooks';
+import { formatInTenantTimezone } from '@/lib/timezone';
 
 const STATUS_LABELS: Record<ArticleStatus, string> = {
   wordstat: 'Wordstat',
@@ -34,15 +36,16 @@ const STATUS_STYLES: Record<ArticleStatus, string> = {
   failed: 'bg-red-100 text-red-800',
 };
 
-function formatDate(value?: string | null) {
+function formatDate(value: string | null | undefined, timeZone: string) {
   if (!value) return '—';
   try {
-    return new Date(value).toLocaleString('ru-RU', {
+    return formatInTenantTimezone(value, timeZone, {
       day: '2-digit',
       month: 'short',
+      year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-    });
+    }) || value;
   } catch {
     return value;
   }
@@ -70,6 +73,7 @@ function StatusBadge({ status }: { status: ArticleStatus }) {
 
 export default function ArticlesPageClient() {
   const router = useRouter();
+  const { timezone: tenantTimezone } = useTenantTimezone();
   const [activeTab, setActiveTab] = useState<'create' | 'evaluate'>('create');
   const [evaluateTab, setEvaluateTab] = useState<'analyze' | 'recommend' | 'rewrite'>('analyze');
   const [articles, setArticles] = useState<Article[]>([]);
@@ -276,7 +280,9 @@ export default function ArticlesPageClient() {
                         {article.wordstat}
                       </Link>
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{formatDate(article.created_at)}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {formatDate(article.created_at, tenantTimezone)}
+                    </TableCell>
                     <TableCell>
                       <StatusBadge status={article.status} />
                     </TableCell>
