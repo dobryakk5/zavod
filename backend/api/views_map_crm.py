@@ -603,11 +603,13 @@ class ContactTelegramLinkView(APIView):
         schema = _map_schema()
         with connection.cursor() as cursor:
             cursor.execute(
-                f"SELECT 1 FROM {schema}.contacts WHERE id = %s",
+                f"SELECT tg_username FROM {schema}.contacts WHERE id = %s",
                 [contact_id],
             )
-            if cursor.fetchone() is None:
+            row = cursor.fetchone()
+            if row is None:
                 return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
+            contact_tg_username = row[0]
 
         client = get_active_client(request.user)
         tenant_service = TenantService()
@@ -628,18 +630,21 @@ class ContactTelegramLinkView(APIView):
         if binding is not None:
             telegram_chat_id = binding.telegram_chat_id
             is_connected = bool(binding.is_active)
-            task = (
-                TelegramTask.objects.filter(
-                    client=client,
-                    telegram_user_id=telegram_chat_id,
-                )
-                .order_by("-received_at", "-id")
-                .first()
-            )
-            if task and task.tg_name:
-                tg_name = task.tg_name
+            if contact_tg_username:
+                tg_name = contact_tg_username
             else:
-                tg_name = f"tg_{telegram_chat_id}"
+                task = (
+                    TelegramTask.objects.filter(
+                        client=client,
+                        telegram_user_id=telegram_chat_id,
+                    )
+                    .order_by("-received_at", "-id")
+                    .first()
+                )
+                if task and task.tg_name:
+                    tg_name = task.tg_name
+                else:
+                    tg_name = f"tg_{telegram_chat_id}"
 
         return Response(
             {

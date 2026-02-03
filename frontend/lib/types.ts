@@ -308,6 +308,7 @@ export interface Schedule {
 
 export interface TelegramTask {
   id: number;
+  contact_name: string | null;
   tg_name: string;
   message_text: string;
   received_at: string;

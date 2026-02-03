@@ -1,3 +1,7 @@
+import os
+import re
+
+from django.db import connection
 from django.utils import timezone
 
 from core.models import Client, UserTenantBinding
@@ -8,11 +12,38 @@ class TelegramUserService:
         self.binding_model = binding_model
         self.client_model = client_model
 
+    def _map_schema(self) -> str:
+        schema = os.getenv("MAP_SCHEMA", "map").strip()
+        if not schema or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema):
+            return "map"
+        return schema
+
+    def _store_contact_telegram_data(
+        self,
+        *,
+        contact_id: int,
+        telegram_user_id: int,
+        telegram_username: str | None,
+    ) -> None:
+        schema = self._map_schema()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE {schema}.contacts
+                SET tg_user_id = %s,
+                    tg_username = %s,
+                    tg_connected_at = %s
+                WHERE id = %s
+                """,
+                [telegram_user_id, telegram_username, timezone.now().date(), contact_id],
+            )
+
     def bind_user_to_tenant(
         self,
         telegram_chat_id: int,
         tenant_id: int | str,
         contact_id: int | None = None,
+        telegram_username: str | None = None,
     ) -> dict:
         """Bind a Telegram user to a client (tenant)."""
         tenant = self.client_model.objects.filter(id=tenant_id).first()
@@ -36,6 +67,13 @@ class TelegramUserService:
             tenant=tenant,
             defaults=defaults,
         )
+
+        if contact_id is not None:
+            self._store_contact_telegram_data(
+                contact_id=contact_id,
+                telegram_user_id=telegram_chat_id,
+                telegram_username=telegram_username,
+            )
 
         if created:
             status = "newly_bound"

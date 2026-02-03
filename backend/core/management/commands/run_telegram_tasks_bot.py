@@ -146,6 +146,7 @@ async def handle_start_with_deeplink(message: Message, command: CommandObject) -
             telegram_chat_id=from_user.id,
             tenant_id=tenant_id,
             contact_id=contact_id,
+            telegram_username=from_user.username,
         )
 
         if result["status"] == "newly_bound":
