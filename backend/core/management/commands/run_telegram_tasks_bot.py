@@ -390,7 +390,7 @@ async def handle_improvement_skip(callback: CallbackQuery, state: FSMContext) ->
     data = await state.get_data()
     rating = data.get("rating", 0)
 
-    await _save_service_level_feedback(callback.message, rating, None)
+    await _save_service_level_feedback(callback.message, rating, None, from_user=callback.from_user)
     await state.clear()
     await callback.answer()
 
@@ -405,8 +405,8 @@ async def handle_service_cancel(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer()
 
 
-async def _save_service_level_feedback(message: Message, rating: int, improvement: str | None) -> None:
-    from_user = message.from_user
+async def _save_service_level_feedback(message: Message, rating: int, improvement: str | None, from_user=None) -> None:
+    from_user = from_user or message.from_user
     if not from_user:
         return
 

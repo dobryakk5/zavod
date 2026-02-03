@@ -163,7 +163,7 @@ export default function ClientsPage() {
       </div>
 
       <Tabs defaultValue="clients" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
           <TabsTrigger value="clients">Клиенты</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
           <TabsTrigger value="service-level">Уровень сервиса</TabsTrigger>
