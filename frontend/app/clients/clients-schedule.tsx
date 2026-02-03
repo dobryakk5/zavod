@@ -351,8 +351,16 @@ function WeekViewContent({
               <div className="text-[10px] uppercase tracking-wide text-slate-400">
                 {formatTenantLocalDate(d, timeZone, { weekday: 'short' })}
               </div>
-              <div className={cn('mt-1 text-sm font-semibold', isToday && 'text-blue-600')}>
-                {formatTenantLocalDate(d, timeZone, { day: 'numeric' })}
+              <div className="mt-1 text-sm font-semibold flex justify-center">
+                <span
+                  className={cn(
+                    isToday
+                      ? 'inline-flex h-6 min-w-[24px] items-center justify-center rounded-full border border-blue-500 px-1 text-blue-600'
+                      : ''
+                  )}
+                >
+                  {formatTenantLocalDate(d, timeZone, { day: 'numeric' })}
+                </span>
               </div>
             </div>
           );

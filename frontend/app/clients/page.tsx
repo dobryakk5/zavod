@@ -10,6 +10,7 @@ import { clientApi } from '@/lib/api/client';
 import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezone } from '@/lib/timezone';
 import { ClientsTab } from '../products/clients-tab';
 import { CategoriesTab } from '../products/categories-tab';
+import ScheduleTasksView from '../schedule/tasks-view';
 import NewClientsEditor from './new/new-clients-editor';
 import ClientsSchedule from './clients-schedule';
 
@@ -162,9 +163,10 @@ export default function ClientsPage() {
       </div>
 
       <Tabs defaultValue="clients" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="clients">Клиенты</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
+          <TabsTrigger value="service-level">Уровень сервиса</TabsTrigger>
           <TabsTrigger value="categories">Теги</TabsTrigger>
           <TabsTrigger value="payments">Платежи</TabsTrigger>
         </TabsList>
@@ -178,6 +180,12 @@ export default function ClientsPage() {
         <TabsContent value="schedule" className="space-y-6">
           <div className="bg-white rounded-lg">
             <ClientsSchedule />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="service-level" className="space-y-6">
+          <div className="bg-white rounded-lg p-6">
+            <ScheduleTasksView />
           </div>
         </TabsContent>
 
