@@ -311,6 +311,7 @@ export interface TelegramTask {
   tg_name: string;
   message_text: string;
   received_at: string;
+  rating: number | null;
 }
 
 export interface SocialAccount {

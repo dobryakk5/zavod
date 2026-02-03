@@ -176,6 +176,7 @@ class TelegramTaskSerializer(serializers.ModelSerializer):
             "tg_name",
             "message_text",
             "received_at",
+            "rating",
         ]
 
 class PlatformCountSerializer(serializers.Serializer):

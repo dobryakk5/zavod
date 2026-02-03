@@ -2541,10 +2541,11 @@ class TelegramTask(models.Model):
     telegram_message_id = models.BigIntegerField(blank=True, null=True)
     message_text = models.TextField()
     received_at = models.DateTimeField()
+    rating = models.SmallIntegerField()
 
     class Meta:
         managed = False
-        db_table = 'map"."telegram_tasks'
+        db_table = 'map"."crm_level'
         ordering = ("-received_at", "-id")
 
     def __str__(self):

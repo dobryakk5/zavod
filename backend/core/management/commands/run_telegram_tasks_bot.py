@@ -74,6 +74,8 @@ def _store_task(
     message_id: int | None,
     message_text: str,
     received_at: datetime,
+    rating: int | None = None,
+    improvement: str | None = None,
 ) -> bool:
     telegram_user_service = get_telegram_user_service()
     binding = telegram_user_service.get_active_binding(telegram_id)
@@ -81,13 +83,18 @@ def _store_task(
         return False
 
     tg_name = username or f"tg_{telegram_id}"
+    stored_text = message_text
+    if improvement is not None:
+        stored_text = improvement
+
     TelegramTask.objects.create(
         client=binding.tenant,
         tg_name=tg_name,
         telegram_user_id=telegram_id,
         telegram_message_id=message_id,
-        message_text=message_text,
+        message_text=stored_text,
         received_at=received_at,
+        rating=rating,
     )
     return True
 
@@ -410,12 +417,6 @@ async def _save_service_level_feedback(message: Message, rating: int, improvemen
     if not from_user:
         return
 
-    feedback_text = f"[Оценка сервиса: {rating}/10]"
-    if improvement:
-        feedback_text += f"\nПожелания: {improvement}"
-    else:
-        feedback_text += "\nПожелания: не указаны"
-
     received_at = message.date or timezone.now()
     if timezone.is_naive(received_at):
         received_at = timezone.make_aware(received_at)
@@ -425,8 +426,10 @@ async def _save_service_level_feedback(message: Message, rating: int, improvemen
             telegram_id=from_user.id,
             username=from_user.username,
             message_id=message.message_id,
-            message_text=feedback_text,
+            message_text="",
             received_at=received_at,
+            rating=rating,
+            improvement=improvement,
         )
 
         if stored:
