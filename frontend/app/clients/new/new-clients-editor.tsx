@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { PlusIcon, EditIcon, TrashIcon, XIcon } from 'lucide-react';
-import { crmContactsApi, crmPaymentsApi } from '@/lib/api/crm';
+import { crmCategoriesApi, crmContactsApi, crmPaymentsApi } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
 import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezone } from '@/lib/timezone';
 
@@ -50,14 +50,9 @@ type Category = {
   name: string;
   description: string;
   color: string;
+  created_at?: string;
+  updated_at?: string;
 };
-
-const PREDEFINED_CATEGORIES: Category[] = [
-  { id: 1, name: 'VIP', description: 'Премиум клиенты', color: '#FFD700' },
-  { id: 2, name: 'Стандарт', description: 'Регулярные клиенты', color: '#4A90E2' },
-  { id: 3, name: 'Новички', description: 'Клиенты на пробном периоде', color: '#50C878' },
-  { id: 4, name: 'Потенциальные', description: 'Лиды в воронке продаж', color: '#FFA500' }
-];
 
 type Props = {
   activeTab?: 'clients' | 'categories' | 'payments';
@@ -66,6 +61,7 @@ type Props = {
 export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   const [clients, setClients] = useState<Client[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
@@ -77,15 +73,17 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
       setLoading(true);
       setLoadError(null);
       try {
-        const [contactsData, paymentsData] = await Promise.all([
+        const [contactsData, paymentsData, categoriesData] = await Promise.all([
           crmContactsApi.list(),
           crmPaymentsApi.list(),
+          crmCategoriesApi.list(),
         ]);
 
         if (!isActive) return;
 
         setClients(contactsData);
         setPayments(paymentsData);
+        setCategories(categoriesData);
         try {
           const settings = await clientApi.getSettings();
           if (!isActive) return;
@@ -98,7 +96,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
       } catch (err) {
         if (!isActive) return;
         console.error('Failed to load CRM contacts/payments', err);
-        setLoadError('Не удалось загрузить клиентов или платежи. Проверьте API /crm/contacts/ и /crm/payments/.');
+        setLoadError('Не удалось загрузить данные CRM. Проверьте API /crm/contacts/, /crm/payments/ и /crm/categories/.');
       } finally {
         if (isActive) {
           setLoading(false);
@@ -116,10 +114,6 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   if (loading) {
     return <div className="p-6">Загрузка редактора клиентов...</div>;
   }
-
-  const getClientCategory = (categoryId: number) => {
-    return PREDEFINED_CATEGORIES.find(cat => cat.id === categoryId) || null;
-  };
 
   const getClientFullName = (client: Client) => {
     return client.name;
@@ -159,6 +153,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
               </DialogHeader>
               <NewClientForm
                 clients={clients}
+                categories={categories}
                 onSave={(newClients) =>
                   setClients((prev) =>
                     [...newClients, ...prev].sort((a, b) => a.name.localeCompare(b.name, 'ru-RU'))
@@ -183,44 +178,48 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
           </Button>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {PREDEFINED_CATEGORIES.map((category) => {
-            const count = clients.filter((client) => client.category_id === category.id).length;
-            return (
-              <Card key={category.id}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">{category.name}</CardTitle>
-                    <Badge
-                      variant="outline"
-                      style={{ borderColor: category.color, color: category.color }}
-                    >
-                      {count}
-                    </Badge>
-                  </div>
-                  <CardDescription>{category.description}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div
-                    className="h-2 w-full rounded-full"
-                    style={{ backgroundColor: `${category.color}33` }}
-                  >
+        {categories.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Категории пока не добавлены.</p>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {categories.map((category) => {
+              const count = clients.filter((client) => client.category_id === category.id).length;
+              return (
+                <Card key={category.id}>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-lg">{category.name}</CardTitle>
+                      <Badge
+                        variant="outline"
+                        style={{ borderColor: category.color, color: category.color }}
+                      >
+                        {count}
+                      </Badge>
+                    </div>
+                    <CardDescription>{category.description}</CardDescription>
+                  </CardHeader>
+                  <CardContent>
                     <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${Math.min(100, (count / Math.max(clients.length, 1)) * 100)}%`,
-                        backgroundColor: category.color
-                      }}
-                    />
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {clients.length === 0 ? 'Нет клиентов' : `Доля: ${Math.round((count / clients.length) * 100)}%`}
-                  </p>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                      className="h-2 w-full rounded-full"
+                      style={{ backgroundColor: `${category.color}33` }}
+                    >
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${Math.min(100, (count / Math.max(clients.length, 1)) * 100)}%`,
+                          backgroundColor: category.color
+                        }}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {clients.length === 0 ? 'Нет клиентов' : `Доля: ${Math.round((count / clients.length) * 100)}%`}
+                    </p>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   } else if (activeTab === 'payments') {
@@ -333,8 +332,9 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
 }
 
 // Формы для добавления новых элементов
-function NewClientForm({ clients, onSave }: {
+function NewClientForm({ clients, categories, onSave }: {
   clients: Client[],
+  categories: Category[],
   onSave: (clients: Client[]) => void
 }) {
   const [nameInput, setNameInput] = useState('');
@@ -344,10 +344,21 @@ function NewClientForm({ clients, onSave }: {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [categoryId, setCategoryId] = useState(1); // Default to first category
+  const [categoryId, setCategoryId] = useState<string>('none');
   const [status, setStatus] = useState<'active' | 'inactive' | 'archived'>('active');
   const [notes, setNotes] = useState('');
   const [parentId, setParentId] = useState<number | null>(null); // Добавлено поле для выбора родительского клиента
+
+  useEffect(() => {
+    if (categories.length === 0) {
+      if (categoryId !== 'none') setCategoryId('none');
+      return;
+    }
+    const exists = categories.some((category) => String(category.id) === categoryId);
+    if (!exists) {
+      setCategoryId(String(categories[0].id));
+    }
+  }, [categories, categoryId]);
 
   const normalizeName = (value: string) => value.trim().replace(/\s+/g, ' ');
 
@@ -422,7 +433,7 @@ function NewClientForm({ clients, onSave }: {
             name: clientName,
             email,
             phone,
-            category_id: categoryId,
+            category_id: categoryId === 'none' ? null : Number(categoryId),
             status,
             photo_url: '',
             notes,
@@ -511,13 +522,14 @@ function NewClientForm({ clients, onSave }: {
       
       <div className="space-y-2">
         <Label htmlFor="category">Категория</Label>
-        <Select value={categoryId.toString()} onValueChange={(val) => setCategoryId(Number(val))}>
+        <Select value={categoryId} onValueChange={setCategoryId}>
           <SelectTrigger>
-            <SelectValue />
+            <SelectValue placeholder="Без категории" />
           </SelectTrigger>
           <SelectContent>
-            {PREDEFINED_CATEGORIES.map((category) => (
-              <SelectItem key={category.id} value={category.id.toString()}>
+            <SelectItem value="none">Без категории</SelectItem>
+            {categories.map((category) => (
+              <SelectItem key={category.id} value={String(category.id)}>
                 {category.name}
               </SelectItem>
             ))}

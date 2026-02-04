@@ -196,6 +196,18 @@ def _serialize_event_type_row(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _serialize_category_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Serialize category row from database to API format."""
+    return {
+        "id": row.get("id"),
+        "name": row.get("name") or "",
+        "description": row.get("description") or "",
+        "color": row.get("color") or "#4A90E2",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
 def _serialize_payment_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Serialize payment row from database to API format."""
     return {
@@ -364,6 +376,30 @@ def _fetch_event_type(schema: str, event_type_id: int) -> Dict[str, Any] | None:
             return None
         columns = [col[0] for col in cursor.description]
         return _serialize_event_type_row(dict(zip(columns, row)))
+
+
+def _fetch_category(schema: str, category_id: int) -> Dict[str, Any] | None:
+    """Fetch a single category by ID from the specified schema."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT
+                id,
+                name,
+                description,
+                color,
+                created_at,
+                updated_at
+            FROM {schema}.crm_categories
+            WHERE id = %s
+            """,
+            [category_id],
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        columns = [col[0] for col in cursor.description]
+        return _serialize_category_row(dict(zip(columns, row)))
 
 
 def _fetch_payment(schema: str, payment_id: int) -> Dict[str, Any] | None:
@@ -869,6 +905,127 @@ class ContactTagsView(APIView):
             if cursor.rowcount == 0:
                 return Response({"error": "Связь между контактом и тегом не найдена."}, status=status.HTTP_404_NOT_FOUND)
 
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CategoriesListView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def get(self, request):
+        schema = _map_schema()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT
+                    id,
+                    name,
+                    description,
+                    color,
+                    created_at,
+                    updated_at
+                FROM {schema}.crm_categories
+                ORDER BY name ASC
+                """
+            )
+            rows = _fetch_all(cursor)
+
+        payload = []
+        for row in rows:
+            payload.append(_serialize_category_row(row))
+
+        return Response(payload)
+
+    def post(self, request):
+        name = _coerce_text(request.data.get("name"), "name")
+        description = request.data.get("description", "")
+        color = _coerce_text(request.data.get("color") or "#4A90E2", "color")
+
+        schema = _map_schema()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO {schema}.crm_categories
+                (name, description, color)
+                VALUES (%s, %s, %s)
+                RETURNING id
+                """,
+                [name, description, color],
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return Response({"error": "Не удалось создать категорию."}, status=status.HTTP_400_BAD_REQUEST)
+
+        category_id = row[0]
+        created = _fetch_category(schema, int(category_id))
+        if not created:
+            created = {
+                "id": int(category_id),
+                "name": name,
+                "description": description,
+                "color": color,
+                "created_at": None,
+                "updated_at": None,
+            }
+        return Response(created, status=status.HTTP_201_CREATED)
+
+
+class CategoryDetailView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get(self, request, category_id: int):
+        schema = _map_schema()
+        category = _fetch_category(schema, int(category_id))
+        if not category:
+            return Response({"error": "Категория не найдена."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(category)
+
+    def patch(self, request, category_id: int):
+        schema = _map_schema()
+        updates = []
+        params = []
+
+        if "name" in request.data:
+            updates.append("name = %s")
+            params.append(_coerce_text(request.data["name"], "name"))
+
+        if "description" in request.data:
+            updates.append("description = %s")
+            params.append(request.data["description"])
+
+        if "color" in request.data:
+            updates.append("color = %s")
+            params.append(_coerce_text(request.data["color"], "color"))
+
+        if not updates:
+            return Response({"error": "Нет данных для обновления."}, status=status.HTTP_400_BAD_REQUEST)
+
+        params.append(category_id)
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {schema}.crm_categories SET {', '.join(updates)}, updated_at = NOW() WHERE id = %s",
+                params,
+            )
+            if cursor.rowcount == 0:
+                return Response({"error": "Категория не найдена."}, status=status.HTTP_404_NOT_FOUND)
+
+        updated = _fetch_category(schema, int(category_id))
+        if not updated:
+            return Response({"error": "Категория не найдена."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(updated)
+
+    def delete(self, request, category_id: int):
+        schema = _map_schema()
+        with connection.cursor() as cursor:
+            cursor.execute(f"DELETE FROM {schema}.crm_categories WHERE id = %s", [category_id])
+            if cursor.rowcount == 0:
+                return Response({"error": "Категория не найдена."}, status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

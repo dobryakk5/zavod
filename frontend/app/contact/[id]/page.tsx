@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
-import { crmContactsApi, crmEventTypesApi, crmEventsApi, crmPaymentsApi, crmNotesApi, crmContactTagsApi, type ContactTelegramInfo } from '@/lib/api/crm';
+import { crmContactsApi, crmCategoriesApi, crmEventTypesApi, crmEventsApi, crmPaymentsApi, crmNotesApi, crmContactTagsApi, type ContactTelegramInfo } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import {
@@ -73,6 +73,15 @@ type EventType = {
   duration_minutes: number;
   color: string;
   created_at: string;
+};
+
+type Category = {
+  id: number;
+  name: string;
+  description: string;
+  color: string;
+  created_at: string;
+  updated_at: string;
 };
 
 type Payment = {
@@ -178,6 +187,7 @@ export default function ContactDetailPage() {
   const [contact, setContact] = useState<Contact | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
   const [eventTypes, setEventTypes] = useState<EventType[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -230,6 +240,17 @@ export default function ContactDetailPage() {
   const [editingEventTypeName, setEditingEventTypeName] = useState('');
   const [savingEventTypeEdit, setSavingEventTypeEdit] = useState(false);
   const editEventTypeInputRef = useRef<HTMLInputElement | null>(null);
+  const [categoryId, setCategoryId] = useState<string>('none');
+  const [categorySelectOpen, setCategorySelectOpen] = useState(false);
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [savingCategory, setSavingCategory] = useState(false);
+  const newCategoryInputRef = useRef<HTMLInputElement | null>(null);
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState('');
+  const [savingCategoryEdit, setSavingCategoryEdit] = useState(false);
+  const editCategoryInputRef = useRef<HTMLInputElement | null>(null);
+  const [savingCategoryAssignment, setSavingCategoryAssignment] = useState(false);
   const [newPaymentAmount, setNewPaymentAmount] = useState('');
   const [newPaymentCurrency, setNewPaymentCurrency] = useState('RUB');
   const [newPaymentPlannedAt, setNewPaymentPlannedAt] = useState(defaultPaymentStartRef.current);
@@ -245,6 +266,7 @@ export default function ContactDetailPage() {
     pain: 'Боль',
     experience: 'Опыт',
   };
+  const defaultCategoryColor = '#4A90E2';
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -308,8 +330,19 @@ export default function ContactDetailPage() {
             }
             return { data: null as ContactTelegramInfo | null, error: message };
           });
-        const [contactData, eventTypesData, productsData, eventsData, paymentsData, notesData, contactTagsData, telegramInfoData] = await Promise.all([
+        const [
+          contactData,
+          categoriesData,
+          eventTypesData,
+          productsData,
+          eventsData,
+          paymentsData,
+          notesData,
+          contactTagsData,
+          telegramInfoData,
+        ] = await Promise.all([
           crmContactsApi.detail(contactId),
+          crmCategoriesApi.list(),
           crmEventTypesApi.list(),
           clientProductsApi.list(),
           crmEventsApi.list(),
@@ -320,6 +353,7 @@ export default function ContactDetailPage() {
         ]);
 
         setContact(contactData);
+        setCategories(categoriesData);
         setEventTypes(eventTypesData);
         setProducts(productsData);
         
@@ -338,7 +372,7 @@ export default function ContactDetailPage() {
         );
       } catch (err) {
         console.error('Error loading contact data:', err);
-        setError('Не удалось загрузить данные контакта. Проверьте API /crm/contacts/, /crm/events/, /crm/payments/, /crm/notes/ и /crm/contact-tags/.');
+        setError('Не удалось загрузить данные контакта. Проверьте API /crm/contacts/, /crm/categories/, /crm/event-types/, /crm/events/, /crm/payments/, /crm/notes/ и /crm/contact-tags/.');
       } finally {
         setLoading(false);
       }
@@ -348,6 +382,10 @@ export default function ContactDetailPage() {
       fetchData();
     }
   }, [contactId]);
+
+  useEffect(() => {
+    setCategoryId(contact?.category_id ? String(contact.category_id) : 'none');
+  }, [contact?.category_id]);
 
   const handleFieldEdit = (field: string, currentValue?: string | null) => {
     setEditingField(field);
@@ -660,11 +698,119 @@ export default function ContactDetailPage() {
     }
   };
 
+  const handleStartAddCategory = () => {
+    setAddingCategory(true);
+    setEditingCategoryId(null);
+    setCategorySelectOpen(true);
+    setTimeout(() => newCategoryInputRef.current?.focus(), 0);
+  };
+
+  const handleCancelAddCategory = () => {
+    setAddingCategory(false);
+    setNewCategoryName('');
+  };
+
+  const handleStartEditCategory = (category: Category) => {
+    setEditingCategoryId(category.id);
+    setEditingCategoryName(category.name);
+    setAddingCategory(false);
+    setCategorySelectOpen(true);
+    setTimeout(() => editCategoryInputRef.current?.focus(), 0);
+  };
+
+  const handleCancelEditCategory = () => {
+    setEditingCategoryId(null);
+    setEditingCategoryName('');
+  };
+
+  const handleCreateCategory = async () => {
+    const name = newCategoryName.trim();
+    if (!name) {
+      toast.error('Введите название категории');
+      return;
+    }
+    setSavingCategory(true);
+    try {
+      const created = await crmCategoriesApi.create({
+        name,
+        description: '',
+        color: defaultCategoryColor,
+      });
+      setCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setNewCategoryName('');
+      setAddingCategory(false);
+      setCategorySelectOpen(false);
+      toast.success('Категория добавлена');
+      if (contact) {
+        await handleAssignCategory(String(created.id), { silent: true });
+      }
+    } catch (err) {
+      console.error('Error creating category:', err);
+      toast.error('Не удалось добавить категорию');
+    } finally {
+      setSavingCategory(false);
+    }
+  };
+
+  const handleSaveCategory = async () => {
+    if (!editingCategoryId) return;
+    const name = editingCategoryName.trim();
+    if (!name) {
+      toast.error('Введите название категории');
+      return;
+    }
+    setSavingCategoryEdit(true);
+    try {
+      const updated = await crmCategoriesApi.update(editingCategoryId, { name });
+      setCategories((prev) =>
+        prev
+          .map((item) => (item.id === updated.id ? updated : item))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+      setEditingCategoryId(null);
+      setEditingCategoryName('');
+      toast.success('Категория обновлена');
+    } catch (err) {
+      console.error('Error updating category:', err);
+      toast.error('Не удалось обновить категорию');
+    } finally {
+      setSavingCategoryEdit(false);
+    }
+  };
+
+  const handleAssignCategory = async (value: string, options?: { silent?: boolean }) => {
+    if (!contact) return;
+    const previousValue = categoryId;
+    setCategoryId(value);
+    setSavingCategoryAssignment(true);
+    try {
+      const updated = await crmContactsApi.update(contact.id, {
+        category_id: value === 'none' ? null : Number(value),
+      });
+      setContact(updated);
+      if (!options?.silent) {
+        toast.success('Категория обновлена');
+      }
+    } catch (err) {
+      console.error('Error updating contact category:', err);
+      toast.error('Не удалось обновить категорию');
+      setCategoryId(previousValue);
+    } finally {
+      setSavingCategoryAssignment(false);
+    }
+  };
+
   const eventTypesById = useMemo(() => {
     const map = new Map<number, EventType>();
     eventTypes.forEach((item) => map.set(item.id, item));
     return map;
   }, [eventTypes]);
+
+  const categoriesById = useMemo(() => {
+    const map = new Map<number, Category>();
+    categories.forEach((item) => map.set(item.id, item));
+    return map;
+  }, [categories]);
 
   const productsById = useMemo(() => {
     const map = new Map<number, Product>();
@@ -851,6 +997,133 @@ export default function ContactDetailPage() {
                       </Button>
                     </div>
                   )}
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <Label>Категория</Label>
+                  <Select
+                    value={categoryId}
+                    onValueChange={(value) => void handleAssignCategory(value)}
+                    open={categorySelectOpen}
+                    onOpenChange={(open) => {
+                      setCategorySelectOpen(open);
+                      if (!open) {
+                        setAddingCategory(false);
+                        setEditingCategoryId(null);
+                        setEditingCategoryName('');
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="w-48" disabled={savingCategoryAssignment}>
+                      <SelectValue
+                        placeholder="Без категории"
+                        aria-label={categoriesById.get(Number(categoryId))?.name}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Без категории</SelectItem>
+                      {categories.map((category) =>
+                        editingCategoryId === category.id ? (
+                          <div key={category.id} className="space-y-2 px-2 py-2">
+                            <Input
+                              ref={editCategoryInputRef}
+                              value={editingCategoryName}
+                              onChange={(e) => setEditingCategoryName(e.target.value)}
+                              placeholder="Название категории"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  void handleSaveCategory();
+                                }
+                                if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  handleCancelEditCategory();
+                                }
+                              }}
+                            />
+                            <div className="flex gap-2">
+                              <Button type="button" size="sm" disabled={savingCategoryEdit} onClick={handleSaveCategory}>
+                                {savingCategoryEdit ? 'Сохраняем...' : 'Сохранить'}
+                              </Button>
+                              <Button type="button" size="sm" variant="ghost" onClick={handleCancelEditCategory}>
+                                Отмена
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <SelectItem
+                            key={category.id}
+                            value={String(category.id)}
+                            className="group relative pr-10 [&>span]:right-8"
+                          >
+                            <span className="flex items-center gap-2">
+                              <span
+                                className="inline-flex h-2 w-2 rounded-full"
+                                style={{ backgroundColor: category.color || defaultCategoryColor }}
+                              />
+                              <span className="block w-full truncate pr-6">{category.name}</span>
+                            </span>
+                            <button
+                              type="button"
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+                              onPointerDown={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleStartEditCategory(category);
+                              }}
+                              aria-label="Переименовать категорию"
+                            >
+                              <EditIcon className="h-3.5 w-3.5" />
+                            </button>
+                          </SelectItem>
+                        )
+                      )}
+                      <div className="my-1 h-px bg-border" />
+                      {addingCategory ? (
+                        <div className="space-y-2 px-2 py-2">
+                          <Input
+                            ref={newCategoryInputRef}
+                            value={newCategoryName}
+                            onChange={(e) => setNewCategoryName(e.target.value)}
+                            placeholder="Новая категория"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                void handleCreateCategory();
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                handleCancelAddCategory();
+                              }
+                            }}
+                          />
+                          <div className="flex gap-2">
+                            <Button type="button" size="sm" disabled={savingCategory} onClick={handleCreateCategory}>
+                              {savingCategory ? 'Сохраняем...' : 'Добавить'}
+                            </Button>
+                            <Button type="button" size="sm" variant="ghost" onClick={handleCancelAddCategory}>
+                              Отмена
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="w-full px-2 py-2 text-left text-sm text-primary hover:bg-accent rounded"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            handleStartAddCategory();
+                          }}
+                        >
+                          + Добавить категорию
+                        </button>
+                      )}
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="space-y-[1px]">

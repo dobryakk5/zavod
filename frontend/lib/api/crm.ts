@@ -23,6 +23,15 @@ export type Tag = {
   created_at: string;
 };
 
+export type Category = {
+  id: number;
+  name: string;
+  description: string;
+  color: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ContactTag = {
   contact_id: number;
   tag_id: number;
@@ -190,6 +199,37 @@ export const crmContactTagsApi = {
     return apiFetch<void>('/crm/contact-tags/', {
       method: 'DELETE',
       body: data,
+    });
+  },
+};
+
+// API functions for categories
+export const crmCategoriesApi = {
+  list: async (): Promise<Category[]> => {
+    return apiFetch<Category[]>('/crm/categories/');
+  },
+
+  detail: async (id: number | string): Promise<Category> => {
+    return apiFetch<Category>(`/crm/categories/${id}/`);
+  },
+
+  create: async (data: Omit<Category, 'id' | 'created_at' | 'updated_at'>): Promise<Category> => {
+    return apiFetch<Category>('/crm/categories/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  update: async (id: number | string, data: Partial<Omit<Category, 'id' | 'created_at' | 'updated_at'>>): Promise<Category> => {
+    return apiFetch<Category>(`/crm/categories/${id}/`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  delete: async (id: number | string): Promise<void> => {
+    return apiFetch<void>(`/crm/categories/${id}/`, {
+      method: 'DELETE',
     });
   },
 };

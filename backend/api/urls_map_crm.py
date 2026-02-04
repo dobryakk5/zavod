@@ -6,6 +6,8 @@ from .views_map_crm import (
     TagsListView,
     TagDetailView,
     ContactTagsView,
+    CategoriesListView,
+    CategoryDetailView,
     EventTypesListView,
     EventTypeDetailView,
     EventsListView,
@@ -30,6 +32,10 @@ urlpatterns = [
     
     # Contact-Tag relationships
     path('contact-tags/', ContactTagsView.as_view(), name='map-contact-tags'),
+
+    # Categories endpoints
+    path('categories/', CategoriesListView.as_view(), name='map-categories-list'),
+    path('categories/<int:category_id>/', CategoryDetailView.as_view(), name='map-category-detail'),
     
     # Event types endpoints
     path('event-types/', EventTypesListView.as_view(), name='map-event-types-list'),
