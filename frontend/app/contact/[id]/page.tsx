@@ -999,6 +999,41 @@ export default function ContactDetailPage() {
                   )}
                 </div>
 
+                <div className="space-y-[1px]">
+                  <div className="flex items-center justify-between">
+                    <Label>Telegram</Label>
+                    <div className="flex items-center gap-2">
+                      <span>
+                        {telegramInfo?.tg_name
+                          ? (telegramInfo.tg_name.startsWith('@') ? telegramInfo.tg_name : `@${telegramInfo.tg_name}`)
+                          : 'Не подключен'}
+                      </span>
+                      {telegramInfo?.is_connected && (
+                        <span className="inline-flex h-9 w-9 items-center justify-center">
+                          <CheckIcon className="h-4 w-4 text-emerald-500" />
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="h-auto px-0 text-xs text-muted-foreground"
+                      onClick={() => setTelegramDialogOpen(true)}
+                    >
+                      Подключить клиента к боту
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>О контакте</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Категория</Label>
                   <Select
@@ -1125,42 +1160,6 @@ export default function ContactDetailPage() {
                     </SelectContent>
                   </Select>
                 </div>
-
-                <div className="space-y-[1px]">
-                  <div className="flex items-center justify-between">
-                    <Label>Telegram</Label>
-                    <div className="flex items-center gap-2">
-                      <span>
-                        {telegramInfo?.tg_name
-                          ? (telegramInfo.tg_name.startsWith('@') ? telegramInfo.tg_name : `@${telegramInfo.tg_name}`)
-                          : 'Не подключен'}
-                      </span>
-                      {telegramInfo?.is_connected && (
-                        <span className="inline-flex h-9 w-9 items-center justify-center">
-                          <CheckIcon className="h-4 w-4 text-emerald-500" />
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div>
-                    <Button
-                      type="button"
-                      variant="link"
-                      className="h-auto px-0 text-xs text-muted-foreground"
-                      onClick={() => setTelegramDialogOpen(true)}
-                    >
-                      Подключить клиента к боту
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>О контакте</CardTitle>
-              </CardHeader>
-              <CardContent>
                 {editingField === 'notes' ? (
                   <div className="space-y-2">
                     <Input

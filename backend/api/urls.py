@@ -97,6 +97,16 @@ from .views_map_crm import (
     NotesListView,
     NoteDetailView,
 )
+from .views_chains import (
+    CurrentChainView,
+    CurrentChainGraphView,
+    ChainNodesView,
+    ChainNodeDetailView,
+    ChainEdgesView,
+    ChainEdgeDetailView,
+    ChainEdgeConditionsView,
+    ChainEdgeConditionDetailView,
+)
 
 app_name = 'api'
 
@@ -210,6 +220,16 @@ urlpatterns = [
     path('crm/payments/<int:payment_id>/', PaymentDetailView.as_view(), name='crm-payment-detail'),
     path('crm/notes/', NotesListView.as_view(), name='crm-notes-list'),
     path('crm/notes/<int:note_id>/', NoteDetailView.as_view(), name='crm-note-detail'),
+
+    # Welcome chain endpoints (single chain per tenant)
+    path('chains/current/', CurrentChainView.as_view(), name='chains-current'),
+    path('chains/current/graph/', CurrentChainGraphView.as_view(), name='chains-current-graph'),
+    path('chains/current/nodes/', ChainNodesView.as_view(), name='chains-current-nodes'),
+    path('chains/current/nodes/<int:node_id>/', ChainNodeDetailView.as_view(), name='chains-current-node-detail'),
+    path('chains/current/edges/', ChainEdgesView.as_view(), name='chains-current-edges'),
+    path('chains/current/edges/<int:edge_id>/', ChainEdgeDetailView.as_view(), name='chains-current-edge-detail'),
+    path('chains/current/edges/<int:edge_id>/conditions/', ChainEdgeConditionsView.as_view(), name='chains-current-edge-conditions'),
+    path('chains/current/edges/<int:edge_id>/conditions/<int:condition_id>/', ChainEdgeConditionDetailView.as_view(), name='chains-current-edge-condition'),
 
     # Include router URLs
     path('', include(router.urls)),

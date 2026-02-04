@@ -364,6 +364,11 @@ export default function ArticleDetailPageClient() {
     const next = orderedBlocks.find((block) => !block.content?.trim() && block.status !== 'failed');
     return next?.id ?? null;
   }, [generatingPhase2, orderedBlocks]);
+  const phase1ActiveBlockId = useMemo(() => {
+    if (!generatingBlueprint) return null;
+    const next = orderedBlocks.find((block) => block.status === 'draft');
+    return next?.id ?? null;
+  }, [generatingBlueprint, orderedBlocks]);
 
   const typeKeyById = useMemo(() => {
     const map = new Map<number, string>();
@@ -496,6 +501,9 @@ export default function ArticleDetailPageClient() {
       try {
         const status = await articlesApi.generationStatus(blueprintTaskId);
         if (cancelled) return;
+        if (status.status !== 'success' && status.status !== 'failure' && status.status !== 'revoked') {
+          await reloadBlocks();
+        }
         if (status.status === 'success' || status.status === 'failure' || status.status === 'revoked') {
           setBlueprintTaskId(null);
           setGeneratingBlueprint(false);
@@ -1030,7 +1038,9 @@ export default function ArticleDetailPageClient() {
                         <span>
                           {block.order}. {block.block_key}
                         </span>
-                        {generatingBlockId === block.id || phase2ActiveBlockId === block.id ? (
+                        {generatingBlockId === block.id ||
+                        phase2ActiveBlockId === block.id ||
+                        phase1ActiveBlockId === block.id ? (
                           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                         ) : null}
                       </div>

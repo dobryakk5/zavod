@@ -13,6 +13,7 @@ import { CategoriesTab } from '../products/categories-tab';
 import ScheduleTasksView from '../schedule/tasks-view';
 import NewClientsEditor from './new/new-clients-editor';
 import ClientsSchedule from './clients-schedule';
+import ChainEditor from '@/components/chain-editor';
 
 type ClientsStats = {
   upcomingEvents: number;
@@ -163,12 +164,13 @@ export default function ClientsPage() {
       </div>
 
       <Tabs defaultValue="clients" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <TabsList className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
           <TabsTrigger value="clients">Клиенты</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
           <TabsTrigger value="service-level">Уровень сервиса</TabsTrigger>
           <TabsTrigger value="categories">Теги</TabsTrigger>
           <TabsTrigger value="payments">Платежи</TabsTrigger>
+          <TabsTrigger value="welcome-chain">Welcome</TabsTrigger>
         </TabsList>
 
         <TabsContent value="clients" className="space-y-6">
@@ -198,6 +200,12 @@ export default function ClientsPage() {
         <TabsContent value="payments" className="space-y-6">
           <div className="bg-white rounded-lg p-6">
             <NewClientsEditor activeTab="payments" />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="welcome-chain" className="space-y-6">
+          <div className="bg-white rounded-lg p-4 h-[70vh]">
+            <ChainEditor className="h-full" />
           </div>
         </TabsContent>
       </Tabs>

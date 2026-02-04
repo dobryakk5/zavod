@@ -470,7 +470,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
     def _get_system_block_prompt_template(self, block_key: str) -> str:
         """
         Системный промпт для блока (общий для всех клиентов/статей).
-        Редактируется в Django Admin в модели ArticleBlockPromptTemplate.
+        Редактируется в Django Admin в модели GeneratorPrompt (группа "Статьи").
         """
         return get_system_block_prompt_template(block_key)
 

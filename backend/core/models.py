@@ -2512,6 +2512,99 @@ class MindNodePosition(models.Model):
         db_table = 'map"."mind_node_positions'
 
 
+class Chain(models.Model):
+    tenant = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="tenant_id", related_name="chains")
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    status = models.CharField(max_length=20, default="draft")
+    start_node_id = models.BigIntegerField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."chains'
+
+    def __str__(self):
+        return f"{self.tenant_id}:{self.name}"
+
+
+class ChainNode(models.Model):
+    chain = models.ForeignKey(Chain, on_delete=models.CASCADE, db_column="chain_id", related_name="nodes")
+    node_type = models.CharField(max_length=20, default="text")
+    payload = models.JSONField(default=dict)
+    delay_seconds = models.IntegerField(default=0)
+    pos_x = models.FloatField(default=0)
+    pos_y = models.FloatField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."chain_nodes'
+
+    def __str__(self):
+        return f"{self.chain_id}:{self.node_type}"
+
+
+class ChainEdge(models.Model):
+    chain = models.ForeignKey(Chain, on_delete=models.CASCADE, db_column="chain_id", related_name="edges")
+    source_node = models.ForeignKey(ChainNode, on_delete=models.CASCADE, db_column="source_node_id", related_name="edges_from")
+    target_node = models.ForeignKey(ChainNode, on_delete=models.CASCADE, db_column="target_node_id", related_name="edges_to")
+    priority = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."chain_edges'
+
+    def __str__(self):
+        return f"{self.chain_id}:{self.source_node_id}->{self.target_node_id}"
+
+
+class ChainCondition(models.Model):
+    edge = models.ForeignKey(ChainEdge, on_delete=models.CASCADE, db_column="edge_id", related_name="conditions")
+    condition_type = models.CharField(max_length=30)
+    params = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."chain_conditions'
+
+    def __str__(self):
+        return f"{self.edge_id}:{self.condition_type}"
+
+
+class ChainSession(models.Model):
+    user_id = models.BigIntegerField()
+    tenant = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="tenant_id", related_name="chain_sessions")
+    chain = models.ForeignKey(Chain, on_delete=models.CASCADE, db_column="chain_id", related_name="sessions")
+    current_node = models.ForeignKey(
+        ChainNode,
+        on_delete=models.SET_NULL,
+        db_column="current_node_id",
+        related_name="sessions",
+        blank=True,
+        null=True,
+    )
+    status = models.CharField(max_length=20, default="active")
+    context = models.JSONField(default=dict)
+    started_at = models.DateTimeField(auto_now_add=True)
+    last_activity_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."chain_sessions'
+
+    def __str__(self):
+        return f"{self.user_id}:{self.chain_id}:{self.status}"
+
+
 class UserTenantBinding(models.Model):
     tenant = models.ForeignKey(
         Client,

@@ -11,6 +11,10 @@ from core.models import (
     ChannelAnalysis,
     Client,
     ClientProduct,
+    Chain,
+    ChainCondition,
+    ChainEdge,
+    ChainNode,
     ProductType,
     ContentTemplate,
     Connection,
@@ -1387,6 +1391,83 @@ class MindMapDetailSerializer(MindMapSerializer):
 
     class Meta(MindMapSerializer.Meta):
         fields = MindMapSerializer.Meta.fields + ["nodes", "edges"]
+
+
+class ChainSerializer(serializers.ModelSerializer):
+    tenant_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Chain
+        fields = [
+            "id",
+            "tenant_id",
+            "name",
+            "description",
+            "status",
+            "start_node_id",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "tenant_id", "created_at", "updated_at"]
+
+
+class ChainNodeSerializer(serializers.ModelSerializer):
+    chain_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = ChainNode
+        fields = [
+            "id",
+            "chain_id",
+            "node_type",
+            "payload",
+            "delay_seconds",
+            "pos_x",
+            "pos_y",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "chain_id", "created_at", "updated_at"]
+
+
+class ChainEdgeSerializer(serializers.ModelSerializer):
+    chain_id = serializers.IntegerField(read_only=True)
+    source_node_id = serializers.PrimaryKeyRelatedField(
+        queryset=ChainNode.objects.all(),
+        source="source_node",
+    )
+    target_node_id = serializers.PrimaryKeyRelatedField(
+        queryset=ChainNode.objects.all(),
+        source="target_node",
+    )
+
+    class Meta:
+        model = ChainEdge
+        fields = [
+            "id",
+            "chain_id",
+            "source_node_id",
+            "target_node_id",
+            "priority",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "chain_id", "created_at", "updated_at"]
+
+
+class ChainConditionSerializer(serializers.ModelSerializer):
+    edge_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = ChainCondition
+        fields = [
+            "id",
+            "edge_id",
+            "condition_type",
+            "params",
+            "created_at",
+        ]
+        read_only_fields = ["id", "edge_id", "created_at"]
 
 
 class ClientProductSerializer(serializers.ModelSerializer):

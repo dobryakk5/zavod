@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -26,25 +27,154 @@ except ImportError:  # pragma: no cover - optional dependency
     InferenceClient = None  # type: ignore
 
 logger = logging.getLogger("backend.core.ai_generator")
+
+
+def _openrouter_debug_enabled() -> bool:
+    flag = (os.getenv("OPENROUTER_DEBUG") or "1").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
+if _openrouter_debug_enabled():
+    logger.setLevel(logging.DEBUG)
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_ANSWER_BLOCK_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)
 _OPENROUTER_RETRYABLE_STATUS = {500, 502, 503, 504}
 
 
-def _coerce_text(value: object) -> str:
+def _coerce_text(value: object, *, strip: bool = True) -> str:
     if isinstance(value, str):
-        return value.strip()
+        return value.strip() if strip else value
     if isinstance(value, dict):
         for key in ("text", "content", "value"):
             candidate = value.get(key)
             if isinstance(candidate, str) and candidate.strip():
-                return candidate.strip()
+                return candidate.strip() if strip else candidate
     if isinstance(value, list):
         parts: List[str] = []
         for item in value:
-            text = _coerce_text(item)
+            text = _coerce_text(item, strip=strip)
             if text:
                 parts.append(text)
-        return "\n".join(parts).strip()
+        joined = "\n".join(parts)
+        return joined.strip() if strip else joined
+    return ""
+
+
+def _iter_openrouter_candidate_texts(data: object) -> List[str]:
+    if not isinstance(data, dict):
+        return []
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return []
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return []
+
+    candidates: List[str] = []
+    message = first_choice.get("message")
+    if isinstance(message, dict):
+        candidates.append(_coerce_text(message.get("content")))
+        candidates.append(_coerce_text(message.get("text")))
+        candidates.append(_coerce_text(message.get("reasoning")))
+        candidates.append(_coerce_text(message.get("reasoning_details")))
+    else:
+        candidates.append(_coerce_text(message))
+
+    delta = first_choice.get("delta")
+    if isinstance(delta, dict):
+        candidates.append(_coerce_text(delta.get("content")))
+
+    candidates.append(_coerce_text(first_choice.get("text")))
+
+    return [item for item in candidates if item]
+
+
+def _extract_json_payload(text: str) -> str:
+    if not text:
+        return ""
+    text = _THINK_BLOCK_RE.sub("", text).strip()
+    answer_match = _ANSWER_BLOCK_RE.search(text)
+    if answer_match:
+        candidate = (answer_match.group(1) or "").strip()
+        if candidate:
+            return candidate
+    match = _JSON_BLOCK_RE.search(text)
+    if match:
+        candidate = (match.group(1) or "").strip()
+        if candidate:
+            return candidate
+    stripped = text.strip()
+    if stripped.startswith(("{", "[")):
+        return stripped
+    start_obj = stripped.find("{")
+    end_obj = stripped.rfind("}")
+    if start_obj != -1 and end_obj > start_obj:
+        return stripped[start_obj : end_obj + 1].strip()
+    start_arr = stripped.find("[")
+    end_arr = stripped.rfind("]")
+    if start_arr != -1 and end_arr > start_arr:
+        return stripped[start_arr : end_arr + 1].strip()
+    return ""
+
+
+def _extract_openrouter_json(data: object) -> Optional[str]:
+    for candidate in _iter_openrouter_candidate_texts(data):
+        extracted = _extract_json_payload(candidate)
+        if extracted:
+            return extracted
+    return None
+
+
+def _extract_openrouter_stream_parts(data: object) -> tuple[str, str]:
+    if not isinstance(data, dict):
+        return "", ""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return "", ""
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return "", ""
+
+    content_piece = ""
+    reasoning_piece = ""
+
+    delta = first_choice.get("delta")
+    if isinstance(delta, dict):
+        content_piece = _coerce_text(delta.get("content"), strip=False) or _coerce_text(delta.get("text"), strip=False)
+        reasoning_piece = _coerce_text(delta.get("reasoning"), strip=False) or _coerce_text(
+            delta.get("reasoning_details"),
+            strip=False,
+        )
+
+    message = first_choice.get("message")
+    if isinstance(message, dict):
+        if not content_piece:
+            content_piece = _coerce_text(message.get("content"), strip=False) or _coerce_text(
+                message.get("text"),
+                strip=False,
+            )
+        if not reasoning_piece:
+            reasoning_piece = _coerce_text(message.get("reasoning"), strip=False) or _coerce_text(
+                message.get("reasoning_details"),
+                strip=False,
+            )
+
+    text_value = first_choice.get("text")
+    if not content_piece and isinstance(text_value, str) and text_value:
+        content_piece = text_value
+
+    return content_piece, reasoning_piece
+
+
+def _extract_openrouter_stream_text(data: object, *, include_reasoning: bool = True) -> str:
+    content_piece, reasoning_piece = _extract_openrouter_stream_parts(data)
+    if content_piece:
+        return content_piece
+    if reasoning_piece and include_reasoning:
+        cleaned = _THINK_BLOCK_RE.sub("", reasoning_piece).strip()
+        return cleaned
     return ""
 
 
@@ -75,6 +205,16 @@ def _extract_openrouter_text(data: object) -> Optional[str]:
         message_text = _coerce_text(message.get("text"))
         if message_text:
             return message_text
+        reasoning_text = _coerce_text(message.get("reasoning"))
+        if reasoning_text:
+            cleaned = _THINK_BLOCK_RE.sub("", reasoning_text).strip()
+            if cleaned:
+                return cleaned
+        reasoning_details_text = _coerce_text(message.get("reasoning_details"))
+        if reasoning_details_text:
+            cleaned = _THINK_BLOCK_RE.sub("", reasoning_details_text).strip()
+            if cleaned:
+                return cleaned
     else:
         message_text = _coerce_text(message)
         if message_text:
@@ -162,19 +302,45 @@ class BaseAIContentGenerator:
         max_tokens: int,
         temperature: float,
         response_format: Optional[dict] = None,
+        plugins: Optional[List[dict]] = None,
+        stream: bool = False,
+        stop: Optional[List[str]] = None,
+        extra_body: Optional[dict] = None,
+        timeout_seconds: float = 60.0,
     ) -> Optional[str]:
         """Call OpenRouter chat completions API and return text."""
+        effective_max_tokens = max_tokens
+        model_lower = (model or "").lower()
+        is_reasoning_model = any(
+            keyword in model_lower for keyword in ("r1", "reasoning", "deepseek-r", "qwq")
+        )
+        if is_reasoning_model and max_tokens < 4000:
+            effective_max_tokens = max(max_tokens * 2, 4000)
+            logger.debug(
+                "Increased max_tokens from %s to %s for reasoning model %s",
+                max_tokens,
+                effective_max_tokens,
+                model,
+            )
         payload = {
             "model": model,
             "messages": [
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max_tokens,
             "temperature": temperature,
         }
 
         if response_format:
             payload["response_format"] = response_format
+        if plugins:
+            payload["plugins"] = plugins
+        if stream:
+            payload["stream"] = True
+        if stop:
+            payload["stop"] = stop
+        if extra_body:
+            payload.update(extra_body)
 
         max_retries = _get_openrouter_max_retries()
         attempt = 0
@@ -187,8 +353,11 @@ class BaseAIContentGenerator:
                         default_title="Content Factory AI Generator",
                     ),
                     json=payload,
-                    timeout=60,
+                    timeout=timeout_seconds,
+                    stream=stream,
                 )
+                if stream:
+                    response.encoding = "utf-8"
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
                 if attempt < max_retries:
                     delay = _compute_backoff(attempt)
@@ -242,6 +411,98 @@ class BaseAIContentGenerator:
                 continue
 
             if response.status_code == 200:
+                if stream:
+                    content_parts: List[str] = []
+                    reasoning_parts: List[str] = []
+                    last_log_time = time.monotonic()
+                    last_log_content_len = 0
+                    last_log_reasoning_len = 0
+                    stream_start = time.monotonic()
+                    finish_reason: Optional[str] = None
+                    try:
+                        for raw_line in response.iter_lines(decode_unicode=True):
+                            if time.monotonic() - stream_start >= timeout_seconds:
+                                logger.warning(
+                                    "OpenRouter stream timeout (%.1fs) for model %s",
+                                    timeout_seconds,
+                                    model,
+                                )
+                                break
+                            if not raw_line:
+                                continue
+                            line = raw_line.strip()
+                            if not line.startswith("data:"):
+                                continue
+                            data_str = line[5:].strip()
+                            if not data_str:
+                                continue
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                            except ValueError:
+                                continue
+                            if isinstance(chunk, dict):
+                                choices = chunk.get("choices")
+                                if isinstance(choices, list) and choices:
+                                    first_choice = choices[0]
+                                    if isinstance(first_choice, dict):
+                                        chunk_finish_reason = first_choice.get("finish_reason")
+                                        if chunk_finish_reason:
+                                            finish_reason = chunk_finish_reason
+                            content_piece, reasoning_piece = _extract_openrouter_stream_parts(chunk)
+                            if content_piece:
+                                content_parts.append(content_piece)
+                            if reasoning_piece:
+                                reasoning_parts.append(reasoning_piece)
+
+                            if _openrouter_debug_enabled():
+                                now = time.monotonic()
+                                if now - last_log_time >= 1.0:
+                                    content_text = "".join(content_parts)
+                                    reasoning_text = "".join(reasoning_parts)
+                                    content_delta = content_text[last_log_content_len:]
+                                    reasoning_delta = reasoning_text[last_log_reasoning_len:]
+                                    if content_delta or reasoning_delta:
+                                        logger.debug(
+                                            "OpenRouter stream (1s) content=%r reasoning=%r",
+                                            content_delta[-400:],
+                                            reasoning_delta[-400:],
+                                        )
+                                    last_log_content_len = len(content_text)
+                                    last_log_reasoning_len = len(reasoning_text)
+                                    last_log_time = now
+                    except Exception as exc:
+                        logger.error("OpenRouter stream decode failed for model %s: %s", model, exc)
+                        return None
+
+                    streamed_text = "".join(content_parts).strip()
+                    reasoning_text = "".join(reasoning_parts).strip()
+                    if finish_reason == "length":
+                        logger.warning(
+                            "OpenRouter stream truncated by token limit for model %s (content=%s, reasoning=%s)",
+                            model,
+                            len(streamed_text),
+                            len(reasoning_text),
+                        )
+                    if not streamed_text:
+                        if _openrouter_debug_enabled():
+                            if reasoning_text:
+                                logger.debug(
+                                    "OpenRouter stream ended without content (reasoning length=%s)",
+                                    len(reasoning_text),
+                                )
+                        return None
+                    if response_format:
+                        extracted = _extract_json_payload(streamed_text)
+                        if extracted:
+                            return extracted
+                        logger.warning(
+                            "OpenRouter response for model %s ignored: expected JSON but none found (stream)",
+                            model,
+                        )
+                        return None
+                    return streamed_text
                 try:
                     data = response.json()
                 except ValueError:
@@ -258,17 +519,28 @@ class BaseAIContentGenerator:
                     )
                     return None
 
-                content_text = _extract_openrouter_text(data)
-                if content_text:
-                    if response_format:
-                        stripped = content_text.lstrip()
-                        if stripped.startswith(("{", "[", "```")):
-                            return content_text
-                        logger.warning(
-                            "OpenRouter response for model %s ignored: expected JSON but got text",
+                if _openrouter_debug_enabled():
+                    try:
+                        logger.debug(
+                            "OpenRouter response JSON for model %s: %s",
                             model,
+                            json.dumps(data, ensure_ascii=False),
                         )
-                    else:
+                    except (TypeError, ValueError):
+                        logger.debug("OpenRouter response JSON for model %s: <unserializable>", model)
+
+                if response_format:
+                    extracted_json = _extract_openrouter_json(data)
+                    if extracted_json:
+                        return extracted_json
+                    logger.warning(
+                        "OpenRouter response for model %s ignored: expected JSON but none found",
+                        model,
+                    )
+                    return None
+                else:
+                    content_text = _extract_openrouter_text(data)
+                    if content_text:
                         return content_text
 
                 choices = data.get("choices")
@@ -319,6 +591,11 @@ class BaseAIContentGenerator:
         primary_model: Optional[str] = None,
         fallback_models: Optional[List[str]] = None,
         response_format: Optional[dict] = None,
+        plugins: Optional[List[dict]] = None,
+        stream: bool = False,
+        stop: Optional[List[str]] = None,
+        extra_body: Optional[dict] = None,
+        timeout_seconds: float = 60.0,
         retry_without_format: bool = True,
     ) -> Optional[str]:
         """Try a primary model and optional fallback models sequentially."""
@@ -349,6 +626,11 @@ class BaseAIContentGenerator:
                     max_tokens,
                     temperature,
                     response_format=with_response_format,
+                    plugins=plugins,
+                    stream=stream,
+                    stop=stop,
+                    extra_body=extra_body,
+                    timeout_seconds=timeout_seconds,
                 )
                 if response:
                     return response
@@ -378,6 +660,11 @@ class BaseAIContentGenerator:
         model: Optional[str] = None,
         allow_fallback: bool = True,
         response_format: Optional[dict] = None,
+        plugins: Optional[List[dict]] = None,
+        stream: bool = False,
+        stop: Optional[List[str]] = None,
+        extra_body: Optional[dict] = None,
+        timeout_seconds: float = 60.0,
         retry_without_format: bool = True,
     ) -> Optional[str]:
         """Send request to OpenRouter API with automatic fallback model."""
@@ -401,6 +688,11 @@ class BaseAIContentGenerator:
             primary_model=selected_model,
             fallback_models=fallback_models,
             response_format=response_format,
+            plugins=plugins,
+            stream=stream,
+            stop=stop,
+            extra_body=extra_body,
+            timeout_seconds=timeout_seconds,
             retry_without_format=retry_without_format,
         )
 

@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -28,7 +29,9 @@ from aiogram.types import (
 from core.models import TelegramTask
 from core.telegram_bot.dependencies import get_telegram_user_service, init_dependencies
 from core.telegram_bot.meetings import meetings_router, send_meetings, get_binding_meeting_keyboard
-from core.telegram_bot.ui import main_menu, MEETINGS_BUTTON_TEXT
+from core.telegram_bot.ui import main_menu, MEETINGS_BUTTON_TEXT, WELCOME_BUTTON_TEXT
+from core.services.chain_executor import ChainExecutor
+from core.tasks.chains import chains_send_delayed_message, chains_check_timeout, CHAIN_BUTTON_PREFIX
 
 
 logger = logging.getLogger(__name__)
@@ -97,6 +100,65 @@ def _store_task(
         rating=rating,
     )
     return True
+
+
+def _build_chain_keyboard(buttons: list[str]) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text=label, callback_data=f"{CHAIN_BUTTON_PREFIX}{label}")]
+        for label in buttons
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+async def _execute_chain_actions(
+    *,
+    bot: Bot,
+    chat_id: int,
+    session_id: int | None,
+    actions: list[dict],
+) -> None:
+    for action in actions:
+        action_type = action.get("action_type")
+        payload = action.get("payload", {})
+        delay_seconds = int(action.get("delay_seconds", 0) or 0)
+
+        if action_type in {"send_text", "send_photo", "send_buttons"} and delay_seconds > 0:
+            node_id = payload.get("node_id")
+            if session_id and node_id:
+                chains_send_delayed_message.apply_async(
+                    args=[session_id, node_id],
+                    countdown=delay_seconds,
+                )
+            continue
+
+        if action_type == "send_text":
+            await bot.send_message(chat_id, text=payload.get("text", ""))
+        elif action_type == "send_photo":
+            await bot.send_photo(
+                chat_id,
+                photo=payload.get("photo_url"),
+                caption=payload.get("caption", ""),
+            )
+        elif action_type == "send_buttons":
+            buttons = payload.get("buttons", [])
+            await bot.send_message(
+                chat_id,
+                text=payload.get("text", ""),
+                reply_markup=_build_chain_keyboard(buttons),
+            )
+        elif action_type == "schedule_timeout":
+            chains_check_timeout.apply_async(
+                args=[payload.get("session_id"), payload.get("edge_id")],
+                countdown=int(payload.get("timeout_seconds", 300)),
+            )
+
+
+async def _get_binding_for_user(telegram_id: int):
+    telegram_user_service = get_telegram_user_service()
+    return await sync_to_async(
+        telegram_user_service.get_active_binding,
+        thread_sensitive=True,
+    )(telegram_id)
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +519,48 @@ async def _save_service_level_feedback(message: Message, rating: int, improvemen
             await message.edit_text(error_text, reply_markup=None)
 
 
+@router.callback_query(F.data.startswith(CHAIN_BUTTON_PREFIX))
+async def handle_chain_button(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        return
+
+    from_user = callback.from_user
+    if from_user is None:
+        return
+
+    await callback.answer()
+
+    binding = await _get_binding_for_user(from_user.id)
+    if binding is None:
+        await callback.message.answer(
+            "❗️Ваш аккаунт ещё не привязан к клиенту.\n"
+            "Пожалуйста, используйте персональную ссылку от администратора.",
+            reply_markup=main_menu(),
+        )
+        return
+
+    data = callback.data or ""
+    button_label = data[len(CHAIN_BUTTON_PREFIX):]
+
+    executor = ChainExecutor()
+    result = await sync_to_async(
+        executor.process_user_message,
+        thread_sensitive=True,
+    )(
+        user_id=from_user.id,
+        tenant_id=binding.tenant_id,
+        user_message={"button": button_label},
+    )
+    await _execute_chain_actions(
+        bot=callback.message.bot,
+        chat_id=from_user.id,
+        session_id=result.get("session_id"),
+        actions=result.get("actions", []),
+    )
+    if result.get("session_status") == "completed":
+        await callback.message.answer("Цепочка завершена.", reply_markup=main_menu())
+
+
 # ---------------------------------------------------------------------------
 # /meetings
 # ---------------------------------------------------------------------------
@@ -485,6 +589,29 @@ async def handle_message(message: Message, state: FSMContext) -> None:
     if not message_text:
         return
 
+    if message_text == WELCOME_BUTTON_TEXT:
+        binding = await _get_binding_for_user(from_user.id)
+        if binding is None:
+            await message.answer(
+                "❗️Ваш аккаунт ещё не привязан к клиенту.\n"
+                "Пожалуйста, используйте персональную ссылку от администратора.",
+                reply_markup=main_menu(),
+            )
+            return
+
+        executor = ChainExecutor()
+        result = await sync_to_async(
+            executor.start_chain,
+            thread_sensitive=True,
+        )(user_id=from_user.id, tenant_id=binding.tenant_id)
+        await _execute_chain_actions(
+            bot=message.bot,
+            chat_id=from_user.id,
+            session_id=result.get("session_id"),
+            actions=result.get("actions", []),
+        )
+        return
+
     if message_text.lower() == MEETINGS_BUTTON_TEXT.lower():
         await send_meetings(message)
         return
@@ -492,6 +619,37 @@ async def handle_message(message: Message, state: FSMContext) -> None:
     if message_text == "📊 Уровень сервиса":
         await _start_service_level_survey(message, state)
         return
+
+    binding = await _get_binding_for_user(from_user.id)
+    if binding is not None:
+        user_message: dict[str, Any] = {}
+        if message.text:
+            user_message["text"] = message.text
+        if message.caption:
+            user_message["text"] = message.caption
+        if message.photo:
+            user_message["photo"] = True
+
+        if user_message:
+            executor = ChainExecutor()
+            result = await sync_to_async(
+                executor.process_user_message,
+                thread_sensitive=True,
+            )(
+                user_id=from_user.id,
+                tenant_id=binding.tenant_id,
+                user_message=user_message,
+            )
+            if result.get("session_status") != "none":
+                await _execute_chain_actions(
+                    bot=message.bot,
+                    chat_id=from_user.id,
+                    session_id=result.get("session_id"),
+                    actions=result.get("actions", []),
+                )
+                if result.get("session_status") == "completed":
+                    await message.answer("Цепочка завершена.", reply_markup=main_menu())
+                return
 
     await message.answer(
         "Используйте меню для выбора действия:",

@@ -3,12 +3,20 @@ from __future__ import annotations
 import json
 import logging
 import re
+from string import Template
 
 from celery import shared_task
 from django.db import transaction
 
 from core.ai_generator import AIContentGenerator
+from core.ai_generator_content import _parse_ai_json_response
+from core.article_prompt_codes import (
+    ARTICLE_BLOCK_PROMPT_CODES,
+    ARTICLE_BLUEPRINT_DETAILS_CODE,
+    ARTICLE_BLUEPRINT_OUTLINE_CODE,
+)
 from core.models import Article, ArticleBlock, WordstatResult
+from core.prompt_settings import render_generator_prompt
 from core.services.article_blocks import ARTICLE_BLOCK_TITLES, get_system_block_prompt_template, sync_blocks_from_seo_blocks
 
 logger = logging.getLogger(__name__)
@@ -60,6 +68,33 @@ def _escape_newlines_in_strings(text: str) -> str:
     return "".join(result)
 
 
+_FINAL_ANSWER_PATTERNS = [
+    r"<answer>\s*",
+    r"Ответ:\s*",
+    r"Итак,\s*",
+    r"Финальный ответ:\s*",
+    r"```json\s*",
+    r"^\s*\{",
+]
+
+
+def _extract_final_answer(text: str) -> str:
+    if not text:
+        return ""
+    if "<answer>" in text.lower():
+        match = re.search(r"<answer>(.*?)</answer>", text, re.DOTALL | re.IGNORECASE)
+        if match:
+            return (match.group(1) or "").strip()
+        start = re.search(r"<answer>\s*", text, re.DOTALL | re.IGNORECASE)
+        if start:
+            return text[start.end() :].strip()
+    for pattern in _FINAL_ANSWER_PATTERNS:
+        match = re.search(pattern, text, re.MULTILINE | re.IGNORECASE)
+        if match:
+            return text[match.start() :].strip()
+    return ""
+
+
 def _normalize_inline_text(value: str) -> str:
     return " ".join(str(value or "").split())
 
@@ -67,25 +102,9 @@ def _normalize_inline_text(value: str) -> str:
 def _parse_ai_json_object(raw_response: str):
     if not raw_response:
         return None
-    candidates: list[str] = []
-    cleaned = _strip_code_fences(raw_response)
-    if cleaned:
-        candidates.append(cleaned)
-    if raw_response.strip() and raw_response.strip() not in candidates:
-        candidates.append(raw_response.strip())
-
-    for candidate in candidates:
-        variants = [candidate]
-        repaired = _escape_newlines_in_strings(candidate)
-        if repaired and repaired != candidate:
-            variants.append(repaired)
-        for variant in variants:
-            try:
-                parsed = json.loads(variant)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
+    parsed, _, _ = _parse_ai_json_response(raw_response)
+    if isinstance(parsed, dict):
+        return parsed
     return None
 
 
@@ -100,6 +119,16 @@ def _format_context(article: Article) -> str:
     return "\n".join(parts).strip()
 
 
+def _format_why_now_options(article: Article) -> list[str]:
+    items = article.options_why_now if isinstance(article.options_why_now, list) else []
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _format_selected_solution(article: Article) -> list[str]:
+    items = article.selected_solution if isinstance(article.selected_solution, list) else []
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
 def _format_product_context(article: Article) -> str:
     parts: list[str] = []
     if article.lead_product_name:
@@ -107,6 +136,16 @@ def _format_product_context(article: Article) -> str:
     if article.tripwire_product_name:
         parts.append(f"Tripwire: {article.tripwire_product_name}")
     return "\n".join(parts).strip()
+
+
+def _render_inline_template(template: str, variables: dict[str, str]) -> str:
+    if not template:
+        return ""
+    normalized = template.replace("{{", "${").replace("}}", "}")
+    try:
+        return Template(normalized).safe_substitute(**variables)
+    except ValueError:
+        return template
 
 
 def _build_prompt(article: Article, block: ArticleBlock) -> tuple[str, list[str]]:
@@ -133,18 +172,30 @@ def _build_prompt(article: Article, block: ArticleBlock) -> tuple[str, list[str]
         "keywords": wordstat2,
     }
 
-    base_template = get_system_block_prompt_template(block.block_key).strip()
-    if not base_template:
-        base_template = "Контекст статьи: {{context}}\n\nЗадача: Напиши блок по теме {{main_query}}."
+    prompt_code = ARTICLE_BLOCK_PROMPT_CODES.get(block.block_key)
+    base_prompt = ""
+    if prompt_code:
+        base_prompt = render_generator_prompt(prompt_code, **variables)
+
+    if not base_prompt:
+        fallback_template = get_system_block_prompt_template(block.block_key).strip()
+        if fallback_template:
+            base_prompt = _render_inline_template(fallback_template, variables)
+
+    if not base_prompt:
+        base_prompt = _render_inline_template(
+            "Контекст статьи: ${context}\n\nЗадача: Напиши блок по теме ${main_query}.",
+            variables,
+        )
+
     correction = (block.prompt_template or "").strip()
     if correction:
-        template = f"{base_template}\n\nКорректировка (учти при написании):\n{correction}"
+        correction_text = _render_inline_template(correction, variables)
+        template = f"{base_prompt}\n\nКорректировка (учти при написании):\n{correction_text}"
     else:
-        template = base_template
+        template = base_prompt
 
     prompt_used = template
-    for key, value in variables.items():
-        prompt_used = prompt_used.replace(f"{{{{{key}}}}}", value)
 
     if block.block_key not in {"Закрывающее утверждение"}:
         prompt_used = (
@@ -168,10 +219,49 @@ def _generate_block_content(article: Article, block: ArticleBlock) -> ArticleBlo
         raise
 
     prompt_used, keywords = _build_prompt(article, block)
-    block.prompt_used = prompt_used
 
     post_model = (generator.post_model or generator.model).strip() or None
-    ai_text = generator.get_ai_response(prompt_used, max_tokens=850, temperature=0.35, model=post_model)
+    model_name = (post_model or generator.model or "").strip().lower()
+    is_deepseek = "deepseek" in model_name
+    json_instruction = ""
+    response_format = None
+    plugins = None
+    if is_deepseek:
+        json_instruction = """
+
+Верни ответ строго JSON внутри тегов <answer>...</answer>:
+<answer>
+{
+  "content": "<текст блока>"
+}
+</answer>
+
+Никаких пояснений, только JSON.
+""".strip()
+        response_format = {"type": "json_object"}
+        plugins = [{"id": "response-healing"}]
+
+    prompt_used_final = f"{prompt_used}\n\n{json_instruction}" if json_instruction else prompt_used
+    block.prompt_used = prompt_used_final
+
+    ai_text = generator.get_ai_response(
+        prompt_used_final,
+        max_tokens=850,
+        temperature=0.35,
+        model=post_model,
+        stream=is_deepseek,
+        timeout_seconds=300.0 if is_deepseek else 60.0,
+        response_format=response_format,
+        plugins=plugins,
+        retry_without_format=False if is_deepseek else True,
+    )
+    if is_deepseek and ai_text:
+        candidate = _extract_final_answer(ai_text)
+        parsed = _parse_ai_json_object(candidate or "")
+        if isinstance(parsed, dict):
+            content_value = parsed.get("content") or parsed.get("text") or parsed.get("result")
+            if isinstance(content_value, str) and content_value.strip():
+                ai_text = content_value
     if not ai_text:
         block.status = "failed"
         block.save(update_fields=["prompt_used", "status", "updated_at"])
@@ -390,6 +480,14 @@ def generate_article_blueprint_task(article_id: int) -> dict:
             return value
         return f"{value[:1500]} ... {value[-400:]}"
 
+    def _persist_partial_structure() -> None:
+        try:
+            article.seo_blocks = dict(level3)
+            article.save(update_fields=["seo_blocks", "updated_at"])
+            sync_blocks_from_seo_blocks(article)
+        except Exception:
+            logger.exception("Failed to persist blueprint progress for article %s", article.id)
+
     def _fail_blueprint(reason: str, *, raw: str | None = None) -> None:
         article.status = "failed"
         article.save(update_fields=["status", "updated_at"])
@@ -411,7 +509,8 @@ def generate_article_blueprint_task(article_id: int) -> dict:
             start = max(0, exc.pos - 120)
             end = min(len(candidate), exc.pos + 120)
             snippet = candidate[start:end]
-            logger.error(
+            log = logger.error if "compact" in (attempt or "").lower() else logger.warning
+            log(
                 "Blueprint AI JSON decode error [%s] for article %s: %s (line %s, col %s). Snippet: %s",
                 attempt,
                 article.id,
@@ -421,18 +520,47 @@ def generate_article_blueprint_task(article_id: int) -> dict:
                 snippet,
             )
 
-    def _request_json(prompt: str, *, attempt: str, max_tokens: int = 800, temperature: float = 0.35) -> tuple[dict | None, str]:
+    def _request_json(
+        prompt: str,
+        *,
+        attempt: str,
+        schema_hint: str,
+        max_tokens: int = 800,
+        temperature: float = 0.35,
+        allow_reasoning_repair: bool = False,
+    ) -> tuple[dict | None, str]:
         nonlocal last_raw
         ai_raw = generator.get_ai_response(
             prompt,
             max_tokens=max_tokens,
             temperature=temperature,
             response_format={"type": "json_object"},
+            plugins=[{"id": "response-healing"}],
+            allow_fallback=False,
+            retry_without_format=False,
+            stream=True,
+            timeout_seconds=300.0,
         )
         last_raw = ai_raw or ""
         if not ai_raw or not ai_raw.strip():
-            logger.error("Blueprint AI empty response [%s] for article %s", attempt, article.id)
-            return None, ai_raw or ""
+            logger.warning(
+                "Blueprint AI empty response [%s] for article %s (stream). Retrying without stream",
+                attempt,
+                article.id,
+            )
+            ai_raw = generator.get_ai_response(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                response_format={"type": "json_object"},
+                plugins=[{"id": "response-healing"}],
+                allow_fallback=False,
+                retry_without_format=False,
+                stream=False,
+                timeout_seconds=300.0,
+            ) or ""
+            if not ai_raw.strip():
+                logger.error("Blueprint AI empty response [%s] for article %s", attempt, article.id)
 
         logger.info(
             "Blueprint AI response length=%s (%s) for article %s",
@@ -442,11 +570,55 @@ def generate_article_blueprint_task(article_id: int) -> dict:
         )
         logger.debug("Blueprint AI raw response (%s) for article %s: %s", attempt, article.id, ai_raw[:2000])
 
-        parsed = _parse_ai_json_object(ai_raw or "")
+        candidate = _extract_final_answer(ai_raw or "")
+        parse_source = candidate if candidate else (ai_raw if allow_reasoning_repair else "")
+        parsed = _parse_ai_json_object(parse_source or "")
         if not isinstance(parsed, dict):
-            cleaned = _strip_code_fences(ai_raw or "")
-            _log_json_error(cleaned or ai_raw or "", attempt=attempt)
-            return None, ai_raw
+            if parse_source and schema_hint:
+                repaired = generator._repair_json_structure(parse_source, schema_hint=schema_hint)
+                if isinstance(repaired, dict):
+                    return repaired, ai_raw
+            if parse_source:
+                cleaned = _strip_code_fences(parse_source)
+                _log_json_error(cleaned or parse_source, attempt=attempt)
+
+            ai_raw_fallback = generator.get_ai_response(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                response_format={"type": "json_object"},
+                plugins=[{"id": "response-healing"}],
+                allow_fallback=True,
+                retry_without_format=False,
+                stream=True,
+                timeout_seconds=300.0,
+            )
+            if ai_raw_fallback and ai_raw_fallback.strip():
+                last_raw = ai_raw_fallback
+                logger.info(
+                    "Blueprint AI response length=%s (%s:fallback) for article %s",
+                    len(ai_raw_fallback),
+                    attempt,
+                    article.id,
+                )
+                logger.debug(
+                    "Blueprint AI raw response (%s:fallback) for article %s: %s",
+                    attempt,
+                    article.id,
+                    ai_raw_fallback[:2000],
+                )
+                fallback_candidate = _extract_final_answer(ai_raw_fallback or "")
+                fallback_source = (
+                    fallback_candidate
+                    if fallback_candidate
+                    else (ai_raw_fallback if allow_reasoning_repair else "")
+                )
+                parsed = _parse_ai_json_object(fallback_source or "")
+                if not isinstance(parsed, dict) and fallback_source and schema_hint:
+                    repaired = generator._repair_json_structure(fallback_source, schema_hint=schema_hint)
+                    if isinstance(repaired, dict):
+                        return repaired, ai_raw_fallback
+            return None, ai_raw_fallback or ai_raw
         return parsed, ai_raw
 
     def _build_outline_prompt(compact: bool) -> str:
@@ -456,8 +628,36 @@ def generate_article_blueprint_task(article_id: int) -> dict:
         block_map = "\n".join(
             [f"{idx + 1} — {block_labels[idx]}" for idx in range(len(block_titles))]
         )
+        why_now_options = _format_why_now_options(article)
+        solution_selected = _format_selected_solution(article)
+        context_lines: list[str] = []
+        if why_now_options:
+            context_lines.append("Почему ищет сейчас (варианты):")
+            context_lines.extend([f"- {item}" for item in why_now_options[:10]])
+        if solution_selected:
+            context_lines.append("К какому решению ведём:")
+            context_lines.extend([f"- {item}" for item in solution_selected[:10]])
+        context_block = "\n".join(context_lines).strip()
+        context_hint = (
+            "\nКонтекст:\n"
+            + context_block
+            + "\n\nУсловия контекста:\n"
+            + "- Для блока 1 (Вступление) опирайся на варианты «Почему ищет сейчас».\n"
+            + "- Для блока 7 (Что делать дальше) опирайся на «К какому решению ведём».\n"
+            if context_block
+            else ""
+        )
+        prompt = render_generator_prompt(
+            ARTICLE_BLUEPRINT_OUTLINE_CODE,
+            main_query=article.wordstat,
+            extra_rules=extra_rules,
+            block_map=block_map,
+        )
+        if prompt:
+            return f"{prompt}{context_hint}" if context_hint else prompt
         return f"""
 Сделай базовую структуру статьи по запросу: "{article.wordstat}".
+{context_hint}
 
 Для каждого блока:
 - придумай 1 H2 заголовок (4–10 слов)
@@ -467,7 +667,8 @@ def generate_article_blueprint_task(article_id: int) -> dict:
 Блоки (используй id):
 {block_map}
 
-Верни строго JSON:
+Верни строго JSON внутри тегов <answer>...</answer>:
+<answer>
 {{
   "blocks": [
     {{
@@ -477,6 +678,7 @@ def generate_article_blueprint_task(article_id: int) -> dict:
     }}
   ]
 }}
+</answer>
 
 НЕ добавляй subquery и key_points. НЕ пиши пояснений и текста статьи.
 """
@@ -492,27 +694,54 @@ def generate_article_blueprint_task(article_id: int) -> dict:
         extra_rules = ""
         if compact:
             extra_rules = "\nДоп.условия: 3–4 key_points, каждый пункт короткий."
+        why_now_options = _format_why_now_options(article)
+        solution_selected = _format_selected_solution(article)
+        context_hint = ""
+        if block_id == 1 and why_now_options:
+            context_hint = (
+                "\nУчитывай варианты «Почему ищет сейчас»:\n"
+                + "\n".join([f"- {item}" for item in why_now_options[:10]])
+            )
+        elif block_id == 7 and solution_selected:
+            context_hint = (
+                "\nУчитывай «К какому решению ведём»:\n"
+                + "\n".join([f"- {item}" for item in solution_selected[:10]])
+            )
         keyword_block = ""
         if keywords:
             keyword_block = "\nКлючевые фразы для блока (используй их в смыслах):\n" + "\n".join(
                 [f"- {keyword}" for keyword in keywords]
             )
+        prompt = render_generator_prompt(
+            ARTICLE_BLUEPRINT_DETAILS_CODE,
+            block_id=str(block_id),
+            block_name=block_name,
+            h2_title=h2_title,
+            intent=intent,
+            keyword_block=keyword_block,
+            extra_rules=extra_rules,
+        )
+        if prompt:
+            return f"{prompt}{context_hint}" if context_hint else prompt
         return f"""
 Заполни детали для блока {block_id} ({block_name}).
 H2: "{h2_title}"
 Интент: "{intent}"
 {keyword_block}
+{context_hint}
 
 Сформулируй:
 - 1 подзапрос (subquery)
 - 3–6 ключевых смыслов (key_points)
 {extra_rules}
 
-Верни строго JSON:
+Верни строго JSON внутри тегов <answer>...</answer>:
+<answer>
 {{
   "subquery": "<подзапрос>",
   "key_points": ["<смысл 1>", "<смысл 2>", "<смысл 3>"]
 }}
+</answer>
 
 НЕ добавляй другие поля. НЕ пиши пояснений.
 """
@@ -520,11 +749,40 @@ H2: "{h2_title}"
     try:
         generator = AIContentGenerator()
 
+        outline_schema_hint = """
+{
+  "blocks": [
+    {
+      "id": 1,
+      "h2_title": "строка",
+      "intent": "строка"
+    }
+  ]
+}
+""".strip()
+
+        details_schema_hint = """
+{
+  "subquery": "строка",
+  "key_points": ["строка"]
+}
+""".strip()
+
         outline_prompt = _build_outline_prompt(compact=False)
-        outline_parsed, outline_raw = _request_json(outline_prompt, attempt="outline", max_tokens=520)
+        outline_parsed, outline_raw = _request_json(
+            outline_prompt,
+            attempt="outline",
+            schema_hint=outline_schema_hint,
+            max_tokens=520,
+        )
         if not outline_parsed:
             outline_prompt_compact = _build_outline_prompt(compact=True)
-            outline_parsed, outline_raw = _request_json(outline_prompt_compact, attempt="outline_compact", max_tokens=450)
+            outline_parsed, outline_raw = _request_json(
+                outline_prompt_compact,
+                attempt="outline_compact",
+                schema_hint=outline_schema_hint,
+                max_tokens=450,
+            )
         if not outline_parsed:
             _fail_blueprint("ai_invalid_json_outline", raw=outline_raw or "")
 
@@ -614,6 +872,7 @@ H2: "{h2_title}"
             details_parsed, details_raw = _request_json(
                 details_prompt,
                 attempt=f"details:{block}",
+                schema_hint=details_schema_hint,
                 max_tokens=700,
                 temperature=0.4,
             )
@@ -629,6 +888,7 @@ H2: "{h2_title}"
                 details_parsed, details_raw = _request_json(
                     details_prompt_compact,
                     attempt=f"details_compact:{block}",
+                    schema_hint=details_schema_hint,
                     max_tokens=520,
                     temperature=0.3,
                 )
@@ -654,6 +914,7 @@ H2: "{h2_title}"
                 "micro_intent": meta["micro_intent"],
                 "key_points": key_points,
             }
+            _persist_partial_structure()
     except RuntimeError:
         raise
     except Exception as exc:

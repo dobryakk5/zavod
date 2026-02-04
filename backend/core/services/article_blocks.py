@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from core.article_prompt_codes import ARTICLE_BLOCK_PROMPT_CODES
 from core.article_prompt_templates import ARTICLE_BLOCK_PROMPTS
 from core.models import Article, ArticleBlock, ArticleBlockPromptTemplate
+from core.prompt_settings import get_generator_prompt
 
 ARTICLE_BLOCK_TITLES = [
     "Вступление",
@@ -17,6 +19,12 @@ ARTICLE_BLOCK_TITLES = [
 
 
 def get_system_block_prompt_template(block_key: str) -> str:
+    prompt_code = ARTICLE_BLOCK_PROMPT_CODES.get(block_key)
+    if prompt_code:
+        prompt = get_generator_prompt(prompt_code)
+        if prompt:
+            return prompt
+
     row = ArticleBlockPromptTemplate.objects.filter(block_key=block_key).only("prompt_template").first()
     if row and (row.prompt_template or "").strip():
         return row.prompt_template

@@ -113,6 +113,13 @@ class ClientAdmin(admin.ModelAdmin):
     readonly_fields = []
 
 
+@admin.register(UserTenantRole)
+class UserTenantRoleAdmin(admin.ModelAdmin):
+    list_display = ['user', 'client', 'role']
+    list_filter = ['role', 'client']
+    search_fields = ['user__username', 'user__email', 'client__name']
+
+
 @admin.register(ChannelAnalysis)
 class ChannelAnalysisAdmin(admin.ModelAdmin):
     list_display = ['client', 'channel_type', 'status', 'progress', 'created_at']
