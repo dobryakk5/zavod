@@ -30,12 +30,8 @@ logger = logging.getLogger("backend.core.ai_generator")
 
 
 def _openrouter_debug_enabled() -> bool:
-    flag = (os.getenv("OPENROUTER_DEBUG") or "1").strip().lower()
+    flag = (os.getenv("OPENROUTER_DEBUG") or "0").strip().lower()
     return flag in {"1", "true", "yes", "on"}
-
-
-if _openrouter_debug_enabled():
-    logger.setLevel(logging.DEBUG)
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _ANSWER_BLOCK_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)

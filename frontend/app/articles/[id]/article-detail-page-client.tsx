@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2 } from 'lucide-react';
+import { Loader2, X as XIcon } from 'lucide-react';
 import type { Article, ArticleBlock, ArticleStatus, ClientProduct, ProductType } from '@/lib/types';
 import { ApiError } from '@/lib/api';
 import { articlesApi } from '@/lib/api/articles';
@@ -62,12 +62,98 @@ function ensureArray(value: unknown): string[] {
   return value.map((item) => String(item)).map((s) => s.trim()).filter(Boolean);
 }
 
-function parseKeywordsCsv(raw: string): string[] {
-  return (raw || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 2);
+function normalizeChipValue(value: string) {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+function KeywordsChipsInput({
+  value,
+  onChange,
+  placeholder,
+  disabled = false,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [inputValue, setInputValue] = useState('');
+
+  const addItems = (items: string[]) => {
+    const cleaned = items.map((item) => normalizeChipValue(item)).filter(Boolean);
+    if (cleaned.length === 0) return;
+    const existing = new Set(value.map((item) => item.toLowerCase()));
+    const next = [...value];
+    cleaned.forEach((item) => {
+      const key = item.toLowerCase();
+      if (!existing.has(key)) {
+        existing.add(key);
+        next.push(item);
+      }
+    });
+    onChange(next);
+    setInputValue('');
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault();
+      addItems([inputValue]);
+      return;
+    }
+    if (event.key === 'Backspace' && inputValue.length === 0 && value.length > 0) {
+      event.preventDefault();
+      onChange(value.slice(0, -1));
+    }
+  };
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = event.clipboardData.getData('text');
+    if (!text) return;
+    event.preventDefault();
+    addItems(text.split(/\r?\n|\t|,/));
+  };
+
+  const handleBlur = () => {
+    if (!inputValue.trim()) return;
+    addItems([inputValue]);
+  };
+
+  const removeChip = (chip: string) => {
+    onChange(value.filter((item) => item !== chip));
+  };
+
+  return (
+    <div className="flex min-h-10 w-full flex-wrap items-center gap-2 rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
+      {value.map((chip) => (
+        <span
+          key={chip}
+          className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-foreground"
+        >
+          <span className="max-w-[12rem] truncate">{chip}</span>
+          <button
+            type="button"
+            onClick={() => removeChip(chip)}
+            className="rounded-full p-0.5 text-muted-foreground transition hover:text-foreground"
+            aria-label={`Удалить ${chip}`}
+            disabled={disabled}
+          >
+            <XIcon className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
+      <input
+        value={inputValue}
+        onChange={(e) => setInputValue(e.target.value)}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        onBlur={handleBlur}
+        placeholder={value.length === 0 ? placeholder : ''}
+        className="min-w-[160px] flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-muted-foreground"
+        disabled={disabled}
+      />
+    </div>
+  );
 }
 
 function parsePhrases(raw: string): string[] {
@@ -984,7 +1070,7 @@ export default function ArticleDetailPageClient() {
           ) : (
             <div className="space-y-4">
               {orderedBlocks.map((block) => {
-                const keywordsText = (block.keywords || []).join(', ');
+                const keywordsList = block.keywords || [];
                 const onUpdateLocal = (next: Partial<ArticleBlock>) => {
                   setBlocks((prev) => prev.map((b) => (b.id === block.id ? { ...b, ...next } : b)));
                 };
@@ -1077,14 +1163,14 @@ export default function ArticleDetailPageClient() {
                         />
                       </div>
                       <div className="space-y-1">
-                        <div className="text-sm text-muted-foreground">
-                          Wordstat-кластер - 1 основная фраза (и еще парочка)
-                        </div>
-                        <Input
-                          value={keywordsText}
-                          onChange={(e) => onUpdateLocal({ keywords: parseKeywordsCsv(e.target.value) })}
-                          placeholder="ключ 1, ключ 2"
-                        />
+                      <div className="text-sm text-muted-foreground">
+                        Wordstat-кластер — добавляй фразы по Enter или вставкой столбца
+                      </div>
+                      <KeywordsChipsInput
+                        value={keywordsList}
+                        onChange={(next) => onUpdateLocal({ keywords: next })}
+                        placeholder="Введите фразу"
+                      />
                       </div>
                     </div>
 

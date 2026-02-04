@@ -565,7 +565,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
         if "keywords" in request.data:
             raw_keywords = request.data.get("keywords")
             if isinstance(raw_keywords, list):
-                block.keywords = [str(item).strip() for item in raw_keywords if str(item).strip()][:2]
+                block.keywords = [str(item).strip() for item in raw_keywords if str(item).strip()]
             else:
                 return Response({"error": "keywords должен быть массивом"}, status=status.HTTP_400_BAD_REQUEST)
         if "key_points" in request.data:
@@ -600,6 +600,24 @@ class ArticleViewSet(viewsets.ModelViewSet):
                 "updated_at",
             ]
         )
+        seo_blocks = article.seo_blocks if isinstance(article.seo_blocks, dict) else {}
+        if not isinstance(seo_blocks, dict):
+            seo_blocks = {}
+        seo_entry = seo_blocks.get(block.block_key) if isinstance(seo_blocks, dict) else None
+        if not isinstance(seo_entry, dict):
+            seo_entry = {}
+        seo_entry.update(
+            {
+                "h2_title": block.h2_title,
+                "subquery": block.subquery,
+                "micro_intent": block.micro_intent,
+                "key_points": block.key_points,
+                "keywords": block.keywords,
+            }
+        )
+        seo_blocks[block.block_key] = seo_entry
+        article.seo_blocks = seo_blocks
+        article.save(update_fields=["seo_blocks", "updated_at"])
         serializer = ArticleBlockSerializer(block)
         return Response(serializer.data)
 
