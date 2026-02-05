@@ -4,10 +4,19 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { toast } from 'sonner';
+import { Trash2 } from 'lucide-react';
 import type { Article, ArticleSeoEvaluationResponse, ArticleStatus } from '@/lib/types';
 import { ApiError } from '@/lib/api';
 import { articlesApi } from '@/lib/api/articles';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -85,6 +94,8 @@ export default function ArticlesPageClient() {
   const [evaluateWordstat, setEvaluateWordstat] = useState('');
   const [evaluateResult, setEvaluateResult] = useState<ArticleSeoEvaluationResponse | null>(null);
   const [evaluatingAction, setEvaluatingAction] = useState<'analyze' | 'recommend' | 'rewrite' | null>(null);
+  const [articleToDelete, setArticleToDelete] = useState<Article | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -188,6 +199,27 @@ export default function ArticlesPageClient() {
     }
   };
 
+  const handleDeleteConfirm = async () => {
+    if (!articleToDelete || deletingId) return;
+    const articleId = articleToDelete.id;
+    setDeletingId(articleId);
+    try {
+      await articlesApi.delete(articleId);
+      setArticles((prev) => prev.filter((article) => article.id !== articleId));
+      toast.success('Статья удалена');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        router.push('/login');
+        return;
+      }
+      console.error('Failed to delete article', error);
+      toast.error('Не удалось удалить статью');
+    } finally {
+      setDeletingId(null);
+      setArticleToDelete(null);
+    }
+  };
+
   const analysis = evaluateResult?.analysis;
   const aiResult = evaluateResult?.ai;
   const isEvaluating = evaluatingAction !== null;
@@ -270,6 +302,7 @@ export default function ArticlesPageClient() {
                   <TableHead>Wordstat</TableHead>
                   <TableHead className="w-44">Дата</TableHead>
                   <TableHead className="w-44">Статус</TableHead>
+                  <TableHead className="w-12 text-right"> </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -286,11 +319,66 @@ export default function ArticlesPageClient() {
                     <TableCell>
                       <StatusBadge status={article.status} />
                     </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setArticleToDelete(article);
+                        }}
+                        aria-label="Удалить"
+                        title="Удалить"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           ) : null}
+
+          <Dialog
+            open={articleToDelete != null}
+            onOpenChange={(open) => {
+              if (!open && !deletingId) {
+                setArticleToDelete(null);
+              }
+            }}
+          >
+            <DialogContent className="sm:max-w-md bg-white text-gray-900 dark:bg-white dark:text-gray-900 dark:border-gray-200 [&>button]:text-gray-900 dark:[&>button]:text-gray-900 dark:[&>button]:data-[state=open]:bg-gray-100 dark:[&>button]:data-[state=open]:text-gray-600">
+              <DialogHeader>
+                <DialogTitle>Удалить статью?</DialogTitle>
+                <DialogDescription>
+                  {articleToDelete
+                    ? `Статья «${articleToDelete.wordstat}» будет удалена без возможности восстановления.`
+                    : 'Статья будет удалена без возможности восстановления.'}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setArticleToDelete(null)}
+                  disabled={Boolean(deletingId)}
+                >
+                  Отмена
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={() => void handleDeleteConfirm()}
+                  disabled={Boolean(deletingId)}
+                >
+                  {deletingId ? 'Удаление…' : 'Удалить'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="evaluate" className="space-y-4">

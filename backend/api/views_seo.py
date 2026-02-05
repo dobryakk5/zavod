@@ -432,7 +432,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
     """Статьи (скелеты) по Wordstat запросам."""
 
     permission_classes = [IsTenantMember]
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "delete", "head", "options"]
     pagination_class = None
 
     def get_queryset(self):
@@ -455,6 +455,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
             "blocks_generate",
             "evaluate",
             "update_result",
+            "destroy",
         }:
             return [IsTenantOwnerOrEditor()]
         return super().get_permissions()

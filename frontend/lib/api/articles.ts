@@ -152,4 +152,10 @@ export const articlesApi = {
       body: payload,
     });
   },
+
+  delete: async (id: number): Promise<void> => {
+    return apiFetch<void>(`/articles/${id}/`, {
+      method: 'DELETE',
+    });
+  },
 };

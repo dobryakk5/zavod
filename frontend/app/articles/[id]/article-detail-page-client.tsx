@@ -1325,7 +1325,7 @@ export default function ArticleDetailPageClient() {
       </div>
 
       <Dialog open={phase2ConfirmOpen} onOpenChange={(open) => !phaseBusy && setPhase2ConfirmOpen(open)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md bg-white text-gray-900 dark:bg-white dark:text-gray-900 dark:border-gray-200 [&>button]:text-gray-900 dark:[&>button]:text-gray-900 dark:[&>button]:data-[state=open]:bg-gray-100 dark:[&>button]:data-[state=open]:text-gray-600">
           <DialogHeader>
             <DialogTitle>Текст статьи уже заполнен</DialogTitle>
             <DialogDescription>Перегенерировать?</DialogDescription>
