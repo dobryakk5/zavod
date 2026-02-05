@@ -1410,6 +1410,13 @@ class ChainSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "tenant_id", "created_at", "updated_at"]
 
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if validated_data:
+            instance.save(update_fields=list(validated_data.keys()))
+        return instance
+
 
 class ChainNodeSerializer(serializers.ModelSerializer):
     chain_id = serializers.IntegerField(read_only=True)
@@ -1428,6 +1435,13 @@ class ChainNodeSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "chain_id", "created_at", "updated_at"]
+
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if validated_data:
+            instance.save(update_fields=list(validated_data.keys()))
+        return instance
 
 
 class ChainEdgeSerializer(serializers.ModelSerializer):
@@ -1454,6 +1468,13 @@ class ChainEdgeSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "chain_id", "created_at", "updated_at"]
 
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if validated_data:
+            instance.save(update_fields=list(validated_data.keys()))
+        return instance
+
 
 class ChainConditionSerializer(serializers.ModelSerializer):
     edge_id = serializers.IntegerField(read_only=True)
@@ -1468,6 +1489,13 @@ class ChainConditionSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "edge_id", "created_at"]
+
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if validated_data:
+            instance.save(update_fields=list(validated_data.keys()))
+        return instance
 
 
 class ClientProductSerializer(serializers.ModelSerializer):

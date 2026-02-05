@@ -17,7 +17,7 @@ celery -A config worker -l info -Q media --concurrency=1
 Path: `/Users/pavellebedev/Desktop/proj/zavod/frontend`
 
 ## Stack Overview
-- [Next.js 15.5.6](https://nextjs.org/) (App Router) with React 19 RC
+- [Next.js 15.5.9](https://nextjs.org/) (App Router) with React 19 RC
 - TypeScript + Tailwind CSS + Radix UI components
 - Node package manager: npm (lockfile: `package-lock.json`)
 

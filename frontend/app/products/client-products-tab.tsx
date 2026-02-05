@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -16,15 +16,43 @@ import { Copy, Loader2, Trash2 } from 'lucide-react';
 import { useTenantTimezone } from '@/lib/hooks';
 import { formatInTenantTimezone } from '@/lib/timezone';
 
+type PendingProduct = {
+  id: number;
+  name: string;
+  product_type_id?: number | null;
+  product_type_name?: string | null;
+  short_description?: string | null;
+  updated_at?: string;
+  __pending: true;
+  task_id: string;
+};
+
+type ProductRow = ClientProduct | PendingProduct;
+
 const formatDate = (iso: string | undefined, timeZone: string) =>
   iso
     ? formatInTenantTimezone(iso, timeZone, { dateStyle: 'medium' }) || '—'
     : '—';
 
+const resolveProductId = (result?: Record<string, unknown>) => {
+  if (!result || typeof result !== 'object') return null;
+  const raw = (result as { product_id?: unknown }).product_id;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
+const isPendingProduct = (product: ProductRow): product is PendingProduct =>
+  (product as PendingProduct).__pending === true;
+
 export function ClientProductsTab() {
   const router = useRouter();
   const { timezone: tenantTimezone } = useTenantTimezone();
   const [products, setProducts] = useState<ClientProduct[]>([]);
+  const [pendingProducts, setPendingProducts] = useState<PendingProduct[]>([]);
   const [types, setTypes] = useState<Array<{ id: number; name: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,11 +62,22 @@ export function ClientProductsTab() {
   const [filterTypeId, setFilterTypeId] = useState<number | null>(null);
   const [creatingManual, setCreatingManual] = useState(false);
   const [creatingAuto, setCreatingAuto] = useState(false);
+  const [creatingAutoTaskId, setCreatingAutoTaskId] = useState<string | null>(null);
   const [creatingProductsMap, setCreatingProductsMap] = useState(false);
 
   const [duplicatingId, setDuplicatingId] = useState<number | null>(null);
   const [productToDelete, setProductToDelete] = useState<ClientProduct | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  const coreTypeId = useMemo(() => {
+    const core = types.find((t) => t.name.trim().toLowerCase() === 'core');
+    return core?.id ?? null;
+  }, [types]);
+
+  const coreTypeName = useMemo(() => {
+    const core = types.find((t) => t.name.trim().toLowerCase() === 'core');
+    return core?.name ?? 'Core';
+  }, [types]);
 
   useEffect(() => {
     const load = async () => {
@@ -64,9 +103,12 @@ export function ClientProductsTab() {
     load();
   }, []);
 
-  const openProduct = (productId: number) => {
-    router.push(`/product/${productId}`);
-  };
+  const openProduct = useCallback(
+    (productId: number) => {
+      router.push(`/product/${productId}`);
+    },
+    [router]
+  );
 
   const handleCreateCoreManual = async () => {
     const name = createName.trim();
@@ -99,15 +141,41 @@ export function ClientProductsTab() {
     if (creatingManual || creatingAuto) return;
     setCreatingAuto(true);
     setError(null);
+    let keepLoading = false;
     try {
-      const created = await clientProductsApi.createCoreAi({
+      const response = await clientProductsApi.createCoreAi({
         name,
         short_description
       });
-      setProducts((prev) => [created, ...prev]);
-      setCreateName('');
-      setCreateShortDescription('');
-      openProduct(created.id);
+      const immediateProduct = response.product;
+      if (immediateProduct?.id != null) {
+        setProducts((prev) => (prev.some((item) => item.id === immediateProduct.id) ? prev : [immediateProduct, ...prev]));
+        setCreateName('');
+        setCreateShortDescription('');
+        setCreatingAuto(false);
+        return;
+      }
+
+      if (response.task_id) {
+        keepLoading = true;
+        const pending: PendingProduct = {
+          id: -Date.now(),
+          name,
+          product_type_id: coreTypeId,
+          product_type_name: coreTypeName,
+          short_description,
+          updated_at: new Date().toISOString(),
+          __pending: true,
+          task_id: response.task_id
+        };
+        setPendingProducts((prev) => [pending, ...prev]);
+        setCreateName('');
+        setCreateShortDescription('');
+        setCreatingAutoTaskId(response.task_id);
+        return;
+      }
+
+      setError(response.error ? String(response.error) : 'Не удалось запустить автогенерацию core-продукта.');
     } catch (err) {
       console.error('Failed to auto-create core product', err);
       if (err instanceof ApiError) {
@@ -122,9 +190,69 @@ export function ClientProductsTab() {
       }
       setError('Не удалось создать core-продукт с помощью ИИ.');
     } finally {
-      setCreatingAuto(false);
+      if (!keepLoading) {
+        setCreatingAuto(false);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!creatingAutoTaskId) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const status = await clientProductsApi.generationStatus(creatingAutoTaskId);
+        if (cancelled) return;
+
+        if (status.status === 'success') {
+          let created = status.product ?? null;
+          if (!created) {
+            const productId = resolveProductId(status.result);
+            if (productId != null) {
+              try {
+                created = await clientProductsApi.detail(productId);
+              } catch (err) {
+                console.error('Failed to fetch created core product', err);
+              }
+            }
+          }
+
+          if (created?.id != null) {
+            setProducts((prev) => (prev.some((item) => item.id === created!.id) ? prev : [created!, ...prev]));
+            setPendingProducts((prev) => prev.filter((item) => item.task_id !== creatingAutoTaskId));
+          } else {
+            setError('Core-продукт создан, но не удалось получить его данные. Обновите список продуктов.');
+            setPendingProducts((prev) => prev.filter((item) => item.task_id !== creatingAutoTaskId));
+          }
+
+          setCreatingAuto(false);
+          setCreatingAutoTaskId(null);
+          return;
+        }
+
+        if (status.status === 'failure' || status.status === 'revoked') {
+          setError(status.error || 'Автогенерация core-продукта завершилась с ошибкой.');
+          setPendingProducts((prev) => prev.filter((item) => item.task_id !== creatingAutoTaskId));
+          setCreatingAuto(false);
+          setCreatingAutoTaskId(null);
+        }
+      } catch (err) {
+        console.error('Failed to fetch core product generation status', err);
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, 2000);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [creatingAutoTaskId]);
 
   const handleCreateProductsMap = async () => {
     if (creatingProductsMap) return;
@@ -186,13 +314,26 @@ export function ClientProductsTab() {
   };
 
   const rows = useMemo(() => {
-    if (filterTypeId == null) return products;
-    return products.filter((product) => product.product_type_id === filterTypeId);
-  }, [filterTypeId, products]);
+    const combined: ProductRow[] = [...pendingProducts, ...products];
+    if (filterTypeId == null) return combined;
+    return combined.filter((product) => product.product_type_id === filterTypeId);
+  }, [filterTypeId, pendingProducts, products]);
 
-  const coreOnboarding = !loading && !error && products.length === 0;
+  const hasAnyProducts = products.length > 0 || pendingProducts.length > 0;
+  const coreOnboarding = !loading && !error && !hasAnyProducts;
   const canCreateCore = Boolean(createName.trim() && createShortDescription.trim());
   const isDeleteDialogOpen = productToDelete != null;
+
+  useEffect(() => {
+    if (coreTypeId == null) return;
+    setPendingProducts((prev) =>
+      prev.map((product) =>
+        product.product_type_id == null
+          ? { ...product, product_type_id: coreTypeId, product_type_name: product.product_type_name ?? coreTypeName }
+          : product
+      )
+    );
+  }, [coreTypeId, coreTypeName]);
 
   return (
     <div className="space-y-6">
@@ -259,12 +400,12 @@ export function ClientProductsTab() {
         </div>
       )}
       {loading && <div className="text-sm text-muted-foreground">Загрузка продуктов…</div>}
-      {!loading && !error && products.length === 0 && (
+      {!loading && !error && !hasAnyProducts && (
         <div className="rounded-lg border px-4 py-6 text-muted-foreground">
           Пока нет продуктов. Создайте основной продукт (Core) через форму выше.
         </div>
       )}
-      {!loading && !error && products.length > 0 && rows.length === 0 && filterTypeId != null && (
+      {!loading && !error && hasAnyProducts && rows.length === 0 && filterTypeId != null && (
         <div className="rounded-lg border px-4 py-6 text-muted-foreground">
           Нет продуктов выбранного типа.
         </div>
@@ -301,62 +442,80 @@ export function ClientProductsTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((product) => (
+              {rows.map((product) => {
+                const pending = isPendingProduct(product);
+                return (
                 <TableRow
                   key={product.id}
-                  className="cursor-pointer"
+                  className={pending ? 'opacity-70' : 'cursor-pointer'}
                   onClick={(e) => {
+                    if (pending) return;
                     const target = e.target as HTMLElement | null;
                     if (target?.closest('button,a')) return;
                     openProduct(product.id);
                   }}
                 >
-                  <TableCell className="font-medium">{product.name}</TableCell>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <span>{product.name}</span>
+                      {pending && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">Создается</span>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{product.product_type_name || '—'}</TableCell>
                   <TableCell className="text-muted-foreground">{product.short_description || '—'}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {formatDate(product.updated_at, tenantTimezone)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <div className="inline-flex items-center gap-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        disabled={duplicatingId === product.id || (product.product_type_name ?? '').trim().toLowerCase() !== 'core'}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDuplicate(product);
-                        }}
-                        aria-label="Сделать копию"
-                        title={
-                          (product.product_type_name ?? '').trim().toLowerCase() === 'core'
-                            ? 'Сделать копию'
-                            : 'Копирование сопутствующих продуктов доступно внутри Core'
-                        }
-                      >
-                        {duplicatingId === product.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
-                        disabled={duplicatingId === product.id || deletingId === product.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setProductToDelete(product);
-                        }}
-                        aria-label="Удалить"
-                        title="Удалить"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    {pending ? (
+                      <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Создается…
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          disabled={duplicatingId === product.id || (product.product_type_name ?? '').trim().toLowerCase() !== 'core'}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDuplicate(product);
+                          }}
+                          aria-label="Сделать копию"
+                          title={
+                            (product.product_type_name ?? '').trim().toLowerCase() === 'core'
+                              ? 'Сделать копию'
+                              : 'Копирование сопутствующих продуктов доступно внутри Core'
+                          }
+                        >
+                          {duplicatingId === product.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                          disabled={duplicatingId === product.id || deletingId === product.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setProductToDelete(product);
+                          }}
+                          aria-label="Удалить"
+                          title="Удалить"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    )}
                   </TableCell>
                 </TableRow>
-              ))}
+              );
+            })}
             </TableBody>
           </Table>
         </div>

@@ -82,6 +82,17 @@ const toNumberOrNull = (value: unknown) => {
   return null;
 };
 
+const resolveProductId = (result?: Record<string, unknown>) => {
+  if (!result || typeof result !== 'object') return null;
+  const raw = (result as { product_id?: unknown }).product_id;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
 const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure => {
   const base = (raw ?? {}) as Record<string, unknown>;
   const audience = Array.isArray(base.audience)
@@ -276,6 +287,7 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [createRelatedTypeId, setCreateRelatedTypeId] = useState<number | null>(null);
   const [createRelatedShortDescription, setCreateRelatedShortDescription] = useState('');
   const [creatingRelated, setCreatingRelated] = useState(false);
+  const [creatingRelatedTaskId, setCreatingRelatedTaskId] = useState<string | null>(null);
   const [creatingRelatedMap, setCreatingRelatedMap] = useState(false);
 
   const coreTypeId = useMemo(() => {
@@ -388,31 +400,46 @@ export default function ProductPage({ params }: ProductPageProps) {
     if (productId == null) return;
 
     setCreatingRelated(true);
+    let keepLoading = false;
     try {
-      const created = await clientProductsApi.createRelatedAi(productId, {
+      const response = await clientProductsApi.createRelatedAi(productId, {
         name,
         product_type_id: createRelatedTypeId,
         short_description: short_description ? short_description : undefined,
         language: 'ru'
       });
 
-      const ref: RelatedProductRef = {
-        id: created.id,
-        name: created.name ?? name,
-        product_type_id: created.product_type_id ?? createRelatedTypeId,
-        product_type_name: created.product_type_name ?? null,
-        short_description: created.short_description ?? (short_description ? short_description : null)
-      };
+      const immediateProduct = response.product;
+      if (immediateProduct?.id != null) {
+        const ref: RelatedProductRef = {
+          id: immediateProduct.id,
+          name: immediateProduct.name ?? name,
+          product_type_id: immediateProduct.product_type_id ?? createRelatedTypeId,
+          product_type_name: immediateProduct.product_type_name ?? null,
+          short_description: immediateProduct.short_description ?? (short_description ? short_description : null)
+        };
 
-      setRelatedProducts((prev) => {
-        if (prev.some((item) => item.id === ref.id)) return prev;
-        return [ref, ...prev];
-      });
+        setRelatedProducts((prev) => {
+          if (prev.some((item) => item.id === ref.id)) return prev;
+          return [ref, ...prev];
+        });
 
-      setCreateRelatedName('');
-      setCreateRelatedTypeId(null);
-      setCreateRelatedShortDescription('');
-      toast.success('Сопутствующий продукт создан и добавлен в список. Привязка к Core сохранится автоматически после завершения создания.');
+        setCreateRelatedName('');
+        setCreateRelatedTypeId(null);
+        setCreateRelatedShortDescription('');
+        toast.success('Сопутствующий продукт создан и добавлен в список. Привязка к Core сохранится автоматически после завершения создания.');
+        setCreatingRelated(false);
+        return;
+      }
+
+      if (response.task_id) {
+        keepLoading = true;
+        setCreatingRelatedTaskId(response.task_id);
+        toast.success(response.message || 'Генерация сопутствующего продукта запущена.');
+        return;
+      }
+
+      toast.error(response.error || 'Не удалось запустить генерацию сопутствующего продукта');
     } catch (err) {
       console.error('Failed to create related product', err);
       if (err instanceof ApiError) {
@@ -427,9 +454,82 @@ export default function ProductPage({ params }: ProductPageProps) {
       }
       toast.error('Не удалось создать сопутствующий продукт');
     } finally {
-      setCreatingRelated(false);
+      if (!keepLoading) {
+        setCreatingRelated(false);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!creatingRelatedTaskId) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const status = await clientProductsApi.generationStatus(creatingRelatedTaskId);
+        if (cancelled) return;
+
+        if (status.status === 'success') {
+          let created = status.product ?? null;
+          if (!created) {
+            const productId = resolveProductId(status.result);
+            if (productId != null) {
+              try {
+                created = await clientProductsApi.detail(productId);
+              } catch (err) {
+                console.error('Failed to fetch created related product', err);
+              }
+            }
+          }
+
+          if (created?.id != null) {
+            const ref: RelatedProductRef = {
+              id: created.id,
+              name: created.name ?? '',
+              product_type_id: created.product_type_id ?? null,
+              product_type_name: created.product_type_name ?? null,
+              short_description: created.short_description ?? null
+            };
+
+            setRelatedProducts((prev) => {
+              if (prev.some((item) => item.id === ref.id)) return prev;
+              return [ref, ...prev];
+            });
+
+            setCreateRelatedName('');
+            setCreateRelatedTypeId(null);
+            setCreateRelatedShortDescription('');
+            toast.success('Сопутствующий продукт создан и добавлен в список.');
+          } else {
+            toast.error('Сопутствующий продукт создан, но не удалось получить его данные.');
+          }
+
+          setCreatingRelated(false);
+          setCreatingRelatedTaskId(null);
+          return;
+        }
+
+        if (status.status === 'failure' || status.status === 'revoked') {
+          toast.error(status.error || 'Генерация сопутствующего продукта завершилась с ошибкой.');
+          setCreatingRelated(false);
+          setCreatingRelatedTaskId(null);
+        }
+      } catch (err) {
+        console.error('Failed to fetch related product generation status', err);
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, 2000);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [creatingRelatedTaskId]);
 
   const handleCreateRelatedMap = async () => {
     if (!canEdit || creatingRelatedMap || productId == null) return;

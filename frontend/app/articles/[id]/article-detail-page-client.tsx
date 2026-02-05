@@ -564,11 +564,25 @@ export default function ArticleDetailPageClient() {
     if (!hasContent) return;
     const nextAuto = buildResultHtml(orderedBlocks);
     if (!nextAuto.trim()) return;
-    if (!resultDraft.trim() || resultDraft === resultAutoRef.current) {
+
+    if (!resultAutoRef.current && resultDraft.trim() && article?.status !== 'result_edited') {
+      resultAutoRef.current = resultDraft;
+    }
+
+    if (!resultDraft.trim()) {
+      setResultDraft(nextAuto);
+      resultAutoRef.current = nextAuto;
+      return;
+    }
+    if (resultDraft === nextAuto) {
+      resultAutoRef.current = nextAuto;
+      return;
+    }
+    if (resultDraft === resultAutoRef.current) {
       setResultDraft(nextAuto);
       resultAutoRef.current = nextAuto;
     }
-  }, [orderedBlocks, resultDraft, resultTouched]);
+  }, [orderedBlocks, resultDraft, resultTouched, article?.status]);
 
   const reloadBlocks = async () => {
     try {

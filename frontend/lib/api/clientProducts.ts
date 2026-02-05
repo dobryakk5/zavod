@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { ClientProduct, MindMap } from '../types';
+import type { ClientProduct, MindMap, ProductGenerationResponse } from '../types';
 
 export const clientProductsApi = {
   list: async (): Promise<ClientProduct[]> => {
@@ -14,7 +14,7 @@ export const clientProductsApi = {
   },
 
   createCoreAi: async (payload: { name: string; short_description: string; language?: 'ru' | 'en' }) => {
-    return apiFetch<ClientProduct>('/products/list/create-core-ai/', {
+    return apiFetch<ProductGenerationResponse>('/products/list/create-core-ai/', {
       method: 'POST',
       body: payload
     });
@@ -41,10 +41,14 @@ export const clientProductsApi = {
     coreProductId: string | number,
     payload: { name: string; product_type_id: number; short_description?: string; language?: 'ru' | 'en' }
   ) => {
-    return apiFetch<ClientProduct>(`/products/list/${coreProductId}/create-related-ai/`, {
+    return apiFetch<ProductGenerationResponse>(`/products/list/${coreProductId}/create-related-ai/`, {
       method: 'POST',
       body: payload
     });
+  },
+
+  generationStatus: async (taskId: string): Promise<ProductGenerationResponse> => {
+    return apiFetch<ProductGenerationResponse>(`/products/list/generation-status/?task_id=${encodeURIComponent(taskId)}`);
   },
 
   createRelatedMap: async (coreProductId: string | number): Promise<MindMap> => {

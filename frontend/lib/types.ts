@@ -544,6 +544,16 @@ export interface TaskResponse {
   status?: string;
 }
 
+export interface ProductGenerationResponse {
+  success: boolean;
+  message?: string;
+  task_id?: string;
+  error?: string;
+  status?: string;
+  result?: Record<string, unknown>;
+  product?: ClientProduct;
+}
+
 export type SEOGroupType = 'seo_pains' | 'seo_desires' | 'seo_objections' | 'seo_avatar' | 'seo_keywords' | '';
 
 export type WordstatResultType = 'top_request' | 'association' | 'favorite' | 'skip';

@@ -170,7 +170,7 @@ export default function ClientsPage() {
           <TabsTrigger value="service-level">Уровень сервиса</TabsTrigger>
           <TabsTrigger value="categories">Теги</TabsTrigger>
           <TabsTrigger value="payments">Платежи</TabsTrigger>
-          <TabsTrigger value="welcome-chain">Welcome</TabsTrigger>
+          <TabsTrigger value="welcome-chain">ChatBot</TabsTrigger>
         </TabsList>
 
         <TabsContent value="clients" className="space-y-6">
