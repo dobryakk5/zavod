@@ -17,6 +17,7 @@ import { SchedulePostDialog } from './schedule-post-dialog';
 import { ChevronLeft, ChevronRight, Trash2, Loader2 } from 'lucide-react';
 import { sanitizeRichText } from '@/lib/sanitize-html';
 import { highlightPhrasesInHtml } from '@/lib/highlight-html';
+import Image from 'next/image';
 import Link from 'next/link';
 import { formatInTenantTimezone } from '@/lib/timezone';
 
@@ -741,13 +742,16 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
                 return (
                   <div key={image.id} className="rounded-lg border bg-background p-2 shadow-sm relative group">
                     <div
-                      className="w-full overflow-hidden rounded-md"
+                      className="w-full overflow-hidden rounded-md relative"
                       style={{ aspectRatio: `${clampedRatio}` }}
                     >
-                      <img
+                      <Image
                         src={resolveMediaUrl(image.image)}
                         alt={image.alt_text || post.title || `Изображение ${image.id}`}
-                        className="w-full h-full object-contain cursor-pointer"
+                        fill
+                        sizes="(min-width: 640px) 33vw, 100vw"
+                        className="object-contain cursor-pointer"
+                        unoptimized
                         onClick={() => handleImageClick(image)}
                       />
                     </div>
@@ -812,11 +816,14 @@ export function PostDetailView({ postId }: PostDetailViewProps) {
               </DialogDescription>
             </VisuallyHidden>
             {selectedImage && (
-              <div className="relative">
-                <img
+              <div className="relative w-full h-[90vh]">
+                <Image
                   src={selectedImage.src}
                   alt={selectedImage.alt}
-                  className="w-full h-auto max-h-[90vh] object-contain"
+                  fill
+                  sizes="95vw"
+                  className="object-contain"
+                  unoptimized
                 />
                 <Button
                   variant="secondary"

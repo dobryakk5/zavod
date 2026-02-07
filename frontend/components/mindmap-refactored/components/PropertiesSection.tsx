@@ -51,7 +51,7 @@ export function PropertiesSection({
       {/* Empty state */}
       {visibleProperties.length === 0 ? (
         <div className="text-center py-8 text-sm text-slate-500 bg-slate-50 rounded-lg border border-slate-200">
-          Нет свойств. Нажмите "Добавить свойство" чтобы создать первое.
+          Нет свойств. Нажмите «Добавить свойство», чтобы создать первое.
         </div>
       ) : (
         /* Properties list */

@@ -3,6 +3,7 @@
 import { useEditor, EditorContent } from '@tiptap/react';
 import { Bold, ChevronDown, ImagePlus, Italic, Link2, List, ListOrdered, ListTodo, Quote, Table as TableIcon, Underline as UnderlineIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Image from 'next/image';
 import { kbDocumentsApi, kbLinkPreviewApi } from '@/lib/api/knowledgeBase';
 import type { KbLinkPreview } from '@/lib/types';
 import { Button } from '@/components/ui/button';
@@ -495,9 +496,12 @@ export default function TipTapEditor({
             {linkPreview?.title && (
               <div className="rounded-md border border-gray-200 p-3 flex items-start gap-3 bg-gray-50">
                 {linkPreview.favicon ? (
-                  <img
+                  <Image
                     src={linkPreview.favicon}
                     alt="favicon"
+                    width={20}
+                    height={20}
+                    unoptimized
                     className="w-5 h-5 mt-0.5 rounded-sm object-contain"
                   />
                 ) : (
