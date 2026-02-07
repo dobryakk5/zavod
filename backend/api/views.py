@@ -66,6 +66,15 @@ from .views_tgstat import (  # noqa: F401
     TgstatTagListView,
 )
 from .views_websites import WebsiteScanViewSet  # noqa: F401
+from .views_kb import (  # noqa: F401
+    KbFolderViewSet,
+    KbDocumentViewSet,
+    KbCommentViewSet,
+    KbDocumentShareViewSet,
+    KbTagViewSet,
+    KbSearchViewSet,
+    KbLinkPreviewView,
+)
 from .views_google import (  # noqa: F401
     GoogleCSESearchView,
     GoogleCompetitorsAnalyzeView,

@@ -15,6 +15,18 @@ logger = logging.getLogger(__name__)
 CHAIN_BUTTON_PREFIX = "chain_btn:"
 
 
+def _normalize_buttons(buttons: list) -> list[str]:
+    normalized = []
+    for btn in buttons or []:
+        if isinstance(btn, str):
+            label = btn
+        else:
+            label = (btn or {}).get("text")
+        if label:
+            normalized.append(label)
+    return normalized
+
+
 def _build_inline_keyboard(buttons: list[str]) -> dict:
     keyboard = [[{"text": label, "callback_data": f"{CHAIN_BUTTON_PREFIX}{label}"}] for label in buttons]
     return {"inline_keyboard": keyboard}
@@ -70,7 +82,13 @@ def _send_node_message(user_id: int, node: ChainNode) -> bool:
         return _send_telegram_message(
             user_id,
             text=node.payload.get("text", ""),
-            buttons=node.payload.get("buttons", []),
+            buttons=_normalize_buttons(node.payload.get("buttons", [])),
+        )
+    if node.node_type == "start":
+        return _send_telegram_message(
+            user_id,
+            text=node.payload.get("text", ""),
+            buttons=_normalize_buttons(node.payload.get("buttons", [])),
         )
     return False
 
@@ -103,7 +121,7 @@ def _execute_action(action: dict, session_id: int) -> None:
             _send_telegram_message(
                 session.user_id,
                 text=payload.get("text", ""),
-                buttons=payload.get("buttons", []),
+                buttons=_normalize_buttons(payload.get("buttons", [])),
             )
 
     if action_type == "schedule_timeout":

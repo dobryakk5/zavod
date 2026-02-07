@@ -8,19 +8,14 @@ from core.models import Chain, ChainNode
 DEFAULT_CHAIN_NAME = "Welcome"
 
 
-def build_welcome_text(client) -> str:
-    brand = (client.brand_name or client.name or "").strip()
-    niche = (client.niche or "").strip()
-    product = (client.product_service or "").strip()
-
-    lines = ["Добро пожаловать!"]
-    if brand:
-        lines.append(f"Бренд: {brand}")
-    if niche:
-        lines.append(f"Ниша: {niche}")
-    if product:
-        lines.append(f"Продукт/услуга: {product}")
-    return "\n".join(lines)
+def build_start_payload() -> dict:
+    return {
+        "text": "Вы даете согласие на обработку персональных данных?",
+        "buttons": [
+            {"text": "Да", "color": "green"},
+            {"text": "Нет", "color": "red"},
+        ],
+    }
 
 
 def get_or_create_chain(client) -> Chain:
@@ -41,8 +36,8 @@ def get_or_create_chain(client) -> Chain:
         )
         node = ChainNode.objects.create(
             chain=chain,
-            node_type="text",
-            payload={"text": build_welcome_text(client)},
+            node_type="start",
+            payload=build_start_payload(),
             delay_seconds=0,
             pos_x=0,
             pos_y=0,

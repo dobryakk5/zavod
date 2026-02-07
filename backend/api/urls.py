@@ -63,6 +63,13 @@ from .views import (
     VkCallbackView,
     VkConnectView,
     VkPublishView,
+    KbFolderViewSet,
+    KbDocumentViewSet,
+    KbCommentViewSet,
+    KbDocumentShareViewSet,
+    KbTagViewSet,
+    KbSearchViewSet,
+    KbLinkPreviewView,
 )
 
 from .views_social import (
@@ -141,6 +148,12 @@ router.register(r'map/node-properties', MindNodePropertyViewSet, basename='mind-
 router.register(r'map/mind-maps', MindMapViewSet, basename='mind-map')
 router.register(r'products/list', ClientProductViewSet, basename='client-product')
 router.register(r'products/types', ProductTypeViewSet, basename='product-type')
+router.register(r'kb/folders', KbFolderViewSet, basename='kb-folder')
+router.register(r'kb/documents', KbDocumentViewSet, basename='kb-document')
+router.register(r'kb/comments', KbCommentViewSet, basename='kb-comment')
+router.register(r'kb/shares', KbDocumentShareViewSet, basename='kb-share')
+router.register(r'kb/tags', KbTagViewSet, basename='kb-tag')
+router.register(r'kb/search', KbSearchViewSet, basename='kb-search')
 
 urlpatterns = [
     # Analytics endpoint (must be before router to avoid conflicts)
@@ -197,6 +210,9 @@ urlpatterns = [
     path('vk/connect/', VkConnectView.as_view(), name='vk-connect'),
     path('vk/callback/', VkCallbackView.as_view(), name='vk-callback'),
     path('vk/post_with_photos/', VkPublishView.as_view(), name='vk-post-with-photos'),
+
+    # Link preview endpoint for editor modal
+    path('link-preview/', KbLinkPreviewView.as_view(), name='link-preview'),
 
     # Mind map endpoints
     path('map/nodes/<uuid:node_id>/position/', MindNodePositionView.as_view(), name='mind-node-position'),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from core.models import (
@@ -23,6 +24,13 @@ from core.models import (
     MindNode,
     MindNodePosition,
     MindNodeProperty,
+    KbFolder,
+    KbDocument,
+    KbDocumentVersion,
+    KbComment,
+    KbTag,
+    KbDocumentTag,
+    KbDocumentShare,
     Post,
     PostImage,
     PostTone,
@@ -55,6 +63,8 @@ from core.services.product_type_templates import is_system_product_type_name
 from core.telegram_client import normalize_telegram_channel_identifier
 from core.social_accounts import ensure_telegram_account_metadata
 from core.social_accounts import sync_client_default_telegram_account
+
+User = get_user_model()
 
 
 class PostSerializer(serializers.ModelSerializer):
@@ -1393,6 +1403,240 @@ class MindMapDetailSerializer(MindMapSerializer):
         fields = MindMapSerializer.Meta.fields + ["nodes", "edges"]
 
 
+# ============================================================================
+# Knowledge base
+# ============================================================================
+
+
+class KbUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "username", "email", "first_name", "last_name"]
+        read_only_fields = ["id"]
+
+
+class KbFolderSerializer(serializers.ModelSerializer):
+    created_by = KbUserSerializer(read_only=True)
+    documents_count = serializers.SerializerMethodField()
+    subfolders_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KbFolder
+        fields = [
+            "id",
+            "name",
+            "workspace",
+            "parent",
+            "created_by",
+            "created_at",
+            "updated_at",
+            "position",
+            "documents_count",
+            "subfolders_count",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at", "created_by", "workspace"]
+
+    def get_documents_count(self, obj):
+        return obj.documents.filter(is_archived=False).count()
+
+    def get_subfolders_count(self, obj):
+        return obj.subfolders.count()
+
+
+class KbFolderTreeSerializer(KbFolderSerializer):
+    children = serializers.SerializerMethodField()
+
+    class Meta(KbFolderSerializer.Meta):
+        fields = KbFolderSerializer.Meta.fields + ["children"]
+
+    def get_children(self, obj):
+        children = obj.subfolders.all().order_by("position", "id")
+        return KbFolderTreeSerializer(children, many=True, context=self.context).data
+
+
+class KbTagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = KbTag
+        fields = ["id", "name", "color", "workspace", "created_at"]
+        read_only_fields = ["id", "created_at", "workspace"]
+
+
+class KbDocumentListSerializer(serializers.ModelSerializer):
+    created_by = KbUserSerializer(read_only=True)
+    last_edited_by = KbUserSerializer(read_only=True)
+    tags = KbTagSerializer(many=True, read_only=True)
+    child_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KbDocument
+        fields = [
+            "id",
+            "title",
+            "icon",
+            "cover_image",
+            "workspace",
+            "folder",
+            "parent_document",
+            "created_by",
+            "last_edited_by",
+            "created_at",
+            "updated_at",
+            "is_published",
+            "is_archived",
+            "is_template",
+            "position",
+            "tags",
+            "child_count",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at", "workspace"]
+
+    def get_child_count(self, obj):
+        return obj.child_documents.count()
+
+
+class KbDocumentDetailSerializer(serializers.ModelSerializer):
+    created_by = KbUserSerializer(read_only=True)
+    last_edited_by = KbUserSerializer(read_only=True)
+    tags = KbTagSerializer(many=True, read_only=True)
+    child_documents = KbDocumentListSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = KbDocument
+        fields = [
+            "id",
+            "title",
+            "icon",
+            "cover_image",
+            "content",
+            "workspace",
+            "folder",
+            "parent_document",
+            "created_by",
+            "last_edited_by",
+            "created_at",
+            "updated_at",
+            "is_published",
+            "is_archived",
+            "is_template",
+            "position",
+            "tags",
+            "child_documents",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at", "created_by", "workspace"]
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        if request and hasattr(request, "user"):
+            instance.last_edited_by = request.user
+        return super().update(instance, validated_data)
+
+
+class KbDocumentVersionSerializer(serializers.ModelSerializer):
+    created_by = KbUserSerializer(read_only=True)
+
+    class Meta:
+        model = KbDocumentVersion
+        fields = [
+            "id",
+            "document",
+            "content",
+            "title",
+            "created_by",
+            "created_at",
+            "version_number",
+        ]
+        read_only_fields = ["id", "created_at", "version_number", "created_by"]
+
+
+class KbCommentSerializer(serializers.ModelSerializer):
+    created_by = KbUserSerializer(read_only=True)
+    replies = serializers.SerializerMethodField()
+    replies_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KbComment
+        fields = [
+            "id",
+            "document",
+            "parent_comment",
+            "content",
+            "block_id",
+            "created_by",
+            "created_at",
+            "updated_at",
+            "is_resolved",
+            "replies",
+            "replies_count",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at", "created_by"]
+
+    def get_replies(self, obj):
+        if obj.parent_comment is None:
+            replies = obj.replies.all()
+            return KbCommentSerializer(replies, many=True, context=self.context).data
+        return []
+
+    def get_replies_count(self, obj):
+        return obj.replies.count()
+
+
+class KbDocumentShareSerializer(serializers.ModelSerializer):
+    created_by = KbUserSerializer(read_only=True)
+    share_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KbDocumentShare
+        fields = [
+            "id",
+            "document",
+            "share_token",
+            "permission",
+            "password",
+            "expires_at",
+            "created_by",
+            "created_at",
+            "is_active",
+            "visit_count",
+            "share_url",
+        ]
+        read_only_fields = ["id", "share_token", "created_at", "visit_count", "created_by"]
+
+    def get_share_url(self, obj):
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(f"/kb/share/{obj.share_token}")
+        return f"/kb/share/{obj.share_token}"
+
+
+class KbDocumentTagSerializer(serializers.ModelSerializer):
+    tag = KbTagSerializer(read_only=True)
+    tag_id = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = KbDocumentTag
+        fields = ["id", "document", "tag", "tag_id", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+
+class KbDocumentMoveSerializer(serializers.Serializer):
+    folder_id = serializers.IntegerField(required=False, allow_null=True)
+    parent_document_id = serializers.IntegerField(required=False, allow_null=True)
+    position = serializers.IntegerField(required=False)
+
+
+class KbDocumentDuplicateSerializer(serializers.Serializer):
+    title = serializers.CharField(required=False)
+    include_children = serializers.BooleanField(default=False)
+
+
+class KbBulkDocumentArchiveSerializer(serializers.Serializer):
+    document_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        min_length=1,
+    )
+    archive = serializers.BooleanField(default=True)
+
+
 class ChainSerializer(serializers.ModelSerializer):
     tenant_id = serializers.IntegerField(read_only=True)
 
@@ -1461,6 +1705,7 @@ class ChainEdgeSerializer(serializers.ModelSerializer):
             "id",
             "chain_id",
             "source_node_id",
+            "source_port_id",
             "target_node_id",
             "priority",
             "created_at",

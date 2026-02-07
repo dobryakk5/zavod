@@ -102,6 +102,18 @@ def _store_task(
     return True
 
 
+def _normalize_buttons(buttons: list) -> list[str]:
+    normalized = []
+    for btn in buttons or []:
+        if isinstance(btn, str):
+            label = btn
+        else:
+            label = (btn or {}).get("text")
+        if label:
+            normalized.append(label)
+    return normalized
+
+
 def _build_chain_keyboard(buttons: list[str]) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton(text=label, callback_data=f"{CHAIN_BUTTON_PREFIX}{label}")]
@@ -140,7 +152,7 @@ async def _execute_chain_actions(
                 caption=payload.get("caption", ""),
             )
         elif action_type == "send_buttons":
-            buttons = payload.get("buttons", [])
+            buttons = _normalize_buttons(payload.get("buttons", []))
             await bot.send_message(
                 chat_id,
                 text=payload.get("text", ""),
@@ -623,12 +635,75 @@ async def handle_message(message: Message, state: FSMContext) -> None:
     binding = await _get_binding_for_user(from_user.id)
     if binding is not None:
         user_message: dict[str, Any] = {}
-        if message.text:
-            user_message["text"] = message.text
-        if message.caption:
-            user_message["text"] = message.caption
+        text_value = (message.text or message.caption or "").strip()
+        if text_value:
+            user_message["text"] = text_value
         if message.photo:
             user_message["photo"] = True
+        if message.video:
+            user_message["video"] = True
+        if message.audio:
+            user_message["audio"] = True
+        if message.voice:
+            user_message["voice"] = True
+        if message.document:
+            user_message["document"] = True
+        if message.sticker:
+            user_message["sticker"] = True
+        if message.location:
+            user_message["location"] = True
+        if message.contact:
+            user_message["contact"] = True
+
+        message_type = None
+        if message.photo:
+            message_type = "photo"
+        elif message.video:
+            message_type = "video"
+        elif message.audio:
+            message_type = "audio"
+        elif message.voice:
+            message_type = "voice"
+        elif message.document:
+            message_type = "document"
+        elif message.sticker:
+            message_type = "sticker"
+        elif message.location:
+            message_type = "location"
+        elif message.contact:
+            message_type = "contact"
+        elif text_value:
+            message_type = "text"
+
+        if message_type:
+            user_message["message_type"] = message_type
+
+        entities_raw = []
+        if message.entities:
+            entities_raw.extend(message.entities)
+        if message.caption_entities:
+            entities_raw.extend(message.caption_entities)
+
+        if entities_raw:
+            normalized = set()
+            for ent in entities_raw:
+                ent_type = getattr(ent, "type", "") or ""
+                if ent_type == "email":
+                    normalized.add("email")
+                elif ent_type == "phone_number":
+                    normalized.add("phone")
+                elif ent_type in {"url", "text_link"}:
+                    normalized.add("url")
+                elif ent_type == "hashtag":
+                    normalized.add("hashtag")
+                elif ent_type == "mention":
+                    normalized.add("mention")
+                elif ent_type == "cashtag":
+                    normalized.add("cashtag")
+                elif ent_type == "bot_command":
+                    normalized.add("bot_command")
+            if normalized:
+                user_message["entities"] = sorted(normalized)
 
         if user_message:
             executor = ChainExecutor()

@@ -23,3 +23,4 @@ export * from './articles';
 export * from './telegramTasks';
 export * from './mapTags';
 export * from './mapContacts';
+export * from './knowledgeBase';

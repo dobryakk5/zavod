@@ -6,7 +6,7 @@ celery -A config worker -l info -Q celery --concurrency=5
 
 celery -A config beat -l info
 python manage.py runserver
-
+python manage.py run_telegram_tasks_bot
 
 celery -A config worker -l info -Q media --concurrency=1 
 
@@ -191,3 +191,36 @@ redis-cli ping
 ```
 
 
+sudo nano /etc/systemd/system/celery-beat.service
+
+[Unit]
+Description=Celery Beat
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=next
+Group=next
+WorkingDirectory=/var/py/zavod/backend
+
+Environment=PATH=/var/py/zavod/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=PYTHONPATH=/var/py/zavod/backend
+Environment=DJANGO_SETTINGS_MODULE=config.settings.dev
+EnvironmentFile=/var/py/zavod/backend/.env
+
+ExecStart=/var/py/zavod/.venv/bin/celery -A config beat -l info
+
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+
+sudo systemctl daemon-reload
+sudo systemctl enable celery-beat.service
+sudo systemctl start celery-beat.service

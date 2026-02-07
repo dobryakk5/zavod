@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Calendar } from 'lucide-react';
 import { crmContactsApi, crmEventsApi } from '@/lib/api/crm';
@@ -77,7 +76,7 @@ export default function ClientsPage() {
             const bTime = new Date(b.start_time).getTime();
             return aTime - bTime;
           });
-        const nextEvents = upcomingEventsSorted.slice(0, 2).map((event) => ({
+        const nextEvents = upcomingEventsSorted.slice(0, 1).map((event) => ({
           id: event.id,
           title: event.title || 'Встреча',
           start_time: event.start_time,
@@ -135,32 +134,27 @@ export default function ClientsPage() {
       </div>
 
       <div className="mb-8">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Ближайшие встречи</CardTitle>
+        <div className="rounded-lg bg-transparent">
+          <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
             <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
             {displayStats.nextEvents.length > 0 && (
-              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                {displayStats.nextEvents.map((event) => (
-                  <div key={event.id}>
-                    {formatEventTime(event.start_time, tenantTimezone)} · {event.title} ·{' '}
-                    <Link
-                      href={`/contact/${event.contactId}`}
-                      className="text-blue-600 hover:underline"
-                    >
-                      {event.contactName}
-                    </Link>
-                  </div>
-                ))}
+              <div>
+                Ближайша встреча:{' '}
+                {formatEventTime(displayStats.nextEvents[0].start_time, tenantTimezone)} ·{' '}
+                {displayStats.nextEvents[0].title} ·{' '}
+                <Link
+                  href={`/contact/${displayStats.nextEvents[0].contactId}`}
+                  className="text-blue-600 hover:underline"
+                >
+                  {displayStats.nextEvents[0].contactName}
+                </Link>
               </div>
             )}
             {displayStats.nextEvents.length === 0 && (
-              <p className="text-xs text-muted-foreground">Нет запланированных встреч</p>
+              <div>Ближайша встреча: Нет запланированных встреч</div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
 
       <Tabs defaultValue="clients" className="space-y-6">

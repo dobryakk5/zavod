@@ -153,3 +153,39 @@ tail -f celery.log
 
 ### Бот публикует от своего имени, а не от имени канала
 - Это нормально! При публикации ботом в канал сообщения появляются как сообщения канала, а не бота
+
+
+
+sudo nano /etc/systemd/system/tgbot.service
+
+[Unit]
+Description=Fibo Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=next
+Group=next
+WorkingDirectory=/var/py/zavod/backend
+
+Environment=PATH=/var/py/zavod/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=PYTHONPATH=/var/py/zavod/backend
+Environment=DJANGO_SETTINGS_MODULE=config.settings.dev
+EnvironmentFile=/var/py/zavod/backend/.env
+
+ExecStart=/var/py/zavod/.venv/bin/python manage.py run_telegram_tasks_bot
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+
+sudo systemctl daemon-reload
+sudo systemctl enable tgbot
+sudo systemctl start tgbot
+sudo systemctl status tgbot

@@ -113,6 +113,8 @@ class ChainNodeDetailView(APIView):
         client = get_active_client(request.user)
         chain = _get_or_create_chain(client)
         node = get_object_or_404(ChainNode.objects.filter(chain=chain), pk=node_id)
+        if node.node_type == "start":
+            return Response({"detail": "Нельзя удалить стартовый узел"}, status=status.HTTP_400_BAD_REQUEST)
         node.delete()
         if chain.start_node_id == node_id:
             chain.start_node_id = None

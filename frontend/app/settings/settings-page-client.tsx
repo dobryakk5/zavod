@@ -7,13 +7,14 @@ import { ClientTimezoneSetting } from '@/components/settings/client-timezone-set
 import { SocialAccountsManager } from '@/components/settings/social-accounts-manager';
 import { VkIntegrationsPanel } from '@/components/settings/vk-integrations-panel';
 import { PaymentTab } from '@/components/settings/payment-tab';
+import { KnowledgeBaseTab } from '@/components/settings/knowledge-base-tab';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function SettingsPageClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const tabParam = searchParams.get('tab') ?? 'client';
-  const availableTabs = useMemo(() => new Set(['client', 'social', 'vk', 'payment']), []);
+  const availableTabs = useMemo(() => new Set(['client', 'social', 'vk', 'payment', 'kb']), []);
   const [activeTab, setActiveTab] = useState(() => (availableTabs.has(tabParam) ? tabParam : 'client'));
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export default function SettingsPageClient() {
           <TabsTrigger value="social">Социальные аккаунты</TabsTrigger>
           <TabsTrigger value="vk">Группы VK</TabsTrigger>
           <TabsTrigger value="payment">Оплата</TabsTrigger>
+          <TabsTrigger value="kb">База знаний</TabsTrigger>
         </TabsList>
 
         <TabsContent value="client" className="space-y-6">
@@ -66,6 +68,10 @@ export default function SettingsPageClient() {
 
         <TabsContent value="payment" className="space-y-6">
           <PaymentTab />
+        </TabsContent>
+
+        <TabsContent value="kb" className="space-y-6">
+          <KnowledgeBaseTab />
         </TabsContent>
       </Tabs>
     </div>

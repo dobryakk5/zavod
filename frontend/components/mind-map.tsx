@@ -808,13 +808,14 @@ export function MindMap({ initialNodes = defaultNodes, initialEdges = defaultEdg
 
       const scale = 0.85 / Math.max(bounds.width / fullWidth, bounds.height / fullHeight);
       if (!Number.isFinite(scale) || scale <= 0) return false;
+      const fitScale = Math.min(scale, 1);
 
       const translate = [
-        fullWidth / 2 - scale * (bounds.x + bounds.width / 2),
-        fullHeight / 2 - scale * (bounds.y + bounds.height / 2)
+        fullWidth / 2 - fitScale * (bounds.x + bounds.width / 2),
+        fullHeight / 2 - fitScale * (bounds.y + bounds.height / 2)
       ] as const;
 
-      const nextTransform = d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale);
+      const nextTransform = d3.zoomIdentity.translate(translate[0], translate[1]).scale(fitScale);
       const svg = d3.select(svgRef.current);
       const animate = opts?.animate ?? true;
       const target = animate ? (svg.transition().duration(600) as any) : (svg as any);

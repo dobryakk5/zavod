@@ -2512,6 +2512,221 @@ class MindNodePosition(models.Model):
         db_table = 'map"."mind_node_positions'
 
 
+# ============================================================================
+# Knowledge base schema (map.kb_* tables)
+# ============================================================================
+
+
+class KbFolder(models.Model):
+    workspace = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="workspace_id", related_name="kb_folders")
+    name = models.TextField()
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        db_column="parent_id",
+        related_name="subfolders",
+        null=True,
+        blank=True,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        db_column="created_by_id",
+        related_name="kb_folders_created",
+        null=True,
+        blank=True,
+    )
+    position = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."kb_folders'
+
+    def __str__(self):
+        return self.name
+
+
+class KbDocument(models.Model):
+    workspace = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="workspace_id", related_name="kb_documents")
+    folder = models.ForeignKey(
+        KbFolder,
+        on_delete=models.SET_NULL,
+        db_column="folder_id",
+        related_name="documents",
+        null=True,
+        blank=True,
+    )
+    parent_document = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        db_column="parent_document_id",
+        related_name="child_documents",
+        null=True,
+        blank=True,
+    )
+    title = models.TextField()
+    icon = models.TextField(blank=True, null=True)
+    cover_image = models.TextField(blank=True, null=True)
+    content = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        db_column="created_by_id",
+        related_name="kb_documents_created",
+        null=True,
+        blank=True,
+    )
+    last_edited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        db_column="last_edited_by_id",
+        related_name="kb_documents_edited",
+        null=True,
+        blank=True,
+    )
+    is_published = models.BooleanField(default=False)
+    is_archived = models.BooleanField(default=False)
+    is_template = models.BooleanField(default=False)
+    position = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    tags = models.ManyToManyField("KbTag", through="KbDocumentTag", related_name="documents")
+
+    class Meta:
+        managed = False
+        db_table = 'map"."kb_documents'
+
+    def __str__(self):
+        return self.title
+
+
+class KbDocumentVersion(models.Model):
+    document = models.ForeignKey(
+        KbDocument,
+        on_delete=models.CASCADE,
+        db_column="document_id",
+        related_name="versions",
+    )
+    title = models.TextField(blank=True, null=True)
+    content = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        db_column="created_by_id",
+        related_name="kb_document_versions_created",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    version_number = models.IntegerField(default=1)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."kb_document_versions'
+        unique_together = ("document", "version_number")
+
+
+class KbComment(models.Model):
+    document = models.ForeignKey(
+        KbDocument,
+        on_delete=models.CASCADE,
+        db_column="document_id",
+        related_name="comments",
+    )
+    parent_comment = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        db_column="parent_comment_id",
+        related_name="replies",
+        null=True,
+        blank=True,
+    )
+    content = models.TextField()
+    block_id = models.TextField(blank=True, null=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        db_column="created_by_id",
+        related_name="kb_comments_created",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_resolved = models.BooleanField(default=False)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."kb_comments'
+
+
+class KbTag(models.Model):
+    workspace = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="workspace_id", related_name="kb_tags")
+    name = models.TextField()
+    color = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."kb_tags'
+        unique_together = ("workspace", "name")
+
+    def __str__(self):
+        return self.name
+
+
+class KbDocumentTag(models.Model):
+    document = models.ForeignKey(
+        KbDocument,
+        on_delete=models.CASCADE,
+        db_column="document_id",
+        related_name="document_tags",
+    )
+    tag = models.ForeignKey(
+        KbTag,
+        on_delete=models.CASCADE,
+        db_column="tag_id",
+        related_name="document_tags",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."kb_document_tags'
+        unique_together = ("document", "tag")
+
+
+class KbDocumentShare(models.Model):
+    document = models.ForeignKey(
+        KbDocument,
+        on_delete=models.CASCADE,
+        db_column="document_id",
+        related_name="shares",
+    )
+    share_token = models.TextField(unique=True)
+    permission = models.TextField(default="view")
+    password = models.TextField(blank=True, null=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        db_column="created_by_id",
+        related_name="kb_shares_created",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+    visit_count = models.IntegerField(default=0)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."kb_shares'
+
+
 class Chain(models.Model):
     tenant = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="tenant_id", related_name="chains")
     name = models.CharField(max_length=255)
@@ -2550,6 +2765,7 @@ class ChainNode(models.Model):
 class ChainEdge(models.Model):
     chain = models.ForeignKey(Chain, on_delete=models.CASCADE, db_column="chain_id", related_name="edges")
     source_node = models.ForeignKey(ChainNode, on_delete=models.CASCADE, db_column="source_node_id", related_name="edges_from")
+    source_port_id = models.CharField(max_length=64, blank=True, null=True)
     target_node = models.ForeignKey(ChainNode, on_delete=models.CASCADE, db_column="target_node_id", related_name="edges_to")
     priority = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -1,8 +1,17 @@
 import { apiFetch } from '../api';
 
 export type ChainStatus = 'draft' | 'active' | 'paused' | 'archived';
-export type ChainNodeType = 'text' | 'photo' | 'buttons';
-export type ChainConditionType = 'button_press' | 'text_contains' | 'text_regex' | 'timeout' | 'any_reply';
+export type ChainNodeType = 'start' | 'text' | 'photo' | 'buttons' | 'router' | 'timer';
+export type ChainConditionType =
+  | 'button_press'
+  | 'text_contains'
+  | 'text_regex'
+  | 'timeout'
+  | 'any_reply'
+  | 'content_type'
+  | 'has_media'
+  | 'text_equals'
+  | 'has_entities';
 
 export type Chain = {
   id: number;
@@ -39,6 +48,7 @@ export type ChainEdge = {
   id: number;
   chain_id: number;
   source_node_id: number;
+  source_port_id?: string | null;
   target_node_id: number;
   priority: number;
   created_at: string;

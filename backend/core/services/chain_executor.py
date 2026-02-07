@@ -67,6 +67,34 @@ class ChainExecutor:
             logger.warning("Chain session %s has no current node", session.id)
             return {"session_id": session.id, "actions": [], "session_status": session.status}
 
+        current_node = ChainNode.objects.filter(id=session.current_node_id).first()
+        if current_node is None:
+            logger.warning("Chain node %s not found for session %s", session.current_node_id, session.id)
+            return {"session_id": session.id, "actions": [], "session_status": session.status}
+
+        if current_node.node_type == "timer":
+            return {"session_id": session.id, "actions": [], "session_status": session.status}
+
+        if current_node.node_type == "router":
+            matching_edge = self._select_router_edge(current_node, user_message, session.context or {})
+            if not matching_edge:
+                session.status = "completed"
+                session.completed_at = timezone.now()
+                session.save(update_fields=["status", "completed_at", "updated_at"])
+                return {"session_id": session.id, "actions": [], "session_status": "completed"}
+
+            context = dict(session.context or {})
+            context.setdefault("answers", {})
+            context["answers"][str(session.current_node_id)] = user_message
+            context["last_message_at"] = datetime.utcnow().isoformat()
+
+            session.context = context
+            session.last_activity_at = timezone.now()
+            session.save(update_fields=["context", "last_activity_at", "updated_at"])
+
+            actions = self._advance_to_node(session, matching_edge.target_node_id)
+            return {"session_id": session.id, "actions": actions, "session_status": "active"}
+
         edges = self._get_edges_with_conditions(session.current_node_id)
 
         matching_edge = None
@@ -124,7 +152,42 @@ class ChainExecutor:
         session.save(update_fields=["current_node_id", "last_activity_at", "updated_at"])
 
         actions: list[dict[str, Any]] = []
-        if node.node_type == "text":
+        if node.node_type == "timer":
+            payload = dict(node.payload or {})
+            raw_duration = payload.get("duration_seconds", 60)
+            try:
+                duration = max(1, int(raw_duration))
+            except (TypeError, ValueError):
+                duration = 60
+
+            edges = self._get_edges_with_conditions(node_id)
+            if not edges:
+                logger.warning("Timer node %s has no outgoing edges", node_id)
+                return actions
+
+            first_edge = edges[0]
+            actions.append({
+                "action_type": "schedule_timeout",
+                "payload": {
+                    "session_id": session.id,
+                    "edge_id": first_edge["id"],
+                    "timeout_seconds": duration,
+                },
+                "delay_seconds": 0,
+            })
+            return actions
+
+        if node.node_type == "start":
+            payload = dict(node.payload or {})
+            payload["node_id"] = node.id
+            buttons = payload.get("buttons") or []
+            has_buttons = len(buttons) > 0
+            actions.append({
+                "action_type": "send_buttons" if has_buttons else "send_text",
+                "payload": payload,
+                "delay_seconds": node.delay_seconds,
+            })
+        elif node.node_type == "text":
             payload = dict(node.payload or {})
             payload["node_id"] = node.id
             actions.append({
@@ -190,9 +253,48 @@ class ChainExecutor:
                 "source_node_id": edge.source_node_id,
                 "target_node_id": edge.target_node_id,
                 "priority": edge.priority,
+                "source_port_id": edge.source_port_id,
                 "conditions": conditions_by_edge.get(edge.id, []),
             })
         return edge_payload
+
+    def _select_router_edge(
+        self,
+        node: ChainNode,
+        user_message: dict[str, Any],
+        session_context: dict[str, Any],
+    ) -> ChainEdge | None:
+        conditions = node.payload.get("conditions") or []
+        if not conditions:
+            return None
+
+        ordered = sorted(
+            enumerate(conditions),
+            key=lambda item: int(item[1].get("port_index") if item[1].get("port_index") is not None else item[0]),
+        )
+        for _, cond in ordered:
+            cond_type = cond.get("condition_type")
+            params = cond.get("params", {})
+            if cond_type == "fallback":
+                matched = True
+            else:
+                matched = _evaluate_single_condition(cond_type or "", params, user_message, session_context)
+            if not matched:
+                continue
+
+            cond_id = cond.get("id")
+            if not cond_id:
+                continue
+            edge = (
+                ChainEdge.objects
+                .filter(source_node_id=node.id, source_port_id=cond_id)
+                .order_by("priority", "id")
+                .first()
+            )
+            if edge is not None:
+                return edge
+
+        return None
 
 
 def get_or_create_chain_for_tenant(tenant_id: int):
@@ -232,6 +334,14 @@ def _evaluate_single_condition(
         return _eval_text_contains(params, user_message)
     if cond_type == "text_regex":
         return _eval_text_regex(params, user_message)
+    if cond_type == "content_type":
+        return _eval_content_type(params, user_message)
+    if cond_type == "has_media":
+        return _eval_has_media(user_message)
+    if cond_type == "text_equals":
+        return _eval_text_equals(params, user_message)
+    if cond_type == "has_entities":
+        return _eval_has_entities(params, user_message)
     if cond_type == "timeout":
         return False
     if cond_type == "any_reply":
@@ -276,5 +386,67 @@ def _eval_text_regex(params: dict, user_message: dict) -> bool:
         return False
 
 
+def _eval_content_type(params: dict, user_message: dict) -> bool:
+    message_type = params.get("message_type") or ""
+    if not message_type:
+        return False
+
+    declared_type = user_message.get("message_type")
+    if declared_type:
+        return declared_type == message_type
+
+    if message_type == "text":
+        return bool(user_message.get("text"))
+    if message_type == "photo":
+        return bool(user_message.get("photo"))
+    if message_type == "video":
+        return bool(user_message.get("video"))
+    if message_type == "audio":
+        return bool(user_message.get("audio"))
+    if message_type == "voice":
+        return bool(user_message.get("voice"))
+    if message_type == "document":
+        return bool(user_message.get("document"))
+    if message_type == "sticker":
+        return bool(user_message.get("sticker"))
+    if message_type == "location":
+        return bool(user_message.get("location"))
+    if message_type == "contact":
+        return bool(user_message.get("contact"))
+    return False
+
+
+def _eval_has_media(user_message: dict) -> bool:
+    return any(
+        user_message.get(key)
+        for key in ("photo", "video", "audio", "voice", "document")
+    )
+
+
+def _eval_text_equals(params: dict, user_message: dict) -> bool:
+    exact_text = params.get("exact_text", "")
+    user_text = user_message.get("text", "")
+    return user_text == exact_text
+
+
+def _eval_has_entities(params: dict, user_message: dict) -> bool:
+    expected = params.get("entity_type")
+    if not expected:
+        return False
+    entities = user_message.get("entities") or []
+    return expected in entities
+
+
 def _eval_any_reply(user_message: dict) -> bool:
-    return bool(user_message.get("text") or user_message.get("button") or user_message.get("photo"))
+    return bool(
+        user_message.get("text")
+        or user_message.get("button")
+        or user_message.get("photo")
+        or user_message.get("video")
+        or user_message.get("audio")
+        or user_message.get("voice")
+        or user_message.get("document")
+        or user_message.get("sticker")
+        or user_message.get("location")
+        or user_message.get("contact")
+    )

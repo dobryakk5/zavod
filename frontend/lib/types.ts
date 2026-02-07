@@ -354,6 +354,111 @@ export interface ClientProduct {
   updated_at?: string;
 }
 
+// ============================================================================
+// Knowledge base
+// ============================================================================
+
+export interface KbUser {
+  id: number;
+  username: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+}
+
+export interface KbFolder {
+  id: number;
+  name: string;
+  workspace: number;
+  parent?: number | null;
+  created_by?: KbUser | null;
+  created_at: string;
+  updated_at: string;
+  position: number;
+  documents_count?: number;
+  subfolders_count?: number;
+  children?: KbFolder[];
+}
+
+export interface KbTag {
+  id: number;
+  name: string;
+  color?: string | null;
+  workspace: number;
+  created_at: string;
+}
+
+export interface KbDocumentList {
+  id: number;
+  title: string;
+  icon?: string | null;
+  cover_image?: string | null;
+  workspace: number;
+  folder?: number | null;
+  parent_document?: number | null;
+  created_by?: KbUser | null;
+  last_edited_by?: KbUser | null;
+  created_at: string;
+  updated_at: string;
+  is_published: boolean;
+  is_archived: boolean;
+  is_template: boolean;
+  position: number;
+  tags?: KbTag[];
+  child_count?: number;
+}
+
+export interface KbDocumentDetail extends KbDocumentList {
+  content: Record<string, unknown> | null;
+  child_documents?: KbDocumentList[];
+}
+
+export interface KbDocumentVersion {
+  id: number;
+  document: number;
+  content: Record<string, unknown> | null;
+  title?: string | null;
+  created_by?: KbUser | null;
+  created_at: string;
+  version_number: number;
+}
+
+export interface KbComment {
+  id: number;
+  document: number;
+  parent_comment?: number | null;
+  content: string;
+  block_id?: string | null;
+  created_by?: KbUser | null;
+  created_at: string;
+  updated_at: string;
+  is_resolved: boolean;
+  replies?: KbComment[];
+  replies_count?: number;
+}
+
+export interface KbDocumentShare {
+  id: number;
+  document: number;
+  share_token: string;
+  permission: 'view' | 'comment' | 'edit';
+  password?: string | null;
+  expires_at?: string | null;
+  created_by?: KbUser | null;
+  created_at: string;
+  is_active: boolean;
+  visit_count: number;
+  share_url: string;
+  document_detail?: KbDocumentDetail;
+}
+
+export interface KbLinkPreview {
+  title: string;
+  description: string;
+  favicon: string;
+  url: string;
+}
+
 export interface ProductType {
   id: number;
   name: string;
