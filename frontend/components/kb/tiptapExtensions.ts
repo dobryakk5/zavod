@@ -35,8 +35,8 @@ export const createKbExtensions = ({
       },
       codeBlock: false,
       blockquote: false,
-      bulletList: true,
-      orderedList: true,
+      bulletList: {},
+      orderedList: {},
     }),
     Link.configure({
       openOnClick: false,
