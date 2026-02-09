@@ -21,6 +21,28 @@ def build_start_payload() -> dict:
 def get_or_create_chain(client) -> Chain:
     chain = Chain.objects.filter(tenant=client).first()
     if chain:
+        start_node = None
+        if chain.start_node_id:
+            start_node = ChainNode.objects.filter(chain=chain, id=chain.start_node_id).first()
+        if not start_node:
+            start_node = (
+                ChainNode.objects
+                .filter(chain=chain, node_type="start")
+                .order_by("created_at", "id")
+                .first()
+            )
+        if not start_node:
+            start_node = ChainNode.objects.create(
+                chain=chain,
+                node_type="start",
+                payload=build_start_payload(),
+                delay_seconds=0,
+                pos_x=0,
+                pos_y=0,
+            )
+        if chain.start_node_id != start_node.id:
+            chain.start_node_id = start_node.id
+            chain.save(update_fields=["start_node_id"])
         return chain
 
     with transaction.atomic():

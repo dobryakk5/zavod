@@ -61,7 +61,8 @@ export function NodeCard({
     willChange: 'opacity, transform',
   };
 
-  const conditionSide = 'right'; // Всегда выдвигать вправо
+  // Блоки всегда выходят вправо
+  const conditionSide = 'right';
 
   // Специальная карточка START
   if (isStartNode) {
@@ -374,22 +375,22 @@ function ConditionPort({ condition, accent, border, isHovered, side, onPortPoint
     switch(side) {
       case 'right':
         return {
-          marginRight: `-${extrusion}px`,
-          paddingRight: `${extrusion + 12}px`, // 12px - базовый padding
+          marginRight: `-${extrusion}px`,  // Выдвигаем вправо наружу
+          paddingRight: `${extrusion + 12}px`, // Компенсируем padding
         };
       case 'left':
         return {
-          marginLeft: `-${extrusion}px`,
+          marginLeft: `-${extrusion}px`,   // Выдвигаем влево наружу
           paddingLeft: `${extrusion + 12}px`,
         };
       case 'top':
         return {
-          marginTop: `-${extrusion}px`,
-          paddingTop: `${extrusion + 8}px`, // 8px - базовый padding
+          marginTop: `-${extrusion}px`,    // Выдвигаем вверх наружу
+          paddingTop: `${extrusion + 8}px`,
         };
       case 'bottom':
         return {
-          marginBottom: `-${extrusion}px`,
+          marginBottom: `-${extrusion}px`, // Выдвигаем вниз наружу
           paddingBottom: `${extrusion + 8}px`,
         };
       default:

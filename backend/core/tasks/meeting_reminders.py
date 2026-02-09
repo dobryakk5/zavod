@@ -75,7 +75,7 @@ def _build_reminder_text(row: dict, reminder_minutes: int) -> str:
 
     lines = [
         f"⏰ Напоминание: встреча через {reminder_label}.",
-        f"📝 {title}",
+        f"📌 {title}",
         f"🗓 {time_range}",
     ]
     if event_type:
@@ -137,9 +137,11 @@ def send_meeting_reminders() -> int:
         min_created_lead_hours = config.get("min_created_lead_hours")
         window_start_offset = minutes - window_minutes
         window_end_offset = minutes + window_minutes
-        now_utc_naive = timezone.now().astimezone(UTC_TZ).replace(tzinfo=None)
-        window_start = now_utc_naive + timedelta(minutes=window_start_offset)
-        window_end = now_utc_naive + timedelta(minutes=window_end_offset)
+        
+        # Вычисляем временное окно в UTC (PostgreSQL теперь работает в UTC)
+        now_utc = timezone.now().astimezone(UTC_TZ)
+        window_start = now_utc + timedelta(minutes=window_start_offset)
+        window_end = now_utc + timedelta(minutes=window_end_offset)
 
         with connection.cursor() as cursor:
             cursor.execute(
