@@ -96,6 +96,9 @@ from .scheduling import (
 from .meeting_reminders import (
     send_meeting_reminders,
 )
+from .payment_reminders import (
+    send_payment_reminders,
+)
 from .chains import (
     chains_send_delayed_message,
     chains_check_timeout,
@@ -164,6 +167,7 @@ __all__ = [
 
     # CRM reminders (1)
     'send_meeting_reminders',
+    'send_payment_reminders',
 
     # Chains (2)
     'chains_send_delayed_message',

@@ -7,7 +7,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
@@ -120,7 +120,16 @@ class KbDocumentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
-        qs = KbDocument.objects.filter(workspace=client).select_related("folder", "created_by", "last_edited_by").prefetch_related("tags")
+        qs = (
+            KbDocument.objects.filter(workspace=client)
+            .select_related("folder", "created_by", "last_edited_by")
+            .prefetch_related("tags")
+            .annotate(
+                has_children=Exists(
+                    KbDocument.objects.filter(parent_document_id=OuterRef("pk"))
+                )
+            )
+        )
 
         folder_id = self.request.query_params.get("folder")
         parent_id = self.request.query_params.get("parent")

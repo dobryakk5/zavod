@@ -15,9 +15,10 @@ celery -A config worker -l info -Q media --concurrency=1
 # Frontend DevOps Guide
 
 Path: `/Users/pavellebedev/Desktop/proj/zavod/frontend`
+npm install 
 
 ## Stack Overview
-- [Next.js 15.5.9](https://nextjs.org/) (App Router) with React 19 RC
+- [Next.js 15.5.12] npm install next@15.5.12
 - TypeScript + Tailwind CSS + Radix UI components
 - Node package manager: npm (lockfile: `package-lock.json`)
 

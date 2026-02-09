@@ -1,0 +1,153 @@
+/* styles/tiptap-editor.css */
+/* Стили для Tiptap редактора */
+
+.tiptap-editor {
+  @apply min-h-screen;
+}
+
+.tiptap-editor .ProseMirror {
+  @apply outline-none;
+}
+
+/* Placeholder */
+.tiptap-editor .ProseMirror p.is-editor-empty:first-child::before {
+  @apply text-gray-400;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+/* Стили для page-link */
+.tiptap-editor span[data-type="page-link"] {
+  @apply inline-flex items-center gap-1 px-2 py-1 bg-blue-50 border border-blue-200 rounded cursor-pointer transition-colors;
+}
+
+.tiptap-editor span[data-type="page-link"]:hover {
+  @apply bg-blue-100;
+}
+
+/* Стили для выделения */
+.tiptap-editor .ProseMirror-selectednode {
+  @apply outline outline-2 outline-blue-500 outline-offset-2;
+}
+
+/* Стили для таблиц */
+.tiptap-editor table {
+  @apply border-collapse w-full my-4;
+}
+
+.tiptap-editor table td,
+.tiptap-editor table th {
+  @apply border border-gray-300 px-3 py-2 min-w-[100px];
+}
+
+.tiptap-editor table th {
+  @apply bg-gray-50 font-semibold;
+}
+
+/* Стили для task list */
+.tiptap-editor ul[data-type="taskList"] {
+  @apply list-none pl-0;
+}
+
+.tiptap-editor ul[data-type="taskList"] li {
+  @apply flex items-start gap-2;
+}
+
+.tiptap-editor ul[data-type="taskList"] li > label {
+  @apply flex items-center mt-1;
+}
+
+.tiptap-editor ul[data-type="taskList"] li > div {
+  @apply flex-1;
+}
+
+/* Стили для code block */
+.tiptap-editor pre {
+  @apply bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto;
+}
+
+.tiptap-editor pre code {
+  @apply bg-transparent text-sm;
+}
+
+/* Стили для blockquote */
+.tiptap-editor blockquote {
+  @apply border-l-4 border-gray-300 pl-4 italic text-gray-700;
+}
+
+/* Стили для highlight */
+.tiptap-editor mark {
+  @apply bg-yellow-200 px-1 rounded;
+}
+
+/* Стили для ссылок */
+.tiptap-editor a {
+  @apply text-blue-600 underline cursor-pointer hover:text-blue-800;
+}
+
+/* Prose стили */
+.prose {
+  @apply text-gray-900;
+}
+
+.prose h1 {
+  @apply text-4xl font-bold mb-4 mt-8;
+}
+
+.prose h2 {
+  @apply text-3xl font-bold mb-3 mt-6;
+}
+
+.prose h3 {
+  @apply text-2xl font-bold mb-2 mt-4;
+}
+
+.prose p {
+  @apply mb-4 leading-7;
+}
+
+.prose ul,
+.prose ol {
+  @apply mb-4 pl-6;
+}
+
+.prose ul {
+  @apply list-disc;
+}
+
+.prose ol {
+  @apply list-decimal;
+}
+
+.prose li {
+  @apply mb-1;
+}
+
+.prose img {
+  @apply rounded-lg my-4;
+}
+
+/* Bubble menu */
+.tippy-box[data-theme~='light'] {
+  @apply bg-white border border-gray-200 rounded-lg shadow-lg;
+}
+
+.tippy-box[data-theme~='light'] .tippy-content {
+  @apply p-0;
+}
+
+/* Animation для page link creation */
+@keyframes pageCreated {
+  0% {
+    @apply opacity-0 scale-95;
+  }
+  100% {
+    @apply opacity-100 scale-100;
+  }
+}
+
+.page-link-created {
+  animation: pageCreated 0.2s ease-out;
+}

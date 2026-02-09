@@ -16,6 +16,7 @@ import Highlight from '@tiptap/extension-highlight';
 import Blockquote from '@tiptap/extension-blockquote';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { common, createLowlight } from 'lowlight';
+import PageLink from './extensions/page-link';
 
 type CreateKbExtensionsOptions = {
   placeholder?: string;
@@ -38,6 +39,7 @@ export const createKbExtensions = ({
       bulletList: {},
       orderedList: {},
     }),
+    PageLink,
     Link.configure({
       openOnClick: false,
       autolink: false,

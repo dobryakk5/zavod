@@ -87,6 +87,20 @@ export default function DocumentPage() {
     }
   };
 
+  const handlePageCreated = (newPage: KbDocumentDetail) => {
+    setDocument((prev) => {
+      if (!prev) return prev;
+      const existing = prev.child_documents ?? [];
+      if (existing.some((child) => child.id === newPage.id)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        child_documents: [newPage, ...existing],
+      };
+    });
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -221,6 +235,7 @@ export default function DocumentPage() {
             initialContent={document.content}
             autoSave
             autoSaveInterval={3000}
+            onPageCreated={handlePageCreated}
           />
         </div>
 
@@ -229,6 +244,34 @@ export default function DocumentPage() {
             <CommentsPanel documentId={documentId} />
           </div>
         )}
+      </div>
+
+      <div className="max-w-6xl mx-auto px-6 pb-10">
+        <div className="rounded-lg border bg-white">
+          <div className="border-b px-4 py-3 text-sm text-gray-500">Вложенные страницы</div>
+          <div className="divide-y">
+            {(document.child_documents ?? []).map((child) => (
+              <button
+                key={child.id}
+                onClick={() => router.push(`/kb/${child.id}`)}
+                className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"
+              >
+                <div className="text-lg">{child.icon || '📄'}</div>
+                <div>
+                  <div className="font-medium text-gray-900">{child.title}</div>
+                  <div className="text-xs text-gray-500">
+                    Обновлен: {new Date(child.updated_at).toLocaleDateString('ru-RU')}
+                  </div>
+                </div>
+              </button>
+            ))}
+            {(document.child_documents ?? []).length === 0 && (
+              <div className="px-4 py-6 text-sm text-gray-500">
+                Пока нет вложенных страниц. Выделите текст в документе и нажмите «Создать страницу».
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

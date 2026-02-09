@@ -139,7 +139,7 @@ export default function ClientsPage() {
             <Calendar className="h-4 w-4 text-muted-foreground" />
             {displayStats.nextEvents.length > 0 && (
               <div>
-                Ближайша встреча:{' '}
+                Ближайшая встреча:{' '}
                 {formatEventTime(displayStats.nextEvents[0].start_time, tenantTimezone)} ·{' '}
                 {displayStats.nextEvents[0].title} ·{' '}
                 <Link
@@ -151,7 +151,7 @@ export default function ClientsPage() {
               </div>
             )}
             {displayStats.nextEvents.length === 0 && (
-              <div>Ближайша встреча: Нет запланированных встреч</div>
+              <div>Ближайшая встреча: Нет запланированных встреч</div>
             )}
           </div>
         </div>

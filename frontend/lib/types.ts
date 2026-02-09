@@ -406,6 +406,7 @@ export interface KbDocumentList {
   position: number;
   tags?: KbTag[];
   child_count?: number;
+  has_children?: boolean;
 }
 
 export interface KbDocumentDetail extends KbDocumentList {

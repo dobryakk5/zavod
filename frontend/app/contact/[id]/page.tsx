@@ -547,7 +547,14 @@ export default function ContactDetailPage() {
     }
     const amountValue = Number(newPaymentAmount);
     const amount = Number.isFinite(amountValue) ? amountValue : 0;
-    const plannedAtPayload = newPaymentPlannedAt || null;
+    const plannedAtUtc = newPaymentPlannedAt
+      ? localDateTimeStringToUtcISOString(newPaymentPlannedAt, tenantTimezone)
+      : '';
+    if (newPaymentPlannedAt && !plannedAtUtc) {
+      toast.error('Некорректная дата планового платежа');
+      return;
+    }
+    const plannedAtPayload = plannedAtUtc || null;
     const paidAtPayload = newPaymentPaid
       ? plannedAtPayload || new Date().toISOString()
       : null;

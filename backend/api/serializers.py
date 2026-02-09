@@ -1465,7 +1465,7 @@ class KbDocumentListSerializer(serializers.ModelSerializer):
     created_by = KbUserSerializer(read_only=True)
     last_edited_by = KbUserSerializer(read_only=True)
     tags = KbTagSerializer(many=True, read_only=True)
-    child_count = serializers.SerializerMethodField()
+    has_children = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = KbDocument
@@ -1486,12 +1486,9 @@ class KbDocumentListSerializer(serializers.ModelSerializer):
             "is_template",
             "position",
             "tags",
-            "child_count",
+            "has_children",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "workspace"]
-
-    def get_child_count(self, obj):
-        return obj.child_documents.count()
 
 
 class KbDocumentDetailSerializer(serializers.ModelSerializer):

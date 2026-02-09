@@ -76,6 +76,12 @@ def _coerce_datetime_utc(value: Any, field_name: str) -> datetime:
     return _parse_datetime(value, field_name).replace(tzinfo=None)
 
 
+def _coerce_datetime_utc_optional(value: Any, field_name: str) -> datetime | None:
+    if value is None or value == "":
+        return None
+    return _coerce_datetime_utc(value, field_name)
+
+
 def _serialize_datetime_utc(value: Any) -> Any:
     if value is None:
         return None
@@ -220,10 +226,10 @@ def _serialize_payment_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "payment_method": row.get("payment_method") or "",
         "transaction_id": row.get("transaction_id") or "",
         "description": row.get("description") or "",
-        "planned_at": row.get("planned_at"),
-        "paid_at": row.get("paid_at"),
-        "created_at": row.get("created_at"),
-        "updated_at": row.get("updated_at"),
+        "planned_at": _serialize_datetime_utc(row.get("planned_at")),
+        "paid_at": _serialize_datetime_utc(row.get("paid_at")),
+        "created_at": _serialize_datetime_utc(row.get("created_at")),
+        "updated_at": _serialize_datetime_utc(row.get("updated_at")),
     }
 
 
@@ -1509,8 +1515,8 @@ class PaymentsListView(APIView):
         payment_method = request.data.get("payment_method", "")
         transaction_id = request.data.get("transaction_id", "")
         description = request.data.get("description", "")
-        planned_at = request.data.get("planned_at")
-        paid_at = request.data.get("paid_at")
+        planned_at = _coerce_datetime_utc_optional(request.data.get("planned_at"), "planned_at")
+        paid_at = _coerce_datetime_utc_optional(request.data.get("paid_at"), "paid_at")
 
         schema = _map_schema()
         with connection.cursor() as cursor:
@@ -1599,11 +1605,11 @@ class PaymentDetailView(APIView):
 
         if "planned_at" in request.data:
             updates.append("planned_at = %s")
-            params.append(request.data["planned_at"])
+            params.append(_coerce_datetime_utc_optional(request.data["planned_at"], "planned_at"))
 
         if "paid_at" in request.data:
             updates.append("paid_at = %s")
-            params.append(request.data["paid_at"])
+            params.append(_coerce_datetime_utc_optional(request.data["paid_at"], "paid_at"))
 
         if not updates:
             return Response({"error": "Нет данных для обновления."}, status=status.HTTP_400_BAD_REQUEST)

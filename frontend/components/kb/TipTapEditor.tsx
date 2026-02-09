@@ -1,11 +1,11 @@
 'use client';
 
-import { useEditor, EditorContent } from '@tiptap/react';
-import { Bold, ChevronDown, ImagePlus, Italic, Link2, List, ListOrdered, ListTodo, Quote, Table as TableIcon, Underline as UnderlineIcon } from 'lucide-react';
+import { BubbleMenu, useEditor, EditorContent } from '@tiptap/react';
+import { Bold, ChevronDown, FilePlus, ImagePlus, Italic, Link2, List, ListOrdered, ListTodo, Quote, Table as TableIcon, Underline as UnderlineIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import { kbDocumentsApi, kbLinkPreviewApi } from '@/lib/api/knowledgeBase';
-import type { KbLinkPreview } from '@/lib/types';
+import type { KbDocumentDetail, KbLinkPreview } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { createKbExtensions } from '@/components/kb/tiptapExtensions';
@@ -29,6 +29,7 @@ interface TipTapEditorProps {
   autoSaveInterval?: number;
   onSave?: (content: Record<string, unknown>) => Promise<void>;
   showToolbar?: boolean;
+  onPageCreated?: (document: KbDocumentDetail) => void;
 }
 
 const normalizeUrl = (value: string): string => {
@@ -51,11 +52,14 @@ export default function TipTapEditor({
   autoSaveInterval = 3000,
   onSave,
   showToolbar = true,
+  onPageCreated,
 }: TipTapEditorProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [currentBlockLabel, setCurrentBlockLabel] = useState<'Text' | 'H1' | 'H2' | 'H3'>('Text');
+  const [isCreatingPage, setIsCreatingPage] = useState(false);
+  const [createPageError, setCreatePageError] = useState<string | null>(null);
 
   const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
@@ -224,6 +228,54 @@ export default function TipTapEditor({
     }
   }, [editor]);
 
+  const createPageFromSelection = useCallback(async () => {
+    if (!editor || !documentId) return;
+
+    const { from, to, empty } = editor.state.selection;
+    if (empty) {
+      setCreatePageError('Выделите текст для новой страницы');
+      return;
+    }
+
+    const selectedText = editor.state.doc.textBetween(from, to, ' ').trim();
+    if (!selectedText) {
+      setCreatePageError('Выделите текст для новой страницы');
+      return;
+    }
+
+    const title = selectedText.slice(0, 120);
+    setIsCreatingPage(true);
+    setCreatePageError(null);
+
+    try {
+      const created = await kbDocumentsApi.create({
+        title,
+        content: { type: 'doc', content: [] },
+        parent_document: documentId,
+      });
+
+      editor
+        .chain()
+        .focus()
+        .insertContent({
+          type: 'pageLink',
+          attrs: {
+            id: created.id,
+            title: created.title,
+            icon: created.icon || '📄',
+          },
+        })
+        .run();
+
+      onPageCreated?.(created);
+    } catch (error: any) {
+      console.error('Error creating page from selection:', error);
+      setCreatePageError(error?.message || 'Не удалось создать страницу');
+    } finally {
+      setIsCreatingPage(false);
+    }
+  }, [editor, documentId, onPageCreated]);
+
   const insertDefaultTable = useCallback(() => {
     if (!editor) return;
     editor
@@ -259,6 +311,7 @@ export default function TipTapEditor({
   useEffect(() => {
     if (!editor) return;
     const syncBlockLabel = () => {
+      setCreatePageError(null);
       if (editor.isActive('heading', { level: 1 })) {
         setCurrentBlockLabel('H1');
         return;
@@ -461,11 +514,63 @@ export default function TipTapEditor({
           </div>
         )}
 
+        {editable && (
+          <BubbleMenu
+            editor={editor}
+            tippyOptions={{ duration: 150 }}
+            shouldShow={({ editor: menuEditor }) => menuEditor.isEditable && !menuEditor.state.selection.empty}
+          >
+            <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 py-1 shadow-lg">
+              <button
+                type="button"
+                onClick={() => editor.chain().focus().toggleBold().run()}
+                className={toolbarButtonClass(editor.isActive('bold'))}
+                title="Жирный"
+              >
+                <Bold className="w-4 h-4" strokeWidth={2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => editor.chain().focus().toggleItalic().run()}
+                className={toolbarButtonClass(editor.isActive('italic'))}
+                title="Курсив"
+              >
+                <Italic className="w-4 h-4" strokeWidth={1.5} />
+              </button>
+              <button
+                type="button"
+                onClick={() => editor.chain().focus().toggleUnderline().run()}
+                className={toolbarButtonClass(editor.isActive('underline'))}
+                title="Подчеркнутый"
+              >
+                <UnderlineIcon className="w-4 h-4" strokeWidth={1.5} />
+              </button>
+
+              <div className="h-5 w-px bg-gray-200 mx-1" />
+
+              <button
+                type="button"
+                onClick={createPageFromSelection}
+                disabled={isCreatingPage || !documentId}
+                className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                title={documentId ? 'Создать вложенную страницу' : 'Сохраните документ, чтобы создать вложенную страницу'}
+              >
+                <FilePlus className="h-4 w-4" />
+                Создать страницу
+              </button>
+            </div>
+          </BubbleMenu>
+        )}
+
+        {createPageError && (
+          <div className="mt-2 text-xs text-red-600">{createPageError}</div>
+        )}
+
         <EditorContent editor={editor} />
       </div>
 
       <Dialog open={isLinkModalOpen} onOpenChange={(open) => (open ? setIsLinkModalOpen(true) : closeLinkModal())}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="sm:max-w-xl bg-white text-gray-900 dark:bg-white dark:text-gray-900 dark:border-gray-200 [&>button]:text-gray-900 dark:[&>button]:text-gray-900 dark:[&>button]:data-[state=open]:bg-gray-100 dark:[&>button]:data-[state=open]:text-gray-600">
           <DialogHeader>
             <DialogTitle>Вставить ссылку</DialogTitle>
             <DialogDescription>

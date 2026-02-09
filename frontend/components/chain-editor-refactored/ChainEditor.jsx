@@ -30,11 +30,14 @@ export default function ChainEditor({ className = '' } = {}) {
   const [draggingLink, setDraggingLink] = useState(null);
   const [hoveredNodeId, setHoveredNodeId] = useState(null);
   const [addMenu, setAddMenu] = useState(null);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const panRef = useRef({ startMouse: null, startPan: null });
   const dragging = useRef(null);
   const canvasRef = useRef(null);
+  const resetButtonRef = useRef(null);
+  const resetPopoverRef = useRef(null);
   const positionQueueRef = useRef(new Map());
   const flushTimerRef = useRef(null);
   const deleteTimersRef = useRef(new Map());
@@ -109,6 +112,24 @@ export default function ChainEditor({ className = '' } = {}) {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!resetConfirmOpen) return;
+    const onPointerDown = (e) => {
+      if (resetPopoverRef.current?.contains(e.target)) return;
+      if (resetButtonRef.current?.contains(e.target)) return;
+      setResetConfirmOpen(false);
+    };
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setResetConfirmOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [resetConfirmOpen]);
 
   const createNodeAt = useCallback((x, y, kind = 'message') => {
     let node_type = 'text';
@@ -724,6 +745,44 @@ export default function ChainEditor({ className = '' } = {}) {
     await flushPositions();
   };
 
+  const handleResetChain = useCallback(async () => {
+    if (saving) return;
+    setResetConfirmOpen(false);
+    setContextMenu(null);
+    setAddMenu(null);
+
+    const current = stateRef.current;
+    const edgesToDelete = current.edges.filter((edge) => !isTempId(edge.id));
+    const nodesToDelete = current.nodes.filter((node) => node.node_type !== 'start' && !isTempId(node.id));
+
+    if (edgesToDelete.length === 0 && nodesToDelete.length === 0) {
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      if (edgesToDelete.length) {
+        await Promise.all(edgesToDelete.map((edge) => chainsApi.deleteEdge(edge.id)));
+      }
+      if (nodesToDelete.length) {
+        await Promise.all(nodesToDelete.map((node) => chainsApi.deleteNode(node.id)));
+      }
+      const graph = await chainsApi.getGraph();
+      dispatch({ type: 'LOAD', payload: graph });
+    } catch (err) {
+      setError('Не удалось очистить цепочку');
+      try {
+        const graph = await chainsApi.getGraph();
+        dispatch({ type: 'LOAD', payload: graph });
+      } catch {
+        // ignore reload failure
+      }
+    } finally {
+      setSaving(false);
+    }
+  }, [saving]);
+
   if (loading) return <div className="min-h-[400px] flex items-center justify-center text-slate-600">Загрузка...</div>;
   if (!state.chain) return <div className="min-h-[400px] flex items-center justify-center text-slate-600">Цепочка недоступна</div>;
 
@@ -866,6 +925,41 @@ export default function ChainEditor({ className = '' } = {}) {
           <span>Клик на ребро — условия</span>
           <span>{state.dirty && !saving && '● Несохранённые изменения'}</span>
           {saving && <span>💾 Сохранение...</span>}
+          <div className="ml-auto relative flex items-center">
+            <button
+              ref={resetButtonRef}
+              type="button"
+              onClick={() => setResetConfirmOpen(true)}
+              className={`text-xs text-red-500 hover:text-red-600 ${saving ? 'opacity-60 cursor-not-allowed' : ''}`}
+              disabled={saving}
+            >
+              Сброс
+            </button>
+            {resetConfirmOpen && (
+              <div
+                ref={resetPopoverRef}
+                className="absolute bottom-full right-0 mb-2 z-30 bg-white border border-slate-200 rounded-lg shadow-xl px-3 py-2 text-xs text-slate-700"
+              >
+                <div className="mb-2 whitespace-nowrap">Очистить цепочку сообщений?</div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleResetChain}
+                    className="px-2 py-1 rounded border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                  >
+                    Да
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResetConfirmOpen(false)}
+                    className="px-2 py-1 rounded border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                  >
+                    Нет
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

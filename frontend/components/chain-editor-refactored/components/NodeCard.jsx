@@ -61,18 +61,18 @@ export function NodeCard({
     willChange: 'opacity, transform',
   };
 
+  const conditionSide = 'right'; // Всегда выдвигать вправо
+
   // Специальная карточка START
   if (isStartNode) {
-    // Новая структура: buttons - массив объектов {text, color}
     const buttons = Array.isArray(node.payload?.buttons) 
       ? node.payload.buttons.map(btn => 
           typeof btn === 'string' 
-            ? { text: btn, color: 'green' } // обратная совместимость
+            ? { text: btn, color: 'green' }
             : btn
         )
       : [];
     
-    // Цвета для кнопок
     const buttonStyles = {
       green: { border: 'border-emerald-500', text: 'text-emerald-700' },
       red: { border: 'border-red-500', text: 'text-red-700' },
@@ -190,6 +190,7 @@ export function NodeCard({
       .map((c, i) => ({ cond: c, order: c.port_index ?? i }))
       .sort((a, b) => a.order - b.order)
       .map((item) => item.cond);
+    
     return (
       <div
         onPointerDown={onPointerDown}
@@ -197,11 +198,10 @@ export function NodeCard({
         onContextMenu={onContextMenu}
         onMouseEnter={onMouseEnter}
         onMouseLeave={(e) => {
-          // Проверяем, что мышь действительно покинула карточку, а не просто перешла на дочерний элемент
           const rect = e.currentTarget.getBoundingClientRect();
           const x = e.clientX;
           const y = e.clientY;
-          const padding = 30; // Добавляем padding для портов
+          const padding = 30;
           if (
             x < rect.left - padding ||
             x > rect.right + padding ||
@@ -235,6 +235,7 @@ export function NodeCard({
                 accent={c.accent}
                 border={c.border}
                 isHovered={showControls}
+                side={conditionSide}
                 onPortPointerDown={(e) => onConditionPortPointerDown?.(node.id, cond.id, e)}
                 onEdit={() => onConditionEdit?.(node.id, cond)}
                 onDelete={() => onConditionDelete?.(node.id, cond.id)}
@@ -275,11 +276,10 @@ export function NodeCard({
       onContextMenu={onContextMenu}
       onMouseEnter={onMouseEnter}
       onMouseLeave={(e) => {
-        // Проверяем, что мышь действительно покинула карточку, а не просто перешла на дочерний элемент
         const rect = e.currentTarget.getBoundingClientRect();
         const x = e.clientX;
         const y = e.clientY;
-        const padding = 30; // Добавляем padding для портов и кнопок
+        const padding = 30;
         if (
           x < rect.left - padding ||
           x > rect.right + padding ||
@@ -307,13 +307,6 @@ export function NodeCard({
       <div className="p-3 h-full flex flex-col justify-center">
         {isTimer ? (
           <div className="text-center flex flex-col items-center justify-center">
-            <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-              <svg width="20" height="20" viewBox="0 0 10 10" aria-hidden="true">
-                <circle cx="5" cy="5" r="4" fill="#fff" stroke={c.accent} strokeWidth="1" />
-                <line x1="5" y1="5" x2="5" y2="2.6" stroke={c.accent} strokeWidth="1" strokeLinecap="round" />
-                <line x1="5" y1="5" x2="7" y2="5.8" stroke={c.accent} strokeWidth="1" strokeLinecap="round" />
-              </svg>
-            </div>
             <div className="text-2xl font-bold mb-0.5" style={{ color: c.accent }}>
               {formatDuration(node.payload?.duration_seconds || 60)}
             </div>
@@ -370,12 +363,78 @@ export function NodeCard({
   );
 }
 
-function ConditionPort({ condition, accent, border, isHovered, onPortPointerDown, onEdit, onDelete }) {
+function ConditionPort({ condition, accent, border, isHovered, side, onPortPointerDown, onEdit, onDelete }) {
   const [localHover, setLocalHover] = useState(false);
   const label = condition.label || formatRouterConditionLabel(condition);
+  
+  // Определяем стили выдвижения в зависимости от стороны
+  const getExtrusionStyle = () => {
+    const extrusion = 5; // Величина выдвижения в пикселях
+    
+    switch(side) {
+      case 'right':
+        return {
+          marginRight: `-${extrusion}px`,
+          paddingRight: `${extrusion + 12}px`, // 12px - базовый padding
+        };
+      case 'left':
+        return {
+          marginLeft: `-${extrusion}px`,
+          paddingLeft: `${extrusion + 12}px`,
+        };
+      case 'top':
+        return {
+          marginTop: `-${extrusion}px`,
+          paddingTop: `${extrusion + 8}px`, // 8px - базовый padding
+        };
+      case 'bottom':
+        return {
+          marginBottom: `-${extrusion}px`,
+          paddingBottom: `${extrusion + 8}px`,
+        };
+      default:
+        return {};
+    }
+  };
+
+  // Определяем позицию порта в зависимости от стороны
+  const getPortPosition = () => {
+    const portSize = 16; // 4 * 4px (w-4 h-4)
+    
+    switch(side) {
+      case 'right':
+        return {
+          right: -8,
+          top: '50%',
+          transform: 'translateY(-50%)',
+        };
+      case 'left':
+        return {
+          left: -8,
+          top: '50%',
+          transform: 'translateY(-50%)',
+        };
+      case 'top':
+        return {
+          top: -8,
+          left: '50%',
+          transform: 'translateX(-50%)',
+        };
+      case 'bottom':
+        return {
+          bottom: -8,
+          left: '50%',
+          transform: 'translateX(-50%)',
+        };
+      default:
+        return { right: -8, top: '50%', transform: 'translateY(-50%)' };
+    }
+  };
+
   return (
     <div
       className="relative"
+      style={getExtrusionStyle()}
       onMouseEnter={() => setLocalHover(true)}
       onMouseLeave={() => setLocalHover(false)}
       onPointerDown={(e) => {
@@ -413,9 +472,9 @@ function ConditionPort({ condition, accent, border, isHovered, onPortPointerDown
             e.stopPropagation();
             onPortPointerDown?.(e);
           }}
-          className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 cursor-crosshair hover:scale-125 transition-transform z-10"
+          className="absolute w-4 h-4 rounded-full bg-white border-2 cursor-crosshair hover:scale-125 transition-transform z-10"
           style={{
-            right: -8,
+            ...getPortPosition(),
             borderColor: accent,
           }}
         />

@@ -186,6 +186,16 @@ input[type="datetime-local"]::-webkit-inner-spin-button {
   font-style: normal !important;
 }
 
+.kb-page-link {
+  color: #1d4ed8;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.kb-page-link:hover {
+  text-decoration: underline;
+}
+
 /* Override prose blockquote defaults */
 .prose blockquote,
 .prose-sm blockquote,

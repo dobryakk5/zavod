@@ -44,6 +44,20 @@ export function KnowledgeBaseTab() {
     }
   };
 
+  const handleCreateChild = async (parentId: number) => {
+    try {
+      const created = await kbDocumentsApi.create({
+        title: 'Новая страница',
+        content: { type: 'doc', content: [] },
+        parent_document: parentId,
+      });
+      router.push(`/kb/${created.id}`);
+    } catch (err) {
+      console.error('Failed to create child document', err);
+      alert('Ошибка создания вложенной страницы');
+    }
+  };
+
   const handleArchive = async (doc: KbDocumentList) => {
     try {
       if (doc.is_archived) {
@@ -93,12 +107,30 @@ export function KnowledgeBaseTab() {
                 <div className="flex items-center gap-3">
                   <div className="text-lg">{doc.icon || '📄'}</div>
                   <div>
-                    <button
-                      className="text-left font-medium text-gray-900 hover:underline"
-                      onClick={() => router.push(`/kb/${doc.id}`)}
-                    >
-                      {doc.title}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="text-left font-medium text-gray-900 hover:underline"
+                        onClick={() => router.push(`/kb/${doc.id}`)}
+                      >
+                        {doc.title}
+                      </button>
+                      {doc.has_children && (
+                        <span className="text-gray-400 text-sm" title="Есть вложенные страницы">
+                          &gt;
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleCreateChild(doc.id)}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                        title="Создать вложенную страницу"
+                        aria-label={`Создать вложенную страницу для ${doc.title}`}
+                      >
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v14m7-7H5" />
+                        </svg>
+                      </button>
+                    </div>
                     <div className="text-xs text-gray-500">
                       Обновлен: {new Date(doc.updated_at).toLocaleDateString('ru-RU')}
                     </div>
