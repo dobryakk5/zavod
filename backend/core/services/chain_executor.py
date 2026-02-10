@@ -213,6 +213,21 @@ class ChainExecutor:
             })
 
         edges = self._get_edges_with_conditions(node_id)
+
+        # Если узел отправляет кнопки и следующий — router,
+        # сразу переводим сессию на router. Иначе первое нажатие кнопки
+        # приходит когда current_node ещё = start/buttons и попадает
+        # в ветку обычных edges (ChainCondition) где ничего нет → session completed.
+        has_buttons = node.node_type in ("start", "buttons") and bool(
+            (node.payload or {}).get("buttons")
+        )
+        if has_buttons and len(edges) == 1:
+            next_node = ChainNode.objects.filter(id=edges[0]["target_node_id"]).first()
+            if next_node and next_node.node_type == "router":
+                session.current_node_id = next_node.id
+                session.last_activity_at = timezone.now()
+                session.save(update_fields=["current_node_id", "last_activity_at", "updated_at"])
+
         for edge in edges:
             for cond in edge.get("conditions", []):
                 if cond.get("condition_type") == "timeout":
