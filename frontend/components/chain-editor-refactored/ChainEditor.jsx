@@ -54,24 +54,6 @@ export default function ChainEditor({ className = '' } = {}) {
     stateRef.current = state;
   }, [state]);
 
-  useEffect(() => {
-    let isActive = true;
-    chainsApi.getGraph()
-      .then((graph) => {
-        if (!isActive) return;
-        dispatch({ type: 'LOAD', payload: graph });
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!isActive) return;
-        setError('Не удалось загрузить цепочку');
-        setLoading(false);
-      });
-    return () => {
-      isActive = false;
-    };
-  }, []);
-
   const flushPositions = useCallback(async () => {
     if (positionQueueRef.current.size === 0) return;
     const updates = Array.from(positionQueueRef.current.entries());
@@ -221,6 +203,106 @@ export default function ChainEditor({ className = '' } = {}) {
 
     return tempNode;
   }, []);
+
+  const createStartWithRouter = useCallback(async () => {
+    const existing = stateRef.current.nodes.find(n => n.node_type === 'start');
+    if (existing) return;
+
+    const startX = 100;
+    const startY = 200;
+    const routerX = startX + 340;
+    const routerY = startY;
+
+    setSaving(true);
+    setError(null);
+    try {
+      // 1. START
+      const createdStart = await chainsApi.createNode({
+        node_type: 'start',
+        payload: {
+          text: 'Привет! Выберите вариант:',
+          buttons: [
+            { text: 'Да', color: 'green' },
+            { text: 'Нет', color: 'red' },
+          ],
+        },
+        delay_seconds: 0,
+        pos_x: startX,
+        pos_y: startY,
+      });
+
+      // 2. ROUTER с условиями под кнопки
+      const createdRouter = await chainsApi.createNode({
+        node_type: 'router',
+        payload: {
+          conditions: [
+            {
+              id: makeConditionId(),
+              condition_type: 'text_equals',
+              params: { exact_text: 'Да' },
+              label: 'Кнопка: Да',
+              port_index: 0,
+            },
+            {
+              id: makeConditionId(),
+              condition_type: 'text_equals',
+              params: { exact_text: 'Нет' },
+              label: 'Кнопка: Нет',
+              port_index: 1,
+            },
+            {
+              id: makeConditionId(),
+              condition_type: 'fallback',
+              params: {},
+              label: 'Любой другой',
+              port_index: 2,
+            },
+          ],
+        },
+        delay_seconds: 0,
+        pos_x: routerX,
+        pos_y: routerY,
+      });
+
+      // 3. Ребро START → ROUTER
+      await chainsApi.createEdge({
+        source_node_id: createdStart.id,
+        target_node_id: createdRouter.id,
+        priority: 0,
+        source_port_id: null,
+      });
+
+      // 4. Перезагружаем граф
+      const graph = await chainsApi.getGraph();
+      dispatch({ type: 'LOAD', payload: graph });
+    } catch (err) {
+      setError('Не удалось создать начальные узлы');
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let isActive = true;
+    chainsApi.getGraph()
+      .then(async (graph) => {
+        if (!isActive) return;
+        dispatch({ type: 'LOAD', payload: graph });
+        setLoading(false);
+        // Если граф пустой — создаём START + ROUTER по умолчанию
+        if (graph.nodes.length === 0) {
+          await createStartWithRouter();
+        }
+      })
+      .catch(() => {
+        if (!isActive) return;
+        setError('Не удалось загрузить цепочку');
+        setLoading(false);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [createStartWithRouter]);
 
   const updateNode = useCallback(async (nodeId, data) => {
     const prev = stateRef.current.nodes.find((n) => n.id === nodeId);
@@ -456,7 +538,7 @@ export default function ChainEditor({ className = '' } = {}) {
     setSaving(true);
     setError(null);
     try {
-      const edge = state.edges.find((item) => item.id === edgeId);
+      const edge = stateRef.current.edges.find((item) => item.id === edgeId);
       const existing = edge?.conditions || [];
       const existingIds = existing
         .map((cond) => cond.id)
@@ -481,10 +563,10 @@ export default function ChainEditor({ className = '' } = {}) {
     } finally {
       setSaving(false);
     }
-  }, [state.edges]);
+  }, []);
 
   const saveRouterCondition = useCallback(async (nodeId, condition) => {
-    const node = state.nodes.find((n) => n.id === nodeId);
+    const node = stateRef.current.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const current = Array.isArray(node.payload?.conditions) ? [...node.payload.conditions] : [];
     const isFallback = condition.condition_type === 'fallback';
@@ -502,21 +584,21 @@ export default function ChainEditor({ className = '' } = {}) {
 
     next = next.map((c, i) => ({ ...c, port_index: i }));
     await updateNode(nodeId, { payload: { ...node.payload, conditions: next } });
-  }, [state.nodes, updateNode]);
+  }, [updateNode]);
 
   const deleteRouterCondition = useCallback(async (nodeId, conditionId) => {
-    const node = state.nodes.find((n) => n.id === nodeId);
+    const node = stateRef.current.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const current = Array.isArray(node.payload?.conditions) ? node.payload.conditions : [];
     const next = current.filter((c) => c.id !== conditionId).map((c, i) => ({ ...c, port_index: i }));
     await updateNode(nodeId, { payload: { ...node.payload, conditions: next } });
-    const edgesToDelete = state.edges.filter((edge) => (
+    const edgesToDelete = stateRef.current.edges.filter((edge) => (
       edge.source_node_id === nodeId && edge.source_port_id === conditionId
     ));
     for (const edge of edgesToDelete) {
       await deleteEdge(edge.id);
     }
-  }, [state.edges, state.nodes, updateNode, deleteEdge]);
+  }, [updateNode, deleteEdge]);
 
   const onCanvasPointerDown = useCallback((e) => {
     if (e.target !== canvasRef.current && e.target.tagName !== 'svg') return;
@@ -770,6 +852,8 @@ export default function ChainEditor({ className = '' } = {}) {
       }
       const graph = await chainsApi.getGraph();
       dispatch({ type: 'LOAD', payload: graph });
+      // После сброса пересоздаём ROUTER рядом со START
+      await createStartWithRouter();
     } catch (err) {
       setError('Не удалось очистить цепочку');
       try {
@@ -781,7 +865,7 @@ export default function ChainEditor({ className = '' } = {}) {
     } finally {
       setSaving(false);
     }
-  }, [saving]);
+  }, [saving, createStartWithRouter]);
 
   if (loading) return <div className="min-h-[400px] flex items-center justify-center text-slate-600">Загрузка...</div>;
   if (!state.chain) return <div className="min-h-[400px] flex items-center justify-center text-slate-600">Цепочка недоступна</div>;
