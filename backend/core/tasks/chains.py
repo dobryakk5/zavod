@@ -71,6 +71,13 @@ def _send_telegram_message(
 
 def _send_node_message(user_id: int, node: ChainNode) -> bool:
     if node.node_type == "text":
+        buttons = _normalize_buttons(node.payload.get("buttons", []))
+        if buttons:
+            return _send_telegram_message(
+                user_id,
+                text=node.payload.get("text", ""),
+                buttons=buttons,
+            )
         return _send_telegram_message(user_id, text=node.payload.get("text", ""))
     if node.node_type == "photo":
         return _send_telegram_message(

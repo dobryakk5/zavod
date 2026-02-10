@@ -4,6 +4,8 @@ import re
 from typing import Optional
 
 from django.contrib.auth import get_user_model
+from django.conf import settings
+from urllib.parse import urlparse
 from rest_framework import serializers
 
 from core.models import (
@@ -1598,8 +1600,50 @@ class KbDocumentShareSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "share_token", "created_at", "visit_count", "created_by"]
 
+    def _extract_origin_base_url(self, request) -> str:
+        if not request:
+            return ""
+        origin = request.headers.get("Origin") or request.META.get("HTTP_ORIGIN")
+        if not origin:
+            origin = request.headers.get("Referer") or request.META.get("HTTP_REFERER")
+        if not origin:
+            return ""
+        parsed = urlparse(origin)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return ""
+
+    def _derive_base_url_from_request(self, request) -> str:
+        if not request:
+            return ""
+        host = request.get_host()  # may include port
+        if not host:
+            return ""
+        hostname = host
+        port = ""
+        if ":" in host:
+            hostname, port = host.rsplit(":", 1)
+            port = f":{port}"
+
+        if hostname.startswith("adm."):
+            hostname = hostname[len("adm."):]
+
+        if hostname.startswith(("localhost", "127.", "0.0.0.0")):
+            scheme = "http"
+        else:
+            scheme = "https"
+
+        return f"{scheme}://{hostname}{port}"
+
     def get_share_url(self, obj):
+        base_url = getattr(settings, "PUBLIC_FRONTEND_BASE_URL", "").rstrip("/")
         request = self.context.get("request")
+        if not base_url:
+            base_url = self._extract_origin_base_url(request)
+        if not base_url:
+            base_url = self._derive_base_url_from_request(request)
+        if base_url:
+            return f"{base_url}/kb/share/{obj.share_token}"
         if request:
             return request.build_absolute_uri(f"/kb/share/{obj.share_token}")
         return f"/kb/share/{obj.share_token}"

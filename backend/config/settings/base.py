@@ -185,6 +185,9 @@ WAGTAIL_SITE_NAME = "Content Marketing"
 # URL, по которому ты заходишь в админку
 WAGTAILADMIN_BASE_URL = "http://localhost:8000"
 
+# Публичный домен фронтенда для share-ссылок и публичных маршрутов
+PUBLIC_FRONTEND_BASE_URL = os.getenv("PUBLIC_FRONTEND_BASE_URL", "").rstrip("/")
+
 # Celery (можно оставить как есть, даже если пока не пользуешься)
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")

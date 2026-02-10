@@ -29,7 +29,12 @@ export function ConditionEditorModal({ edge, srcNode, tgtNode, onSave, onClose, 
   const ParamInputs = () => {
     switch (newCond.condition_type) {
       case 'button_press':
-        if ((srcNode?.node_type === 'buttons' || srcNode?.node_type === 'start') && srcNode.payload?.buttons) {
+        if (
+          (srcNode?.node_type === 'buttons' ||
+            srcNode?.node_type === 'start' ||
+            (srcNode?.node_type === 'text' && srcNode.payload?.buttons)) &&
+          srcNode.payload?.buttons
+        ) {
           const used = conditions.filter(c => c.condition_type === 'button_press').map(c => c.params.button_label);
           const rawButtons = srcNode.payload.buttons || [];
           const labels = rawButtons

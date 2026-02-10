@@ -190,8 +190,9 @@ class ChainExecutor:
         elif node.node_type == "text":
             payload = dict(node.payload or {})
             payload["node_id"] = node.id
+            has_buttons = bool(payload.get("buttons"))
             actions.append({
-                "action_type": "send_text",
+                "action_type": "send_buttons" if has_buttons else "send_text",
                 "payload": payload,
                 "delay_seconds": node.delay_seconds,
             })
@@ -218,7 +219,7 @@ class ChainExecutor:
         # сразу переводим сессию на router. Иначе первое нажатие кнопки
         # приходит когда current_node ещё = start/buttons и попадает
         # в ветку обычных edges (ChainCondition) где ничего нет → session completed.
-        has_buttons = node.node_type in ("start", "buttons") and bool(
+        has_buttons = node.node_type in ("start", "buttons", "text") and bool(
             (node.payload or {}).get("buttons")
         )
         if has_buttons and len(edges) == 1:

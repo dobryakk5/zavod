@@ -49,6 +49,7 @@ export function NodeCard({
   const isTimer = node.node_type === 'timer' || (node.node_type === 'text' && node.payload?.kind === 'timer');
   const isRouter = node.node_type === 'router';
   const isStartNode = node.node_type === 'start';
+  const isTextWithButtons = node.node_type === 'text' && Array.isArray(node.payload?.buttons) && node.payload.buttons.length > 0;
   const showControls = Boolean(isHovered);
   const { w, h } = getNodeDimensions(node);
   const isEntering = node.__anim === 'enter';
@@ -265,6 +266,101 @@ export function NodeCard({
             className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2"
             style={{ backgroundColor: c.bg, borderColor: c.border }}
           />
+        )}
+      </div>
+    );
+  }
+
+  if (isTextWithButtons) {
+    const buttons = node.payload.buttons.map((btn) => (typeof btn === 'string' ? btn : btn?.text)).filter(Boolean);
+    return (
+      <div
+        onPointerDown={onPointerDown}
+        onClick={onClick}
+        onContextMenu={onContextMenu}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = e.clientX;
+          const y = e.clientY;
+          const padding = 30;
+          if (
+            x < rect.left - padding ||
+            x > rect.right + padding ||
+            y < rect.top - padding ||
+            y > rect.bottom + padding
+          ) {
+            onMouseLeave?.(e);
+          }
+        }}
+        className={`rounded-xl border-2 cursor-grab select-none shadow-lg transition-all ${
+          isSelected ? 'ring-2 ring-offset-2' : ''
+        } relative`}
+        style={{
+          position: 'absolute',
+          left: node.pos_x,
+          top: node.pos_y,
+          width: w,
+          height: h,
+          backgroundColor: c.bg,
+          borderColor: isSelected ? c.accent : c.border,
+          ringColor: c.accent,
+          ...animStyle,
+        }}
+      >
+        <div className="p-3 h-full flex flex-col justify-center gap-2">
+          <p className="text-sm text-slate-700 line-clamp-2 leading-snug text-center">
+            {node.payload?.text || 'Сообщение'}
+          </p>
+          {buttons.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 justify-center">
+              {buttons.map((btn, idx) => (
+                <div
+                  key={idx}
+                  className="px-2 py-1 bg-white border border-slate-300 rounded text-xs font-medium text-slate-700"
+                >
+                  {btn}
+                </div>
+              ))}
+            </div>
+          )}
+          {node.delay_seconds > 0 && (
+            <span className="text-xs text-slate-500 text-center">⏱ {node.delay_seconds}с задержка</span>
+          )}
+        </div>
+
+        {showControls && (
+          <>
+            {PORTS.map((port) => (
+              <div
+                key={port.side}
+                style={{ ...port.style, borderColor: c.border }}
+                className="absolute w-3 h-3 rounded-full bg-white border-2 shadow-sm cursor-crosshair"
+                data-port={port.side}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  onPortPointerDown?.(node.id, port.side, e);
+                }}
+              />
+            ))}
+
+            {PLUS.map((plus) => (
+              <div
+                key={plus.side}
+                style={plus.style}
+                className="absolute w-4 h-4 rounded bg-white border border-slate-300 text-[10px] font-bold flex items-center justify-center cursor-pointer"
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                }}
+                onPointerUp={(e) => {
+                  e.stopPropagation();
+                  onAddFromSide?.(node.id, plus.side, e);
+                }}
+              >
+                +
+              </div>
+            ))}
+          </>
         )}
       </div>
     );

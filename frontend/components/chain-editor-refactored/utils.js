@@ -197,7 +197,13 @@ export function validateGraph(state) {
     }
   });
 
-  nodes.filter(n => n.node_type === 'buttons' || n.node_type === 'start').forEach(n => {
+  nodes
+    .filter(n =>
+      n.node_type === 'buttons' ||
+      n.node_type === 'start' ||
+      (n.node_type === 'text' && Array.isArray(n.payload?.buttons) && n.payload.buttons.length > 0)
+    )
+    .forEach(n => {
     const rawButtons = n.payload?.buttons || [];
     const btns = rawButtons.map(b => (typeof b === 'string' ? b : b?.text)).filter(Boolean);
     const outEdges = edges.filter(e => e.source_node_id === n.id);

@@ -3,10 +3,18 @@ import { Alert } from './Alert';
 import { Button, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input, Label, Select } from './ui';
 
 export function NodeEditorModal({ node, onSave, onClose }) {
+  const isStartNode = node.node_type === 'start';
+  const initialButtons = isStartNode
+    ? (node.payload?.buttons || []).map((b) =>
+      typeof b === 'string'
+        ? { text: b, color: 'green' }
+        : { text: b?.text || '', color: b?.color || 'green' }
+    )
+    : (node.payload?.buttons || []).map((b) => (typeof b === 'string' ? b : b?.text || ''));
   const [form, setForm] = useState({
     ...node,
     payload: { ...node.payload },
-    buttons: node.payload?.buttons ? [...node.payload.buttons] : [],
+    buttons: initialButtons,
   });
   const [error, setError] = useState(null);
   const isTimer = form.node_type === 'timer' || form.payload?.kind === 'timer';
@@ -46,6 +54,17 @@ export function NodeEditorModal({ node, onSave, onClose }) {
     let nodeType = form.node_type;
 
     if (form.node_type === 'buttons') payload.buttons = form.buttons.filter(Boolean);
+
+    if (form.node_type === 'text') {
+      const cleanedButtons = form.buttons
+        .map((b) => (b || '').trim())
+        .filter(Boolean);
+      if (cleanedButtons.length) {
+        payload.buttons = cleanedButtons;
+      } else {
+        delete payload.buttons;
+      }
+    }
 
     if (isStart) {
       nodeType = 'start';
@@ -274,17 +293,6 @@ export function NodeEditorModal({ node, onSave, onClose }) {
                         onChange={e => setStartBtn(i, 'text', e.target.value)}
                         placeholder={`Кнопка ${i + 1}`}
                       />
-                      <Select
-                        value={b?.color || 'green'}
-                        onChange={e => setStartBtn(i, 'color', e.target.value)}
-                        options={[
-                          { value: 'green', label: 'Зелёная' },
-                          { value: 'red', label: 'Красная' },
-                          { value: 'blue', label: 'Синяя' },
-                          { value: 'gray', label: 'Серая' },
-                        ]}
-                        className="w-36"
-                      />
                       <button onClick={() => rmStartBtn(i)} className="text-red-600 hover:text-red-700 px-2">×</button>
                     </div>
                   ))}
@@ -322,7 +330,7 @@ export function NodeEditorModal({ node, onSave, onClose }) {
             </>
           )}
 
-          {form.node_type === 'buttons' && (
+          {(form.node_type === 'buttons' || form.node_type === 'text') && (
             <div>
               <Label>Кнопки</Label>
               <div className="space-y-2">
