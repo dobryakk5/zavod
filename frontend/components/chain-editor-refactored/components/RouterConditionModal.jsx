@@ -4,6 +4,7 @@ import { formatRouterConditionLabel } from '../utils';
 import { Button, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input, Label, Select } from './ui';
 
 const ROUTER_CONDITION_OPTIONS = [
+  { value: 'button_press', label: CONDITION_LABELS.button_press },
   { value: 'content_type', label: CONDITION_LABELS.content_type },
   { value: 'text_contains', label: CONDITION_LABELS.text_contains },
   { value: 'text_equals', label: CONDITION_LABELS.text_equals },
@@ -15,6 +16,8 @@ const ROUTER_CONDITION_OPTIONS = [
 
 function defaultParams(type) {
   switch (type) {
+    case 'button_press':
+      return { button_label: '' };
     case 'content_type':
       return { message_type: '' };
     case 'text_contains':
@@ -75,6 +78,17 @@ export function RouterConditionModal({ condition, onSave, onClose }) {
               options={ROUTER_CONDITION_OPTIONS}
             />
           </div>
+
+          {type === 'button_press' && (
+            <div>
+              <Label>Текст кнопки</Label>
+              <Input
+                value={params.button_label || ''}
+                onChange={(e) => setParams({ button_label: e.target.value })}
+                placeholder="Да"
+              />
+            </div>
+          )}
 
           {type === 'content_type' && (
             <div>

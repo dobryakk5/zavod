@@ -238,15 +238,15 @@ export default function ChainEditor({ className = '' } = {}) {
           conditions: [
             {
               id: makeConditionId(),
-              condition_type: 'text_equals',
-              params: { exact_text: 'Да' },
+              condition_type: 'button_press',
+              params: { button_label: 'Да' },
               label: 'Кнопка: Да',
               port_index: 0,
             },
             {
               id: makeConditionId(),
-              condition_type: 'text_equals',
-              params: { exact_text: 'Нет' },
+              condition_type: 'button_press',
+              params: { button_label: 'Нет' },
               label: 'Кнопка: Нет',
               port_index: 1,
             },

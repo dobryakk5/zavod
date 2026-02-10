@@ -533,23 +533,27 @@ async def _save_service_level_feedback(message: Message, rating: int, improvemen
 
 @router.callback_query(F.data.startswith(CHAIN_BUTTON_PREFIX))
 async def handle_chain_button(callback: CallbackQuery) -> None:
+    """Handle chain inline button presses."""
     if callback.message is None:
         return
 
     from_user = callback.from_user
     if from_user is None:
+        await callback.answer()
         return
-
-    await callback.answer()
 
     binding = await _get_binding_for_user(from_user.id)
     if binding is None:
+        await callback.answer()
         await callback.message.answer(
             "❗️Ваш аккаунт ещё не привязан к клиенту.\n"
             "Пожалуйста, используйте персональную ссылку от администратора.",
             reply_markup=main_menu(),
         )
         return
+
+    # ИСПРАВЛЕНИЕ: Отвечаем на callback сразу, чтобы убрать "часики" в Telegram
+    await callback.answer()
 
     data = callback.data or ""
     button_label = data[len(CHAIN_BUTTON_PREFIX):]
