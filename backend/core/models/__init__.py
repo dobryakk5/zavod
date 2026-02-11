@@ -17,6 +17,9 @@ from ._mixins import TaskStatusMixin
 from .payments import PaymentPlan, YooKassaPayment
 from .client import Client, UserTenantRole
 
+# --- CRM ---
+from .crm import ClientCategory, CRMClient, Event, EventType, Payment, Note
+
 # --- Integrations ---
 from .integrations import VkIntegration, SocialAccount, Connection
 
@@ -96,6 +99,13 @@ __all__ = [
     # Payments
     "PaymentPlan",
     "YooKassaPayment",
+    # CRM
+    "ClientCategory",
+    "CRMClient",
+    "Event",
+    "EventType",
+    "Payment",
+    "Note",
     # Integrations
     "VkIntegration",
     "SocialAccount",

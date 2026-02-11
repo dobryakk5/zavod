@@ -60,7 +60,7 @@ class Post(models.Model):
 
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="posts")
     story = models.ForeignKey(
-        "story.Story",
+        "Story",
         on_delete=models.CASCADE,
         null=True,
         blank=True,
@@ -68,7 +68,7 @@ class Post(models.Model):
         help_text="История, к которой относится этот пост",
     )
     template = models.ForeignKey(
-        "content_template.ContentTemplate",
+        "ContentTemplate",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

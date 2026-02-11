@@ -75,7 +75,7 @@ class TrendItem(models.Model):
     relevance_score = models.IntegerField(default=0)
     extra = models.JSONField(default=dict, blank=True)
     used_for_post = models.ForeignKey(
-        "content.Post",
+        "Post",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -114,7 +114,7 @@ class Story(models.Model):
         help_text="Тренд, на основе которого создана история",
     )
     template = models.ForeignKey(
-        "content_template.ContentTemplate",
+        "ContentTemplate",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
