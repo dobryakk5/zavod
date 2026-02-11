@@ -91,4 +91,8 @@ from .views_payments import (  # noqa: F401
     PaymentPromoCodeApplyView,
     PaymentSubscriptionView,
     YooKassaWebhookView,
+    YooKassaOAuthRedirectView,
+    YooKassaOAuthCallbackView,
+    YooKassaOAuthDisconnectView,
+    YooKassaSaveCredentialsView,
 )

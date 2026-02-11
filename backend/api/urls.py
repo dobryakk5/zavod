@@ -41,6 +41,10 @@ from .views import (
     PaymentPromoCodeApplyView,
     PaymentSubscriptionView,
     YooKassaWebhookView,
+    YooKassaOAuthRedirectView,
+    YooKassaOAuthCallbackView,
+    YooKassaOAuthDisconnectView,
+    YooKassaSaveCredentialsView,
     SocialAccountViewSet,
     SEOKeywordSetViewSet,
     StoryViewSet,
@@ -196,6 +200,11 @@ urlpatterns = [
     path('payments/plans/', PaymentPlanListView.as_view(), name='payment-plans'),
     path('payments/subscription/', PaymentSubscriptionView.as_view(), name='payment-subscription'),
     path('payments/promo/', PaymentPromoCodeApplyView.as_view(), name='payment-promo-apply'),
+    path('payments/webhook/<uuid:client_uuid>/', YooKassaWebhookView.as_view(), name='yookassa-webhook-client'),
+    path('payments/yookassa/connect/', YooKassaOAuthRedirectView.as_view(), name='yookassa-oauth-connect'),
+    path('payments/yookassa/callback/', YooKassaOAuthCallbackView.as_view(), name='yookassa-oauth-callback'),
+    path('payments/yookassa/disconnect/', YooKassaOAuthDisconnectView.as_view(), name='yookassa-oauth-disconnect'),
+    path('payments/yookassa/credentials/', YooKassaSaveCredentialsView.as_view(), name='yookassa-credentials'),
     path('payments/webhook/', YooKassaWebhookView.as_view(), name='yookassa-webhook'),
 
     # Legacy list views (kept for backward compatibility)

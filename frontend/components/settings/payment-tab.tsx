@@ -94,6 +94,7 @@ export function PaymentTab() {
   const [promoCode, setPromoCode] = useState('');
   const [promoLoading, setPromoLoading] = useState(false);
   const [promoError, setPromoError] = useState('');
+  const [connectLoading, setConnectLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [telegramUser, setTelegramUser] = useState<TelegramAuthResponse['user'] | null>(null);
@@ -237,6 +238,17 @@ export function PaymentTab() {
     }
   };
 
+  const clearStoredPaymentId = () => {
+    try {
+      sessionStorage.removeItem('yookassa_payment_id');
+      localStorage.removeItem('yookassa_payment_id');
+    } catch (storageError) {
+      console.warn('Unable to clear payment id', storageError);
+    }
+    setPaymentId(null);
+    setPaymentStatus(null);
+  };
+
   const refreshStatus = async (id: string) => {
     setStatusLoading(true);
     setStatusError('');
@@ -245,9 +257,31 @@ export function PaymentTab() {
       setPaymentStatus(data);
     } catch (statusError) {
       console.error('Unable to load payment status', statusError);
-      setStatusError('Не удалось получить статус платежа.');
+      if (statusError instanceof ApiError && statusError.status === 404) {
+        clearStoredPaymentId();
+        setStatusError('Платеж не найден. Создайте новый.');
+      } else {
+        setStatusError('Не удалось получить статус платежа.');
+      }
     } finally {
       setStatusLoading(false);
+    }
+  };
+
+  const handleConnectYookassa = async () => {
+    setConnectLoading(true);
+    try {
+      const response = await apiFetch<{ redirect_url?: string }>('/payments/yookassa/connect/');
+      if (response?.redirect_url) {
+        window.location.href = response.redirect_url;
+        return;
+      }
+      toast.error('Не удалось получить ссылку подключения YooKassa.');
+    } catch (connectError) {
+      console.error('Failed to start YooKassa OAuth', connectError);
+      toast.error('Не удалось начать подключение YooKassa.');
+    } finally {
+      setConnectLoading(false);
     }
   };
 
@@ -400,6 +434,16 @@ export function PaymentTab() {
           {subscriptionLoading ? 'Ваш тариф: ...' : `Ваш тариф: ${subscriptionName}`}
           {!subscriptionLoading && subscriptionUntil ? ` до ${subscriptionUntil}` : ''}
         </h2>
+        <div>
+          <button
+            type="button"
+            onClick={handleConnectYookassa}
+            disabled={connectLoading}
+            className="text-sm text-blue-600 underline underline-offset-2 hover:text-blue-700 disabled:opacity-50"
+          >
+            {connectLoading ? 'Переходим в YooKassa...' : 'Подключить прием платежей от своих клиентов'}
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">

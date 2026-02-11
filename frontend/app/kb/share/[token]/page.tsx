@@ -1,78 +1,51 @@
-'use client';
-
-import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
-import TipTapEditor from '@/components/kb/TipTapEditor';
-import { kbSharesApi } from '@/lib/api/knowledgeBase';
+import type { Metadata } from 'next';
+import SharedDocumentClient from './shared-document-client';
 import type { KbDocumentShare } from '@/lib/types';
 
-export default function SharedDocumentPage() {
-  const params = useParams();
-  const token = params.token as string;
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api').replace(/\/+$/, '');
 
-  const [share, setShare] = useState<KbDocumentShare | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+async function fetchShare(token: string): Promise<KbDocumentShare | null> {
+  const response = await fetch(`${API_BASE_URL}/kb/shares/by_token/${encodeURIComponent(token)}/`, {
+    cache: 'no-store',
+  });
 
-  useEffect(() => {
-    const loadShare = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        const data = await kbSharesApi.byToken(token);
-        setShare(data);
-      } catch (err: any) {
-        console.error('Error loading shared document:', err);
-        setError('Ссылка недоступна или истекла');
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  if (!response.ok) {
+    return null;
+  }
 
-    void loadShare();
-  }, [token]);
+  return (await response.json()) as KbDocumentShare;
+}
 
-  if (isLoading) {
+type SharedDocumentPageProps = {
+  params: Promise<{ token: string }>;
+};
+
+export async function generateMetadata({ params }: SharedDocumentPageProps): Promise<Metadata> {
+  const { token } = await params;
+  const share = await fetchShare(token);
+  const title = share?.document_detail?.title?.trim();
+
+  if (!title) {
+    return { title: 'Документ недоступен' };
+  }
+
+  return {
+    title,
+    description: 'Публичный документ в базе знаний',
+  };
+}
+
+export default async function SharedDocumentPage({ params }: SharedDocumentPageProps) {
+  const { token } = await params;
+  const share = await fetchShare(token);
+
+  if (!share?.document_detail) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" />
-          <p className="text-gray-600">Загрузка документа...</p>
-        </div>
+        <p className="text-gray-600">Ссылка недоступна или истекла</p>
       </div>
     );
   }
 
-  if (error || !share?.document_detail) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-gray-600">{error || 'Документ не найден'}</p>
-      </div>
-    );
-  }
-
-  const document = share.document_detail;
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white border-b">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="text-2xl">{document.icon || '📄'}</div>
-            <h1 className="text-xl font-semibold">{document.title}</h1>
-          </div>
-          <div className="text-sm text-gray-500">Публичный доступ</div>
-        </div>
-      </div>
-
-      <div className="max-w-5xl mx-auto p-6">
-        <TipTapEditor
-          initialContent={document.content}
-          editable={false}
-          autoSave={false}
-          showToolbar={false}
-        />
-      </div>
-    </div>
-  );
+  return <SharedDocumentClient document={share.document_detail} />;
 }
