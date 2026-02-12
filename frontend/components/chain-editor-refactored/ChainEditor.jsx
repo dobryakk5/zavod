@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { chainsApi } from '@/lib/api/chains';
 
 import { NODE_W, NODE_H } from './constants';
@@ -16,7 +16,12 @@ import { NodeEditorModal } from './components/NodeEditorModal';
 import { ConditionEditorModal } from './components/ConditionEditorModal';
 import { RouterConditionModal } from './components/RouterConditionModal';
 
-export default function ChainEditor({ className = '' } = {}) {
+const WELCOME_CHAIN_NAME = 'Welcome';
+
+/**
+ * @param {{ className?: string; chainId?: number | null }} props
+ */
+export default function ChainEditor({ className = '', chainId = null } = {}) {
   const [state, dispatch] = useReducer(graphReducer, { chain: null, nodes: [], edges: [], dirty: false });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -44,6 +49,7 @@ export default function ChainEditor({ className = '' } = {}) {
   const deleteTimersRef = useRef(new Map());
   const pendingEdgeCreatesRef = useRef(new Set());
   const stateRef = useRef(state);
+  const chainApi = useMemo(() => chainsApi.forChain(chainId), [chainId]);
 
   const ANIM_MS = 500;
   const makeTempId = (prefix) => `tmp_${prefix}_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
@@ -63,7 +69,7 @@ export default function ChainEditor({ className = '' } = {}) {
     setError(null);
     try {
       await Promise.all(
-        updates.map(([nodeId, pos]) => chainsApi.updateNode(nodeId, pos))
+        updates.map(([nodeId, pos]) => chainApi.updateNode(nodeId, pos))
       );
       dispatch({ type: 'SAVED' });
     } catch (err) {
@@ -167,7 +173,7 @@ export default function ChainEditor({ className = '' } = {}) {
       setSaving(true);
       setError(null);
       try {
-        const created = await chainsApi.createNode({
+        const created = await chainApi.createNode({
           node_type,
           payload,
           delay_seconds,
@@ -178,7 +184,7 @@ export default function ChainEditor({ className = '' } = {}) {
         const stillExists = stateRef.current.nodes.some((n) => n.id === tempId);
         if (!stillExists) {
           try {
-            await chainsApi.deleteNode(created.id);
+            await chainApi.deleteNode(created.id);
           } catch {
             // ignore cleanup failure
           }
@@ -206,93 +212,151 @@ export default function ChainEditor({ className = '' } = {}) {
   }, []);
 
   const createStartWithRouter = useCallback(async () => {
-    const existing = stateRef.current.nodes.find(n => n.node_type === 'start');
-    if (existing) return;
-
     const startX = 100;
     const startY = 200;
     const routerX = startX + 340;
     const routerY = startY;
+    const current = stateRef.current;
+    const existingStart = current.nodes.find((n) => n.node_type === 'start');
+    const existingRouter = current.nodes.find((n) => n.node_type === 'router');
+    const hasStartToRouterEdge = Boolean(
+      existingStart && existingRouter && current.edges.some(
+        (edge) => edge.source_node_id === existingStart.id && edge.target_node_id === existingRouter.id
+      )
+    );
+
+    if (existingStart && existingRouter && hasStartToRouterEdge) return;
 
     setSaving(true);
     setError(null);
     try {
-      // 1. START
-      const createdStart = await chainsApi.createNode({
-        node_type: 'start',
-        payload: {
-          text: 'Привет! Выберите вариант:',
-          buttons: [
-            'Да',
-            'Нет',
-          ],
-        },
-        delay_seconds: 0,
-        pos_x: startX,
-        pos_y: startY,
-      });
+      let startNodeId = existingStart?.id;
+      if (!startNodeId) {
+        const createdStart = await chainApi.createNode({
+          node_type: 'start',
+          payload: {
+            text: 'Привет! Выберите вариант:',
+            buttons: [
+              'Да',
+              'Нет',
+            ],
+          },
+          delay_seconds: 0,
+          pos_x: startX,
+          pos_y: startY,
+        });
+        startNodeId = createdStart.id;
+      }
 
-      // 2. ROUTER с условиями под кнопки
-      const createdRouter = await chainsApi.createNode({
-        node_type: 'router',
-        payload: {
-          conditions: [
-            {
-              id: makeConditionId(),
-              condition_type: 'button_press',
-              params: { button_label: 'Да' },
-              label: 'Кнопка: Да',
-              port_index: 0,
-            },
-            {
-              id: makeConditionId(),
-              condition_type: 'button_press',
-              params: { button_label: 'Нет' },
-              label: 'Кнопка: Нет',
-              port_index: 1,
-            },
-            {
-              id: makeConditionId(),
-              condition_type: 'fallback',
-              params: {},
-              label: 'Любой другой',
-              port_index: 2,
-            },
-          ],
-        },
-        delay_seconds: 0,
-        pos_x: routerX,
-        pos_y: routerY,
-      });
+      let routerNodeId = existingRouter?.id;
+      if (!routerNodeId) {
+        const createdRouter = await chainApi.createNode({
+          node_type: 'router',
+          payload: {
+            conditions: [
+              {
+                id: makeConditionId(),
+                condition_type: 'button_press',
+                params: { button_label: 'Да' },
+                label: 'Кнопка: Да',
+                port_index: 0,
+              },
+              {
+                id: makeConditionId(),
+                condition_type: 'button_press',
+                params: { button_label: 'Нет' },
+                label: 'Кнопка: Нет',
+                port_index: 1,
+              },
+              {
+                id: makeConditionId(),
+                condition_type: 'fallback',
+                params: {},
+                label: 'Любой другой',
+                port_index: 2,
+              },
+            ],
+          },
+          delay_seconds: 0,
+          pos_x: routerX,
+          pos_y: routerY,
+        });
+        routerNodeId = createdRouter.id;
+      }
 
-      // 3. Ребро START → ROUTER
-      await chainsApi.createEdge({
-        source_node_id: createdStart.id,
-        target_node_id: createdRouter.id,
-        priority: 0,
-        source_port_id: null,
-      });
+      if (!hasStartToRouterEdge && startNodeId && routerNodeId) {
+        await chainApi.createEdge({
+          source_node_id: startNodeId,
+          target_node_id: routerNodeId,
+          priority: 0,
+          source_port_id: null,
+        });
+      }
 
       // 4. Перезагружаем граф
-      const graph = await chainsApi.getGraph();
+      const graph = await chainApi.getGraph();
       dispatch({ type: 'LOAD', payload: graph });
     } catch (err) {
       setError('Не удалось создать начальные узлы');
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [chainApi]);
+
+  const createStartOnly = useCallback(async () => {
+    const existing = stateRef.current.nodes.find((n) => n.node_type === 'start');
+    if (existing) return;
+
+    const startX = 100;
+    const startY = 200;
+
+    setSaving(true);
+    setError(null);
+    try {
+      await chainApi.createNode({
+        node_type: 'start',
+        payload: {
+          text: '',
+          buttons: [],
+        },
+        delay_seconds: 0,
+        pos_x: startX,
+        pos_y: startY,
+      });
+
+      const graph = await chainApi.getGraph();
+      dispatch({ type: 'LOAD', payload: graph });
+    } catch (err) {
+      setError('Не удалось создать стартовый узел');
+    } finally {
+      setSaving(false);
+    }
+  }, [chainApi]);
+
+  const createInitialNodes = useCallback(async (chainName) => {
+    if (chainName === WELCOME_CHAIN_NAME) {
+      await createStartWithRouter();
+      return;
+    }
+    await createStartOnly();
+  }, [createStartOnly, createStartWithRouter]);
 
   useEffect(() => {
     let isActive = true;
-    chainsApi.getGraph()
+    chainApi.getGraph()
       .then(async (graph) => {
         if (!isActive) return;
         dispatch({ type: 'LOAD', payload: graph });
         setLoading(false);
-        // Если граф пустой — создаём START + ROUTER по умолчанию
-        if (graph.nodes.length === 0) {
-          await createStartWithRouter();
+        const hasStartNode = graph.nodes.some((node) => node.node_type === 'start');
+        const hasRouterNode = graph.nodes.some((node) => node.node_type === 'router');
+
+        if (graph.chain?.name === WELCOME_CHAIN_NAME) {
+          if (!hasStartNode || !hasRouterNode) {
+            await createStartWithRouter();
+          }
+        } else if (!hasStartNode) {
+          await createStartOnly();
         }
       })
       .catch(() => {
@@ -303,7 +367,7 @@ export default function ChainEditor({ className = '' } = {}) {
     return () => {
       isActive = false;
     };
-  }, [createStartWithRouter]);
+  }, [chainApi, createStartOnly, createStartWithRouter]);
 
   const updateNode = useCallback(async (nodeId, data) => {
     const prev = stateRef.current.nodes.find((n) => n.id === nodeId);
@@ -316,7 +380,7 @@ export default function ChainEditor({ className = '' } = {}) {
     setSaving(true);
     setError(null);
     try {
-      const updated = await chainsApi.updateNode(nodeId, data);
+      const updated = await chainApi.updateNode(nodeId, data);
       dispatch({ type: 'UPDATE_NODE', id: nodeId, data: updated });
       dispatch({ type: 'SAVED' });
     } catch (err) {
@@ -348,7 +412,7 @@ export default function ChainEditor({ className = '' } = {}) {
     setSaving(true);
     setError(null);
     try {
-      await chainsApi.deleteNode(nodeId);
+      await chainApi.deleteNode(nodeId);
       dispatch({ type: 'SAVED' });
     } catch (err) {
       const pending = deleteTimersRef.current.get(`node:${nodeId}`);
@@ -371,7 +435,7 @@ export default function ChainEditor({ className = '' } = {}) {
     setSaving(true);
     setError(null);
     try {
-      await chainsApi.updateChain({ start_node_id: nodeId });
+      await chainApi.updateChain({ start_node_id: nodeId });
       dispatch({ type: 'SET_START_NODE', id: nodeId });
       dispatch({ type: 'SAVED' });
     } catch (err) {
@@ -390,7 +454,7 @@ export default function ChainEditor({ className = '' } = {}) {
     setSaving(true);
     setError(null);
     try {
-      const created = await chainsApi.createEdge({
+      const created = await chainApi.createEdge({
         source_node_id: currentEdge.source_node_id,
         target_node_id: currentEdge.target_node_id,
         priority: currentEdge.priority || 0,
@@ -400,7 +464,7 @@ export default function ChainEditor({ className = '' } = {}) {
       const stillExists = stateRef.current.edges.some((e) => e.id === edge.id);
       if (!stillExists) {
         try {
-          await chainsApi.deleteEdge(created.id);
+          await chainApi.deleteEdge(created.id);
         } catch {
           // ignore cleanup failure
         }
@@ -443,7 +507,7 @@ export default function ChainEditor({ className = '' } = {}) {
       setSaving(true);
       setError(null);
       try {
-        const updated = await chainsApi.updateEdge(existing.id, { target_node_id: targetId });
+        const updated = await chainApi.updateEdge(existing.id, { target_node_id: targetId });
         dispatch({ type: 'UPDATE_EDGE', id: existing.id, data: { ...updated, conditions: existing.conditions || [] } });
         dispatch({ type: 'SAVED' });
       } catch (err) {
@@ -514,7 +578,7 @@ export default function ChainEditor({ className = '' } = {}) {
     setSaving(true);
     setError(null);
     try {
-      await chainsApi.deleteEdge(edgeId);
+      await chainApi.deleteEdge(edgeId);
       dispatch({ type: 'SAVED' });
     } catch (err) {
       const pending = deleteTimersRef.current.get(`edge:${edgeId}`);
@@ -545,7 +609,7 @@ export default function ChainEditor({ className = '' } = {}) {
         .map((cond) => cond.id)
         .filter((id) => typeof id === 'number' && id > 0);
 
-      await Promise.all(existingIds.map((id) => chainsApi.deleteCondition(edgeId, id)));
+      await Promise.all(existingIds.map((id) => chainApi.deleteCondition(edgeId, id)));
 
       const created = [];
       for (const condition of nextConditions) {
@@ -553,7 +617,7 @@ export default function ChainEditor({ className = '' } = {}) {
           condition_type: condition.condition_type,
           params: condition.params || {},
         };
-        const saved = await chainsApi.createCondition(edgeId, payload);
+        const saved = await chainApi.createCondition(edgeId, payload);
         created.push(saved);
       }
 
@@ -829,7 +893,7 @@ export default function ChainEditor({ className = '' } = {}) {
     setSaving(true);
     setError(null);
     try {
-      await chainsApi.updateChain({ status: newStatus });
+      await chainApi.updateChain({ status: newStatus });
       dispatch({ type: 'SET_STATUS', status: newStatus });
       dispatch({ type: 'SAVED' });
     } catch (err) {
@@ -861,19 +925,19 @@ export default function ChainEditor({ className = '' } = {}) {
     setError(null);
     try {
       if (edgesToDelete.length) {
-        await Promise.all(edgesToDelete.map((edge) => chainsApi.deleteEdge(edge.id)));
+        await Promise.all(edgesToDelete.map((edge) => chainApi.deleteEdge(edge.id)));
       }
       if (nodesToDelete.length) {
-        await Promise.all(nodesToDelete.map((node) => chainsApi.deleteNode(node.id)));
+        await Promise.all(nodesToDelete.map((node) => chainApi.deleteNode(node.id)));
       }
-      const graph = await chainsApi.getGraph();
+      const graph = await chainApi.getGraph();
       dispatch({ type: 'LOAD', payload: graph });
-      // После сброса пересоздаём ROUTER рядом со START
-      await createStartWithRouter();
+      // После сброса пересоздаём базовые узлы для текущей цепочки
+      await createInitialNodes(current.chain?.name);
     } catch (err) {
       setError('Не удалось очистить цепочку');
       try {
-        const graph = await chainsApi.getGraph();
+        const graph = await chainApi.getGraph();
         dispatch({ type: 'LOAD', payload: graph });
       } catch {
         // ignore reload failure
@@ -881,7 +945,7 @@ export default function ChainEditor({ className = '' } = {}) {
     } finally {
       setSaving(false);
     }
-  }, [saving, createStartWithRouter]);
+  }, [saving, chainApi, createInitialNodes]);
 
   if (loading) return <div className="min-h-[400px] flex items-center justify-center text-slate-600">Загрузка...</div>;
   if (!state.chain) return <div className="min-h-[400px] flex items-center justify-center text-slate-600">Цепочка недоступна</div>;
@@ -1024,10 +1088,8 @@ export default function ChainEditor({ className = '' } = {}) {
           <span>Двойной клик — добавить узел</span>
           <span>Правый клик — контекст</span>
           <span>Клик на ребро — условия</span>
-          <span>Колесо мыши — масштаб</span>
-          <span>{state.dirty && !saving && '● Несохранённые изменения'}</span>
-          {saving && <span>💾 Сохранение...</span>}
-          <div className="ml-auto flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span>Колесо мыши — масштаб</span>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setZoom(z => Math.max(0.1, z - 0.1))}
@@ -1054,6 +1116,10 @@ export default function ChainEditor({ className = '' } = {}) {
                 100%
               </button>
             </div>
+          </div>
+          <span>{state.dirty && !saving && '● Несохранённые изменения'}</span>
+          {saving && <span>💾 Сохранение...</span>}
+          <div className="ml-auto flex items-center gap-4">
             <div className="relative flex items-center">
               <button
                 ref={resetButtonRef}

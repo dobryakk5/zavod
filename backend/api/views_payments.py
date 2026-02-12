@@ -4,6 +4,7 @@ import uuid
 from decimal import Decimal, InvalidOperation
 from base64 import b64decode
 from datetime import datetime
+from urllib.parse import urlencode
 
 import requests
 from django.conf import settings
@@ -13,6 +14,7 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.core.validators import validate_email
+from django.http import HttpResponseRedirect
 from django.utils import timezone
 from dateutil.relativedelta import relativedelta
 from rest_framework import status
@@ -306,6 +308,50 @@ def _register_client_webhooks(client: Client) -> None:
             logger.exception("yookassa: webhook registration request failed client_id=%s event=%s", client.id, event)
 
 
+def _build_settings_redirect_url(**params: str) -> str:
+    """Формирует URL возврата на вкладку оплаты в настройках."""
+    site_url = getattr(settings, "SITE_BASE_URL", "").rstrip("/")
+    query: dict[str, str] = {"tab": "payment"}
+    for key, value in params.items():
+        if value:
+            query[key] = value
+    return f"{site_url}/settings?{urlencode(query)}"
+
+
+def _exchange_oauth_code(code: str, oauth_client_id: str, oauth_client_secret: str, client_uuid: str):
+    """
+    Обменивает OAuth code на token.
+
+    Делаем повтор при сетевом сбое, чтобы переживать кратковременные проблемы сети.
+    """
+    token_url = getattr(settings, "YOOKASSA_OAUTH_TOKEN_URL", "https://yookassa.ru/oauth/v2/token")
+    payload = {"grant_type": "authorization_code", "code": code}
+    last_error: requests.RequestException | None = None
+
+    for attempt in (1, 2):
+        try:
+            return requests.post(
+                token_url,
+                auth=(oauth_client_id, oauth_client_secret),
+                data=payload,
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            last_error = exc
+            logger.warning(
+                "yookassa: oauth token exchange network error attempt=%s client_uuid=%s url=%s error=%s",
+                attempt,
+                client_uuid,
+                token_url,
+                exc,
+            )
+
+    if last_error:
+        raise last_error
+
+    raise requests.RequestException("OAuth token exchange failed without exception details")
+
+
 # ---------------------------------------------------------------------------
 # NEW: OAuth flow views
 # ---------------------------------------------------------------------------
@@ -320,6 +366,7 @@ class YooKassaOAuthRedirectView(APIView):
     def get(self, request):
         client = get_active_client(request.user)
         client_id = getattr(settings, "YOOKASSA_CLIENT_ID", "")
+        auth_base_url = getattr(settings, "YOOKASSA_OAUTH_AUTHORIZE_URL", "https://yookassa.ru/oauth/v2/authorize")
 
         if not client_id:
             return Response(
@@ -328,7 +375,7 @@ class YooKassaOAuthRedirectView(APIView):
             )
 
         auth_url = (
-            f"https://yookassa.ru/oauth/v2/authorize"
+            f"{auth_base_url}"
             f"?response_type=code"
             f"&client_id={client_id}"
             f"&state={client.uuid}"  # используем UUID клиента как state для безопасности
@@ -350,47 +397,44 @@ class YooKassaOAuthCallbackView(APIView):
 
         if not code or not client_uuid:
             logger.warning("yookassa: oauth callback missing code or state")
-            return Response({"detail": "Неверные параметры."}, status=status.HTTP_400_BAD_REQUEST)
+            return HttpResponseRedirect(_build_settings_redirect_url(yookassa_error="invalid_params"))
 
         try:
             client = Client.objects.get(uuid=client_uuid)
         except (Client.DoesNotExist, ValueError):
-            return Response({"detail": "Клиент не найден."}, status=status.HTTP_404_NOT_FOUND)
+            return HttpResponseRedirect(_build_settings_redirect_url(yookassa_error="client_not_found"))
 
         oauth_client_id = getattr(settings, "YOOKASSA_CLIENT_ID", "")
         oauth_client_secret = getattr(settings, "YOOKASSA_CLIENT_SECRET", "")
 
         if not oauth_client_id or not oauth_client_secret:
-            return Response(
-                {"detail": "OAuth не настроен."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+            logger.error("yookassa: oauth callback called but oauth credentials are not configured")
+            return HttpResponseRedirect(_build_settings_redirect_url(yookassa_error="oauth_not_configured"))
 
         # Обмениваем code → OAuth-токен
         try:
-            resp = requests.post(
-                "https://yookassa.ru/oauth/v2/token",
-                auth=(oauth_client_id, oauth_client_secret),
-                data={"grant_type": "authorization_code", "code": code},
-                timeout=15,
-            )
+            resp = _exchange_oauth_code(code, oauth_client_id, oauth_client_secret, str(client_uuid))
         except requests.RequestException:
             logger.exception("yookassa: oauth token exchange failed client_uuid=%s", client_uuid)
-            return Response({"detail": "Ошибка соединения с YooKassa."}, status=status.HTTP_502_BAD_GATEWAY)
+            return HttpResponseRedirect(_build_settings_redirect_url(yookassa_error="connection_failed"))
 
         if resp.status_code != 200:
             logger.error(
                 "yookassa: oauth token exchange error status=%s body=%s client_uuid=%s",
                 resp.status_code, resp.text, client_uuid,
             )
-            return Response({"detail": "YooKassa вернула ошибку при обмене токена."}, status=status.HTTP_502_BAD_GATEWAY)
+            return HttpResponseRedirect(_build_settings_redirect_url(yookassa_error="token_exchange_failed"))
 
-        token_data = resp.json()
+        try:
+            token_data = resp.json()
+        except ValueError:
+            logger.error("yookassa: oauth token exchange returned non-json body client_uuid=%s", client_uuid)
+            return HttpResponseRedirect(_build_settings_redirect_url(yookassa_error="token_exchange_failed"))
         oauth_token = token_data.get("access_token")
 
         if not oauth_token:
             logger.error("yookassa: oauth response missing access_token client_uuid=%s", client_uuid)
-            return Response({"detail": "Не получен access_token."}, status=status.HTTP_502_BAD_GATEWAY)
+            return HttpResponseRedirect(_build_settings_redirect_url(yookassa_error="missing_access_token"))
 
         # Сохраняем токен и помечаем клиента как подключённого
         client.yookassa_oauth_token = oauth_token
@@ -403,9 +447,7 @@ class YooKassaOAuthCallbackView(APIView):
         _register_client_webhooks(client)
 
         # Редиректим обратно в настройки
-        site_url = getattr(settings, "SITE_BASE_URL", "").rstrip("/")
-        redirect_url = f"{site_url}/settings?tab=payment&connected=true"
-        return Response({"redirect_url": redirect_url})
+        return HttpResponseRedirect(_build_settings_redirect_url(connected="true"))
 
 
 class YooKassaOAuthDisconnectView(APIView):

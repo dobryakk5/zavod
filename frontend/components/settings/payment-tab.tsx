@@ -294,6 +294,32 @@ export function PaymentTab() {
     void refreshStatus(paymentId);
   }, [paymentId]);
 
+  useEffect(() => {
+    const isConnected = searchParams.get('connected') === 'true';
+    const yookassaError = searchParams.get('yookassa_error');
+
+    if (isConnected) {
+      toast.success('YooKassa успешно подключена.');
+      void loadSubscription(false);
+      return;
+    }
+
+    if (!yookassaError) {
+      return;
+    }
+
+    const errorMessages: Record<string, string> = {
+      invalid_params: 'Не удалось подключить YooKassa: некорректные параметры OAuth.',
+      client_not_found: 'Не удалось подключить YooKassa: клиент не найден.',
+      oauth_not_configured: 'OAuth YooKassa не настроен на сервере.',
+      connection_failed: 'Ошибка соединения с YooKassa. Повторите попытку чуть позже.',
+      token_exchange_failed: 'YooKassa вернула ошибку при обмене токена.',
+      missing_access_token: 'YooKassa не вернула access_token.',
+    };
+
+    toast.error(errorMessages[yookassaError] || 'Не удалось подключить YooKassa.');
+  }, [loadSubscription, searchParams]);
+
   const onPlanSelect = (nextPlanId: string) => {
     setPlanId(nextPlanId);
     const nextPlan = plans.find((plan) => plan.code === nextPlanId);

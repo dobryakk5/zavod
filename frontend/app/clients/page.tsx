@@ -6,13 +6,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Calendar } from 'lucide-react';
 import { crmContactsApi, crmEventsApi } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
+import { chainsApi, type ChainCatalogItem } from '@/lib/api/chains';
 import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezone } from '@/lib/timezone';
 import { ClientsTab } from '../products/clients-tab';
 import { CategoriesTab } from '../products/categories-tab';
 import ScheduleTasksView from '../schedule/tasks-view';
 import NewClientsEditor from './new/new-clients-editor';
 import ClientsSchedule from './clients-schedule';
-import ChainEditor from '@/components/chain-editor';
 
 type ClientsStats = {
   upcomingEvents: number;
@@ -44,6 +44,9 @@ export default function ClientsPage() {
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
+  const [chatbotChains, setChatbotChains] = useState<ChainCatalogItem[]>([]);
+  const [chatbotChainsLoading, setChatbotChainsLoading] = useState(true);
+  const [chatbotChainsError, setChatbotChainsError] = useState<string | null>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -100,6 +103,34 @@ export default function ClientsPage() {
     };
 
     void loadStats();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadChatbotChains = async () => {
+      setChatbotChainsLoading(true);
+      setChatbotChainsError(null);
+      try {
+        const items = await chainsApi.list();
+        if (!isActive) return;
+        setChatbotChains(items);
+      } catch (err) {
+        if (!isActive) return;
+        console.error('Failed to load chatbot chains', err);
+        setChatbotChainsError('Не удалось загрузить список цепочек.');
+      } finally {
+        if (isActive) {
+          setChatbotChainsLoading(false);
+        }
+      }
+    };
+
+    void loadChatbotChains();
 
     return () => {
       isActive = false;
@@ -198,8 +229,40 @@ export default function ClientsPage() {
         </TabsContent>
 
         <TabsContent value="welcome-chain" className="space-y-6">
-          <div className="bg-white rounded-lg p-4 h-[70vh]">
-            <ChainEditor className="h-full" />
+          <div className="bg-white rounded-lg p-6 space-y-4">
+            <div>
+              <h2 className="text-xl font-semibold">Цепочки ChatBot</h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                Выберите цепочку и откройте отдельную страницу редактора.
+              </p>
+            </div>
+
+            {chatbotChainsLoading && (
+              <p className="text-sm text-muted-foreground">Загрузка цепочек...</p>
+            )}
+
+            {chatbotChainsError && (
+              <p className="text-sm text-red-500">{chatbotChainsError}</p>
+            )}
+
+            {!chatbotChainsLoading && !chatbotChainsError && (
+              <div className="space-y-3">
+                {chatbotChains.map((chain) => (
+                  <Link
+                    key={chain.id}
+                    href={`/clients/chatbot/${chain.id}`}
+                    className="block rounded-lg border border-slate-200 px-4 py-3 transition-colors hover:bg-slate-50"
+                  >
+                    <div>
+                      <div className="font-medium text-slate-900">{chain.title}</div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        ID: {chain.id} · Статус: {chain.status}
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
         </TabsContent>
       </Tabs>

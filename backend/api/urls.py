@@ -108,6 +108,7 @@ from .views_crm_orm import (
     MapContactTagsViewSet,
 )
 from .views_chains import (
+    ChainsListView,
     CurrentChainView,
     CurrentChainGraphView,
     ChainNodesView,
@@ -247,7 +248,8 @@ urlpatterns = [
     path('crm/notes/', NotesListView.as_view(), name='crm-notes-list'),
     path('crm/notes/<int:note_id>/', NoteDetailView.as_view(), name='crm-note-detail'),
 
-    # Welcome chain endpoints (single chain per tenant)
+    # Chains / chatbot endpoints
+    path('chains/', ChainsListView.as_view(), name='chains-list'),
     path('chains/current/', CurrentChainView.as_view(), name='chains-current'),
     path('chains/current/graph/', CurrentChainGraphView.as_view(), name='chains-current-graph'),
     path('chains/current/nodes/', ChainNodesView.as_view(), name='chains-current-nodes'),
@@ -256,6 +258,14 @@ urlpatterns = [
     path('chains/current/edges/<int:edge_id>/', ChainEdgeDetailView.as_view(), name='chains-current-edge-detail'),
     path('chains/current/edges/<int:edge_id>/conditions/', ChainEdgeConditionsView.as_view(), name='chains-current-edge-conditions'),
     path('chains/current/edges/<int:edge_id>/conditions/<int:condition_id>/', ChainEdgeConditionDetailView.as_view(), name='chains-current-edge-condition'),
+    path('chains/<int:chain_id>/', CurrentChainView.as_view(), name='chains-detail'),
+    path('chains/<int:chain_id>/graph/', CurrentChainGraphView.as_view(), name='chains-graph'),
+    path('chains/<int:chain_id>/nodes/', ChainNodesView.as_view(), name='chains-nodes'),
+    path('chains/<int:chain_id>/nodes/<int:node_id>/', ChainNodeDetailView.as_view(), name='chains-node-detail'),
+    path('chains/<int:chain_id>/edges/', ChainEdgesView.as_view(), name='chains-edges'),
+    path('chains/<int:chain_id>/edges/<int:edge_id>/', ChainEdgeDetailView.as_view(), name='chains-edge-detail'),
+    path('chains/<int:chain_id>/edges/<int:edge_id>/conditions/', ChainEdgeConditionsView.as_view(), name='chains-edge-conditions'),
+    path('chains/<int:chain_id>/edges/<int:edge_id>/conditions/<int:condition_id>/', ChainEdgeConditionDetailView.as_view(), name='chains-edge-condition'),
 
     # Include router URLs
     path('', include(router.urls)),

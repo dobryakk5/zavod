@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.models import Chain, ChainCondition, ChainEdge, ChainNode
-from core.services.chain_service import get_or_create_chain
+from core.services.chain_service import CHAIN_DEFINITIONS, WELCOME_CHAIN_KEY, ensure_predefined_chains
 from api.permissions import IsTenantMember, IsTenantOwnerOrEditor
 from api.serializers import (
     ChainSerializer,
@@ -17,8 +17,11 @@ from api.serializers import (
 from api.utils import get_active_client
 
 
-def _get_or_create_chain(client) -> Chain:
-    return get_or_create_chain(client)
+def _get_or_create_chain(client, chain_id: int | None = None) -> Chain:
+    chains = ensure_predefined_chains(client)
+    if chain_id is None:
+        return chains[WELCOME_CHAIN_KEY]
+    return get_object_or_404(Chain.objects.filter(tenant=client), pk=chain_id)
 
 
 def _build_graph(chain: Chain) -> dict:
@@ -55,14 +58,14 @@ class CurrentChainView(APIView):
             return [IsTenantOwnerOrEditor()]
         return super().get_permissions()
 
-    def get(self, request):
+    def get(self, request, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         return Response(ChainSerializer(chain).data)
 
-    def patch(self, request):
+    def patch(self, request, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         serializer = ChainSerializer(chain, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
@@ -79,18 +82,36 @@ class CurrentChainView(APIView):
 class CurrentChainGraphView(APIView):
     permission_classes = [IsTenantMember]
 
+    def get(self, request, chain_id: int | None = None):
+        client = get_active_client(request.user)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
+        return Response(_build_graph(chain))
+
+
+class ChainsListView(APIView):
+    permission_classes = [IsTenantMember]
+
     def get(self, request):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
-        return Response(_build_graph(chain))
+        chains = ensure_predefined_chains(client)
+        payload = []
+        for definition in CHAIN_DEFINITIONS:
+            chain = chains.get(definition["key"])
+            if not chain:
+                continue
+            data = ChainSerializer(chain).data
+            data["key"] = definition["key"]
+            data["title"] = definition["title"]
+            payload.append(data)
+        return Response(payload)
 
 
 class ChainNodesView(APIView):
     permission_classes = [IsTenantOwnerOrEditor]
 
-    def post(self, request):
+    def post(self, request, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         serializer = ChainNodeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         node = serializer.save(chain=chain)
@@ -100,18 +121,18 @@ class ChainNodesView(APIView):
 class ChainNodeDetailView(APIView):
     permission_classes = [IsTenantOwnerOrEditor]
 
-    def patch(self, request, node_id: int):
+    def patch(self, request, node_id: int, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         node = get_object_or_404(ChainNode.objects.filter(chain=chain), pk=node_id)
         serializer = ChainNodeSerializer(node, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(ChainNodeSerializer(node).data)
 
-    def delete(self, request, node_id: int):
+    def delete(self, request, node_id: int, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         node = get_object_or_404(ChainNode.objects.filter(chain=chain), pk=node_id)
         if node.node_type == "start":
             return Response({"detail": "Нельзя удалить стартовый узел"}, status=status.HTTP_400_BAD_REQUEST)
@@ -125,9 +146,9 @@ class ChainNodeDetailView(APIView):
 class ChainEdgesView(APIView):
     permission_classes = [IsTenantOwnerOrEditor]
 
-    def post(self, request):
+    def post(self, request, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         serializer = ChainEdgeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -145,9 +166,9 @@ class ChainEdgesView(APIView):
 class ChainEdgeDetailView(APIView):
     permission_classes = [IsTenantOwnerOrEditor]
 
-    def patch(self, request, edge_id: int):
+    def patch(self, request, edge_id: int, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         edge = get_object_or_404(ChainEdge.objects.filter(chain=chain), pk=edge_id)
         serializer = ChainEdgeSerializer(edge, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -162,9 +183,9 @@ class ChainEdgeDetailView(APIView):
         serializer.save()
         return Response(ChainEdgeSerializer(edge).data)
 
-    def delete(self, request, edge_id: int):
+    def delete(self, request, edge_id: int, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         edge = get_object_or_404(ChainEdge.objects.filter(chain=chain), pk=edge_id)
         edge.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -173,16 +194,16 @@ class ChainEdgeDetailView(APIView):
 class ChainEdgeConditionsView(APIView):
     permission_classes = [IsTenantOwnerOrEditor]
 
-    def get(self, request, edge_id: int):
+    def get(self, request, edge_id: int, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         edge = get_object_or_404(ChainEdge.objects.filter(chain=chain), pk=edge_id)
         conditions = ChainCondition.objects.filter(edge=edge).order_by("created_at", "id")
         return Response(ChainConditionSerializer(conditions, many=True).data)
 
-    def post(self, request, edge_id: int):
+    def post(self, request, edge_id: int, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         edge = get_object_or_404(ChainEdge.objects.filter(chain=chain), pk=edge_id)
         serializer = ChainConditionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -193,9 +214,9 @@ class ChainEdgeConditionsView(APIView):
 class ChainEdgeConditionDetailView(APIView):
     permission_classes = [IsTenantOwnerOrEditor]
 
-    def delete(self, request, edge_id: int, condition_id: int):
+    def delete(self, request, edge_id: int, condition_id: int, chain_id: int | None = None):
         client = get_active_client(request.user)
-        chain = _get_or_create_chain(client)
+        chain = _get_or_create_chain(client, chain_id=chain_id)
         edge = get_object_or_404(ChainEdge.objects.filter(chain=chain), pk=edge_id)
         condition = get_object_or_404(ChainCondition.objects.filter(edge=edge), pk=condition_id)
         condition.delete()
