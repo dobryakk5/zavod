@@ -64,6 +64,15 @@ from .weekly import (
 # --- System ---
 from .system import SystemSetting, GeneratorPrompt, GenerationEvent
 
+# --- Map CRM (map.* schema, managed=False) ---
+from .map_crm import (
+    MapContact,
+    MapCRMPayment,
+    MapCRMTag,
+    MapContactTag,
+    MapCRMCategory,
+)
+
 # --- Unmanaged (managed=False, map.* и chains.*) ---
 from .unmanaged import (
     ProductType,
@@ -89,6 +98,9 @@ from .unmanaged import (
     UserTenantBinding,
     TelegramTask,
 )
+
+# --- Referral ---
+from core.referral import ReferralCode, Referral
 
 __all__ = [
     # Mixins
@@ -161,6 +173,12 @@ __all__ = [
     "SystemSetting",
     "GeneratorPrompt",
     "GenerationEvent",
+    # Map CRM
+    "MapContact",
+    "MapCRMPayment",
+    "MapCRMTag",
+    "MapContactTag",
+    "MapCRMCategory",
     # Unmanaged
     "ProductType",
     "ClientProduct",
@@ -184,4 +202,7 @@ __all__ = [
     "ChainSession",
     "UserTenantBinding",
     "TelegramTask",
+    # Referral
+    "ReferralCode",
+    "Referral",
 ]

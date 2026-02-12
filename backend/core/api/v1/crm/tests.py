@@ -265,11 +265,45 @@ class CRMPaymentsAPITest(CRMTestCase):
         """Тест получения сводки по платежам"""
         url = reverse('crm-payment-summary')
         response = self.client.get(url)
-        
+
         self.assertEqual(response.status_code, 200)
         self.assertIn('total_paid', response.data)
         self.assertIn('total_pending', response.data)
         self.assertIn('by_currency', response.data)
+
+    def test_get_client_payments(self):
+        """Тест получения платежей конкретного клиента"""
+        url = reverse('crm-client-payments', kwargs={'pk': self.crm_client.id})
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        # Должен вернуть список платежей для конкретного клиента
+        self.assertIsInstance(response.data, list)
+        # Убедимся, что возвращается платеж, созданный в setUp
+        self.assertGreaterEqual(len(response.data), 1)
+        # Проверим, что все возвращенные платежи принадлежат нужному клиенту
+        for payment in response.data:
+            self.assertEqual(payment['client']['id'], self.crm_client.id)
+
+    def test_create_payment_for_client(self):
+        """Тест создания платежа для конкретного клиента"""
+        url = reverse('crm-client-create-payment', kwargs={'pk': self.crm_client.id})
+        data = {
+            'amount': 7500.00,
+            'currency': 'RUB',
+            'status': 'paid',
+            'payment_method': 'card',
+            'description': 'Оплата за дополнительные услуги'
+        }
+
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, 201)
+
+        # Проверим, что платеж был создан и принадлежит нужному клиенту
+        self.assertEqual(Payment.objects.count(), 2)
+        new_payment = Payment.objects.get(description='Оплата за дополнительные услуги')
+        self.assertEqual(new_payment.client.id, self.crm_client.id)
+        self.assertEqual(float(new_payment.amount), 7500.00)
 
 
 class CRMNotesAPITest(CRMTestCase):

@@ -87,6 +87,8 @@ export const kbSharesApi = {
     apiFetch(`/kb/shares/${id}/revoke/`, { method: 'POST' }),
   byToken: async (token: string): Promise<KbDocumentShare> =>
     apiFetch<KbDocumentShare>(`/kb/shares/by_token/${encodeURIComponent(token)}/`),
+  resolveDocumentByToken: async (token: string, documentId: number): Promise<KbDocumentShare> =>
+    apiFetch<KbDocumentShare>(`/kb/shares/by_token/${encodeURIComponent(token)}/document/${documentId}/`),
 };
 
 export const kbTagsApi = {

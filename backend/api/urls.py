@@ -36,6 +36,7 @@ from .views import (
     TelegramAuthView,
     TelegramTaskListView,
     YooKassaCreatePaymentView,
+    YooKassaCreatePaymentLinkView,
     YooKassaPaymentStatusView,
     PaymentPlanListView,
     PaymentPromoCodeApplyView,
@@ -89,24 +90,22 @@ from .views_tgstat import (
 )
 
 from .views_map_crm import (
-    ContactsListView,
-    ContactDetailView,
     ContactTelegramLinkView,
-    TagsListView,
-    TagDetailView,
-    ContactTagsView,
-    CategoriesListView,
-    CategoryDetailView,
     EventTypesListView,
     EventTypeDetailView,
     EventsListView,
     EventDetailView,
     AvailabilityEventsListView,
     AvailabilityEventDetailView,
-    PaymentsListView,
-    PaymentDetailView,
     NotesListView,
     NoteDetailView,
+)
+from .views_crm_orm import (
+    MapContactViewSet,
+    MapCRMPaymentViewSet,
+    MapCRMTagViewSet,
+    MapCRMCategoryViewSet,
+    MapContactTagsViewSet,
 )
 from .views_chains import (
     CurrentChainView,
@@ -159,6 +158,14 @@ router.register(r'kb/shares', KbDocumentShareViewSet, basename='kb-share')
 router.register(r'kb/tags', KbTagViewSet, basename='kb-tag')
 router.register(r'kb/search', KbSearchViewSet, basename='kb-search')
 
+# CRM router (ORM для contacts, payments, tags, categories)
+crm_router = DefaultRouter()
+crm_router.register(r'contacts', MapContactViewSet, basename='crm-contact')
+crm_router.register(r'payments', MapCRMPaymentViewSet, basename='crm-payment')
+crm_router.register(r'tags', MapCRMTagViewSet, basename='crm-tag')
+crm_router.register(r'categories', MapCRMCategoryViewSet, basename='crm-category')
+crm_router.register(r'contact-tags', MapContactTagsViewSet, basename='crm-contact-tag')
+
 urlpatterns = [
     # Analytics endpoint (must be before router to avoid conflicts)
     path('tg_channel/', TgChannelView.as_view(), name='tg_channel'),
@@ -196,6 +203,7 @@ urlpatterns = [
 
     # Payments
     path('payments/create/', YooKassaCreatePaymentView.as_view(), name='yookassa-create-payment'),
+    path('payments/link/', YooKassaCreatePaymentLinkView.as_view(), name='yookassa-create-payment-link'),
     path('payments/status/<str:payment_id>/', YooKassaPaymentStatusView.as_view(), name='yookassa-payment-status'),
     path('payments/plans/', PaymentPlanListView.as_view(), name='payment-plans'),
     path('payments/subscription/', PaymentSubscriptionView.as_view(), name='payment-subscription'),
@@ -226,23 +234,16 @@ urlpatterns = [
     # Mind map endpoints
     path('map/nodes/<uuid:node_id>/position/', MindNodePositionView.as_view(), name='mind-node-position'),
 
-    # CRM endpoints
-    path('crm/contacts/', ContactsListView.as_view(), name='crm-contacts-list'),
-    path('crm/contacts/<int:contact_id>/', ContactDetailView.as_view(), name='crm-contact-detail'),
+    # CRM endpoints: ORM для contacts, tags, categories, payments, contact-tags
     path('crm/contacts/<int:contact_id>/telegram-link/', ContactTelegramLinkView.as_view(), name='crm-contact-telegram-link'),
-    path('crm/tags/', TagsListView.as_view(), name='crm-tags-list'),
-    path('crm/tags/<int:tag_id>/', TagDetailView.as_view(), name='crm-tag-detail'),
-    path('crm/contact-tags/', ContactTagsView.as_view(), name='crm-contact-tags'),
-    path('crm/categories/', CategoriesListView.as_view(), name='crm-categories-list'),
-    path('crm/categories/<int:category_id>/', CategoryDetailView.as_view(), name='crm-category-detail'),
+    path('crm/', include(crm_router.urls)),
+    # CRM: Raw SQL для events, notes (пока)
     path('crm/event-types/', EventTypesListView.as_view(), name='crm-event-types-list'),
     path('crm/event-types/<int:event_type_id>/', EventTypeDetailView.as_view(), name='crm-event-type-detail'),
     path('crm/events/', EventsListView.as_view(), name='crm-events-list'),
     path('crm/events/<int:event_id>/', EventDetailView.as_view(), name='crm-event-detail'),
     path('crm/availability-events/', AvailabilityEventsListView.as_view(), name='crm-availability-events-list'),
     path('crm/availability-events/<int:event_id>/', AvailabilityEventDetailView.as_view(), name='crm-availability-event-detail'),
-    path('crm/payments/', PaymentsListView.as_view(), name='crm-payments-list'),
-    path('crm/payments/<int:payment_id>/', PaymentDetailView.as_view(), name='crm-payment-detail'),
     path('crm/notes/', NotesListView.as_view(), name='crm-notes-list'),
     path('crm/notes/<int:note_id>/', NoteDetailView.as_view(), name='crm-note-detail'),
 

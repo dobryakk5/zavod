@@ -22,7 +22,7 @@ from rest_framework.views import APIView
 
 from .permissions import IsTenantMember
 from .utils import get_active_client
-from core.models import Client, PaymentPlan, YooKassaPayment  # добавлена YooKassaPayment
+from core.models import Client, PaymentPlan, YooKassaPayment, MapCRMPayment  # добавлена YooKassaPayment
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -157,6 +157,65 @@ def _apply_payment_plan(payment: dict) -> None:
         "yookassa: plan applied client_id=%s plan=%s expires_at=%s",
         client_id, plan.code, expires_at,
     )
+
+
+def _parse_payment_success_at(payment: dict) -> datetime:
+    confirmed_at = payment.get("captured_at") or payment.get("paid_at") or payment.get("created_at")
+    return _parse_payment_created_at(confirmed_at)
+
+
+def _mark_crm_payment_paid(payment: dict) -> None:
+    if payment.get("status") != "succeeded" or not payment.get("paid"):
+        return
+
+    metadata = payment.get("metadata") or {}
+    crm_payment_id = metadata.get("crm_payment_id")
+    yookassa_payment_id = payment.get("id")
+
+    crm_payment = None
+    if crm_payment_id:
+        try:
+            crm_payment = MapCRMPayment.objects.filter(id=int(str(crm_payment_id))).first()
+        except (TypeError, ValueError):
+            crm_payment = None
+
+    if not crm_payment and yookassa_payment_id:
+        crm_payment = MapCRMPayment.objects.filter(transaction_id=str(yookassa_payment_id)).first()
+
+    if not crm_payment:
+        logger.info(
+            "yookassa: crm payment not found for update yookassa_payment_id=%s crm_payment_id=%s",
+            yookassa_payment_id,
+            crm_payment_id,
+        )
+        return
+
+    update_fields: list[str] = []
+    if crm_payment.status != "paid":
+        crm_payment.status = "paid"
+        update_fields.append("status")
+
+    paid_at = _parse_payment_success_at(payment)
+    if not crm_payment.paid_at or crm_payment.paid_at != paid_at:
+        crm_payment.paid_at = paid_at
+        update_fields.append("paid_at")
+
+    if yookassa_payment_id and crm_payment.transaction_id != str(yookassa_payment_id):
+        crm_payment.transaction_id = str(yookassa_payment_id)
+        update_fields.append("transaction_id")
+
+    payment_method = (payment.get("payment_method") or {}).get("type")
+    if payment_method and crm_payment.payment_method != str(payment_method):
+        crm_payment.payment_method = str(payment_method)
+        update_fields.append("payment_method")
+
+    if update_fields:
+        crm_payment.save(update_fields=update_fields)
+        logger.info(
+            "yookassa: crm payment marked as paid crm_payment_id=%s yookassa_payment_id=%s",
+            crm_payment.id,
+            yookassa_payment_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +610,128 @@ class YooKassaCreatePaymentView(APIView):
         return Response(response_payload, status=status.HTTP_201_CREATED)
 
 
+class YooKassaCreatePaymentLinkView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        user = request.user
+        api_url = settings.YOOKASSA_API_URL
+
+        shop_id, secret_or_token, auth_type = _get_yookassa_credentials(client)
+        if not secret_or_token:
+            logger.error("yookassa: credentials are missing for payment link client_id=%s", client.id)
+            return Response(
+                {"detail": "YooKassa не подключена. Пожалуйста, настройте оплату в разделе настроек."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        amount_raw = request.data.get("amount")
+        currency = str(request.data.get("currency") or "RUB").strip().upper() or "RUB"
+        description = (request.data.get("description") or "Оплата").strip()
+        return_url = (
+            request.data.get("return_url")
+            or _get_client_return_url(client)
+            or settings.YOOKASSA_RETURN_URL
+        )
+
+        if not return_url:
+            return Response({"detail": "return_url is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            amount = Decimal(str(amount_raw)).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError):
+            return Response({"detail": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if amount <= 0:
+            return Response({"detail": "Amount must be greater than zero."}, status=status.HTTP_400_BAD_REQUEST)
+
+        idempotence_key = str(uuid.uuid4())
+        metadata_payload: dict[str, str] = {
+            "client_id": str(client.id),
+            "client_slug": str(client.slug),
+            "telegram_id": str(client.slug),
+            "telegram_username": str(user.username),
+            "telegram_user_id": str(user.id),
+            "payment_kind": "crm_payment_link",
+        }
+
+        raw_metadata = request.data.get("metadata")
+        if isinstance(raw_metadata, dict):
+            for key, value in raw_metadata.items():
+                if value is None:
+                    continue
+                metadata_payload[str(key)] = str(value)
+
+        metadata_email = _normalize_email(metadata_payload.get("email"))
+        if metadata_email and metadata_email != user.email:
+            user.email = metadata_email
+            user.save(update_fields=["email"])
+
+        payload: dict[str, object] = {
+            "amount": {"value": f"{amount:.2f}", "currency": currency},
+            "confirmation": {"type": "redirect", "return_url": return_url},
+            "capture": True,
+            "description": description,
+            "metadata": metadata_payload,
+        }
+
+        request_kwargs = _build_yookassa_request_kwargs(shop_id, secret_or_token, auth_type, idempotence_key)
+
+        try:
+            response = requests.post(api_url, json=payload, timeout=15, **request_kwargs)
+        except requests.RequestException as exc:
+            logger.exception("yookassa: payment link request failed idempotence_key=%s", idempotence_key)
+            return Response({"detail": f"YooKassa request failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        if response.status_code not in (200, 201):
+            logger.error(
+                "yookassa: payment link error status=%s idempotence_key=%s body=%s",
+                response.status_code,
+                idempotence_key,
+                response.text,
+            )
+            return Response(
+                {"detail": "YooKassa returned an error.", "status_code": response.status_code, "body": response.text},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        data = response.json()
+        payment_id = data.get("id")
+        confirmation = data.get("confirmation") or {}
+        confirmation_url = confirmation.get("confirmation_url")
+
+        if payment_id:
+            YooKassaPayment.objects.get_or_create(
+                payment_id=payment_id,
+                defaults={
+                    "client": client,
+                    "status": str(data.get("status") or YooKassaPayment.STATUS_PENDING),
+                    "amount": amount,
+                },
+            )
+
+            crm_payment_id = metadata_payload.get("crm_payment_id")
+            if crm_payment_id:
+                try:
+                    crm_payment = MapCRMPayment.objects.filter(id=int(str(crm_payment_id))).first()
+                except (TypeError, ValueError):
+                    crm_payment = None
+                if crm_payment and crm_payment.transaction_id != str(payment_id):
+                    crm_payment.transaction_id = str(payment_id)
+                    crm_payment.save(update_fields=["transaction_id"])
+
+        return Response(
+            {
+                "id": payment_id,
+                "status": data.get("status"),
+                "confirmation_url": confirmation_url,
+                "payment_url": confirmation_url,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
 # ---------------------------------------------------------------------------
 # UPDATED: PaymentStatus — теперь берёт ключи клиента
 # ---------------------------------------------------------------------------
@@ -625,6 +806,7 @@ class YooKassaPaymentStatusView(APIView):
         if data.get("status") == "succeeded" and data.get("paid"):
             try:
                 _apply_payment_plan(data)
+                _mark_crm_payment_paid(data)
                 if yk_payment:
                     yk_payment.status = "succeeded"
                     yk_payment.save(update_fields=["status"])
@@ -755,6 +937,11 @@ class YooKassaWebhookView(APIView):
             _apply_payment_plan(payment)
         except Exception:
             logger.exception("yookassa: failed to apply plan payment_id=%s", payment_id)
+
+        try:
+            _mark_crm_payment_paid(payment)
+        except Exception:
+            logger.exception("yookassa: failed to mark crm payment as paid payment_id=%s", payment_id)
 
         try:
             _send_payment_confirmation(payment)

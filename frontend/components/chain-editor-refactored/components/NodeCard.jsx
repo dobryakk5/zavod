@@ -127,7 +127,7 @@ export function NodeCard({
           </div>
           
           {node.payload?.text && (
-            <p className="text-sm text-slate-700 text-center leading-snug">
+            <p className="text-sm text-slate-700 text-center leading-snug line-clamp-2">
               {node.payload.text}
             </p>
           )}

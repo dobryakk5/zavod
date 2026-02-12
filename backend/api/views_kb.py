@@ -48,6 +48,26 @@ def _issue_share_token() -> str:
     return secrets.token_hex(16)
 
 
+def _is_document_in_subtree(root_document_id: int, target_document: KbDocument) -> bool:
+    """
+    Checks whether target_document belongs to the subtree rooted at root_document_id.
+    """
+    current_id: Optional[int] = target_document.id
+    visited: set[int] = set()
+
+    while current_id and current_id not in visited:
+        if current_id == root_document_id:
+            return True
+        visited.add(current_id)
+        current_id = (
+            KbDocument.objects.filter(pk=current_id)
+            .values_list("parent_document_id", flat=True)
+            .first()
+        )
+
+    return False
+
+
 def _extract_meta_content(tag) -> str:
     if not tag:
         return ""
@@ -369,7 +389,7 @@ class KbDocumentShareViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy", "revoke"}:
             return [IsTenantOwnerOrEditor()]
-        if self.action in {"by_token"}:
+        if self.action in {"by_token", "resolve_document_by_token"}:
             return [AllowAny()]
         return super().get_permissions()
 
@@ -407,6 +427,57 @@ class KbDocumentShareViewSet(viewsets.ModelViewSet):
         data = KbDocumentShareSerializer(share, context=self.get_serializer_context()).data
         data["document_detail"] = KbDocumentDetailSerializer(share.document, context=self.get_serializer_context()).data
         return Response(data)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"by_token/(?P<token>[^/.]+)/document/(?P<document_id>\d+)",
+        permission_classes=[AllowAny],
+    )
+    def resolve_document_by_token(self, request, token=None, document_id=None):
+        root_share = get_object_or_404(
+            KbDocumentShare.objects.select_related("document", "created_by"),
+            share_token=token,
+        )
+
+        if not root_share.is_active:
+            return Response({"detail": "Ссылка не активна"}, status=status.HTTP_404_NOT_FOUND)
+        if root_share.expires_at and root_share.expires_at < timezone.now():
+            return Response({"detail": "Ссылка истекла"}, status=status.HTTP_410_GONE)
+
+        target_document = get_object_or_404(
+            KbDocument.objects.filter(
+                id=document_id,
+                workspace_id=root_share.document.workspace_id,
+                is_archived=False,
+            )
+        )
+
+        if not _is_document_in_subtree(root_share.document_id, target_document):
+            return Response({"detail": "Документ недоступен по этой ссылке"}, status=status.HTTP_404_NOT_FOUND)
+
+        resolved_share = (
+            KbDocumentShare.objects.filter(document_id=target_document.id, is_active=True)
+            .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+            .order_by("-created_at")
+            .first()
+        )
+
+        if not resolved_share:
+            token_value = _issue_share_token()
+            while KbDocumentShare.objects.filter(share_token=token_value).exists():
+                token_value = _issue_share_token()
+            resolved_share = KbDocumentShare.objects.create(
+                document=target_document,
+                share_token=token_value,
+                permission="view",
+                created_by=root_share.created_by,
+                is_active=True,
+            )
+
+        return Response(
+            KbDocumentShareSerializer(resolved_share, context=self.get_serializer_context()).data
+        )
 
 
 class KbTagViewSet(viewsets.ModelViewSet):

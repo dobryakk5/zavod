@@ -90,6 +90,13 @@ export type Payment = {
   updated_at: string;
 };
 
+export type YooKassaPaymentLinkResponse = {
+  id?: string;
+  status?: string;
+  confirmation_url?: string;
+  payment_url?: string;
+};
+
 export type Note = {
   id: number;
   contact_id: number;
@@ -353,6 +360,19 @@ export const crmPaymentsApi = {
   delete: async (id: number | string): Promise<void> => {
     return apiFetch<void>(`/crm/payments/${id}/`, {
       method: 'DELETE',
+    });
+  },
+
+  generateYooKassaLink: async (data: {
+    amount: number;
+    currency?: string;
+    description?: string;
+    metadata?: Record<string, string>;
+    return_url?: string;
+  }): Promise<YooKassaPaymentLinkResponse> => {
+    return apiFetch<YooKassaPaymentLinkResponse>('/payments/link/', {
+      method: 'POST',
+      body: data,
     });
   },
 };

@@ -3,7 +3,7 @@ import base64
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from asgiref.sync import sync_to_async
@@ -32,6 +32,9 @@ from core.telegram_bot.meetings import meetings_router, send_meetings, get_bindi
 from core.telegram_bot.ui import main_menu, MEETINGS_BUTTON_TEXT, WELCOME_BUTTON_TEXT
 from core.services.chain_executor import ChainExecutor
 from core.tasks.chains import chains_send_delayed_message, chains_check_timeout, CHAIN_BUTTON_PREFIX
+
+# Referral
+from core.referral import Referral, ReferralCode, reward_referral_month
 
 
 logger = logging.getLogger(__name__)
@@ -68,6 +71,211 @@ def decode_start_param(start_param: str) -> dict:
         return json.loads(decoded)
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"Invalid start parameter: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Referral helpers
+# ---------------------------------------------------------------------------
+
+
+async def handle_referral_link(message: Message, start_param: str) -> None:
+    """
+    Обрабатывает /start ref_XXXXXXXX.
+    Находит ReferralCode, создаёт Referral, уведомляет пригласившего.
+    """
+    from_user = message.from_user
+    if from_user is None:
+        return
+
+    try:
+        referral_code = await sync_to_async(
+            ReferralCode.objects.select_related("client").get,
+            thread_sensitive=True,
+        )(code=start_param, is_active=True)
+    except ReferralCode.DoesNotExist:
+        await message.answer("❌ Реферальная ссылка недействительна или устарела.")
+        return
+
+    # Защита от самоприглашения / повторных регистраций
+    telegram_user_service = get_telegram_user_service()
+    existing_binding = await sync_to_async(
+        telegram_user_service.get_active_binding,
+        thread_sensitive=True,
+    )(from_user.id)
+
+    if existing_binding is not None:
+        if existing_binding.tenant_id == referral_code.client_id:
+            await message.answer(
+                "ℹ️ Вы уже подключены к этому клиенту.",
+                reply_markup=main_menu(),
+            )
+        else:
+            await message.answer(
+                "ℹ️ Вы уже зарегистрированы. Реферальная ссылка действует только для новых пользователей.",
+                reply_markup=main_menu(),
+            )
+        return
+
+    await sync_to_async(Referral.objects.create, thread_sensitive=True)(
+        referral_code=referral_code,
+        referrer=referral_code.client,
+        invited_telegram_id=from_user.id,
+        invited_telegram_username=from_user.username or "",
+        expires_at=timezone.now() + timedelta(days=30),
+    )
+
+    await message.answer(
+        "🎁 Вы перешли по реферальной ссылке!\n\n"
+        "После подключения вы и пригласивший вас получите бонус — бесплатный месяц подписки.\n\n"
+        "Используйте вашу персональную ссылку от администратора для привязки аккаунта.",
+        reply_markup=main_menu(),
+    )
+
+    # Уведомляем пригласившего — прямой запрос по binding (метода в сервисе нет)
+    try:
+        from core.models import UserTenantBinding
+
+        referrer_binding = await sync_to_async(
+            UserTenantBinding.objects.filter(tenant_id=referral_code.client_id, is_active=True)
+            .order_by("-bound_at")
+            .first,
+            thread_sensitive=True,
+        )()
+        if referrer_binding:
+            await message.bot.send_message(
+                chat_id=referrer_binding.telegram_chat_id,
+                text=(
+                    "🎉 По вашей реферальной ссылке перешёл пользователь "
+                    f"@{from_user.username or from_user.id}!\n\n"
+                    "После его привязки вы оба получите бонус."
+                ),
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to notify referrer (client_id=%s)", referral_code.client_id)
+
+
+async def _complete_pending_referral(telegram_id: int, tenant_id: int, message: Message) -> None:
+    """
+    Если у пользователя есть pending Referral — закрываем его после привязки к tenant
+    и начисляем бонус обоим (по бесплатному месяцу).
+    """
+    try:
+        from core.models import Client, UserTenantBinding
+
+        referee_client = await sync_to_async(
+            Client.objects.get,
+            thread_sensitive=True,
+        )(id=tenant_id)
+
+        referral = await sync_to_async(
+            Referral.objects.select_related("referral_code__client", "referrer")
+            .filter(invited_telegram_id=telegram_id, status=Referral.STATUS_PENDING)
+            .first,
+            thread_sensitive=True,
+        )()
+        if referral is None:
+            return
+
+        await sync_to_async(referral.mark_registered, thread_sensitive=True)(referee_client)
+        await sync_to_async(reward_referral_month, thread_sensitive=True)(
+            referrer=referral.referrer,
+            referee=referee_client,
+        )
+        await sync_to_async(referral.mark_rewarded, thread_sensitive=True)()
+
+        referrer_binding = await sync_to_async(
+            UserTenantBinding.objects.filter(tenant_id=referral.referrer_id, is_active=True)
+            .order_by("-bound_at")
+            .first,
+            thread_sensitive=True,
+        )()
+
+        if referrer_binding:
+            await message.bot.send_message(
+                chat_id=referrer_binding.telegram_chat_id,
+                text=(
+                    "✅ Ваш реферал успешно зарегистрировался!\n\n"
+                    "🎁 Вы получили бонус — бесплатный месяц подписки."
+                ),
+            )
+
+        await message.answer("🎁 Реферальный бонус активирован! Вы получили бесплатный месяц подписки.")
+
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to complete pending referral (telegram_id=%s)", telegram_id)
+
+
+async def handle_tenant_deeplink(message: Message, start_param: str) -> None:
+    """
+    Обрабатывает /start base64payload (обычный deeplink от TenantService).
+    Вынесено из handle_start_with_deeplink для читаемости.
+    """
+    from_user = message.from_user
+    if from_user is None:
+        return
+
+    try:
+        payload = decode_start_param(start_param)
+        tenant_id = payload.get("tid")
+        contact_id = payload.get("cid")
+
+        if not tenant_id:
+            await message.answer("❌ Неверная ссылка. Свяжитесь с администратором.")
+            return
+        try:
+            tenant_id = int(tenant_id)
+        except (TypeError, ValueError):
+            await message.answer("❌ Неверная ссылка. Свяжитесь с администратором.")
+            return
+
+        if contact_id is not None:
+            try:
+                contact_id = int(contact_id)
+            except (TypeError, ValueError):
+                await message.answer("❌ Неверная ссылка. Свяжитесь с администратором.")
+                return
+
+        telegram_user_service = get_telegram_user_service()
+        result = await sync_to_async(
+            telegram_user_service.bind_user_to_tenant,
+            thread_sensitive=True,
+        )(
+            telegram_chat_id=from_user.id,
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            telegram_username=from_user.username,
+        )
+
+        if result["status"] == "newly_bound":
+            await _complete_pending_referral(from_user.id, tenant_id, message)
+
+            await message.answer(
+                "✅ Вы успешно подключены к клиенту!\n"
+                "Добро пожаловать!",
+                reply_markup=main_menu(),
+            )
+            await message.answer(
+                "Запланируем встречу?",
+                reply_markup=get_binding_meeting_keyboard(),
+            )
+        else:
+            await message.answer(
+                "ℹ️ Вы уже подключены к этому клиенту.\n"
+                "Можете продолжить работу.",
+                reply_markup=main_menu(),
+            )
+
+    except ValueError:
+        await message.answer(
+            "❌ Неверная ссылка. Пожалуйста, получите новую ссылку от администратора.",
+            reply_markup=main_menu(),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to bind Telegram user (user_id=%s)", from_user.id)
+        await message.answer(
+            "❌ Произошла ошибка. Попробуйте позже или свяжитесь с поддержкой.",
+            reply_markup=main_menu(),
+        )
 
 
 def _store_task(
@@ -191,65 +399,11 @@ async def handle_start_with_deeplink(message: Message, command: CommandObject) -
         await message.answer("❌ Неверная ссылка. Свяжитесь с администратором.")
         return
 
-    try:
-        payload = decode_start_param(start_param)
-        tenant_id = payload.get("tid")
-        contact_id = payload.get("cid")
-
-        if not tenant_id:
-            await message.answer("❌ Неверная ссылка. Свяжитесь с администратором.")
-            return
-        try:
-            tenant_id = int(tenant_id)
-        except (TypeError, ValueError):
-            await message.answer("❌ Неверная ссылка. Свяжитесь с администратором.")
-            return
-
-        if contact_id is not None:
-            try:
-                contact_id = int(contact_id)
-            except (TypeError, ValueError):
-                await message.answer("❌ Неверная ссылка. Свяжитесь с администратором.")
-                return
-
-        telegram_user_service = get_telegram_user_service()
-        result = await sync_to_async(
-            telegram_user_service.bind_user_to_tenant,
-            thread_sensitive=True,
-        )(
-            telegram_chat_id=from_user.id,
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            telegram_username=from_user.username,
-        )
-
-        if result["status"] == "newly_bound":
-            await message.answer(
-                "✅ Вы успешно подключены к клиенту!\n"
-                "Добро пожаловать!",
-                reply_markup=main_menu(),
-            )
-            await message.answer(
-                "Запланируем встречу?",
-                reply_markup=get_binding_meeting_keyboard(),
-            )
-        else:
-            await message.answer(
-                "ℹ️ Вы уже подключены к этому клиенту.\n"
-                "Можете продолжить работу.",
-                reply_markup=main_menu(),
-            )
-    except ValueError:
-        await message.answer(
-            "❌ Неверная ссылка. Пожалуйста, получите новую ссылку от администратора.",
-            reply_markup=main_menu(),
-        )
-    except Exception:
-        logger.exception("Failed to bind Telegram user (user_id=%s)", from_user.id)
-        await message.answer(
-            "❌ Произошла ошибка. Попробуйте позже или свяжитесь с поддержкой.",
-            reply_markup=main_menu(),
-        )
+    # Referral: ref_* vs tenant deeplink (base64)
+    if ReferralCode.is_referral_code(start_param):
+        await handle_referral_link(message, start_param)
+    else:
+        await handle_tenant_deeplink(message, start_param)
 
 
 @router.message(CommandStart(deep_link=False))

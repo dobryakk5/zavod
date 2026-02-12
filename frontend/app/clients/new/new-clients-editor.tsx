@@ -9,10 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { PlusIcon, EditIcon, TrashIcon, XIcon } from 'lucide-react';
+import { PlusIcon, EditIcon, TrashIcon, XIcon, CopyIcon } from 'lucide-react';
 import { crmCategoriesApi, crmContactsApi, crmPaymentsApi } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
 import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezone } from '@/lib/timezone';
+import { toast } from 'sonner';
 
 // Типы данных для новой CRM-схемы с иерархией
 type Client = {
@@ -62,8 +63,10 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   const [clients, setClients] = useState<Client[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [paymentToEdit, setPaymentToEdit] = useState<Payment | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [paymentLinkLoadingId, setPaymentLinkLoadingId] = useState<number | null>(null);
   const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
 
   useEffect(() => {
@@ -82,7 +85,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
         if (!isActive) return;
 
         setClients(contactsData);
-        setPayments(paymentsData);
+        setPayments(paymentsData.map(normalizePayment));
         setCategories(categoriesData);
         try {
           const settings = await clientApi.getSettings();
@@ -126,6 +129,52 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
       return clients.find(client => client.id === childClient.parent_id);
     }
     return null;
+  };
+
+  const handleCopyPaymentLink = async (payment: Payment, paymentClient?: Client) => {
+    const numericAmount = Number.parseFloat(String(payment.amount).replace(',', '.'));
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      toast.error('Укажите корректную сумму платежа.');
+      return;
+    }
+
+    setPaymentLinkLoadingId(payment.id);
+    try {
+      const metadata: Record<string, string> = {
+        crm_payment_id: String(payment.id),
+        crm_contact_id: String(payment.contact_id),
+      };
+      if (paymentClient?.name) {
+        metadata.crm_contact_name = paymentClient.name;
+      }
+      if (paymentClient?.email) {
+        metadata.email = paymentClient.email;
+      }
+
+      const description = (payment.description || '').trim() || (
+        paymentClient ? `Оплата от клиента ${paymentClient.name}` : 'Оплата от клиента'
+      );
+
+      const response = await crmPaymentsApi.generateYooKassaLink({
+        amount: numericAmount,
+        currency: payment.currency || 'RUB',
+        description,
+        metadata,
+      });
+
+      const paymentUrl = response.payment_url || response.confirmation_url;
+      if (!paymentUrl) {
+        throw new Error('Payment URL was not returned');
+      }
+
+      await copyTextToClipboard(paymentUrl);
+      toast.success('Ссылка на оплату скопирована.');
+    } catch (err) {
+      console.error('Failed to generate YooKassa payment link', err);
+      toast.error('Не удалось сгенерировать ссылку оплаты.');
+    } finally {
+      setPaymentLinkLoadingId(null);
+    }
   };
 
   // Render only the active tab content
@@ -237,16 +286,16 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
                 Добавить платеж
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="bg-white text-black dark:bg-white dark:text-black">
               <DialogHeader>
-                <DialogTitle>Добавить новый платеж</DialogTitle>
-                <DialogDescription>
+                <DialogTitle className="text-black">Добавить новый платеж</DialogTitle>
+                <DialogDescription className="text-slate-600 dark:text-slate-600">
                   Зарегистрируйте платеж от клиента
                 </DialogDescription>
               </DialogHeader>
               <NewPaymentForm
                 clients={clients}
-                onSave={(newPayment) => setPayments((prev) => [newPayment, ...prev])}
+                onSave={(newPayment) => setPayments((prev) => [normalizePayment(newPayment), ...prev])}
               />
             </DialogContent>
           </Dialog>
@@ -305,7 +354,21 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
                     </TableCell>
                     <TableCell>
                       <div className="flex space-x-2">
-                        <Button variant="outline" size="sm">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void handleCopyPaymentLink(payment, client)}
+                          aria-label="Скопировать ссылку оплаты"
+                          disabled={paymentLinkLoadingId === payment.id}
+                        >
+                          <CopyIcon className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPaymentToEdit(payment)}
+                          aria-label="Редактировать платёж"
+                        >
                           <EditIcon className="h-4 w-4" />
                         </Button>
                         <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
@@ -319,6 +382,28 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
             </TableBody>
           </Table>
         </div>
+
+        <Dialog open={!!paymentToEdit} onOpenChange={(open) => !open && setPaymentToEdit(null)}>
+          <DialogContent className="bg-white text-black dark:bg-white dark:text-black">
+            <DialogHeader>
+              <DialogTitle className="text-black">Редактировать платёж</DialogTitle>
+              <DialogDescription className="text-slate-600 dark:text-slate-600">
+                Измените данные платежа и сохраните
+              </DialogDescription>
+            </DialogHeader>
+            {paymentToEdit && (
+              <EditPaymentForm
+                payment={paymentToEdit}
+                clients={clients}
+                onSave={(updated) => {
+                  setPayments((prev) => prev.map((p) => (p.id === updated.id ? normalizePayment(updated) : p)));
+                  setPaymentToEdit(null);
+                }}
+                onCancel={() => setPaymentToEdit(null)}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
@@ -594,8 +679,9 @@ function NewPaymentForm({ clients, onSave }: {
   clients: Client[], 
   onSave: (payment: Payment) => void 
 }) {
-  const [clientId, setClientId] = useState<number | null>(clients[0]?.id ?? null);
-  const [amount, setAmount] = useState('');
+  const selectableClients = clients.filter((client) => isFiniteNumber(client.id));
+  const [clientId, setClientId] = useState<number | null>(() => getSafeNumber(clients[0]?.id));
+  const [amount, setAmount] = useState<number | ''>('');
   const [currency, setCurrency] = useState('RUB');
   const [status, setStatus] = useState<'pending' | 'paid' | 'failed' | 'refunded'>('pending');
   const [paymentMethod, setPaymentMethod] = useState('');
@@ -604,19 +690,24 @@ function NewPaymentForm({ clients, onSave }: {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    if (clients.length === 0) {
+    if (selectableClients.length === 0) {
       if (clientId !== null) setClientId(null);
       return;
     }
-    if (clientId === null || !clients.some((client) => client.id === clientId)) {
-      setClientId(clients[0].id);
+    if (clientId === null || !selectableClients.some((client) => client.id === clientId)) {
+      setClientId(selectableClients[0].id);
     }
-  }, [clients, clientId]);
+  }, [selectableClients, clientId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clientId) {
+    if (clientId === null) {
       setSubmitError('Выберите клиента для платежа.');
+      return;
+    }
+    const parsedAmount = typeof amount === 'number' ? amount : Number.NaN;
+    if (!Number.isFinite(parsedAmount)) {
+      setSubmitError('Введите корректную сумму платежа.');
       return;
     }
 
@@ -627,7 +718,7 @@ function NewPaymentForm({ clients, onSave }: {
       const created = await crmPaymentsApi.create({
         contact_id: clientId,
         product_id: null,
-        amount: parseFloat(amount),
+        amount: parsedAmount,
         currency,
         status,
         payment_method: paymentMethod,
@@ -656,15 +747,18 @@ function NewPaymentForm({ clients, onSave }: {
       <div className="space-y-2">
         <Label htmlFor="client">Клиент</Label>
         <Select
-          value={clientId ? clientId.toString() : ''}
-          onValueChange={(val) => setClientId(val ? Number(val) : null)}
+          value={toSelectValue(clientId)}
+          onValueChange={(val) => {
+            const parsed = Number(val);
+            setClientId(Number.isFinite(parsed) ? parsed : null);
+          }}
         >
           <SelectTrigger>
             <SelectValue placeholder="Выберите клиента" />
           </SelectTrigger>
           <SelectContent>
-            {clients.map((client) => (
-              <SelectItem key={client.id} value={client.id.toString()}>
+            {selectableClients.map((client) => (
+              <SelectItem key={client.id} value={String(client.id)}>
                 {client.parent_id ? (
                   <>
                     <span className="text-muted-foreground text-sm">{getParentClientName(client, clients)} → </span>
@@ -685,7 +779,15 @@ function NewPaymentForm({ clients, onSave }: {
           id="amount" 
           type="number" 
           value={amount} 
-          onChange={(e) => setAmount(e.target.value)} 
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (!raw) {
+              setAmount('');
+              return;
+            }
+            const parsed = Number.parseFloat(raw.replace(',', '.'));
+            setAmount(Number.isFinite(parsed) ? parsed : '');
+          }} 
           required 
           step="0.01"
         />
@@ -751,7 +853,207 @@ function NewPaymentForm({ clients, onSave }: {
   );
 }
 
+function EditPaymentForm({
+  payment,
+  clients,
+  onSave,
+  onCancel,
+}: {
+  payment: Payment;
+  clients: Client[];
+  onSave: (payment: Payment) => void;
+  onCancel: () => void;
+}) {
+  const selectableClients = clients.filter((client) => isFiniteNumber(client.id));
+  const [clientId, setClientId] = useState<number | null>(() => getSafeNumber(payment.contact_id));
+  const [amount, setAmount] = useState<number | ''>(() => (
+    Number.isFinite(payment.amount) ? payment.amount : ''
+  ));
+  const [currency, setCurrency] = useState(payment.currency ?? 'RUB');
+  const [status, setStatus] = useState<'pending' | 'paid' | 'failed' | 'refunded'>(
+    payment.status ?? 'pending'
+  );
+  const [paymentMethod, setPaymentMethod] = useState(payment.payment_method ?? '');
+  const [description, setDescription] = useState(payment.description ?? '');
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (selectableClients.length === 0) {
+      if (clientId !== null) setClientId(null);
+      return;
+    }
+    if (clientId === null || !selectableClients.some((client) => client.id === clientId)) {
+      setClientId(selectableClients[0].id);
+    }
+  }, [selectableClients, clientId]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (clientId === null) {
+      setSubmitError('Выберите клиента для платежа.');
+      return;
+    }
+    const parsedAmount = typeof amount === 'number' ? amount : Number.NaN;
+    if (!Number.isFinite(parsedAmount)) {
+      setSubmitError('Введите корректную сумму платежа.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      const updated = await crmPaymentsApi.update(payment.id, {
+        contact_id: clientId,
+        amount: parsedAmount,
+        currency,
+        status,
+        payment_method: paymentMethod,
+        description,
+        paid_at: status === 'paid' ? (payment.paid_at ?? new Date().toISOString()) : null,
+      });
+      onSave(updated);
+    } catch (err) {
+      console.error('Failed to update payment', err);
+      setSubmitError('Не удалось сохранить платёж. Проверьте API /crm/payments/.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="space-y-2">
+        <Label htmlFor="edit-client">Клиент</Label>
+        <Select
+          value={toSelectValue(clientId)}
+          onValueChange={(val) => {
+            const parsed = Number(val);
+            setClientId(Number.isFinite(parsed) ? parsed : null);
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Выберите клиента" />
+          </SelectTrigger>
+          <SelectContent>
+            {selectableClients.map((client) => (
+              <SelectItem key={client.id} value={String(client.id)}>
+                {client.parent_id ? (
+                  <>
+                    <span className="text-muted-foreground text-sm">{getParentClientName(client, clients)} → </span>
+                    {getClientFullName(client)}
+                  </>
+                ) : (
+                  getClientFullName(client)
+                )}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="edit-amount">Сумма</Label>
+        <Input
+          id="edit-amount"
+          type="number"
+          value={amount}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (!raw) {
+              setAmount('');
+              return;
+            }
+            const parsed = Number.parseFloat(raw.replace(',', '.'));
+            setAmount(Number.isFinite(parsed) ? parsed : '');
+          }}
+          required
+          step="0.01"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="edit-currency">Валюта</Label>
+        <Select value={currency} onValueChange={setCurrency}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="RUB">RUB</SelectItem>
+            <SelectItem value="USD">USD</SelectItem>
+            <SelectItem value="EUR">EUR</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="edit-status">Статус</Label>
+        <Select
+          value={status}
+          onValueChange={(val: 'pending' | 'paid' | 'failed' | 'refunded') => setStatus(val)}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="pending">В ожидании</SelectItem>
+            <SelectItem value="paid">Оплачено</SelectItem>
+            <SelectItem value="failed">Ошибка</SelectItem>
+            <SelectItem value="refunded">Возврат</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="edit-method">Метод оплаты</Label>
+        <Input
+          id="edit-method"
+          value={paymentMethod}
+          onChange={(e) => setPaymentMethod(e.target.value)}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="edit-description">Описание</Label>
+        <Input
+          id="edit-description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </div>
+      {submitError ? (
+        <p className="text-xs text-red-500">{submitError}</p>
+      ) : null}
+      <div className="flex gap-2 justify-end">
+        <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting}>
+          Отмена
+        </Button>
+        <Button type="submit" disabled={isSubmitting}>
+          {isSubmitting ? 'Сохраняем...' : 'Сохранить'}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 // Вспомогательные функции
+const isFiniteNumber = (value: unknown): value is number => (
+  typeof value === 'number' && Number.isFinite(value)
+);
+
+const getSafeNumber = (value: unknown): number | null => (
+  isFiniteNumber(value) ? value : null
+);
+
+const toSelectValue = (value: number | null | undefined): string => (
+  isFiniteNumber(value) ? String(value) : ''
+);
+
+const normalizeNumericAmount = (value: unknown): number => {
+  const parsed = Number.parseFloat(String(value).replace(',', '.'));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizePayment = (payment: Payment): Payment => ({
+  ...payment,
+  amount: normalizeNumericAmount(payment.amount),
+});
+
 const getClientFullName = (client: Client) => {
   return client.name;
 };
@@ -760,4 +1062,27 @@ const getParentClientName = (client: Client, allClients: Client[]): string => {
   if (!client.parent_id) return '';
   const parent = allClients.find(c => c.id === client.parent_id);
   return parent ? parent.name : '';
+};
+
+const copyTextToClipboard = async (value: string): Promise<void> => {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard is unavailable');
+  }
+
+  const textArea = document.createElement('textarea');
+  textArea.value = value;
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-9999px';
+  document.body.appendChild(textArea);
+  textArea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textArea);
+  if (!copied) {
+    throw new Error('Copy command failed');
+  }
 };

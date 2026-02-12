@@ -71,9 +71,10 @@ export function graphReducer(state, action) {
     case 'DELETE_NODE': {
       const nodes = state.nodes.filter(n => n.id !== action.id);
       const edges = state.edges.filter(e => e.source_node_id !== action.id && e.target_node_id !== action.id);
-      if (!state.chain) return { ...state, nodes, edges, dirty: true };
+      const dirty = action.keepDirty ? state.dirty : true;
+      if (!state.chain) return { ...state, nodes, edges, dirty };
       const startNode = state.chain.start_node_id === action.id ? null : state.chain.start_node_id;
-      return { ...state, nodes, edges, chain: { ...state.chain, start_node_id: startNode }, dirty: true };
+      return { ...state, nodes, edges, chain: { ...state.chain, start_node_id: startNode }, dirty };
     }
 
     case 'ADD_EDGE': {
@@ -110,7 +111,7 @@ export function graphReducer(state, action) {
     }
 
     case 'DELETE_EDGE': {
-      return { ...state, edges: state.edges.filter(e => e.id !== action.id), dirty: true };
+      return { ...state, edges: state.edges.filter(e => e.id !== action.id), dirty: action.keepDirty ? state.dirty : true };
     }
 
     case 'UPDATE_EDGE': {

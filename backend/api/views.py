@@ -86,6 +86,7 @@ from .views_google import (  # noqa: F401
 )
 from .views_payments import (  # noqa: F401
     YooKassaCreatePaymentView,
+    YooKassaCreatePaymentLinkView,
     YooKassaPaymentStatusView,
     PaymentPlanListView,
     PaymentPromoCodeApplyView,

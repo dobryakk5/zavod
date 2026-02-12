@@ -101,6 +101,52 @@ class CRMClientViewSet(ZavodClientRequiredMixin, viewsets.ModelViewSet):
         
         return client_data
 
+    @action(detail=True, methods=['get'])
+    def payments(self, request, pk=None):
+        """
+        Возвращает платежи для конкретного клиента
+        """
+        client = self.get_object()  # This will check permissions via get_object
+        
+        # Ensure the client belongs to the current user's zavod client
+        zavod_client = self.get_zavod_client()
+        if not zavod_client or client.zavod_client != zavod_client:
+            return Response(
+                {"error": "У вас нет доступа к этому клиенту"}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get payments for this client
+        payments = Payment.objects.filter(client=client).order_by('-created_at')
+        serializer = PaymentSerializer(payments, many=True, context={'request': request})
+        
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def create_payment(self, request, pk=None):
+        """
+        Создает новый платеж для конкретного клиента
+        """
+        client = self.get_object()  # This will check permissions via get_object
+        
+        # Ensure the client belongs to the current user's zavod client
+        zavod_client = self.get_zavod_client()
+        if not zavod_client or client.zavod_client != zavod_client:
+            return Response(
+                {"error": "У вас нет доступа к этому клиенту"}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Add the client to the request data
+        data = request.data.copy()
+        data['client_id'] = client.id
+        
+        serializer = PaymentSerializer(data=data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class ClientCategoryViewSet(ZavodClientRequiredMixin, viewsets.ModelViewSet):
     serializer_class = ClientCategorySerializer

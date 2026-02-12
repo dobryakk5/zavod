@@ -1,10 +1,13 @@
+# core/urls.py — добавлены referral endpoints
+
 from django.urls import path
 from . import views
-from . import views_referral
+from . import views_referral   # ← новый импорт
 
 app_name = 'core'
 
 urlpatterns = [
+    # --- существующие маршруты (не трогаем) ---
     path('admin/post/<int:post_id>/generate-image/', views.generate_post_image, name='generate_post_image'),
     path('admin/post/<int:post_id>/generate-video/', views.generate_post_video, name='generate_post_video'),
     path('admin/post/<int:post_id>/quick-publish/', views.quick_publish_post, name='quick_publish_post'),

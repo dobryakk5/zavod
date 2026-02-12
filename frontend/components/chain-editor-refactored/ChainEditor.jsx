@@ -33,6 +33,7 @@ export default function ChainEditor({ className = '' } = {}) {
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
   const panRef = useRef({ startMouse: null, startPan: null });
   const dragging = useRef(null);
   const canvasRef = useRef(null);
@@ -335,7 +336,7 @@ export default function ChainEditor({ className = '' } = {}) {
 
     dispatch({ type: 'MARK_NODE_EXITING', id: nodeId });
     const timer = setTimeout(() => {
-      dispatch({ type: 'DELETE_NODE', id: nodeId });
+      dispatch({ type: 'DELETE_NODE', id: nodeId, keepDirty: true });
       deleteTimersRef.current.delete(`node:${nodeId}`);
     }, ANIM_MS);
     deleteTimersRef.current.set(`node:${nodeId}`, { type: 'node', timer, node, edges: relatedEdges });
@@ -501,7 +502,7 @@ export default function ChainEditor({ className = '' } = {}) {
 
     dispatch({ type: 'MARK_EDGE_EXITING', id: edgeId });
     const timer = setTimeout(() => {
-      dispatch({ type: 'DELETE_EDGE', id: edgeId });
+      dispatch({ type: 'DELETE_EDGE', id: edgeId, keepDirty: true });
       deleteTimersRef.current.delete(`edge:${edgeId}`);
     }, ANIM_MS);
     deleteTimersRef.current.set(`edge:${edgeId}`, { type: 'edge', timer, edge });
@@ -606,19 +607,32 @@ export default function ChainEditor({ className = '' } = {}) {
     e.preventDefault();
   }, [pan]);
 
+  const onWheel = useCallback((e) => {
+    e.preventDefault();
+    const delta = e.deltaY;
+    const zoomSpeed = 0.001;
+    const minZoom = 0.1;
+    const maxZoom = 3;
+    
+    setZoom((prevZoom) => {
+      const nextZoom = prevZoom - delta * zoomSpeed;
+      return Math.max(minZoom, Math.min(maxZoom, nextZoom));
+    });
+  }, []);
+
   const onPointerMove = useCallback((e) => {
     if (draggingLink) {
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const x = e.clientX - rect.left - pan.x;
-      const y = e.clientY - rect.top - pan.y;
+      const x = (e.clientX - rect.left - pan.x) / zoom;
+      const y = (e.clientY - rect.top - pan.y) / zoom;
       setDraggingLink((prev) => (prev ? { ...prev, x, y } : prev));
       return;
     }
     if (dragging.current) {
       const rect = canvasRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left - pan.x - dragging.current.offsetX;
-      const y = e.clientY - rect.top - pan.y - dragging.current.offsetY;
+      const x = (e.clientX - rect.left - pan.x) / zoom - dragging.current.offsetX;
+      const y = (e.clientY - rect.top - pan.y) / zoom - dragging.current.offsetY;
       dispatch({ type: 'MOVE_NODE', id: dragging.current.id, x, y });
       queuePositionUpdate(dragging.current.id, x, y);
       return;
@@ -628,18 +642,20 @@ export default function ChainEditor({ className = '' } = {}) {
       const dy = e.clientY - panRef.current.startMouse.y;
       setPan({ x: panRef.current.startPan.x + dx, y: panRef.current.startPan.y + dy });
     }
-  }, [pan, queuePositionUpdate, draggingLink]);
+  }, [pan, zoom, queuePositionUpdate, draggingLink]);
 
   const findNodeAtPoint = useCallback((x, y) => {
+    const scaledX = x / zoom;
+    const scaledY = y / zoom;
     for (let i = state.nodes.length - 1; i >= 0; i -= 1) {
       const node = state.nodes[i];
       const { w, h } = getNodeDimensions(node);
-      if (x >= node.pos_x && x <= node.pos_x + w && y >= node.pos_y && y <= node.pos_y + h) {
+      if (scaledX >= node.pos_x && scaledX <= node.pos_x + w && scaledY >= node.pos_y && scaledY <= node.pos_y + h) {
         return node;
       }
     }
     return null;
-  }, [state.nodes]);
+  }, [state.nodes, zoom]);
 
   const onPointerUp = useCallback((e) => {
     if (draggingLink) {
@@ -677,8 +693,8 @@ export default function ChainEditor({ className = '' } = {}) {
     const rect = canvasRef.current.getBoundingClientRect();
     dragging.current = {
       id: node.id,
-      offsetX: e.clientX - rect.left - pan.x - node.pos_x,
-      offsetY: e.clientY - rect.top - pan.y - node.pos_y,
+      offsetX: (e.clientX - rect.left - pan.x) / zoom - node.pos_x,
+      offsetY: (e.clientY - rect.top - pan.y) / zoom - node.pos_y,
     };
   };
 
@@ -725,8 +741,8 @@ export default function ChainEditor({ className = '' } = {}) {
     if (!canvasRef.current) return;
     setConnectingFrom(null);
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left - pan.x;
-    const y = e.clientY - rect.top - pan.y;
+    const x = (e.clientX - rect.left - pan.x) / zoom;
+    const y = (e.clientY - rect.top - pan.y) / zoom;
     setDraggingLink({ sourceId: nodeId, side, x, y, sourcePortId: null });
   };
 
@@ -736,8 +752,8 @@ export default function ChainEditor({ className = '' } = {}) {
     const node = state.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left - pan.x;
-    const y = e.clientY - rect.top - pan.y;
+    const x = (e.clientX - rect.left - pan.x) / zoom;
+    const y = (e.clientY - rect.top - pan.y) / zoom;
     const port = getRouterConditionPortPosition(node, conditionId);
     setDraggingLink({
       sourceId: nodeId,
@@ -798,14 +814,14 @@ export default function ChainEditor({ className = '' } = {}) {
   const onCanvasDblClick = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
     createNodeAt(
-      e.clientX - rect.left - pan.x - NODE_W / 2,
-      e.clientY - rect.top - pan.y - NODE_H / 2
+      (e.clientX - rect.left - pan.x) / zoom - NODE_W / 2,
+      (e.clientY - rect.top - pan.y) / zoom - NODE_H / 2
     );
   };
 
   const handleAddNode = (kind = 'message') => {
-    const cx = (canvasRef.current?.clientWidth || 600) / 2 - pan.x - NODE_W / 2;
-    const cy = (canvasRef.current?.clientHeight || 400) / 2 - pan.y - NODE_H / 2;
+    const cx = ((canvasRef.current?.clientWidth || 600) / 2 - pan.x) / zoom - NODE_W / 2;
+    const cy = ((canvasRef.current?.clientHeight || 400) / 2 - pan.y) / zoom - NODE_H / 2;
     createNodeAt(cx, cy, kind);
   };
 
@@ -902,18 +918,19 @@ export default function ChainEditor({ className = '' } = {}) {
           onPointerDown={onCanvasPointerDown}
           onDoubleClick={onCanvasDblClick}
           onContextMenu={e => e.preventDefault()}
+          onWheel={onWheel}
           className="w-full h-full relative cursor-grab"
         >
           <svg className="absolute inset-0 w-full h-full pointer-events-none">
             <defs>
-              <pattern id="grid" width={32} height={32} patternUnits="userSpaceOnUse" patternTransform={`translate(${pan.x % 32}, ${pan.y % 32})`}>
+              <pattern id="grid" width={32} height={32} patternUnits="userSpaceOnUse" patternTransform={`translate(${pan.x % 32}, ${pan.y % 32}) scale(${zoom})`}>
                 <circle cx={16} cy={16} r={1} fill="#cbd5e1" />
               </pattern>
             </defs>
             <rect width="100%" height="100%" fill="url(#grid)" />
           </svg>
 
-          <div style={{ position: 'absolute', left: pan.x, top: pan.y, width: 0, height: 0 }}>
+          <div style={{ position: 'absolute', left: pan.x, top: pan.y, width: 0, height: 0, transform: `scale(${zoom})`, transformOrigin: '0 0' }}>
             <svg 
               style={{ position: 'absolute', overflow: 'visible', left: 0, top: 0, pointerEvents: 'none' }}
               width="5000"
@@ -1007,42 +1024,71 @@ export default function ChainEditor({ className = '' } = {}) {
           <span>Двойной клик — добавить узел</span>
           <span>Правый клик — контекст</span>
           <span>Клик на ребро — условия</span>
+          <span>Колесо мыши — масштаб</span>
           <span>{state.dirty && !saving && '● Несохранённые изменения'}</span>
           {saving && <span>💾 Сохранение...</span>}
-          <div className="ml-auto relative flex items-center">
-            <button
-              ref={resetButtonRef}
-              type="button"
-              onClick={() => setResetConfirmOpen(true)}
-              className={`text-xs text-red-500 hover:text-red-600 ${saving ? 'opacity-60 cursor-not-allowed' : ''}`}
-              disabled={saving}
-            >
-              Сброс
-            </button>
-            {resetConfirmOpen && (
-              <div
-                ref={resetPopoverRef}
-                className="absolute bottom-full right-0 mb-2 z-30 bg-white border border-slate-200 rounded-lg shadow-xl px-3 py-2 text-xs text-slate-700"
+          <div className="ml-auto flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setZoom(z => Math.max(0.1, z - 0.1))}
+                className="w-6 h-6 rounded border border-slate-300 hover:bg-slate-100 flex items-center justify-center text-slate-600"
+                title="Уменьшить"
               >
-                <div className="mb-2 whitespace-nowrap">Очистить цепочку сообщений?</div>
-                <div className="flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={handleResetChain}
-                    className="px-2 py-1 rounded border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
-                  >
-                    Да
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setResetConfirmOpen(false)}
-                    className="px-2 py-1 rounded border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
-                  >
-                    Нет
-                  </button>
+                −
+              </button>
+              <span className="text-xs text-slate-600 font-mono w-12 text-center">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                onClick={() => setZoom(z => Math.min(3, z + 0.1))}
+                className="w-6 h-6 rounded border border-slate-300 hover:bg-slate-100 flex items-center justify-center text-slate-600"
+                title="Увеличить"
+              >
+                +
+              </button>
+              <button
+                onClick={() => setZoom(1)}
+                className="px-2 py-1 rounded border border-slate-300 hover:bg-slate-100 text-slate-600"
+                title="Сбросить масштаб"
+              >
+                100%
+              </button>
+            </div>
+            <div className="relative flex items-center">
+              <button
+                ref={resetButtonRef}
+                type="button"
+                onClick={() => setResetConfirmOpen(true)}
+                className={`text-xs text-red-500 hover:text-red-600 ${saving ? 'opacity-60 cursor-not-allowed' : ''}`}
+                disabled={saving}
+              >
+                Сброс
+              </button>
+              {resetConfirmOpen && (
+                <div
+                  ref={resetPopoverRef}
+                  className="absolute bottom-full right-0 mb-2 z-30 bg-white border border-slate-200 rounded-lg shadow-xl px-3 py-2 text-xs text-slate-700"
+                >
+                  <div className="mb-2 whitespace-nowrap">Очистить цепочку сообщений?</div>
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResetChain}
+                      className="px-2 py-1 rounded border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                    >
+                      Да
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResetConfirmOpen(false)}
+                      className="px-2 py-1 rounded border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                    >
+                      Нет
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </div>
