@@ -288,7 +288,8 @@ def _register_client_webhooks(client: Client) -> None:
         idem_key = str(uuid.uuid4())
         kwargs = _build_yookassa_request_kwargs(shop_id, secret_or_token, auth_type, idem_key)
         try:
-            resp = requests.post(
+            resp = _yookassa_request(
+                "POST",
                 "https://api.yookassa.ru/v3/webhooks",
                 json={"event": event, "url": webhook_url},
                 timeout=10,
@@ -306,6 +307,18 @@ def _register_client_webhooks(client: Client) -> None:
                 )
         except requests.RequestException:
             logger.exception("yookassa: webhook registration request failed client_id=%s event=%s", client.id, event)
+
+
+def _yookassa_request(method: str, url: str, *, timeout: int = 30, **kwargs):
+    """
+    Выполняет HTTP-запрос к YooKassa без использования env-proxy.
+    """
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        return session.request(method=method, url=url, timeout=timeout, **kwargs)
+    finally:
+        session.close()
 
 
 def _build_settings_redirect_url(**params: str) -> str:
@@ -330,7 +343,8 @@ def _exchange_oauth_code(code: str, oauth_client_id: str, oauth_client_secret: s
 
     for attempt in (1, 2):
         try:
-            return requests.post(
+            return _yookassa_request(
+                "POST",
                 token_url,
                 auth=(oauth_client_id, oauth_client_secret),
                 data=payload,
@@ -487,7 +501,8 @@ class YooKassaSaveCredentialsView(APIView):
 
         # Проверяем ключи запросом к YooKassa (GET /v3/me или любой тестовый вызов)
         try:
-            check_resp = requests.get(
+            check_resp = _yookassa_request(
+                "GET",
                 "https://api.yookassa.ru/v3/me",
                 auth=(shop_id, secret_key),
                 timeout=10,
@@ -617,7 +632,7 @@ class YooKassaCreatePaymentView(APIView):
         request_kwargs = _build_yookassa_request_kwargs(shop_id, secret_or_token, auth_type, idempotence_key)
 
         try:
-            response = requests.post(api_url, json=payload, timeout=15, **request_kwargs)
+            response = _yookassa_request("POST", api_url, json=payload, timeout=15, **request_kwargs)
         except requests.RequestException as exc:
             logger.exception("yookassa: request failed idempotence_key=%s", idempotence_key)
             return Response({"detail": f"YooKassa request failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
@@ -722,7 +737,7 @@ class YooKassaCreatePaymentLinkView(APIView):
         request_kwargs = _build_yookassa_request_kwargs(shop_id, secret_or_token, auth_type, idempotence_key)
 
         try:
-            response = requests.post(api_url, json=payload, timeout=15, **request_kwargs)
+            response = _yookassa_request("POST", api_url, json=payload, timeout=15, **request_kwargs)
         except requests.RequestException as exc:
             logger.exception("yookassa: payment link request failed idempotence_key=%s", idempotence_key)
             return Response({"detail": f"YooKassa request failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
@@ -812,7 +827,7 @@ class YooKassaPaymentStatusView(APIView):
         request_kwargs["headers"].pop("Idempotence-Key", None)
 
         try:
-            response = requests.get(f"{api_url}/{payment_id}", timeout=15, **request_kwargs)
+            response = _yookassa_request("GET", f"{api_url}/{payment_id}", timeout=15, **request_kwargs)
         except requests.RequestException as exc:
             logger.exception("yookassa: status request failed payment_id=%s", payment_id)
             return Response({"detail": f"YooKassa request failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)

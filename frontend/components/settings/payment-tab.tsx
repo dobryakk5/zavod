@@ -312,6 +312,7 @@ export function PaymentTab() {
       invalid_params: 'Не удалось подключить YooKassa: некорректные параметры OAuth.',
       client_not_found: 'Не удалось подключить YooKassa: клиент не найден.',
       oauth_not_configured: 'OAuth YooKassa не настроен на сервере.',
+      proxy_blocked: 'Прокси сервера блокирует запрос к YooKassa. Обратитесь к администратору сервера.',
       connection_failed: 'Ошибка соединения с YooKassa. Повторите попытку чуть позже.',
       token_exchange_failed: 'YooKassa вернула ошибку при обмене токена.',
       missing_access_token: 'YooKassa не вернула access_token.',
