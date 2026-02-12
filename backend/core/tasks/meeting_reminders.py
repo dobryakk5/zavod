@@ -218,7 +218,8 @@ def send_meeting_reminders() -> int:
                     )
 
         total_sent += sent
-        logger.info(
+        log_fn = logger.info if sent > 0 else logger.debug
+        log_fn(
             "Meeting reminders (%s): sent=%s skipped=%s window=%s..%s",
             reminder_type,
             sent,

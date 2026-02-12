@@ -1,15 +1,31 @@
 import { useState } from 'react';
 import { Alert } from './Alert';
 import { Button, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input, Label, Select } from './ui';
+import { ChainRichTextEditor } from './ChainRichTextEditor';
+
+const normalizeRichTextForTelegram = (value = '') =>
+  value
+    .replace(/\r\n/g, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p>/gi, '\n')
+    .replace(/<\/div>\s*<div>/gi, '\n')
+    .replace(/<p>/gi, '')
+    .replace(/<\/p>/gi, '')
+    .replace(/<div>/gi, '')
+    .replace(/<\/div>/gi, '')
+    .replace(/&nbsp;/gi, ' ')
+    .trim();
+
+const hasMeaningfulText = (value = '') => {
+  const normalized = normalizeRichTextForTelegram(value);
+  const plain = normalized.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  return plain.length > 0;
+};
 
 export function NodeEditorModal({ node, onSave, onClose }) {
   const isStartNode = node.node_type === 'start';
   const initialButtons = isStartNode
-    ? (node.payload?.buttons || []).map((b) =>
-      typeof b === 'string'
-        ? { text: b, color: 'green' }
-        : { text: b?.text || '', color: b?.color || 'green' }
-    )
+    ? (node.payload?.buttons || []).map((b) => (typeof b === 'string' ? b : b?.text || ''))
     : (node.payload?.buttons || []).map((b) => (typeof b === 'string' ? b : b?.text || ''));
   const [form, setForm] = useState({
     ...node,
@@ -32,16 +48,16 @@ export function NodeEditorModal({ node, onSave, onClose }) {
   });
   const rmBtn = (i) => setForm(f => ({ ...f, buttons: f.buttons.filter((_, x) => x !== i) }));
 
-  const addStartBtn = () => setForm(f => ({ ...f, buttons: [...f.buttons, { text: '', color: 'green' }] }));
-  const setStartBtn = (i, key, value) => setForm(f => {
+  const addStartBtn = () => setForm(f => ({ ...f, buttons: [...f.buttons, ''] }));
+  const setStartBtn = (i, value) => setForm(f => {
     const b = [...f.buttons];
-    b[i] = { ...(b[i] || {}), [key]: value };
+    b[i] = value;
     return { ...f, buttons: b };
   });
   const rmStartBtn = (i) => setForm(f => ({ ...f, buttons: f.buttons.filter((_, x) => x !== i) }));
 
   const handleSave = () => {
-    if (!isTimer && (form.node_type === 'text' || isStart) && !form.payload.text?.trim()) {
+    if (!isTimer && (form.node_type === 'text' || isStart) && !hasMeaningfulText(form.payload.text || '')) {
       setError('Введите текст сообщения');
       return;
     }
@@ -53,9 +69,10 @@ export function NodeEditorModal({ node, onSave, onClose }) {
     let payload = { ...form.payload };
     let nodeType = form.node_type;
 
-    if (form.node_type === 'buttons') payload.buttons = form.buttons.filter(Boolean);
+    if (form.node_type === 'buttons') payload.buttons = form.buttons.map((b) => (b || '').trim()).filter(Boolean);
 
     if (form.node_type === 'text') {
+      payload.text = normalizeRichTextForTelegram(payload.text || '');
       const cleanedButtons = form.buttons
         .map((b) => (b || '').trim())
         .filter(Boolean);
@@ -69,13 +86,10 @@ export function NodeEditorModal({ node, onSave, onClose }) {
     if (isStart) {
       nodeType = 'start';
       payload = {
-        text: (payload.text || '').trim(),
+        text: normalizeRichTextForTelegram(payload.text || ''),
         buttons: form.buttons
-          .map((b) => ({
-            text: (b?.text || '').trim(),
-            color: b?.color || 'green',
-          }))
-          .filter((b) => b.text),
+          .map((b) => (b || '').trim())
+          .filter(Boolean),
       };
     }
 
@@ -275,12 +289,10 @@ export function NodeEditorModal({ node, onSave, onClose }) {
               </div>
               <div>
                 <Label>Текст сообщения</Label>
-                <textarea
+                <ChainRichTextEditor
                   value={form.payload.text || ''}
-                  onChange={e => setP('text', e.target.value)}
+                  onChange={(html) => setP('text', html)}
                   placeholder="Введите текст..."
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 resize-none"
-                  rows={3}
                 />
               </div>
               <div>
@@ -289,8 +301,8 @@ export function NodeEditorModal({ node, onSave, onClose }) {
                   {form.buttons.map((b, i) => (
                     <div key={i} className="flex gap-2 items-center">
                       <Input
-                        value={b?.text || ''}
-                        onChange={e => setStartBtn(i, 'text', e.target.value)}
+                        value={b || ''}
+                        onChange={e => setStartBtn(i, e.target.value)}
                         placeholder={`Кнопка ${i + 1}`}
                       />
                       <button onClick={() => rmStartBtn(i)} className="text-red-600 hover:text-red-700 px-2">×</button>
@@ -307,13 +319,21 @@ export function NodeEditorModal({ node, onSave, onClose }) {
           {!isStart && !isTimer && (form.node_type === 'text' || form.node_type === 'buttons') && (
             <div>
               <Label>Текст сообщения</Label>
-              <textarea
-                value={form.payload.text || ''}
-                onChange={e => setP('text', e.target.value)}
-                placeholder="Введите текст..."
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 resize-none"
-                rows={3}
-              />
+              {form.node_type === 'text' ? (
+                <ChainRichTextEditor
+                  value={form.payload.text || ''}
+                  onChange={(html) => setP('text', html)}
+                  placeholder="Введите текст..."
+                />
+              ) : (
+                <textarea
+                  value={form.payload.text || ''}
+                  onChange={e => setP('text', e.target.value)}
+                  placeholder="Введите текст..."
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 resize-none"
+                  rows={3}
+                />
+              )}
             </div>
           )}
 

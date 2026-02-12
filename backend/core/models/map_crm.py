@@ -70,6 +70,11 @@ class MapCRMPayment(models.Model):
         blank=True,
         verbose_name="ID продукта",
     )
+    event_id = models.IntegerField(
+        null=True,
+        blank=True,
+        verbose_name="ID встречи",
+    )
 
     amount = models.DecimalField(
         max_digits=10,
@@ -128,6 +133,7 @@ class MapCRMPayment(models.Model):
             models.Index(fields=["status", "created_at"]),
             models.Index(fields=["contact", "paid_at"]),
             models.Index(fields=["transaction_id"]),
+            models.Index(fields=["event_id"]),
         ]
 
     def __str__(self):

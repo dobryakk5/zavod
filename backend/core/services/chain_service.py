@@ -12,8 +12,8 @@ def build_start_payload() -> dict:
     return {
         "text": "Вы даете согласие на обработку персональных данных?",
         "buttons": [
-            {"text": "Да", "color": "green"},
-            {"text": "Нет", "color": "red"},
+            "Да",
+            "Нет",
         ],
     }
 

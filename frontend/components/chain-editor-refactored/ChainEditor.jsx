@@ -223,8 +223,8 @@ export default function ChainEditor({ className = '' } = {}) {
         payload: {
           text: 'Привет! Выберите вариант:',
           buttons: [
-            { text: 'Да', color: 'green' },
-            { text: 'Нет', color: 'red' },
+            'Да',
+            'Нет',
           ],
         },
         delay_seconds: 0,

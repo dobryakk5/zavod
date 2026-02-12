@@ -58,19 +58,21 @@ CREATE TABLE IF NOT EXISTS map.crm_events (
     event_type_id   INTEGER REFERENCES map.crm_event_types(id) ON DELETE SET NULL,  -- FIXED: was map.event_types
     title           VARCHAR(255) NOT NULL,
     description     TEXT,
-    start_time      TIMESTAMP NOT NULL,
-    end_time        TIMESTAMP NOT NULL,
+    start_time      TIMESTAMPTZ NOT NULL,
+    end_time        TIMESTAMPTZ NOT NULL,
     location        VARCHAR(255),
     status          VARCHAR(20) NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'completed', 'cancelled', 'no_show')),
     notes           TEXT,
-    created_at      TIMESTAMP DEFAULT now(),
-    updated_at      TIMESTAMP DEFAULT now()
+    price           DECIMAL(10,2),
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now()
 );
 
 -- Create payments table (migrated from crm_payments)
 CREATE TABLE IF NOT EXISTS map.crm_payments (
     id              SERIAL PRIMARY KEY,
     contact_id      INTEGER NOT NULL REFERENCES map.contacts(id) ON DELETE CASCADE,
+    event_id        BIGINT REFERENCES map.crm_events(id) ON DELETE SET NULL,
     product_id      BIGINT REFERENCES map.products(id) ON DELETE SET NULL,
     amount          DECIMAL(10,2) NOT NULL,
     currency        VARCHAR(3) NOT NULL DEFAULT 'RUB',
@@ -105,6 +107,7 @@ CREATE INDEX IF NOT EXISTS idx_map_events_contact_start_time ON map.crm_events(c
 CREATE INDEX IF NOT EXISTS idx_map_events_type ON map.crm_events(event_type_id);
 CREATE INDEX IF NOT EXISTS idx_map_payments_contact_status ON map.crm_payments(contact_id, status);
 CREATE INDEX IF NOT EXISTS idx_map_payments_status ON map.crm_payments(status);
+CREATE INDEX IF NOT EXISTS idx_map_payments_event_id ON map.crm_payments(event_id);
 CREATE INDEX IF NOT EXISTS idx_map_notes_contact_important ON map.crm_notes(contact_id, is_important DESC);
 CREATE INDEX IF NOT EXISTS idx_map_contact_tags_contact ON map.contact_tags(contact_id);
 CREATE INDEX IF NOT EXISTS idx_map_contact_tags_tag ON map.contact_tags(tag_id);

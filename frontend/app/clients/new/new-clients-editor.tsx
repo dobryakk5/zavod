@@ -1,18 +1,18 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { PlusIcon, EditIcon, TrashIcon, XIcon, CopyIcon } from 'lucide-react';
-import { crmCategoriesApi, crmContactsApi, crmPaymentsApi } from '@/lib/api/crm';
+import { PlusIcon, XIcon } from 'lucide-react';
+import { crmCategoriesApi, crmContactsApi, crmEventsApi, crmPaymentsApi, type Event as CrmEvent } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
-import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezone } from '@/lib/timezone';
+import { DEFAULT_TENANT_TIMEZONE, normalizeTenantTimezone } from '@/lib/timezone';
+import { PaymentsTable } from '@/components/crm/payments-table';
 import { toast } from 'sonner';
 
 // Типы данных для новой CRM-схемы с иерархией
@@ -33,6 +33,7 @@ type Client = {
 type Payment = {
   id: number;
   contact_id: number;
+  event_id?: number | null;
   product_id: number | null;
   amount: number;
   currency: string;
@@ -61,12 +62,14 @@ type Props = {
 
 export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   const [clients, setClients] = useState<Client[]>([]);
+  const [events, setEvents] = useState<CrmEvent[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [paymentToEdit, setPaymentToEdit] = useState<Payment | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [paymentLinkLoadingId, setPaymentLinkLoadingId] = useState<number | null>(null);
+  const [paymentDeletingId, setPaymentDeletingId] = useState<number | null>(null);
   const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
 
   useEffect(() => {
@@ -76,15 +79,17 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
       setLoading(true);
       setLoadError(null);
       try {
-        const [contactsData, paymentsData, categoriesData] = await Promise.all([
+        const [contactsData, paymentsData, categoriesData, eventsData] = await Promise.all([
           crmContactsApi.list(),
           crmPaymentsApi.list(),
           crmCategoriesApi.list(),
+          crmEventsApi.list(),
         ]);
 
         if (!isActive) return;
 
         setClients(contactsData);
+        setEvents(eventsData);
         setPayments(paymentsData.map(normalizePayment));
         setCategories(categoriesData);
         try {
@@ -99,7 +104,7 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
       } catch (err) {
         if (!isActive) return;
         console.error('Failed to load CRM contacts/payments', err);
-        setLoadError('Не удалось загрузить данные CRM. Проверьте API /crm/contacts/, /crm/payments/ и /crm/categories/.');
+        setLoadError('Не удалось загрузить данные CRM. Проверьте API /crm/contacts/, /crm/payments/, /crm/categories/ и /crm/events/.');
       } finally {
         if (isActive) {
           setLoading(false);
@@ -114,22 +119,19 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
     };
   }, []);
 
+  const paymentEventDateById = useMemo(() => {
+    const map = new Map<number, string>();
+    events.forEach((event) => {
+      if (event.start_time) {
+        map.set(event.id, event.start_time);
+      }
+    });
+    return map;
+  }, [events]);
+
   if (loading) {
     return <div className="p-6">Загрузка редактора клиентов...</div>;
   }
-
-  const getClientFullName = (client: Client) => {
-    return client.name;
-  };
-
-  // Функция для получения родительского клиента
-  const getParentClient = (childId: number) => {
-    const childClient = clients.find(client => client.id === childId);
-    if (childClient && childClient.parent_id) {
-      return clients.find(client => client.id === childClient.parent_id);
-    }
-    return null;
-  };
 
   const handleCopyPaymentLink = async (payment: Payment, paymentClient?: Client) => {
     const numericAmount = Number.parseFloat(String(payment.amount).replace(',', '.'));
@@ -174,6 +176,23 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
       toast.error('Не удалось сгенерировать ссылку оплаты.');
     } finally {
       setPaymentLinkLoadingId(null);
+    }
+  };
+
+  const handleDeletePayment = async (payment: Payment) => {
+    const confirmed = window.confirm(`Удалить платеж на сумму ${payment.amount} ${payment.currency}?`);
+    if (!confirmed) return;
+
+    setPaymentDeletingId(payment.id);
+    try {
+      await crmPaymentsApi.delete(payment.id);
+      setPayments((prev) => prev.filter((item) => item.id !== payment.id));
+      toast.success('Платеж удален.');
+    } catch (err) {
+      console.error('Failed to delete payment', err);
+      toast.error('Не удалось удалить платеж.');
+    } finally {
+      setPaymentDeletingId(null);
     }
   };
 
@@ -301,87 +320,18 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
           </Dialog>
         </div>
 
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Клиент</TableHead>
-                <TableHead>Сумма</TableHead>
-                <TableHead>Статус</TableHead>
-                <TableHead>Дата оплаты</TableHead>
-                <TableHead>Действия</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {payments.map((payment) => {
-                const client = clients.find(c => c.id === payment.contact_id);
-                return (
-                  <TableRow key={payment.id}>
-                    <TableCell className="font-medium">
-                      {client ? (
-                        client.parent_id ? (
-                          <>
-                            <span className="text-muted-foreground text-sm">{getParentClient(client.id)?.name} → </span>
-                            {getClientFullName(client)}
-                          </>
-                        ) : (
-                          getClientFullName(client)
-                        )
-                      ) : 'Неизвестный'}
-                    </TableCell>
-                    <TableCell className="font-semibold">{payment.amount} {payment.currency}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          payment.status === 'paid' ? 'secondary' :
-                          payment.status === 'pending' ? 'default' :
-                          payment.status === 'refunded' ? 'outline' : 'destructive'
-                        }
-                      >
-                        {payment.status === 'paid' ? 'Оплачено' :
-                         payment.status === 'pending' ? 'В ожидании' :
-                         payment.status === 'refunded' ? 'Возврат' : 'Ошибка'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {payment.paid_at
-                        ? formatInTenantTimezone(payment.paid_at, tenantTimezone, {
-                            year: 'numeric',
-                            month: '2-digit',
-                            day: '2-digit',
-                          })
-                        : '-'}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex space-x-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void handleCopyPaymentLink(payment, client)}
-                          aria-label="Скопировать ссылку оплаты"
-                          disabled={paymentLinkLoadingId === payment.id}
-                        >
-                          <CopyIcon className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setPaymentToEdit(payment)}
-                          aria-label="Редактировать платёж"
-                        >
-                          <EditIcon className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700">
-                          <TrashIcon className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
+        <PaymentsTable
+          payments={payments}
+          contacts={clients}
+          tenantTimezone={tenantTimezone}
+          eventDateById={paymentEventDateById}
+          paymentLinkLoadingId={paymentLinkLoadingId}
+          paymentDeletingId={paymentDeletingId}
+          onCopyPaymentLink={(payment, paymentClient) => void handleCopyPaymentLink(payment, paymentClient)}
+          onEditPayment={(payment) => setPaymentToEdit(payment)}
+          onDeletePayment={(payment) => void handleDeletePayment(payment)}
+          emptyText="Нет платежей"
+        />
 
         <Dialog open={!!paymentToEdit} onOpenChange={(open) => !open && setPaymentToEdit(null)}>
           <DialogContent className="bg-white text-black dark:bg-white dark:text-black">

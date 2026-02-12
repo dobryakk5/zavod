@@ -162,6 +162,50 @@ class Referral(models.Model):
         return bool(self.expires_at and timezone.now() > self.expires_at)
 
 
+class ReferralFirstPayment(models.Model):
+    """
+    Первый успешный платёж реферала за подписку.
+    Запись создаётся один раз — при первом succeeded YooKassaPayment от referee.
+    """
+
+    referral = models.OneToOneField(
+        Referral,
+        on_delete=models.CASCADE,
+        related_name="first_payment",
+    )
+    # Денормализация для удобных выборок/отчётов
+    referrer = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        related_name="referral_first_payments_received",
+    )
+    referee = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        related_name="referral_first_payment_made",
+    )
+    yookassa_payment = models.OneToOneField(
+        "YooKassaPayment",
+        on_delete=models.PROTECT,
+        related_name="referral_first_payment",
+    )
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3, default="RUB")
+    plan_code = models.CharField(max_length=100, blank=True)
+    paid_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "referral_first_payments"
+        indexes = [
+            models.Index(fields=["referrer", "-paid_at"], name="rfp_referrer_paid_idx"),
+            models.Index(fields=["referee"], name="rfp_referee_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"FirstPayment: {self.referee_id} -> {self.referrer_id} | {self.amount} {self.currency}"
+
+
 def apply_free_month(*, client: Client) -> None:
     """
     Начисляет клиенту +1 месяц к `plan_expires_at`.
@@ -189,4 +233,3 @@ def reward_referral_month(*, referrer: Client, referee: Client) -> None:
 
     apply_free_month(client=referrer)
     apply_free_month(client=referee)
-

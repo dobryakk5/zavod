@@ -232,7 +232,8 @@ def send_payment_reminders() -> int:
 
         _delete_notification(schema, notification_id)
 
-    logger.info(
+    log_fn = logger.info if total_sent > 0 else logger.debug
+    log_fn(
         "Payment reminders: sent=%s window=%sm morning=%02d:%02d evening=%02d:%02d",
         total_sent,
         window_minutes,

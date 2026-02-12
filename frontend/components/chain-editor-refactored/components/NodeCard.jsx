@@ -28,6 +28,19 @@ function formatDuration(seconds) {
   return `${Math.floor(total / 86400)}д`;
 }
 
+function toPreviewText(value) {
+  return String(value || '')
+    .replace(/<\/p>\s*<p>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function NodeCard({
   node,
   isSelected,
@@ -67,21 +80,10 @@ export function NodeCard({
 
   // Специальная карточка START
   if (isStartNode) {
-    const buttons = Array.isArray(node.payload?.buttons) 
-      ? node.payload.buttons.map(btn => 
-          typeof btn === 'string' 
-            ? { text: btn, color: 'green' }
-            : btn
-        )
+    const buttons = Array.isArray(node.payload?.buttons)
+      ? node.payload.buttons.map((btn) => (typeof btn === 'string' ? btn : btn?.text)).filter(Boolean)
       : [];
-    
-    const buttonStyles = {
-      green: { border: 'border-emerald-500', text: 'text-emerald-700' },
-      red: { border: 'border-red-500', text: 'text-red-700' },
-      blue: { border: 'border-blue-500', text: 'text-blue-700' },
-      black: { border: 'border-slate-700', text: 'text-slate-700' },
-    };
-    
+
     return (
       <div
         onPointerDown={onPointerDown}
@@ -126,25 +128,22 @@ export function NodeCard({
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           </div>
           
-          {node.payload?.text && (
+          {toPreviewText(node.payload?.text) && (
             <p className="text-sm text-slate-700 text-center leading-snug line-clamp-2">
-              {node.payload.text}
+              {toPreviewText(node.payload?.text)}
             </p>
           )}
 
           {buttons.length > 0 && (
             <div className="flex flex-wrap gap-1.5 justify-center">
-              {buttons.map((btn, idx) => {
-                const btnStyle = buttonStyles[btn.color] || buttonStyles.green;
-                return (
-                  <div
-                    key={idx}
-                    className={`px-2 py-1 bg-white border rounded text-xs font-medium ${btnStyle.border} ${btnStyle.text}`}
-                  >
-                    {btn.text}
-                  </div>
-                );
-              })}
+              {buttons.map((btn, idx) => (
+                <div
+                  key={idx}
+                  className="px-2 py-1 bg-white border border-slate-300 rounded text-xs font-medium text-slate-700"
+                >
+                  {btn}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -310,7 +309,7 @@ export function NodeCard({
       >
         <div className="p-3 h-full flex flex-col justify-center gap-2">
           <p className="text-sm text-slate-700 line-clamp-2 leading-snug text-center">
-            {node.payload?.text || 'Сообщение'}
+            {toPreviewText(node.payload?.text) || 'Сообщение'}
           </p>
           {buttons.length > 0 && (
             <div className="flex flex-wrap gap-1.5 justify-center">
@@ -414,7 +413,7 @@ export function NodeCard({
         ) : (
           <div className="flex flex-col gap-1">
             <p className="text-sm text-slate-700 line-clamp-2 leading-snug">
-              {node.payload?.text || node.payload?.caption || '📷 фото'}
+              {toPreviewText(node.payload?.text) || toPreviewText(node.payload?.caption) || '📷 фото'}
             </p>
             {!isTimer && node.delay_seconds > 0 && (
               <span className="text-xs text-slate-500">⏱ {node.delay_seconds}с задержка</span>

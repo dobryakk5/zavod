@@ -23,6 +23,7 @@ from rest_framework.views import APIView
 from .permissions import IsTenantMember
 from .utils import get_active_client
 from core.models import Client, PaymentPlan, YooKassaPayment, MapCRMPayment  # добавлена YooKassaPayment
+from core.services.referral_payment_service import handle_succeeded_payment
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -810,6 +811,7 @@ class YooKassaPaymentStatusView(APIView):
                 if yk_payment:
                     yk_payment.status = "succeeded"
                     yk_payment.save(update_fields=["status"])
+                    handle_succeeded_payment(yk_payment)
             except Exception:
                 logger.exception("yookassa: failed to apply plan via status payment_id=%s", payment_id)
 
@@ -929,6 +931,10 @@ class YooKassaWebhookView(APIView):
             if event == "payment.succeeded":
                 yk_payment.status = "succeeded"
                 yk_payment.save(update_fields=["status"])
+                try:
+                    handle_succeeded_payment(yk_payment)
+                except Exception:
+                    logger.exception("referral: failed to handle first payment payment_id=%s", payment_id)
             elif event == "payment.canceled":
                 yk_payment.status = "canceled"
                 yk_payment.save(update_fields=["status"])

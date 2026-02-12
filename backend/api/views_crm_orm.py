@@ -105,7 +105,7 @@ class MapCRMPaymentViewSet(viewsets.ModelViewSet):
     """
     permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ["status", "currency", "contact_id", "product_id"]
+    filterset_fields = ["status", "currency", "contact_id", "product_id", "event_id"]
     ordering_fields = ["created_at", "paid_at", "amount", "status"]
     ordering = ["-created_at"]
 

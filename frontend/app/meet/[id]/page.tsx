@@ -38,6 +38,7 @@ export default function MeetEditPage() {
   const [eventEnd, setEventEnd] = useState('');
   const [eventLocation, setEventLocation] = useState('');
   const [eventDescription, setEventDescription] = useState('');
+  const [eventPrice, setEventPrice] = useState('');
   const [eventTypeId, setEventTypeId] = useState<string>('none');
   const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
 
@@ -84,6 +85,11 @@ export default function MeetEditPage() {
         setEventTitle(eventData.title || 'Встреча');
         setEventDescription(eventData.description || '');
         setEventLocation(eventData.location || '');
+        setEventPrice(
+          typeof eventData.price === 'number' && Number.isFinite(eventData.price)
+            ? String(eventData.price)
+            : ''
+        );
         setEventTypeId(eventData.event_type_id ? String(eventData.event_type_id) : 'none');
 
         const startDate = new Date(eventData.start_time);
@@ -168,6 +174,16 @@ export default function MeetEditPage() {
       computedEnd.setMinutes(computedEnd.getMinutes() + safeDuration);
       endPayload = computedEnd.toISOString();
     }
+    const priceRaw = eventPrice.trim();
+    let pricePayload: number | null = null;
+    if (priceRaw) {
+      const parsedPrice = Number(priceRaw.replace(',', '.'));
+      if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+        toast.error('Цена должна быть больше 0');
+        return;
+      }
+      pricePayload = parsedPrice;
+    }
 
     setSaving(true);
     try {
@@ -178,6 +194,7 @@ export default function MeetEditPage() {
         end_time: endPayload,
         location: eventLocation.trim(),
         event_type_id: eventTypeId === 'none' ? null : Number(eventTypeId),
+        price: pricePayload,
       });
       toast.success('Встреча обновлена');
       router.push(`/contact/${contactId}?tab=schedule`);
@@ -323,6 +340,18 @@ export default function MeetEditPage() {
                 onChange={(e) => setEventDescription(e.target.value)}
                 placeholder="Краткое описание"
                 rows={3}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="event-price">Цена (если есть)</Label>
+              <Input
+                id="event-price"
+                type="number"
+                min={0}
+                step="0.01"
+                value={eventPrice}
+                onChange={(e) => setEventPrice(e.target.value)}
+                placeholder="Например, 3000"
               />
             </div>
             <div className="flex justify-end">

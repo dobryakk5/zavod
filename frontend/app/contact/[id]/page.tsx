@@ -28,6 +28,7 @@ import { ApiError } from '@/lib/api';
 import { crmContactsApi, crmCategoriesApi, crmEventTypesApi, crmEventsApi, crmPaymentsApi, crmNotesApi, crmContactTagsApi, type ContactTelegramInfo } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
 import { clientProductsApi } from '@/lib/api/clientProducts';
+import { PaymentsTable } from '@/components/crm/payments-table';
 import {
   DEFAULT_TENANT_TIMEZONE,
   formatInTenantTimezone,
@@ -62,6 +63,7 @@ type Event = {
   location: string;
   status: 'scheduled' | 'completed' | 'cancelled' | 'no_show';
   notes: string;
+  price?: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -87,6 +89,7 @@ type Category = {
 type Payment = {
   id: number;
   contact_id: number;
+  event_id?: number | null;
   product_id: number | null;
   amount: number;
   currency: string;
@@ -178,6 +181,29 @@ const buildAppleCalendarLink = ({
   return `/api/calendar/ics?${params.toString()}`;
 };
 
+const copyTextToClipboard = async (value: string): Promise<void> => {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard is unavailable');
+  }
+
+  const textArea = document.createElement('textarea');
+  textArea.value = value;
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-9999px';
+  document.body.appendChild(textArea);
+  textArea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textArea);
+  if (!copied) {
+    throw new Error('Copy command failed');
+  }
+};
+
 export default function ContactDetailPage() {
   const { id } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
@@ -226,6 +252,7 @@ export default function ContactDetailPage() {
   const [newEventDuration, setNewEventDuration] = useState('60');
   const [newEventEnd, setNewEventEnd] = useState('');
   const [newEventLocation, setNewEventLocation] = useState('');
+  const [newEventPrice, setNewEventPrice] = useState('');
   const [newEventTypeId, setNewEventTypeId] = useState<string>('none');
   const [savingEvent, setSavingEvent] = useState(false);
   const eventStartInputRef = useRef<HTMLInputElement | null>(null);
@@ -257,6 +284,12 @@ export default function ContactDetailPage() {
   const [newPaymentPaid, setNewPaymentPaid] = useState(false);
   const [newPaymentProductId, setNewPaymentProductId] = useState<string>('none');
   const [savingPayment, setSavingPayment] = useState(false);
+  const [paymentToEdit, setPaymentToEdit] = useState<Payment | null>(null);
+  const [editingPaymentAmount, setEditingPaymentAmount] = useState('');
+  const [editingPaymentStatus, setEditingPaymentStatus] = useState<Payment['status']>('pending');
+  const [savingPaymentEdit, setSavingPaymentEdit] = useState(false);
+  const [paymentLinkLoadingId, setPaymentLinkLoadingId] = useState<number | null>(null);
+  const [paymentDeletingId, setPaymentDeletingId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'payments' | 'notes'>('overview');
   const [telegramInfo, setTelegramInfo] = useState<ContactTelegramInfo | null>(null);
   const [telegramInfoError, setTelegramInfoError] = useState<string | null>(null);
@@ -495,6 +528,16 @@ export default function ContactDetailPage() {
     const endPayload = newEventEnd
       ? localDateTimeStringToUtcISOString(newEventEnd, tenantTimezone)
       : '';
+    const priceRaw = newEventPrice.trim();
+    let pricePayload: number | null = null;
+    if (priceRaw) {
+      const parsedPrice = Number(priceRaw.replace(',', '.'));
+      if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+        toast.error('Цена должна быть больше 0');
+        return;
+      }
+      pricePayload = parsedPrice;
+    }
     if (!startPayload || !endPayload) {
       toast.error('Некорректная дата или время встречи');
       return;
@@ -511,6 +554,7 @@ export default function ContactDetailPage() {
         location: newEventLocation.trim(),
         status: 'scheduled',
         notes: '',
+        price: pricePayload,
       });
       setEvents((prev) =>
         [created, ...prev].sort(
@@ -523,6 +567,7 @@ export default function ContactDetailPage() {
       setNewEventDuration('60');
       setNewEventEnd('');
       setNewEventLocation('');
+      setNewEventPrice('');
       setNewEventTypeId('none');
       toast.success('Встреча добавлена');
     } catch (err) {
@@ -586,6 +631,113 @@ export default function ContactDetailPage() {
       toast.error('Не удалось сохранить платёж');
     } finally {
       setSavingPayment(false);
+    }
+  };
+
+  const handleCopyPaymentLink = async (payment: Payment) => {
+    const numericAmount = Number.parseFloat(String(payment.amount).replace(',', '.'));
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      toast.error('Укажите корректную сумму платежа.');
+      return;
+    }
+
+    setPaymentLinkLoadingId(payment.id);
+    try {
+      const metadata: Record<string, string> = {
+        crm_payment_id: String(payment.id),
+        crm_contact_id: String(payment.contact_id),
+      };
+      if (contact?.name) {
+        metadata.crm_contact_name = contact.name;
+      }
+      if (contact?.email) {
+        metadata.email = contact.email;
+      }
+
+      const description = (payment.description || '').trim() || (
+        contact ? `Оплата от клиента ${contact.name}` : 'Оплата от клиента'
+      );
+
+      const response = await crmPaymentsApi.generateYooKassaLink({
+        amount: numericAmount,
+        currency: payment.currency || 'RUB',
+        description,
+        metadata,
+      });
+
+      const paymentUrl = response.payment_url || response.confirmation_url;
+      if (!paymentUrl) {
+        throw new Error('Payment URL was not returned');
+      }
+
+      await copyTextToClipboard(paymentUrl);
+      toast.success('Ссылка на оплату скопирована.');
+    } catch (err) {
+      console.error('Failed to generate YooKassa payment link', err);
+      toast.error('Не удалось сгенерировать ссылку оплаты.');
+    } finally {
+      setPaymentLinkLoadingId(null);
+    }
+  };
+
+  const handleDeletePayment = async (payment: Payment) => {
+    const confirmed = window.confirm(`Удалить платеж на сумму ${payment.amount} ${payment.currency}?`);
+    if (!confirmed) return;
+
+    setPaymentDeletingId(payment.id);
+    try {
+      await crmPaymentsApi.delete(payment.id);
+      setPayments((prev) => prev.filter((item) => item.id !== payment.id));
+      toast.success('Платёж удалён');
+    } catch (err) {
+      console.error('Failed to delete payment:', err);
+      toast.error('Не удалось удалить платёж');
+    } finally {
+      setPaymentDeletingId(null);
+    }
+  };
+
+  const handleStartEditPayment = (payment: Payment) => {
+    setPaymentToEdit(payment);
+    setEditingPaymentAmount(String(Math.round(Number(payment.amount) || 0)));
+    setEditingPaymentStatus(payment.status);
+  };
+
+  const handleCancelEditPayment = () => {
+    setPaymentToEdit(null);
+    setEditingPaymentAmount('');
+    setEditingPaymentStatus('pending');
+  };
+
+  const handleSavePaymentEdit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!paymentToEdit) return;
+
+    const parsedAmount = Number(editingPaymentAmount.replace(',', '.'));
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+      toast.error('Введите корректную сумму.');
+      return;
+    }
+
+    setSavingPaymentEdit(true);
+    try {
+      const updated = await crmPaymentsApi.update(paymentToEdit.id, {
+        amount: parsedAmount,
+        status: editingPaymentStatus,
+        paid_at:
+          editingPaymentStatus === 'paid'
+            ? paymentToEdit.paid_at ?? new Date().toISOString()
+            : null,
+      });
+
+      setPayments((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      toast.success('Платёж обновлен');
+      handleCancelEditPayment();
+    } catch (err) {
+      console.error('Failed to update payment:', err);
+      toast.error('Не удалось обновить платёж');
+    } finally {
+      setSavingPaymentEdit(false);
     }
   };
 
@@ -819,11 +971,33 @@ export default function ContactDetailPage() {
     return map;
   }, [categories]);
 
-  const productsById = useMemo(() => {
-    const map = new Map<number, Product>();
-    products.forEach((item) => map.set(item.id, item));
+  const paymentEventDateById = useMemo(() => {
+    const map = new Map<number, string>();
+    events.forEach((event) => {
+      if (event.start_time) {
+        map.set(event.id, event.start_time);
+      }
+    });
     return map;
-  }, [products]);
+  }, [events]);
+
+  const paymentPlanFact = useMemo(() => {
+    return payments.reduce(
+      (acc, payment) => {
+        const amount = Number(payment.amount);
+        if (!Number.isFinite(amount)) {
+          return acc;
+        }
+        if (payment.status === 'pending') {
+          acc.plan += amount;
+        } else if (payment.status === 'paid') {
+          acc.fact += amount;
+        }
+        return acc;
+      },
+      { plan: 0, fact: 0 }
+    );
+  }, [payments]);
 
   useEffect(() => {
     if (!newEventStart) {
@@ -1215,10 +1389,16 @@ export default function ContactDetailPage() {
                   <div className="text-sm text-muted-foreground">Событий</div>
                 </div>
                 <div className="rounded-lg border bg-card p-4">
-                  <div className="text-2xl font-bold">
-                    {Math.round(payments.reduce((sum, payment) => sum + payment.amount, 0))} ₽
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs text-muted-foreground">План</div>
+                      <div className="text-2xl font-bold">{Math.round(paymentPlanFact.plan)} ₽</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-muted-foreground">Факт</div>
+                      <div className="text-2xl font-bold">{Math.round(paymentPlanFact.fact)} ₽</div>
+                    </div>
                   </div>
-                  <div className="text-sm text-muted-foreground">Платежей на сумму</div>
                 </div>
                 <div className="rounded-lg border bg-card p-4">
                   <div className="text-2xl font-bold">{notes.length}</div>
@@ -1490,6 +1670,18 @@ export default function ContactDetailPage() {
                     rows={3}
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="event-price">Цена (если есть)</Label>
+                  <Input
+                    id="event-price"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={newEventPrice}
+                    onChange={(e) => setNewEventPrice(e.target.value)}
+                    placeholder="Например, 5000"
+                  />
+                </div>
                 <Button type="submit" disabled={savingEvent}>
                   {savingEvent ? 'Сохраняем...' : 'Добавить встречу'}
                 </Button>
@@ -1513,6 +1705,19 @@ export default function ContactDetailPage() {
                     const endDate = new Date(event.end_time);
                     const hasValidDates =
                       !Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime());
+                    const eventDate = formatInTenantTimezone(event.start_time, tenantTimezone, {
+                      year: 'numeric',
+                      month: '2-digit',
+                      day: '2-digit',
+                    });
+                    const startTime = formatInTenantTimezone(event.start_time, tenantTimezone, {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    });
+                    const endTime = formatInTenantTimezone(event.end_time, tenantTimezone, {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    });
                     const title = event.title || 'Встреча';
                     const googleLink = hasValidDates
                       ? buildGoogleCalendarLink({
@@ -1560,11 +1765,9 @@ export default function ContactDetailPage() {
                               <p className="text-sm text-muted-foreground">{event.description}</p>
                             )}
                             <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
-                              <span>{formatInTenantTimezone(event.start_time, tenantTimezone, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
-                              <span>→</span>
-                              <span>{formatInTenantTimezone(event.end_time, tenantTimezone, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                              <span>Дата: {eventDate}</span>
                               <span>•</span>
-                              <span>{event.location}</span>
+                              <span>Время: {startTime}-{endTime}</span>
                             </div>
                           </div>
                           <div className="flex items-center gap-3">
@@ -1707,69 +1910,18 @@ export default function ContactDetailPage() {
               <CardDescription>Финансовые транзакции по контакту</CardDescription>
             </CardHeader>
             <CardContent>
-              {payments.length > 0 ? (
-                <div className="space-y-4">
-                  {payments.map((payment) => {
-                    const metaItems: Array<{ key: string; content: string }> = [];
-
-                    if (payment.payment_method) {
-                      metaItems.push({ key: 'method', content: payment.payment_method });
-                    }
-                    if (payment.transaction_id) {
-                      metaItems.push({ key: 'txn', content: `ID: ${payment.transaction_id}` });
-                    }
-                    if (payment.planned_at) {
-                      metaItems.push({
-                        key: 'planned',
-                        content: `План: ${formatInTenantTimezone(payment.planned_at, tenantTimezone, { year: 'numeric', month: '2-digit', day: '2-digit' })}`,
-                      });
-                    }
-                    if (payment.paid_at) {
-                      metaItems.push({
-                        key: 'paid',
-                        content: `Оплачено: ${formatInTenantTimezone(payment.paid_at, tenantTimezone, { year: 'numeric', month: '2-digit', day: '2-digit' })}`,
-                      });
-                    }
-
-                    return (
-                      <Card key={payment.id} className="p-4">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <h3 className="font-semibold">{payment.amount} {payment.currency}</h3>
-                            {payment.product_id && productsById.get(payment.product_id)?.name && (
-                              <p className="text-sm text-muted-foreground">
-                                {productsById.get(payment.product_id)?.name}
-                              </p>
-                            )}
-                            <p className="text-sm text-muted-foreground">{payment.description}</p>
-                            <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-muted-foreground">
-                              {metaItems.map((item, index) => (
-                                <span key={item.key}>
-                                  {item.content}
-                                  {index < metaItems.length - 1 && <span className="mx-2">•</span>}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                          <Badge 
-                            variant={
-                              payment.status === 'paid' ? 'secondary' : 
-                              payment.status === 'pending' ? 'default' : 
-                              payment.status === 'refunded' ? 'outline' : 'destructive'
-                            }
-                          >
-                            {payment.status === 'paid' ? 'Оплачено' : 
-                             payment.status === 'pending' ? 'В ожидании' : 
-                             payment.status === 'refunded' ? 'Возвращено' : 'Ошибка'}
-                          </Badge>
-                        </div>
-                      </Card>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="text-center text-muted-foreground py-8">Нет платежей</p>
-              )}
+              <PaymentsTable
+                payments={payments}
+                contacts={[contact]}
+                tenantTimezone={tenantTimezone}
+                eventDateById={paymentEventDateById}
+                paymentLinkLoadingId={paymentLinkLoadingId}
+                paymentDeletingId={paymentDeletingId}
+                onCopyPaymentLink={(payment) => void handleCopyPaymentLink(payment)}
+                onEditPayment={(payment) => handleStartEditPayment(payment)}
+                onDeletePayment={(payment) => void handleDeletePayment(payment)}
+                emptyText="Нет платежей"
+              />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1879,6 +2031,60 @@ export default function ContactDetailPage() {
               <Copy className="mt-0.5 h-4 w-4 shrink-0 text-black/60" />
             </button>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={paymentToEdit !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            handleCancelEditPayment();
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md bg-white text-black dark:bg-white dark:text-black">
+          <DialogHeader>
+            <DialogTitle className="text-black">Редактировать платёж</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleSavePaymentEdit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-payment-amount">Сумма</Label>
+              <Input
+                id="edit-payment-amount"
+                type="number"
+                min={0}
+                step="1"
+                value={editingPaymentAmount}
+                onChange={(e) => setEditingPaymentAmount(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-payment-status">Статус</Label>
+              <Select
+                value={editingPaymentStatus}
+                onValueChange={(value) => setEditingPaymentStatus(value as Payment['status'])}
+              >
+                <SelectTrigger id="edit-payment-status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">В ожидании</SelectItem>
+                  <SelectItem value="paid">Оплачено</SelectItem>
+                  <SelectItem value="failed">Ошибка</SelectItem>
+                  <SelectItem value="refunded">Возврат</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={handleCancelEditPayment} disabled={savingPaymentEdit}>
+                Отмена
+              </Button>
+              <Button type="submit" disabled={savingPaymentEdit}>
+                {savingPaymentEdit ? 'Сохраняем...' : 'Сохранить'}
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

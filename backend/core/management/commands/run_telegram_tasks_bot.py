@@ -352,12 +352,13 @@ async def _execute_chain_actions(
             continue
 
         if action_type == "send_text":
-            await bot.send_message(chat_id, text=payload.get("text", ""))
+            await bot.send_message(chat_id, text=payload.get("text", ""), parse_mode="HTML")
         elif action_type == "send_photo":
             await bot.send_photo(
                 chat_id,
                 photo=payload.get("photo_url"),
                 caption=payload.get("caption", ""),
+                parse_mode="HTML",
             )
         elif action_type == "send_buttons":
             buttons = _normalize_buttons(payload.get("buttons", []))
@@ -365,6 +366,7 @@ async def _execute_chain_actions(
                 chat_id,
                 text=payload.get("text", ""),
                 reply_markup=_build_chain_keyboard(buttons),
+                parse_mode="HTML",
             )
         elif action_type == "schedule_timeout":
             chains_check_timeout.apply_async(

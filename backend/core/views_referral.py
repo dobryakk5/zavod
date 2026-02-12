@@ -7,6 +7,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
+from api.authentication import CookieJWTAuthentication
 from core.models import UserTenantRole
 from core.referral import Referral, ReferralCode
 
@@ -16,15 +17,35 @@ from core.referral import Referral, ReferralCode
 # ---------------------------------------------------------------------------
 
 
+def _authenticate_cookie_user(request):
+    """
+    Для обычных Django views вручную поднимаем JWT-аутентификацию
+    (как в DRF), чтобы request.user не был AnonymousUser.
+    """
+    if request.user.is_authenticated:
+        return request.user
+    try:
+        auth_result = CookieJWTAuthentication().authenticate(request)
+    except Exception:
+        return None
+    if not auth_result:
+        return None
+    user, token = auth_result
+    request.user = user
+    request.auth = token
+    return user
+
+
 def _get_client_for_user(request):
     """
     Возвращает первый Client где request.user имеет роль owner/editor.
     """
-    if not request.user.is_authenticated:
+    user = _authenticate_cookie_user(request)
+    if not user:
         return None
     role = (
         UserTenantRole.objects.select_related("client")
-        .filter(user=request.user, role__in=("owner", "editor"))
+        .filter(user=user, role__in=("owner", "editor"))
         .first()
     )
     return role.client if role else None
@@ -147,4 +168,3 @@ def stats(request):
             "rewarded_referrals": qs.filter(status=Referral.STATUS_REWARDED).count(),
         }
     )
-

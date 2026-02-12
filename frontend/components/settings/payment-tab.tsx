@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { ArrowUpRight, CheckCircle, Clock3, RefreshCcw, XCircle } from 'lucide-react';
-import { ApiError, apiFetch } from '@/lib/api';
+import { ArrowUpRight, CheckCircle, Clock3, Copy, RefreshCcw, XCircle } from 'lucide-react';
+import { ApiError, apiFetch, BACKEND_BASE_URL } from '@/lib/api';
 import { useTenantTimezone } from '@/lib/hooks';
 import { formatInTenantTimezone } from '@/lib/timezone';
 import { Button } from '@/components/ui/button';
@@ -48,6 +48,13 @@ type SubscriptionInfo = {
   is_active?: boolean;
 };
 
+type ReferralStatsResponse = {
+  has_code?: boolean;
+  referral_code?: string;
+  referral_url?: string;
+  total_referrals?: number;
+};
+
 type PaymentPlan = {
   code: string;
   name: string;
@@ -81,6 +88,59 @@ const parsePlanLines = (description?: string) => {
     .filter(Boolean);
 };
 
+const copyTextToClipboard = async (value: string): Promise<void> => {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard is unavailable');
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+
+  if (!copied) {
+    throw new Error('Copy failed');
+  }
+};
+
+const buildCompactReferralUrl = (stats: ReferralStatsResponse): string => {
+  const referralCode = (stats.referral_code || '').trim();
+  const botUsername = (process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || '').trim().replace(/^@/, '');
+  if (referralCode && botUsername) {
+    return `https://t.me/${botUsername}?start=${referralCode}`;
+  }
+
+  const rawUrl = (stats.referral_url || '').trim();
+  if (!rawUrl) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    const start = parsed.searchParams.get('start');
+    const username = parsed.pathname.replace(/^\/+/, '');
+    const host = parsed.hostname.toLowerCase();
+    if (start && username && (host === 't.me' || host === 'telegram.me')) {
+      return `https://t.me/${username}?start=${start}`;
+    }
+  } catch {
+    return rawUrl;
+  }
+
+  return rawUrl;
+};
+
 export function PaymentTab() {
   const searchParams = useSearchParams();
   const { timezone: tenantTimezone } = useTenantTimezone();
@@ -95,6 +155,10 @@ export function PaymentTab() {
   const [promoLoading, setPromoLoading] = useState(false);
   const [promoError, setPromoError] = useState('');
   const [connectLoading, setConnectLoading] = useState(false);
+  const [referralLoading, setReferralLoading] = useState(false);
+  const [referralCount, setReferralCount] = useState<number | null>(null);
+  const [referralUrl, setReferralUrl] = useState('');
+  const [referralError, setReferralError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [telegramUser, setTelegramUser] = useState<TelegramAuthResponse['user'] | null>(null);
@@ -285,6 +349,49 @@ export function PaymentTab() {
     }
   };
 
+  const handlePartnerProgram = async () => {
+    setReferralLoading(true);
+    setReferralError('');
+    try {
+      let stats = await apiFetch<ReferralStatsResponse>(`${BACKEND_BASE_URL}/core/api/referral/stats/`);
+      if (!stats?.has_code) {
+        try {
+          await apiFetch(`${BACKEND_BASE_URL}/core/api/referral/create_code/`, {
+            method: 'POST',
+          });
+        } catch (createError) {
+          if (!(createError instanceof ApiError && createError.status === 400)) {
+            throw createError;
+          }
+        }
+        stats = await apiFetch<ReferralStatsResponse>(`${BACKEND_BASE_URL}/core/api/referral/stats/`);
+      }
+      setReferralCount(Number(stats?.total_referrals ?? 0));
+      setReferralUrl(buildCompactReferralUrl(stats));
+    } catch (referralLoadError) {
+      console.error('Failed to load referral stats', referralLoadError);
+      setReferralError('Не удалось загрузить партнёрскую программу.');
+      toast.error('Не удалось загрузить партнёрскую программу.');
+    } finally {
+      setReferralLoading(false);
+    }
+  };
+
+  const handleCopyReferralLink = async () => {
+    if (!referralUrl) {
+      toast.error('Реферальная ссылка пока недоступна.');
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(referralUrl);
+      toast.success('Реферальная ссылка скопирована.');
+    } catch (copyError) {
+      console.error('Failed to copy referral link', copyError);
+      toast.error('Не удалось скопировать ссылку.');
+    }
+  };
+
   const handleApplyPromo = async () => {
     const code = promoCode.trim();
     if (!code) {
@@ -443,6 +550,41 @@ export function PaymentTab() {
           >
             {connectLoading ? 'Переходим в YooKassa...' : 'Подключить прием платежей от своих клиентов'}
           </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            onClick={() => void handlePartnerProgram()}
+            disabled={referralLoading}
+            className="text-sm text-blue-600 underline underline-offset-2 hover:text-blue-700 disabled:opacity-50"
+          >
+            {referralLoading
+              ? 'Загружаем партнёрскую программу...'
+              : 'Партнерская программа'}
+          </button>
+          {referralCount !== null || referralUrl ? (
+            <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+              <div className="text-muted-foreground">Рефералов</div>
+              <div>{referralCount ?? 0}</div>
+              <div className="text-muted-foreground">Ссылка</div>
+              <div className="inline-flex max-w-full items-start gap-2">
+                <span className="break-all">{referralUrl || '—'}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 w-7 shrink-0 p-0"
+                  onClick={() => void handleCopyReferralLink()}
+                  aria-label="Копировать реферальную ссылку"
+                  title="Копировать ссылку"
+                  disabled={!referralUrl}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {referralError ? <div className="text-xs text-destructive">{referralError}</div> : null}
         </div>
       </div>
 

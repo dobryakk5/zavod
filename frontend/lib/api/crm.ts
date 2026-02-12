@@ -60,6 +60,7 @@ export type Event = {
   location: string;
   status: 'scheduled' | 'completed' | 'cancelled' | 'no_show';
   notes: string;
+  price?: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -77,6 +78,7 @@ export type AvailabilityEvent = {
 export type Payment = {
   id: number;
   contact_id: number;
+  event_id?: number | null;
   product_id: number | null;
   amount: number;
   currency: string;

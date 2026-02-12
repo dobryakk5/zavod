@@ -100,7 +100,7 @@ from .unmanaged import (
 )
 
 # --- Referral ---
-from core.referral import ReferralCode, Referral
+from core.referral import ReferralCode, Referral, ReferralFirstPayment
 
 __all__ = [
     # Mixins
@@ -205,4 +205,5 @@ __all__ = [
     # Referral
     "ReferralCode",
     "Referral",
+    "ReferralFirstPayment",
 ]

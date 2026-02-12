@@ -73,13 +73,89 @@ def _parse_datetime(value: Any, field_name: str) -> datetime:
 
 
 def _coerce_datetime_utc(value: Any, field_name: str) -> datetime:
-    return _parse_datetime(value, field_name).replace(tzinfo=None)
+    return _parse_datetime(value, field_name)
 
 
 def _coerce_datetime_utc_optional(value: Any, field_name: str) -> datetime | None:
     if value is None or value == "":
         return None
     return _coerce_datetime_utc(value, field_name)
+
+
+def _coerce_positive_float_optional(value: Any, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        raw_value: Any = text.replace(",", ".")
+    else:
+        raw_value = value
+    try:
+        numeric = float(raw_value)
+    except (TypeError, ValueError):
+        raise ValidationError({field_name: "Нужно число."})
+    if numeric <= 0:
+        raise ValidationError({field_name: "Значение должно быть больше 0."})
+    return numeric
+
+
+def _upsert_event_payment(
+    schema: str,
+    event_id: int,
+    contact_id: int,
+    amount: float,
+    title: str,
+    planned_at: datetime | None,
+) -> int | None:
+    description = f"Оплата встречи: {title}".strip() or "Оплата встречи"
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT id, status
+            FROM {schema}.crm_payments
+            WHERE event_id = %s
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            [event_id],
+        )
+        existing = cursor.fetchone()
+
+        if existing:
+            payment_id, payment_status = existing
+            # Не изменяем завершённые/ошибочные платежи автоматически.
+            if payment_status == "pending":
+                cursor.execute(
+                    f"""
+                    UPDATE {schema}.crm_payments
+                    SET
+                        contact_id = %s,
+                        amount = %s,
+                        currency = %s,
+                        description = %s,
+                        planned_at = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    [contact_id, amount, "RUB", description, planned_at, payment_id],
+                )
+            return int(payment_id)
+
+        cursor.execute(
+            f"""
+            INSERT INTO {schema}.crm_payments
+                (contact_id, event_id, product_id, amount, currency, status, payment_method, transaction_id, description, planned_at, paid_at)
+            VALUES
+                (%s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, NULL)
+            RETURNING id
+            """,
+            [contact_id, event_id, amount, "RUB", "pending", "", "", description, planned_at],
+        )
+        created = cursor.fetchone()
+        return int(created[0]) if created else None
 
 
 def _serialize_datetime_utc(value: Any) -> Any:
@@ -172,6 +248,7 @@ def _serialize_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "location": row.get("location") or "",
         "status": row.get("status") or "scheduled",
         "notes": row.get("notes") or "",
+        "price": float(row.get("price")) if row.get("price") is not None else None,
         "created_at": _serialize_datetime_utc(row.get("created_at")),
         "updated_at": _serialize_datetime_utc(row.get("updated_at")),
     }
@@ -219,6 +296,7 @@ def _serialize_payment_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": row.get("id"),
         "contact_id": row.get("contact_id"),
+        "event_id": row.get("event_id"),
         "product_id": row.get("product_id"),
         "amount": float(row.get("amount")) if row.get("amount") else 0.0,
         "currency": row.get("currency") or "RUB",
@@ -321,6 +399,7 @@ def _fetch_event(schema: str, event_id: int) -> Dict[str, Any] | None:
                 location,
                 status,
                 notes,
+                price,
                 created_at,
                 updated_at
             FROM {schema}.crm_events
@@ -416,6 +495,7 @@ def _fetch_payment(schema: str, payment_id: int) -> Dict[str, Any] | None:
             SELECT
                 id,
                 contact_id,
+                event_id,
                 product_id,
                 amount,
                 currency,
@@ -1185,6 +1265,7 @@ class EventsListView(APIView):
                     location,
                     status,
                     notes,
+                    price,
                     created_at,
                     updated_at
                 FROM {schema}.crm_events
@@ -1209,17 +1290,18 @@ class EventsListView(APIView):
         location = request.data.get("location", "")
         status_val = request.data.get("status", "scheduled")
         notes = request.data.get("notes", "")
+        price = _coerce_positive_float_optional(request.data.get("price"), "price")
 
         schema = _map_schema()
         with connection.cursor() as cursor:
             cursor.execute(
                 f"""
                 INSERT INTO {schema}.crm_events 
-                (contact_id, event_type_id, title, description, start_time, end_time, location, status, notes)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (contact_id, event_type_id, title, description, start_time, end_time, location, status, notes, price)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                [contact_id, event_type_id, title, description, start_time, end_time, location, status_val, notes],
+                [contact_id, event_type_id, title, description, start_time, end_time, location, status_val, notes, price],
             )
             row = cursor.fetchone()
 
@@ -1227,6 +1309,16 @@ class EventsListView(APIView):
             return Response({"error": "Не удалось создать событие."}, status=status.HTTP_400_BAD_REQUEST)
 
         event_id = row[0]
+        if price is not None:
+            _upsert_event_payment(
+                schema=schema,
+                event_id=int(event_id),
+                contact_id=contact_id,
+                amount=price,
+                title=title,
+                planned_at=start_time,
+            )
+
         created = _fetch_event(schema, int(event_id))
         if not created:
             created = {
@@ -1240,6 +1332,7 @@ class EventsListView(APIView):
                 "location": location,
                 "status": status_val,
                 "notes": notes,
+                "price": price,
                 "created_at": None,
                 "updated_at": None
             }
@@ -1297,6 +1390,10 @@ class EventDetailView(APIView):
             updates.append("notes = %s")
             params.append(request.data["notes"])
 
+        if "price" in request.data:
+            updates.append("price = %s")
+            params.append(_coerce_positive_float_optional(request.data["price"], "price"))
+
         if not updates:
             return Response({"error": "Нет данных для обновления."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1313,6 +1410,16 @@ class EventDetailView(APIView):
         updated = _fetch_event(schema, int(event_id))
         if not updated:
             return Response({"error": "Событие не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+        if "price" in request.data and updated.get("price") is not None:
+            _upsert_event_payment(
+                schema=schema,
+                event_id=int(updated["id"]),
+                contact_id=int(updated["contact_id"]),
+                amount=float(updated["price"]),
+                title=str(updated.get("title") or "Встреча"),
+                planned_at=updated.get("start_time"),
+            )
         return Response(updated)
 
     def delete(self, request, event_id: int):
@@ -1481,6 +1588,7 @@ class PaymentsListView(APIView):
                 SELECT
                     id,
                     contact_id,
+                    event_id,
                     product_id,
                     amount,
                     currency,
@@ -1506,6 +1614,9 @@ class PaymentsListView(APIView):
 
     def post(self, request):
         contact_id = _coerce_int(request.data.get("contact_id"), "contact_id")
+        event_id = request.data.get("event_id")
+        if event_id is not None:
+            event_id = _coerce_int(event_id, "event_id")
         product_id = request.data.get("product_id")
         if product_id is not None:
             product_id = _coerce_int(product_id, "product_id")
@@ -1523,11 +1634,11 @@ class PaymentsListView(APIView):
             cursor.execute(
                 f"""
                 INSERT INTO {schema}.crm_payments 
-                (contact_id, product_id, amount, currency, status, payment_method, transaction_id, description, planned_at, paid_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (contact_id, event_id, product_id, amount, currency, status, payment_method, transaction_id, description, planned_at, paid_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                [contact_id, product_id, amount, currency, status_val, payment_method, transaction_id, description, planned_at, paid_at],
+                [contact_id, event_id, product_id, amount, currency, status_val, payment_method, transaction_id, description, planned_at, paid_at],
             )
             row = cursor.fetchone()
 
@@ -1540,6 +1651,7 @@ class PaymentsListView(APIView):
             created = {
                 "id": int(payment_id),
                 "contact_id": contact_id,
+                "event_id": event_id,
                 "product_id": product_id,
                 "amount": amount,
                 "currency": currency,
@@ -1578,6 +1690,11 @@ class PaymentDetailView(APIView):
             value = request.data["product_id"]
             params.append(_coerce_int(value, "product_id") if value is not None else None)
             updates.append("product_id = %s")
+
+        if "event_id" in request.data:
+            value = request.data["event_id"]
+            params.append(_coerce_int(value, "event_id") if value is not None else None)
+            updates.append("event_id = %s")
 
         if "amount" in request.data:
             updates.append("amount = %s")

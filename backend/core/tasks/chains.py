@@ -50,11 +50,13 @@ def _send_telegram_message(
         payload: dict[str, Any] = {"chat_id": chat_id, "photo": photo_url}
         if caption:
             payload["caption"] = caption
+            payload["parse_mode"] = "HTML"
         if buttons:
             payload["reply_markup"] = _build_inline_keyboard(buttons)
     else:
         endpoint = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat_id, "text": text or ""}
+        payload["parse_mode"] = "HTML"
         if buttons:
             payload["reply_markup"] = _build_inline_keyboard(buttons)
 

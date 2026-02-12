@@ -1507,25 +1507,37 @@ export default function ClientsSchedule() {
                 onChange={(event) => setMonthEditDuration(event.target.value)}
               />
             </label>
-            <DialogFooter className="sm:justify-between">
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={handleMonthEditDelete}
-                disabled={monthEditDeleting}
-              >
-                {monthEditDeleting ? (
-                  'Удаление...'
-                ) : (
-                  <>
-                    <TrashIcon className="mr-2 h-4 w-4" />
-                    Удалить
-                  </>
+            <DialogFooter className="sm:justify-between sm:items-end">
+              <div className="flex flex-col items-start gap-2">
+                {monthEditItem?.kind === 'event' && (
+                  <Link
+                    href={`/meet/${monthEditItem.eventId}`}
+                    className="text-sm text-blue-600 underline-offset-4 hover:underline hover:text-blue-700"
+                  >
+                    Больше данных
+                  </Link>
                 )}
-              </Button>
-              <Button type="submit" disabled={monthEditSaving}>
-                {monthEditSaving ? 'Сохранение...' : 'Сохранить'}
-              </Button>
+                <Button type="submit" disabled={monthEditSaving}>
+                  {monthEditSaving ? 'Сохранение...' : 'Сохранить'}
+                </Button>
+              </div>
+              <div className="flex flex-col items-end gap-2">
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={handleMonthEditDelete}
+                  disabled={monthEditDeleting}
+                >
+                  {monthEditDeleting ? (
+                    'Удаление...'
+                  ) : (
+                    <>
+                      <TrashIcon className="mr-2 h-4 w-4" />
+                      Удалить
+                    </>
+                  )}
+                </Button>
+              </div>
             </DialogFooter>
           </form>
         </DialogContent>
