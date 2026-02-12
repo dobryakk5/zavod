@@ -71,6 +71,7 @@ export function ClientsTab() {
     pain: [],
     experience: []
   });
+  const [nameFilter, setNameFilter] = useState('');
   const clientDraftsRef = useRef(clientDrafts);
   const tagDraftsRef = useRef(tagDrafts);
 
@@ -227,15 +228,17 @@ export function ClientsTab() {
   }, [clients]);
 
   const filteredClients = useMemo(() => {
-    return clients.filter((client) =>
-      TAG_TYPES.every((type) => {
+    const search = nameFilter.trim().toLowerCase();
+    return clients.filter((client) => {
+      if (search && !(client.name ?? '').toLowerCase().includes(search)) return false;
+      return TAG_TYPES.every((type) => {
         const selected = filters[type] ?? [];
         if (selected.length === 0) return true;
         const clientTags = client.tags?.[type] ?? [];
         return selected.some((id) => clientTags.includes(id));
-      })
-    );
-  }, [clients, filters]);
+      });
+    });
+  }, [clients, filters, nameFilter]);
 
   const saveClientDraft = useCallback(async (clientId: number, override?: Partial<ClientDraft>) => {
     const current = clientDraftsRef.current[clientId];
@@ -674,7 +677,15 @@ export function ClientsTab() {
             <div className="space-y-4">
               <div className="rounded-xl border bg-card/70 p-4 shadow-sm">
                 <div className="grid gap-3 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
-                  <div className="text-xs font-semibold uppercase text-muted-foreground">Фильтры по тегам</div>
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold text-muted-foreground">Имя клиента</div>
+                    <Input
+                      value={nameFilter}
+                      onChange={(e) => setNameFilter(e.target.value)}
+                      placeholder="Поиск по имени"
+                      className="h-8 text-xs"
+                    />
+                  </div>
                   {TAG_TYPES.map((type) => (
                     <div key={`filter-${type}`} className="space-y-2">
                       <div className="text-xs font-semibold text-muted-foreground">{TAG_LABELS[type]}</div>

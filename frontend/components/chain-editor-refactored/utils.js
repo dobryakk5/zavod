@@ -156,6 +156,9 @@ export function formatRouterConditionLabel(condition) {
   if (type === 'text_contains') {
     return `Текст содержит "${params.substring || ''}"`.trim();
   }
+  if (type === 'client_tag_contains') {
+    return `Тег клиента содержит "${params.substring || ''}"`.trim();
+  }
   if (type === 'text_regex') {
     return `Regex: /${params.pattern || ''}/`.trim();
   }

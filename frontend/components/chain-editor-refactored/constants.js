@@ -36,4 +36,5 @@ export const CONDITION_LABELS = {
   has_media:     'Есть медиа?',
   text_equals:   'Текст =',
   has_entities:  'Содержит',
+  client_tag_contains: 'Тег клиента содержит',
 };

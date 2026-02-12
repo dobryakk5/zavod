@@ -73,6 +73,17 @@ export function ConditionEditorModal({ edge, srcNode, tgtNode, onSave, onClose, 
             />
           </>
         );
+      case 'client_tag_contains':
+        return (
+          <>
+            <Label>Текст в теге клиента</Label>
+            <Input
+              value={newCond.params.substring || ''}
+              onChange={e => setNewCond(c => ({ ...c, params: { ...c.params, substring: e.target.value } }))}
+              placeholder="vip"
+            />
+          </>
+        );
       case 'text_regex':
         return (
           <>
@@ -201,6 +212,7 @@ export function ConditionEditorModal({ edge, srcNode, tgtNode, onSave, onClose, 
                     ? [
                         { value: 'content_type', label: CONDITION_LABELS.content_type },
                         { value: 'text_contains', label: CONDITION_LABELS.text_contains },
+                        { value: 'client_tag_contains', label: CONDITION_LABELS.client_tag_contains },
                         { value: 'text_equals', label: CONDITION_LABELS.text_equals },
                         { value: 'text_regex', label: CONDITION_LABELS.text_regex },
                         { value: 'has_media', label: CONDITION_LABELS.has_media },
@@ -209,6 +221,7 @@ export function ConditionEditorModal({ edge, srcNode, tgtNode, onSave, onClose, 
                     : [
                         { value: 'button_press', label: CONDITION_LABELS.button_press },
                         { value: 'text_contains', label: CONDITION_LABELS.text_contains },
+                        { value: 'client_tag_contains', label: CONDITION_LABELS.client_tag_contains },
                         { value: 'text_regex', label: CONDITION_LABELS.text_regex },
                         { value: 'timeout', label: CONDITION_LABELS.timeout },
                         { value: 'any_reply', label: CONDITION_LABELS.any_reply },

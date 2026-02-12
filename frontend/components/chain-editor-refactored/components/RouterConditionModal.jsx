@@ -7,6 +7,7 @@ const ROUTER_CONDITION_OPTIONS = [
   { value: 'button_press', label: CONDITION_LABELS.button_press },
   { value: 'content_type', label: CONDITION_LABELS.content_type },
   { value: 'text_contains', label: CONDITION_LABELS.text_contains },
+  { value: 'client_tag_contains', label: CONDITION_LABELS.client_tag_contains },
   { value: 'text_equals', label: CONDITION_LABELS.text_equals },
   { value: 'text_regex', label: CONDITION_LABELS.text_regex },
   { value: 'has_media', label: CONDITION_LABELS.has_media },
@@ -21,6 +22,8 @@ function defaultParams(type) {
     case 'content_type':
       return { message_type: '' };
     case 'text_contains':
+      return { substring: '' };
+    case 'client_tag_contains':
       return { substring: '' };
     case 'text_equals':
       return { exact_text: '' };
@@ -119,6 +122,17 @@ export function RouterConditionModal({ condition, onSave, onClose }) {
                 value={params.substring || ''}
                 onChange={(e) => setParams({ substring: e.target.value })}
                 placeholder="да"
+              />
+            </div>
+          )}
+
+          {type === 'client_tag_contains' && (
+            <div>
+              <Label>Текст в теге клиента</Label>
+              <Input
+                value={params.substring || ''}
+                onChange={(e) => setParams({ substring: e.target.value })}
+                placeholder="vip"
               />
             </div>
           )}

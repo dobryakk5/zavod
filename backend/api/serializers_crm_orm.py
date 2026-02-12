@@ -44,12 +44,14 @@ class MapCRMTagSerializer(serializers.ModelSerializer):
 
 
 class MapContactTagSerializer(serializers.ModelSerializer):
+    type = serializers.CharField(source="tag.type", read_only=True)
+    value = serializers.CharField(source="tag.value", read_only=True)
     tag_type = serializers.CharField(source="tag.type", read_only=True)
     tag_value = serializers.CharField(source="tag.value", read_only=True)
 
     class Meta:
         model = MapContactTag
-        fields = ["id", "contact_id", "tag_id", "tag_type", "tag_value", "description"]
+        fields = ["id", "contact_id", "tag_id", "type", "value", "tag_type", "tag_value", "description"]
 
 
 class MapContactSerializer(serializers.ModelSerializer):

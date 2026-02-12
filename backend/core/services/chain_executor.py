@@ -7,7 +7,14 @@ from typing import Any
 
 from django.utils import timezone
 
-from core.models import ChainCondition, ChainEdge, ChainNode, ChainSession
+from core.models import (
+    ChainCondition,
+    ChainEdge,
+    ChainNode,
+    ChainSession,
+    MapContactTag,
+    UserTenantBinding,
+)
 from core.services.chain_service import get_or_create_chain
 
 
@@ -76,7 +83,13 @@ class ChainExecutor:
             return {"session_id": session.id, "actions": [], "session_status": session.status}
 
         if current_node.node_type == "router":
-            matching_edge = self._select_router_edge(current_node, user_message, session.context or {})
+            matching_edge = self._select_router_edge(
+                current_node,
+                user_message,
+                session.context or {},
+                user_id=session.user_id,
+                tenant_id=session.tenant_id,
+            )
             if not matching_edge:
                 session.status = "completed"
                 session.completed_at = timezone.now()
@@ -99,7 +112,13 @@ class ChainExecutor:
 
         matching_edge = None
         for edge in edges:
-            if evaluate_conditions(edge["conditions"], user_message, session.context or {}):
+            if evaluate_conditions(
+                edge["conditions"],
+                user_message,
+                session.context or {},
+                user_id=session.user_id,
+                tenant_id=session.tenant_id,
+            ):
                 matching_edge = edge
                 break
 
@@ -279,6 +298,9 @@ class ChainExecutor:
         node: ChainNode,
         user_message: dict[str, Any],
         session_context: dict[str, Any],
+        *,
+        user_id: int | None = None,
+        tenant_id: int | None = None,
     ) -> ChainEdge | None:
         conditions = node.payload.get("conditions") or []
         if not conditions:
@@ -294,7 +316,14 @@ class ChainExecutor:
             if cond_type == "fallback":
                 matched = True
             else:
-                matched = _evaluate_single_condition(cond_type or "", params, user_message, session_context)
+                matched = _evaluate_single_condition(
+                    cond_type or "",
+                    params,
+                    user_message,
+                    session_context,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                )
             if not matched:
                 continue
 
@@ -326,6 +355,9 @@ def evaluate_conditions(
     edge_conditions: list[dict[str, Any]],
     user_message: dict[str, Any],
     session_context: dict[str, Any],
+    *,
+    user_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> bool:
     if not edge_conditions:
         return True
@@ -333,7 +365,14 @@ def evaluate_conditions(
     for cond in edge_conditions:
         cond_type = cond.get("condition_type")
         params = cond.get("params", {})
-        if not _evaluate_single_condition(cond_type, params, user_message, session_context):
+        if not _evaluate_single_condition(
+            cond_type,
+            params,
+            user_message,
+            session_context,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        ):
             return False
     return True
 
@@ -343,6 +382,9 @@ def _evaluate_single_condition(
     params: dict[str, Any],
     user_message: dict[str, Any],
     session_context: dict[str, Any],
+    *,
+    user_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> bool:
     if cond_type == "button_press":
         return _eval_button_press(params, user_message)
@@ -358,6 +400,13 @@ def _evaluate_single_condition(
         return _eval_text_equals(params, user_message)
     if cond_type == "has_entities":
         return _eval_has_entities(params, user_message)
+    if cond_type == "client_tag_contains":
+        return _eval_client_tag_contains(
+            params,
+            session_context,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
     if cond_type == "timeout":
         return False
     if cond_type == "any_reply":
@@ -466,3 +515,63 @@ def _eval_any_reply(user_message: dict) -> bool:
         or user_message.get("location")
         or user_message.get("contact")
     )
+
+
+def _resolve_contact_id(
+    *,
+    session_context: dict[str, Any],
+    user_id: int | None,
+    tenant_id: int | None,
+) -> int | None:
+    context_contact_id = session_context.get("contact_id")
+    if context_contact_id is not None:
+        try:
+            resolved = int(context_contact_id)
+            if resolved > 0:
+                return resolved
+        except (TypeError, ValueError):
+            pass
+
+    if user_id is None or tenant_id is None:
+        return None
+
+    binding = (
+        UserTenantBinding.objects
+        .filter(telegram_chat_id=user_id, tenant_id=tenant_id, is_active=True)
+        .order_by("-bound_at", "-id")
+        .first()
+    )
+    if not binding or not binding.contact_id:
+        return None
+    return int(binding.contact_id)
+
+
+def _eval_client_tag_contains(
+    params: dict[str, Any],
+    session_context: dict[str, Any],
+    *,
+    user_id: int | None,
+    tenant_id: int | None,
+) -> bool:
+    substring = str(params.get("substring") or "").strip()
+    if not substring:
+        return False
+
+    contact_id = _resolve_contact_id(
+        session_context=session_context,
+        user_id=user_id,
+        tenant_id=tenant_id,
+    )
+    if not contact_id:
+        return False
+
+    case_sensitive = bool(params.get("case_sensitive", False))
+    needle = substring if case_sensitive else substring.lower()
+
+    for item in MapContactTag.objects.filter(contact_id=contact_id).select_related("tag"):
+        tag_value = str(getattr(getattr(item, "tag", None), "value", "") or "")
+        haystack = tag_value if case_sensitive else tag_value.lower()
+        if needle in haystack:
+            return True
+
+    return False

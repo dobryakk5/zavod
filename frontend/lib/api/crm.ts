@@ -40,6 +40,16 @@ export type ContactTag = {
   description: string;
 };
 
+type ContactTagApiRow = {
+  contact_id: number;
+  tag_id: number;
+  type?: 'goal' | 'pain' | 'experience';
+  value?: string;
+  tag_type?: 'goal' | 'pain' | 'experience';
+  tag_value?: string;
+  description?: string | null;
+};
+
 export type EventType = {
   id: number;
   name: string;
@@ -187,7 +197,14 @@ export const crmTagsApi = {
 // API functions for contact-tags relationships
 export const crmContactTagsApi = {
   list: async (contactId: number | string): Promise<ContactTag[]> => {
-    return apiFetch<ContactTag[]>(`/crm/contact-tags/?contact_id=${contactId}`);
+    const rows = await apiFetch<ContactTagApiRow[]>(`/crm/contact-tags/?contact_id=${contactId}`);
+    return rows.map((row) => ({
+      contact_id: row.contact_id,
+      tag_id: row.tag_id,
+      type: row.type || row.tag_type || 'goal',
+      value: row.value || row.tag_value || '',
+      description: row.description || '',
+    }));
   },
 
   create: async (data: { contact_id: number; tag_id: number }): Promise<{ success: boolean }> => {

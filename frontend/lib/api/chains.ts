@@ -11,7 +11,8 @@ export type ChainConditionType =
   | 'content_type'
   | 'has_media'
   | 'text_equals'
-  | 'has_entities';
+  | 'has_entities'
+  | 'client_tag_contains';
 
 export type Chain = {
   id: number;
