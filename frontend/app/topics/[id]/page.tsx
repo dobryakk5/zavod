@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { topicsApi } from '@/lib/api/topics';
 import { trendsApi } from '@/lib/api/trends';
@@ -58,14 +58,7 @@ export default function TopicPage({ params }: TopicPageProps) {
     };
   }, [params]);
 
-  useEffect(() => {
-    if (topicId !== null) {
-      loadTopic();
-      loadTrends();
-    }
-  }, [topicId]);
-
-  const loadTopic = async () => {
+  const loadTopic = useCallback(async () => {
     if (topicId === null) return;
     try {
       const data = await topicsApi.get(topicId);
@@ -73,9 +66,9 @@ export default function TopicPage({ params }: TopicPageProps) {
     } catch (error) {
       toast.error('Не удалось загрузить тему');
     }
-  };
+  }, [topicId]);
 
-  const loadTrends = async () => {
+  const loadTrends = useCallback(async () => {
     if (topicId === null) return;
     setLoading(true);
     try {
@@ -86,7 +79,14 @@ export default function TopicPage({ params }: TopicPageProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [topicId]);
+
+  useEffect(() => {
+    if (topicId !== null) {
+      void loadTopic();
+      void loadTrends();
+    }
+  }, [loadTopic, loadTrends, topicId]);
 
   const handleDelete = async () => {
     if (topicId === null) return;

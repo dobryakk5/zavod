@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { templatesApi } from '@/lib/api/templates';
 import { TemplateForm } from '@/components/templates/template-form';
@@ -53,13 +53,7 @@ export default function TemplatePage({ params }: TemplatePageProps) {
     };
   }, [params]);
 
-  useEffect(() => {
-    if (templateId !== null) {
-      loadTemplate();
-    }
-  }, [templateId]);
-
-  const loadTemplate = async () => {
+  const loadTemplate = useCallback(async () => {
     if (templateId === null) return;
     try {
       const data = await templatesApi.get(templateId);
@@ -67,7 +61,13 @@ export default function TemplatePage({ params }: TemplatePageProps) {
     } catch (error) {
       toast.error('Не удалось загрузить шаблон');
     }
-  };
+  }, [templateId]);
+
+  useEffect(() => {
+    if (templateId !== null) {
+      void loadTemplate();
+    }
+  }, [loadTemplate, templateId]);
 
   const handleSubmit = async (data: any) => {
     if (templateId === null) return;

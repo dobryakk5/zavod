@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import TipTapEditor from '@/components/kb/TipTapEditor';
 import ShareButton from '@/components/kb/ShareButton';
@@ -19,11 +19,7 @@ export default function DocumentPage() {
   const [error, setError] = useState<string | null>(null);
   const [showComments, setShowComments] = useState(false);
 
-  useEffect(() => {
-    void loadDocument();
-  }, [documentId]);
-
-  const loadDocument = async () => {
+  const loadDocument = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
@@ -35,7 +31,11 @@ export default function DocumentPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [documentId]);
+
+  useEffect(() => {
+    void loadDocument();
+  }, [loadDocument]);
 
   const handleTitleChange = async (newTitle: string) => {
     if (!document) return;

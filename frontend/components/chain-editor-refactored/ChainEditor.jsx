@@ -52,10 +52,10 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
   const chainApi = useMemo(() => chainsApi.forChain(chainId), [chainId]);
 
   const ANIM_MS = 500;
-  const makeTempId = (prefix) => `tmp_${prefix}_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-  const isTempId = (id) => typeof id === 'string' && id.startsWith('tmp_');
+  const makeTempId = useCallback((prefix) => `tmp_${prefix}_${Date.now()}_${Math.floor(Math.random() * 100000)}`, []);
+  const isTempId = useCallback((id) => typeof id === 'string' && id.startsWith('tmp_'), []);
 
-  const makeConditionId = () => `cond_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+  const makeConditionId = useCallback(() => `cond_${Date.now()}_${Math.floor(Math.random() * 100000)}`, []);
 
   useEffect(() => {
     stateRef.current = state;
@@ -77,7 +77,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [chainApi]);
 
   const scheduleFlush = useCallback(() => {
     if (flushTimerRef.current) {
@@ -92,7 +92,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     if (isTempId(nodeId)) return;
     positionQueueRef.current.set(nodeId, { pos_x: x, pos_y: y });
     scheduleFlush();
-  }, [scheduleFlush]);
+  }, [isTempId, scheduleFlush]);
 
   useEffect(() => {
     return () => {
@@ -209,7 +209,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     })();
 
     return tempNode;
-  }, []);
+  }, [chainApi, makeConditionId, makeTempId, queuePositionUpdate]);
 
   const createStartWithRouter = useCallback(async () => {
     const startX = 100;
@@ -301,7 +301,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     } finally {
       setSaving(false);
     }
-  }, [chainApi]);
+  }, [chainApi, makeConditionId]);
 
   const createStartOnly = useCallback(async () => {
     const existing = stateRef.current.nodes.find((n) => n.node_type === 'start');
@@ -389,7 +389,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [chainApi, isTempId]);
 
   const deleteNode = useCallback(async (nodeId) => {
     const node = stateRef.current.nodes.find((n) => n.id === nodeId);
@@ -428,7 +428,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [ANIM_MS, chainApi, isTempId]);
 
   const setStartNode = useCallback(async (nodeId) => {
     if (!state.chain) return;
@@ -443,7 +443,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     } finally {
       setSaving(false);
     }
-  }, [state.chain]);
+  }, [chainApi, state.chain]);
 
   const createEdgeOnServer = useCallback(async (edge) => {
     if (pendingEdgeCreatesRef.current.has(edge.id)) return;
@@ -480,7 +480,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
       pendingEdgeCreatesRef.current.delete(edge.id);
       setSaving(false);
     }
-  }, []);
+  }, [chainApi]);
 
   const createEdge = useCallback(async (sourceId, targetId, sourcePortId = null) => {
     const edges = stateRef.current.edges.filter((edge) => edge.__anim !== 'exit');
@@ -546,7 +546,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     }
 
     await createEdgeOnServer(tempEdge);
-  }, []);
+  }, [chainApi, createEdgeOnServer, isTempId, makeTempId]);
 
   useEffect(() => {
     const pending = state.edges.filter((edge) => (
@@ -558,7 +558,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     pending.forEach((edge) => {
       void createEdgeOnServer(edge);
     });
-  }, [state.edges, createEdgeOnServer]);
+  }, [createEdgeOnServer, isTempId, state.edges]);
 
   const deleteEdge = useCallback(async (edgeId) => {
     const edge = stateRef.current.edges.find((e) => e.id === edgeId);
@@ -593,7 +593,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [ANIM_MS, chainApi, isTempId]);
 
   const saveEdgeConditions = useCallback(async (edgeId, nextConditions) => {
     if (isTempId(edgeId)) {
@@ -628,7 +628,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [chainApi, isTempId]);
 
   const saveRouterCondition = useCallback(async (nodeId, condition) => {
     const node = stateRef.current.nodes.find((n) => n.id === nodeId);
@@ -649,7 +649,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
 
     next = next.map((c, i) => ({ ...c, port_index: i }));
     await updateNode(nodeId, { payload: { ...node.payload, conditions: next } });
-  }, [updateNode]);
+  }, [makeConditionId, updateNode]);
 
   const deleteRouterCondition = useCallback(async (nodeId, conditionId) => {
     const node = stateRef.current.nodes.find((n) => n.id === nodeId);
@@ -945,7 +945,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
     } finally {
       setSaving(false);
     }
-  }, [saving, chainApi, createInitialNodes]);
+  }, [saving, chainApi, createInitialNodes, isTempId]);
 
   if (loading) return <div className="min-h-[400px] flex items-center justify-center text-slate-600">Загрузка...</div>;
   if (!state.chain) return <div className="min-h-[400px] flex items-center justify-center text-slate-600">Цепочка недоступна</div>;

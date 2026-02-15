@@ -37,4 +37,6 @@ export const CONDITION_LABELS = {
   text_equals:   'Текст =',
   has_entities:  'Содержит',
   client_tag_contains: 'Тег клиента содержит',
+  client_has_meeting: 'Есть встреча',
+  client_has_payment: 'Есть оплата',
 };

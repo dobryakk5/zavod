@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Any
 
+from django.db import connection
 from django.utils import timezone
 
 from core.models import (
@@ -12,6 +14,7 @@ from core.models import (
     ChainEdge,
     ChainNode,
     ChainSession,
+    MapCRMPayment,
     MapContactTag,
     UserTenantBinding,
 )
@@ -407,6 +410,20 @@ def _evaluate_single_condition(
             user_id=user_id,
             tenant_id=tenant_id,
         )
+    if cond_type == "client_has_meeting":
+        return _eval_client_has_meeting(
+            params,
+            session_context,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+    if cond_type == "client_has_payment":
+        return _eval_client_has_payment(
+            params,
+            session_context,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
     if cond_type == "timeout":
         return False
     if cond_type == "any_reply":
@@ -546,6 +563,13 @@ def _resolve_contact_id(
     return int(binding.contact_id)
 
 
+def _map_schema() -> str:
+    schema = (os.getenv("MAP_SCHEMA", "map") or "map").strip()
+    if not schema or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema):
+        return "map"
+    return schema
+
+
 def _eval_client_tag_contains(
     params: dict[str, Any],
     session_context: dict[str, Any],
@@ -574,4 +598,137 @@ def _eval_client_tag_contains(
         if needle in haystack:
             return True
 
+    return False
+
+
+def _eval_client_has_meeting(
+    params: dict[str, Any],
+    session_context: dict[str, Any],
+    *,
+    user_id: int | None,
+    tenant_id: int | None,
+) -> bool:
+    contact_id = _resolve_contact_id(
+        session_context=session_context,
+        user_id=user_id,
+        tenant_id=tenant_id,
+    )
+    if not contact_id:
+        return False
+
+    status = str(params.get("status") or "").strip().lower()
+    allowed_statuses = {"scheduled", "completed", "cancelled", "no_show"}
+    if status and status not in allowed_statuses:
+        return False
+
+    relation = _extract_nearest_relation(params)
+    schema = _map_schema()
+    if not relation:
+        query = f"SELECT 1 FROM {schema}.crm_events WHERE contact_id = %s"
+        args: list[Any] = [contact_id]
+        if status:
+            query += " AND status = %s"
+            args.append(status)
+        query += " LIMIT 1"
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(query, args)
+                return cursor.fetchone() is not None
+        except Exception:
+            logger.exception("Failed to evaluate client_has_meeting for contact %s", contact_id)
+            return False
+
+    query = f"""
+        SELECT start_time
+        FROM {schema}.crm_events
+        WHERE contact_id = %s
+          AND start_time IS NOT NULL
+    """
+    args = [contact_id]
+    if status:
+        query += " AND status = %s"
+        args.append(status)
+    query += " ORDER BY ABS(EXTRACT(EPOCH FROM (start_time - NOW()))) ASC LIMIT 1"
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(query, args)
+            row = cursor.fetchone()
+    except Exception:
+        logger.exception("Failed to evaluate nearest client_has_meeting for contact %s", contact_id)
+        return False
+
+    if not row or not row[0]:
+        return False
+    nearest_dt = _ensure_datetime_aware(row[0])
+    now = timezone.now()
+    return _compare_relation(now, nearest_dt, relation)
+
+
+def _eval_client_has_payment(
+    params: dict[str, Any],
+    session_context: dict[str, Any],
+    *,
+    user_id: int | None,
+    tenant_id: int | None,
+) -> bool:
+    contact_id = _resolve_contact_id(
+        session_context=session_context,
+        user_id=user_id,
+        tenant_id=tenant_id,
+    )
+    if not contact_id:
+        return False
+
+    status = str(params.get("status") or "").strip().lower()
+    allowed_statuses = {"pending", "paid", "failed", "refunded"}
+    if status and status not in allowed_statuses:
+        return False
+
+    relation = _extract_nearest_relation(params)
+    queryset = MapCRMPayment.objects.filter(contact_id=contact_id)
+    if status:
+        queryset = queryset.filter(status=status)
+    if not relation:
+        return queryset.exists()
+
+    now = timezone.now()
+    nearest: datetime | None = None
+    nearest_delta: float | None = None
+
+    for payment in queryset.only("planned_at", "paid_at", "created_at"):
+        dt = payment.planned_at or payment.paid_at or payment.created_at
+        if not dt:
+            continue
+        dt = _ensure_datetime_aware(dt)
+        delta = abs((dt - now).total_seconds())
+        if nearest is None or nearest_delta is None or delta < nearest_delta:
+            nearest = dt
+            nearest_delta = delta
+
+    if nearest is None:
+        return False
+
+    return _compare_relation(now, nearest, relation)
+
+
+def _extract_nearest_relation(params: dict[str, Any]) -> str:
+    relation = str(params.get("nearest_relation") or "").strip().lower()
+    if relation in {"before", "after"}:
+        return relation
+    return ""
+
+
+def _ensure_datetime_aware(value: datetime) -> datetime:
+    if timezone.is_aware(value):
+        return value
+    return timezone.make_aware(value, timezone.get_current_timezone())
+
+
+def _compare_relation(now: datetime, target: datetime, relation: str) -> bool:
+    if relation == "before":
+        return now < target
+    if relation == "after":
+        return now > target
     return False

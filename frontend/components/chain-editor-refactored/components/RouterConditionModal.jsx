@@ -3,17 +3,48 @@ import { CONDITION_LABELS } from '../constants';
 import { formatRouterConditionLabel } from '../utils';
 import { Button, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input, Label, Select } from './ui';
 
-const ROUTER_CONDITION_OPTIONS = [
-  { value: 'button_press', label: CONDITION_LABELS.button_press },
-  { value: 'content_type', label: CONDITION_LABELS.content_type },
-  { value: 'text_contains', label: CONDITION_LABELS.text_contains },
-  { value: 'client_tag_contains', label: CONDITION_LABELS.client_tag_contains },
-  { value: 'text_equals', label: CONDITION_LABELS.text_equals },
-  { value: 'text_regex', label: CONDITION_LABELS.text_regex },
-  { value: 'has_media', label: CONDITION_LABELS.has_media },
-  { value: 'has_entities', label: CONDITION_LABELS.has_entities },
-  { value: 'fallback', label: 'Fallback (любой)' },
+const CONDITION_GROUPS = {
+  content: [
+    { value: 'button_press', label: CONDITION_LABELS.button_press },
+    { value: 'has_media', label: CONDITION_LABELS.has_media },
+    { value: 'content_type', label: CONDITION_LABELS.content_type },
+  ],
+  text: [
+    { value: 'text_regex', label: CONDITION_LABELS.text_regex },
+    { value: 'has_entities', label: CONDITION_LABELS.has_entities },
+    { value: 'text_contains', label: CONDITION_LABELS.text_contains },
+    { value: 'text_equals', label: CONDITION_LABELS.text_equals },
+  ],
+  client: [
+    { value: 'client_tag_contains', label: CONDITION_LABELS.client_tag_contains },
+    { value: 'client_has_meeting', label: CONDITION_LABELS.client_has_meeting },
+    { value: 'client_has_payment', label: CONDITION_LABELS.client_has_payment },
+  ],
+  fallback: [
+    { value: 'fallback', label: 'Fallback (любой)' },
+  ],
+};
+
+const CONDITION_GROUP_OPTIONS = [
+  { value: 'content', label: 'Контент' },
+  { value: 'text', label: 'Текст' },
+  { value: 'client', label: 'Клиент' },
+  { value: 'fallback', label: 'Fallback (иное)' },
 ];
+
+const NEAREST_RELATION_OPTIONS = [
+  { value: '', label: 'Без проверки времени' },
+  { value: 'before', label: 'До ближайшей даты' },
+  { value: 'after', label: 'После ближайшей даты' },
+];
+
+function inferGroupByType(type) {
+  const entries = Object.entries(CONDITION_GROUPS);
+  for (const [group, options] of entries) {
+    if (options.some((item) => item.value === type)) return group;
+  }
+  return 'content';
+}
 
 function defaultParams(type) {
   switch (type) {
@@ -31,23 +62,38 @@ function defaultParams(type) {
       return { pattern: '' };
     case 'has_entities':
       return { entity_type: '' };
+    case 'client_has_meeting':
+      return { status: '', nearest_relation: '' };
+    case 'client_has_payment':
+      return { status: '', nearest_relation: '' };
     default:
       return {};
   }
 }
 
 export function RouterConditionModal({ condition, onSave, onClose }) {
-  const [type, setType] = useState(condition?.condition_type || 'content_type');
-  const [params, setParams] = useState(condition?.params || defaultParams(condition?.condition_type || 'content_type'));
+  const initialType = condition?.condition_type || 'content_type';
+  const [group, setGroup] = useState(inferGroupByType(initialType));
+  const [type, setType] = useState(initialType);
+  const [params, setParams] = useState(condition?.params || defaultParams(initialType));
   const [label, setLabel] = useState(condition?.label || '');
 
   useEffect(() => {
     if (condition) {
-      setType(condition.condition_type || 'content_type');
-      setParams(condition.params || defaultParams(condition.condition_type || 'content_type'));
+      const nextType = condition.condition_type || 'content_type';
+      setType(nextType);
+      setGroup(inferGroupByType(nextType));
+      setParams(condition.params || defaultParams(nextType));
       setLabel(condition.label || '');
+      return;
     }
+    setGroup('content');
+    setType('content_type');
+    setParams(defaultParams('content_type'));
+    setLabel('');
   }, [condition]);
+
+  const conditionTypeOptions = CONDITION_GROUPS[group] || [];
 
   const handleSave = () => {
     const trimmed = label.trim();
@@ -70,15 +116,32 @@ export function RouterConditionModal({ condition, onSave, onClose }) {
       <DialogContent>
         <div className="space-y-4">
           <div>
+            <Label>Группа</Label>
+            <Select
+              value={group}
+              onChange={(e) => {
+                const nextGroup = e.target.value;
+                const firstOption = (CONDITION_GROUPS[nextGroup] || [])[0];
+                if (!firstOption) return;
+                setGroup(nextGroup);
+                setType(firstOption.value);
+                setParams(defaultParams(firstOption.value));
+              }}
+              options={CONDITION_GROUP_OPTIONS}
+            />
+          </div>
+
+          <div>
             <Label>Тип условия</Label>
             <Select
               value={type}
               onChange={(e) => {
                 const nextType = e.target.value;
                 setType(nextType);
+                setGroup(inferGroupByType(nextType));
                 setParams(defaultParams(nextType));
               }}
-              options={ROUTER_CONDITION_OPTIONS}
+              options={conditionTypeOptions}
             />
           </div>
 
@@ -134,6 +197,60 @@ export function RouterConditionModal({ condition, onSave, onClose }) {
                 onChange={(e) => setParams({ substring: e.target.value })}
                 placeholder="vip"
               />
+            </div>
+          )}
+
+          {type === 'client_has_meeting' && (
+            <div className="space-y-3">
+              <div>
+                <Label>Статус встречи (опционально)</Label>
+                <Select
+                  value={params.status || ''}
+                  onChange={(e) => setParams({ ...params, status: e.target.value })}
+                  options={[
+                    { value: '', label: 'Любая встреча' },
+                    { value: 'scheduled', label: 'Запланирована' },
+                    { value: 'completed', label: 'Завершена' },
+                    { value: 'cancelled', label: 'Отменена' },
+                    { value: 'no_show', label: 'Не явился' },
+                  ]}
+                />
+              </div>
+              <div>
+                <Label>Относительно ближайшей встречи</Label>
+                <Select
+                  value={params.nearest_relation || ''}
+                  onChange={(e) => setParams({ ...params, nearest_relation: e.target.value })}
+                  options={NEAREST_RELATION_OPTIONS}
+                />
+              </div>
+            </div>
+          )}
+
+          {type === 'client_has_payment' && (
+            <div className="space-y-3">
+              <div>
+                <Label>Статус оплаты (опционально)</Label>
+                <Select
+                  value={params.status || ''}
+                  onChange={(e) => setParams({ ...params, status: e.target.value })}
+                  options={[
+                    { value: '', label: 'Любая оплата' },
+                    { value: 'pending', label: 'В ожидании' },
+                    { value: 'paid', label: 'Оплачено' },
+                    { value: 'failed', label: 'Ошибка' },
+                    { value: 'refunded', label: 'Возврат' },
+                  ]}
+                />
+              </div>
+              <div>
+                <Label>Относительно ближайшей оплаты</Label>
+                <Select
+                  value={params.nearest_relation || ''}
+                  onChange={(e) => setParams({ ...params, nearest_relation: e.target.value })}
+                  options={NEAREST_RELATION_OPTIONS}
+                />
+              </div>
             </div>
           )}
 

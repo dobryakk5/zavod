@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { kbSharesApi } from '@/lib/api/knowledgeBase';
 import type { KbDocumentShare } from '@/lib/types';
 
@@ -14,11 +14,7 @@ export default function ShareButton({ documentId }: ShareButtonProps) {
   const [showModal, setShowModal] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    void loadExistingShare();
-  }, [documentId]);
-
-  const loadExistingShare = async () => {
+  const loadExistingShare = useCallback(async () => {
     try {
       const shares = await kbSharesApi.list();
       const existingShare = shares.find((s) => s.document === documentId && s.is_active);
@@ -28,7 +24,11 @@ export default function ShareButton({ documentId }: ShareButtonProps) {
     } catch (error) {
       console.error('Error loading share:', error);
     }
-  };
+  }, [documentId]);
+
+  useEffect(() => {
+    void loadExistingShare();
+  }, [loadExistingShare]);
 
   const handleCreateShare = async () => {
     setIsLoading(true);

@@ -149,6 +149,12 @@ export function getEdgeMid(srcNode, tgtNode, edge = null) {
 export function formatRouterConditionLabel(condition) {
   if (!condition) return '';
   const { condition_type: type, params = {} } = condition;
+  const relationText =
+    params.nearest_relation === 'before'
+      ? ' до ближайшей даты'
+      : params.nearest_relation === 'after'
+        ? ' после ближайшей даты'
+        : '';
   if (type === 'fallback') return 'Любой (fallback)';
   if (type === 'content_type') {
     return `Тип = ${params.message_type || '—'}`;
@@ -158,6 +164,14 @@ export function formatRouterConditionLabel(condition) {
   }
   if (type === 'client_tag_contains') {
     return `Тег клиента содержит "${params.substring || ''}"`.trim();
+  }
+  if (type === 'client_has_meeting') {
+    const suffix = params.status ? ` [${params.status}]` : '';
+    return `Есть встреча${suffix}${relationText}`;
+  }
+  if (type === 'client_has_payment') {
+    const suffix = params.status ? ` [${params.status}]` : '';
+    return `Есть оплата${suffix}${relationText}`;
   }
   if (type === 'text_regex') {
     return `Regex: /${params.pattern || ''}/`.trim();

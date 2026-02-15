@@ -12,7 +12,9 @@ export type ChainConditionType =
   | 'has_media'
   | 'text_equals'
   | 'has_entities'
-  | 'client_tag_contains';
+  | 'client_tag_contains'
+  | 'client_has_meeting'
+  | 'client_has_payment';
 
 export type Chain = {
   id: number;

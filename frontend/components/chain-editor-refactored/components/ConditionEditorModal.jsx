@@ -84,6 +84,60 @@ export function ConditionEditorModal({ edge, srcNode, tgtNode, onSave, onClose, 
             />
           </>
         );
+      case 'client_has_meeting':
+        return (
+          <>
+            <Label>Статус встречи (опционально)</Label>
+            <Select
+              value={newCond.params.status || ''}
+              onChange={e => setNewCond(c => ({ ...c, params: { ...c.params, status: e.target.value } }))}
+              options={[
+                { value: '', label: 'Любая встреча' },
+                { value: 'scheduled', label: 'Запланирована' },
+                { value: 'completed', label: 'Завершена' },
+                { value: 'cancelled', label: 'Отменена' },
+                { value: 'no_show', label: 'Не явился' },
+              ]}
+            />
+            <Label>Относительно ближайшей встречи</Label>
+            <Select
+              value={newCond.params.nearest_relation || ''}
+              onChange={e => setNewCond(c => ({ ...c, params: { ...c.params, nearest_relation: e.target.value } }))}
+              options={[
+                { value: '', label: 'Без проверки времени' },
+                { value: 'before', label: 'До ближайшей даты' },
+                { value: 'after', label: 'После ближайшей даты' },
+              ]}
+            />
+          </>
+        );
+      case 'client_has_payment':
+        return (
+          <>
+            <Label>Статус оплаты (опционально)</Label>
+            <Select
+              value={newCond.params.status || ''}
+              onChange={e => setNewCond(c => ({ ...c, params: { ...c.params, status: e.target.value } }))}
+              options={[
+                { value: '', label: 'Любая оплата' },
+                { value: 'pending', label: 'В ожидании' },
+                { value: 'paid', label: 'Оплачено' },
+                { value: 'failed', label: 'Ошибка' },
+                { value: 'refunded', label: 'Возврат' },
+              ]}
+            />
+            <Label>Относительно ближайшей оплаты</Label>
+            <Select
+              value={newCond.params.nearest_relation || ''}
+              onChange={e => setNewCond(c => ({ ...c, params: { ...c.params, nearest_relation: e.target.value } }))}
+              options={[
+                { value: '', label: 'Без проверки времени' },
+                { value: 'before', label: 'До ближайшей даты' },
+                { value: 'after', label: 'После ближайшей даты' },
+              ]}
+            />
+          </>
+        );
       case 'text_regex':
         return (
           <>
@@ -189,6 +243,9 @@ export function ConditionEditorModal({ edge, srcNode, tgtNode, onSave, onClose, 
                   {c.params.message_type ? ` = ${c.params.message_type}` : ''}
                   {c.params.entity_type ? ` [${c.params.entity_type}]` : ''}
                   {c.params.exact_text ? ` = "${c.params.exact_text}"` : ''}
+                  {c.params.status ? ` [${c.params.status}]` : ''}
+                  {c.params.nearest_relation === 'before' ? ' [до ближайшей даты]' : ''}
+                  {c.params.nearest_relation === 'after' ? ' [после ближайшей даты]' : ''}
                 </span>
                 <button onClick={() => removeCondition(i)} className="text-red-600 hover:text-red-700">×</button>
               </div>
@@ -213,6 +270,8 @@ export function ConditionEditorModal({ edge, srcNode, tgtNode, onSave, onClose, 
                         { value: 'content_type', label: CONDITION_LABELS.content_type },
                         { value: 'text_contains', label: CONDITION_LABELS.text_contains },
                         { value: 'client_tag_contains', label: CONDITION_LABELS.client_tag_contains },
+                        { value: 'client_has_meeting', label: CONDITION_LABELS.client_has_meeting },
+                        { value: 'client_has_payment', label: CONDITION_LABELS.client_has_payment },
                         { value: 'text_equals', label: CONDITION_LABELS.text_equals },
                         { value: 'text_regex', label: CONDITION_LABELS.text_regex },
                         { value: 'has_media', label: CONDITION_LABELS.has_media },
@@ -222,6 +281,8 @@ export function ConditionEditorModal({ edge, srcNode, tgtNode, onSave, onClose, 
                         { value: 'button_press', label: CONDITION_LABELS.button_press },
                         { value: 'text_contains', label: CONDITION_LABELS.text_contains },
                         { value: 'client_tag_contains', label: CONDITION_LABELS.client_tag_contains },
+                        { value: 'client_has_meeting', label: CONDITION_LABELS.client_has_meeting },
+                        { value: 'client_has_payment', label: CONDITION_LABELS.client_has_payment },
                         { value: 'text_regex', label: CONDITION_LABELS.text_regex },
                         { value: 'timeout', label: CONDITION_LABELS.timeout },
                         { value: 'any_reply', label: CONDITION_LABELS.any_reply },

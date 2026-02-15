@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -43,6 +43,7 @@ type Contact = {
   name: string;
   email: string;
   phone: string;
+  source?: string;
   category_id: number | null;
   status: 'active' | 'inactive' | 'archived';
   photo_url: string;
@@ -231,7 +232,7 @@ export default function ContactDetailPage() {
   const [newEventTitle, setNewEventTitle] = useState('');
   const [newEventDescription, setNewEventDescription] = useState('');
   const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
-  const getDefaultEventStart = (tz: string) => {
+  const getDefaultEventStart = useCallback((tz: string) => {
     const normalizedTz = normalizeTenantTimezone(tz);
     const nowUtc = new Date().toISOString();
     const nowLocal = formatTenantDateTimeInput(nowUtc, normalizedTz);
@@ -245,7 +246,7 @@ export default function ContactDetailPage() {
     const mm = String(nextDay.getMonth() + 1).padStart(2, '0');
     const dd = String(nextDay.getDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}T12:00`;
-  };
+  }, []);
   const defaultEventStartRef = useRef(getDefaultEventStart(DEFAULT_TENANT_TIMEZONE));
   const defaultPaymentStartRef = useRef(defaultEventStartRef.current);
   const [newEventStart, setNewEventStart] = useState(defaultEventStartRef.current);
@@ -278,6 +279,8 @@ export default function ContactDetailPage() {
   const [savingCategoryEdit, setSavingCategoryEdit] = useState(false);
   const editCategoryInputRef = useRef<HTMLInputElement | null>(null);
   const [savingCategoryAssignment, setSavingCategoryAssignment] = useState(false);
+  const [sourceValue, setSourceValue] = useState('');
+  const [savingSource, setSavingSource] = useState(false);
   const [newPaymentAmount, setNewPaymentAmount] = useState('');
   const [newPaymentCurrency, setNewPaymentCurrency] = useState('RUB');
   const [newPaymentPlannedAt, setNewPaymentPlannedAt] = useState(defaultPaymentStartRef.current);
@@ -331,7 +334,7 @@ export default function ContactDetailPage() {
     }
     defaultEventStartRef.current = nextDefault;
     defaultPaymentStartRef.current = nextDefault;
-  }, [tenantTimezone]);
+  }, [getDefaultEventStart, newEventStart, newPaymentPlannedAt, tenantTimezone]);
 
   // Load contact data
   useEffect(() => {
@@ -419,6 +422,10 @@ export default function ContactDetailPage() {
   useEffect(() => {
     setCategoryId(contact?.category_id ? String(contact.category_id) : 'none');
   }, [contact?.category_id]);
+
+  useEffect(() => {
+    setSourceValue(contact?.source ?? '');
+  }, [contact?.source]);
 
   const handleFieldEdit = (field: string, currentValue?: string | null) => {
     setEditingField(field);
@@ -959,6 +966,37 @@ export default function ContactDetailPage() {
     }
   };
 
+  const saveSource = useCallback(
+    async (value: string) => {
+      if (!contact) return;
+      if (value === (contact.source ?? '')) return;
+
+      setSavingSource(true);
+      try {
+        const updated = await crmContactsApi.update(contact.id, { source: value });
+        setContact(updated);
+      } catch (err) {
+        console.error('Error updating contact source:', err);
+        toast.error('Не удалось обновить источник');
+        setSourceValue(contact.source ?? '');
+      } finally {
+        setSavingSource(false);
+      }
+    },
+    [contact]
+  );
+
+  useEffect(() => {
+    if (!contact || savingSource) return;
+    if (sourceValue === (contact.source ?? '')) return;
+
+    const timer = window.setTimeout(() => {
+      void saveSource(sourceValue);
+    }, 700);
+
+    return () => window.clearTimeout(timer);
+  }, [contact, saveSource, savingSource, sourceValue]);
+
   const eventTypesById = useMemo(() => {
     const map = new Map<number, EventType>();
     eventTypes.forEach((item) => map.set(item.id, item));
@@ -1341,6 +1379,16 @@ export default function ContactDetailPage() {
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="flex items-center justify-between gap-4">
+                  <Label htmlFor="contact-source">Источник</Label>
+                  <Input
+                    id="contact-source"
+                    value={sourceValue}
+                    onChange={(e) => setSourceValue(e.target.value)}
+                    placeholder="сарафан или сайт или"
+                    className="w-48"
+                  />
+                </div>
                 {editingField === 'notes' ? (
                   <div className="space-y-2">
                     <Input
@@ -1423,7 +1471,6 @@ export default function ContactDetailPage() {
                         <Badge variant="outline">{tagTypeLabels[tag.type]}</Badge>
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor={`tag-description-${tag.tag_id}`}>Описание</Label>
                         <Textarea
                           id={`tag-description-${tag.tag_id}`}
                           value={tagDescriptions[tag.tag_id] ?? ''}

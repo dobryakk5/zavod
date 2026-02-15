@@ -7,6 +7,7 @@ export type Contact = {
   name: string;
   email: string;
   phone: string;
+  source?: string;
   category_id: number | null;
   status: 'active' | 'inactive' | 'archived';
   photo_url: string;

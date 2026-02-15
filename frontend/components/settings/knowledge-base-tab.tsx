@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { kbDocumentsApi } from '@/lib/api/knowledgeBase';
 import type { KbDocumentList } from '@/lib/types';
@@ -149,7 +149,7 @@ export function KnowledgeBaseTab() {
   const [error, setError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
 
-  const loadDocuments = async () => {
+  const loadDocuments = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
@@ -161,11 +161,11 @@ export function KnowledgeBaseTab() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [showArchived]);
 
   useEffect(() => {
     void loadDocuments();
-  }, [showArchived]);
+  }, [loadDocuments]);
 
   const handleCreate = async () => {
     try {

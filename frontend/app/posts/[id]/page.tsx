@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { postsApi } from '@/lib/api/posts';
 import { PostDetailView } from '@/components/posts/post-detail-view';
@@ -55,13 +55,7 @@ export default function PostPage({ params }: PostPageProps) {
     };
   }, [params]);
 
-  useEffect(() => {
-    if (postId !== null) {
-      loadPost();
-    }
-  }, [postId]);
-
-  const loadPost = async () => {
+  const loadPost = useCallback(async () => {
     if (postId === null) return;
     try {
       const data = await postsApi.get(postId);
@@ -69,7 +63,13 @@ export default function PostPage({ params }: PostPageProps) {
     } catch (error) {
       toast.error('Не удалось загрузить пост');
     }
-  };
+  }, [postId]);
+
+  useEffect(() => {
+    if (postId !== null) {
+      void loadPost();
+    }
+  }, [loadPost, postId]);
 
   const handleSubmit = async (data: any) => {
     if (postId === null) return;

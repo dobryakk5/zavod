@@ -29,6 +29,7 @@ from aiogram.types import (
 from core.models import TelegramTask
 from core.telegram_bot.dependencies import get_telegram_user_service, init_dependencies
 from core.telegram_bot.meetings import meetings_router, send_meetings, get_binding_meeting_keyboard
+from core.telegram_bot.voice_handlers import voice_router
 from core.telegram_bot.ui import main_menu, MEETINGS_BUTTON_TEXT, WELCOME_BUTTON_TEXT
 from core.services.chain_executor import ChainExecutor
 from core.tasks.chains import chains_send_delayed_message, chains_check_timeout, CHAIN_BUTTON_PREFIX
@@ -748,7 +749,7 @@ async def handle_meetings(message: Message) -> None:
 # Глобальный обработчик — маршрутизация по кнопкам меню
 # ---------------------------------------------------------------------------
 
-@router.message(~(F.text.startswith("/") | F.caption.startswith("/")))
+@router.message((~(F.text.startswith("/") | F.caption.startswith("/"))) & ~F.voice)
 async def handle_message(message: Message, state: FSMContext) -> None:
     if message.chat.type != "private":
         return
@@ -898,13 +899,13 @@ async def handle_message(message: Message, state: FSMContext) -> None:
 
 async def _run_bot(token: str) -> None:
     import logging as _logging
-    _logging.basicConfig(level=_logging.INFO)
+    _logging.basicConfig(level=_logging.WARNING)
 
     debug_handler = _logging.StreamHandler()
     debug_formatter = _logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     debug_handler.setFormatter(debug_formatter)
     debug_logger.addHandler(debug_handler)
-    debug_logger.setLevel(_logging.INFO)
+    debug_logger.setLevel(_logging.WARNING)
 
     bot = Bot(token=token)
     await bot.set_my_commands(
@@ -917,6 +918,7 @@ async def _run_bot(token: str) -> None:
     )
 
     dispatcher = Dispatcher(storage=MemoryStorage())
+    dispatcher.include_router(voice_router)
     dispatcher.include_router(router)
     dispatcher.include_router(meetings_router)
 

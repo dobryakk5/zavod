@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { kbCommentsApi } from '@/lib/api/knowledgeBase';
 import type { KbComment } from '@/lib/types';
 
@@ -15,18 +15,18 @@ export default function CommentsPanel({ documentId }: CommentsPanelProps) {
   const [replyText, setReplyText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
-    void loadComments();
-  }, [documentId]);
-
-  const loadComments = async () => {
+  const loadComments = useCallback(async () => {
     try {
       const data = await kbCommentsApi.list(documentId);
       setComments(data);
     } catch (error) {
       console.error('Error loading comments:', error);
     }
-  };
+  }, [documentId]);
+
+  useEffect(() => {
+    void loadComments();
+  }, [loadComments]);
 
   const handleAddComment = async () => {
     if (!newComment.trim()) return;

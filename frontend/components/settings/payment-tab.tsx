@@ -288,13 +288,6 @@ export function PaymentTab() {
   }, [searchParams]);
 
   useEffect(() => {
-    if (!paymentId) {
-      return;
-    }
-    void refreshStatus(paymentId);
-  }, [paymentId]);
-
-  useEffect(() => {
     const isConnected = searchParams.get('connected') === 'true';
     const yookassaError = searchParams.get('yookassa_error');
 
@@ -329,7 +322,7 @@ export function PaymentTab() {
     }
   };
 
-  const clearStoredPaymentId = () => {
+  const clearStoredPaymentId = useCallback(() => {
     try {
       sessionStorage.removeItem('yookassa_payment_id');
       localStorage.removeItem('yookassa_payment_id');
@@ -338,9 +331,9 @@ export function PaymentTab() {
     }
     setPaymentId(null);
     setPaymentStatus(null);
-  };
+  }, []);
 
-  const refreshStatus = async (id: string) => {
+  const refreshStatus = useCallback(async (id: string) => {
     setStatusLoading(true);
     setStatusError('');
     try {
@@ -357,7 +350,14 @@ export function PaymentTab() {
     } finally {
       setStatusLoading(false);
     }
-  };
+  }, [clearStoredPaymentId]);
+
+  useEffect(() => {
+    if (!paymentId) {
+      return;
+    }
+    void refreshStatus(paymentId);
+  }, [paymentId, refreshStatus]);
 
   const handleConnectYookassa = async () => {
     setConnectLoading(true);

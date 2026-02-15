@@ -16,6 +16,7 @@ class MapContact(models.Model):
     name = models.CharField(max_length=200, verbose_name="Имя клиента")
     email = models.EmailField(blank=True, verbose_name="Email")
     phone = models.CharField(max_length=50, blank=True, verbose_name="Телефон")
+    source = models.CharField(max_length=255, blank=True, verbose_name="Источник")
     category_id = models.IntegerField(null=True, blank=True, verbose_name="ID категории")
     status = models.CharField(
         max_length=20,

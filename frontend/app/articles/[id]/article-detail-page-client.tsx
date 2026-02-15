@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2, X as XIcon } from 'lucide-react';
@@ -584,14 +584,21 @@ export default function ArticleDetailPageClient() {
     }
   }, [orderedBlocks, resultDraft, resultTouched, article?.status]);
 
-  const reloadBlocks = async () => {
+  const scrollToResult = useCallback(() => {
+    setActiveTab('result');
+    window.requestAnimationFrame(() => {
+      resultTabRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, []);
+
+  const reloadBlocks = useCallback(async () => {
     try {
       const data = await articlesApi.listBlocks(articleId);
       setBlocks(data);
     } catch (error) {
       console.error('Failed to reload blocks', error);
     }
-  };
+  }, [articleId]);
 
   useEffect(() => {
     if (!blueprintTaskId) return;
@@ -626,7 +633,7 @@ export default function ArticleDetailPageClient() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [articleId, blueprintTaskId]);
+  }, [articleId, blueprintTaskId, reloadBlocks]);
 
   useEffect(() => {
     if (!phase2TaskId) return;
@@ -664,7 +671,7 @@ export default function ArticleDetailPageClient() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [articleId, phase2TaskId]);
+  }, [articleId, phase2TaskId, reloadBlocks, scrollToResult]);
 
   useEffect(() => {
     if (!blockTaskId) return;
@@ -695,7 +702,7 @@ export default function ArticleDetailPageClient() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [articleId, blockTaskId]);
+  }, [articleId, blockTaskId, reloadBlocks]);
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -744,13 +751,6 @@ export default function ArticleDetailPageClient() {
     saveTimerRef.current = window.setTimeout(() => {
       void saveChoicesNow();
     }, 500);
-  };
-
-  const scrollToResult = () => {
-    setActiveTab('result');
-    window.requestAnimationFrame(() => {
-      resultTabRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
   };
 
   useEffect(() => {

@@ -66,6 +66,7 @@ class MapContactSerializer(serializers.ModelSerializer):
             "name",
             "email",
             "phone",
+            "source",
             "category_id",
             "status",
             "photo_url",

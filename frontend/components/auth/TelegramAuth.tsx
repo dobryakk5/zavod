@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { TelegramAuthButton } from './TelegramAuthButton';
 import { Button } from '@/components/ui/button';
 
@@ -57,27 +58,15 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
   const [user, setUser] = useState<TelegramUser | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
-  const ensureApiConfigured = () => {
+  const ensureApiConfigured = useCallback(() => {
     if (!hasApiUrl) {
       setStatus({ type: 'error', text: API_MISSING_MESSAGE });
       return false;
     }
     return true;
-  };
+  }, []);
 
-  useEffect(() => {
-    if (open) {
-      if (!hasApiUrl) {
-        setStatus({ type: 'error', text: API_MISSING_MESSAGE });
-        return;
-      }
-      void checkAuth();
-    } else {
-      setStatus(null);
-    }
-  }, [open, router]);
-
-  const checkAuth = async () => {
+  const checkAuth = useCallback(async () => {
     if (!ensureApiConfigured()) {
       return;
     }
@@ -96,7 +85,19 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
     } catch (error) {
       console.error('Error checking auth:', error);
     }
-  };
+  }, [ensureApiConfigured, onClose, router]);
+
+  useEffect(() => {
+    if (open) {
+      if (!hasApiUrl) {
+        setStatus({ type: 'error', text: API_MISSING_MESSAGE });
+        return;
+      }
+      void checkAuth();
+    } else {
+      setStatus(null);
+    }
+  }, [checkAuth, open]);
 
   const handleTelegramResponse = async (response: any) => {
     if (!ensureApiConfigured()) {
@@ -251,7 +252,14 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
                 )}
                 <div className="mx-auto mb-3 flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-2xl font-semibold text-primary">
                   {user.photoUrl ? (
-                    <img src={user.photoUrl} alt={user.firstName} className="h-full w-full object-cover" />
+                    <Image
+                      src={user.photoUrl}
+                      alt={user.firstName}
+                      width={80}
+                      height={80}
+                      className="h-full w-full object-cover"
+                      unoptimized
+                    />
                   ) : (
                     renderInitials()
                   )}

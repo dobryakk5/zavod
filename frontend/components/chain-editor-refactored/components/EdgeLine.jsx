@@ -40,6 +40,9 @@ export function EdgeLine({ edge, srcNode, tgtNode, isSelected, onClick, conditio
             {cond.params.message_type ? ` = ${cond.params.message_type}` : ''}
             {cond.params.entity_type ? ` [${cond.params.entity_type}]` : ''}
             {cond.params.exact_text ? ` = "${cond.params.exact_text}"` : ''}
+            {cond.params.status ? ` [${cond.params.status}]` : ''}
+            {cond.params.nearest_relation === 'before' ? ' [до ближайшей даты]' : ''}
+            {cond.params.nearest_relation === 'after' ? ' [после ближайшей даты]' : ''}
           </div>
         </foreignObject>
       ))}

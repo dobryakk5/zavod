@@ -212,7 +212,7 @@ function MyProjectTab({ timeZone }: { timeZone: string }) {
     }
   }, []);
 
-  const loadChannels = async () => {
+  const loadChannels = useCallback(async () => {
     setLoading(true);
     try {
       const data = await clientApi.getSettings();
@@ -226,7 +226,7 @@ function MyProjectTab({ timeZone }: { timeZone: string }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const loadLatestAnalysis = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -245,10 +245,10 @@ function MyProjectTab({ timeZone }: { timeZone: string }) {
   }, []);
 
   useEffect(() => {
-    loadChannels();
+    void loadChannels();
     void loadLatestAnalysis();
     void loadTimeseries();
-  }, []);
+  }, [loadChannels, loadLatestAnalysis, loadTimeseries]);
 
   useEffect(() => {
     const shouldPoll = analysis?.status === 'pending' || analysis?.status === 'in_progress';
@@ -330,8 +330,8 @@ function MyProjectTab({ timeZone }: { timeZone: string }) {
 
   const hasChannels = Object.values(channels).some((value) => value.trim());
   const analysisChannels = analysis?.result?.channels ?? [];
-  const availableTimeseriesChannels = timeseries?.channels ?? [];
-  const runs = timeseries?.runs ?? [];
+  const availableTimeseriesChannels = useMemo(() => timeseries?.channels ?? [], [timeseries?.channels]);
+  const runs = useMemo(() => timeseries?.runs ?? [], [timeseries?.runs]);
 
   useEffect(() => {
     if (availableTimeseriesChannels.length === 0) {
