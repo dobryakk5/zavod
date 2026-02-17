@@ -8,9 +8,9 @@ import { crmContactsApi, crmEventsApi } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
 import { chainsApi, type ChainCatalogItem } from '@/lib/api/chains';
 import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezone } from '@/lib/timezone';
-import { OperatorTasksTab } from './operator-tasks-tab';
 import { ClientsTab } from '../products/clients-tab';
 import { CategoriesTab } from '../products/categories-tab';
+import { OperatorTasksTab } from './operator-tasks-tab';
 import ScheduleTasksView from '../schedule/tasks-view';
 import NewClientsEditor from './new/new-clients-editor';
 import ClientsSchedule from './clients-schedule';
@@ -189,11 +189,12 @@ export default function ClientsPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="clients" className="space-y-3">
-        <TabsList className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
+      <Tabs defaultValue="clients" className="space-y-6">
+        <TabsList className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-7">
           <TabsTrigger value="clients">Клиенты</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
           <TabsTrigger value="service-level">Уровень сервиса</TabsTrigger>
+          <TabsTrigger value="tasks">Задачи</TabsTrigger>
           <TabsTrigger value="categories">Теги</TabsTrigger>
           <TabsTrigger value="payments">Платежи</TabsTrigger>
           <TabsTrigger value="welcome-chain">ChatBot</TabsTrigger>
@@ -206,27 +207,20 @@ export default function ClientsPage() {
         </TabsContent>
 
         <TabsContent value="schedule" className="space-y-6">
-          <div className="bg-white rounded-lg p-6">
-            <Tabs defaultValue="calendar" className="space-y-4">
-              <TabsList>
-                <TabsTrigger value="calendar">Календарь</TabsTrigger>
-                <TabsTrigger value="tasks">Задачи</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="calendar">
-                <ClientsSchedule />
-              </TabsContent>
-
-              <TabsContent value="tasks">
-                <OperatorTasksTab />
-              </TabsContent>
-            </Tabs>
+          <div className="bg-white rounded-lg">
+            <ClientsSchedule />
           </div>
         </TabsContent>
 
         <TabsContent value="service-level" className="space-y-6">
           <div className="bg-white rounded-lg p-6">
             <ScheduleTasksView />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="tasks" className="space-y-6">
+          <div className="bg-white rounded-lg p-6">
+            <OperatorTasksTab />
           </div>
         </TabsContent>
 

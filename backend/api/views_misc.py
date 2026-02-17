@@ -2,14 +2,28 @@ from __future__ import annotations
 
 # NOTE: This module is kept for backward-compatible imports and gradual refactors.
 
+from django.db import transaction
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from core import tasks
 from core.generation_events import record_generation_event
-from core.models import ContentTemplate, GenerationEvent, Schedule, SocialAccount, Story, TelegramTask, Topic, TrendItem
+from core.models import (
+    CRMTask,
+    CRMTaskHistory,
+    ContentTemplate,
+    GenerationEvent,
+    Schedule,
+    SocialAccount,
+    Story,
+    TelegramTask,
+    Topic,
+    TrendItem,
+)
 from core.services.seo_generation import has_active_generation
 from core.services.posting_service import update_post_status_after_publish
 from core.social_accounts import sync_client_default_telegram_account
@@ -17,6 +31,8 @@ from core.social_accounts import sync_client_default_telegram_account
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers import (
     ContentTemplateSerializer,
+    CRMTaskHistorySerializer,
+    CRMTaskSerializer,
     ScheduleSerializer,
     SocialAccountSerializer,
     StoryDetailSerializer,
@@ -97,6 +113,193 @@ class TelegramTaskListView(generics.ListAPIView):
             TelegramTask.objects.filter(client=client)
             .order_by("-received_at", "-id")
         )
+
+
+def _crm_tasks_access_q(user, client):
+    return Q(level__client=client) | (Q(level__isnull=True) & Q(created_by=user.id))
+
+
+def _parse_task_priority(value):
+    if value in (None, ""):
+        return None
+    try:
+        priority = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("Некорректный priority.")
+    if priority not in {1, 2, 3}:
+        raise ValueError("Priority может быть только 1, 2 или 3.")
+    return priority
+
+
+class CRMTaskListCreateView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def get(self, request):
+        client = get_active_client(request.user)
+        history_prefetch = Prefetch(
+            "history_entries",
+            queryset=CRMTaskHistory.objects.order_by("created_at", "id"),
+        )
+        queryset = (
+            CRMTask.objects.select_related("level")
+            .prefetch_related(history_prefetch)
+            .filter(_crm_tasks_access_q(request.user, client))
+            .order_by("-updated_at", "-id")
+        )
+
+        level_id = request.query_params.get("level_id")
+        if level_id not in (None, ""):
+            try:
+                level_id_int = int(level_id)
+            except (TypeError, ValueError):
+                return Response({"error": "Некорректный level_id."}, status=status.HTTP_400_BAD_REQUEST)
+            if not TelegramTask.objects.filter(id=level_id_int, client=client).exists():
+                return Response({"error": "Обратная связь не найдена."}, status=status.HTTP_404_NOT_FOUND)
+            queryset = queryset.filter(level_id=level_id_int)
+
+        manual = request.query_params.get("manual")
+        if manual in {"1", "true", "True"}:
+            queryset = queryset.filter(level__isnull=True)
+        elif manual in {"0", "false", "False"}:
+            queryset = queryset.filter(level__isnull=False)
+
+        serializer = CRMTaskSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        title = str(request.data.get("title") or "").strip()
+        if not title:
+            return Response({"error": "Поле title обязательно."}, status=status.HTTP_400_BAD_REQUEST)
+
+        description_raw = request.data.get("description")
+        description = str(description_raw).strip() if description_raw is not None else ""
+        description = description or None
+
+        level = None
+        level_id = request.data.get("level_id")
+        if level_id not in (None, ""):
+            try:
+                level_id_int = int(level_id)
+            except (TypeError, ValueError):
+                return Response({"error": "Некорректный level_id."}, status=status.HTTP_400_BAD_REQUEST)
+            level = TelegramTask.objects.filter(id=level_id_int, client=client).first()
+            if level is None:
+                return Response({"error": "Обратная связь не найдена."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            priority = _parse_task_priority(request.data.get("priority"))
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        if priority is None:
+            priority = 2
+
+        task = CRMTask.objects.create(
+            level=level,
+            title=title,
+            description=description,
+            status="open",
+            priority=priority,
+            created_by=request.user.id,
+        )
+        serializer = CRMTaskSerializer(task)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class CRMTaskDetailView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get_object(self, request, task_id: int):
+        client = get_active_client(request.user)
+        history_prefetch = Prefetch(
+            "history_entries",
+            queryset=CRMTaskHistory.objects.order_by("created_at", "id"),
+        )
+        return (
+            CRMTask.objects.select_related("level")
+            .prefetch_related(history_prefetch)
+            .filter(id=task_id)
+            .filter(_crm_tasks_access_q(request.user, client))
+            .first()
+        )
+
+    def get(self, request, task_id: int):
+        task = self.get_object(request, task_id)
+        if task is None:
+            return Response({"error": "Задача не найдена."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = CRMTaskSerializer(task)
+        return Response(serializer.data)
+
+
+class CRMTaskHistoryListCreateView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsTenantOwnerOrEditor()]
+        return super().get_permissions()
+
+    def _get_task(self, request, task_id: int):
+        client = get_active_client(request.user)
+        return (
+            CRMTask.objects.select_related("level")
+            .filter(id=task_id)
+            .filter(_crm_tasks_access_q(request.user, client))
+            .first()
+        )
+
+    def get(self, request, task_id: int):
+        task = self._get_task(request, task_id)
+        if task is None:
+            return Response({"error": "Задача не найдена."}, status=status.HTTP_404_NOT_FOUND)
+        entries = task.history_entries.all().order_by("created_at", "id")
+        serializer = CRMTaskHistorySerializer(entries, many=True)
+        return Response(serializer.data)
+
+    def post(self, request, task_id: int):
+        task = self._get_task(request, task_id)
+        if task is None:
+            return Response({"error": "Задача не найдена."}, status=status.HTTP_404_NOT_FOUND)
+
+        note = str(request.data.get("note") or "").strip()
+        if not note:
+            return Response({"error": "Поле note обязательно."}, status=status.HTTP_400_BAD_REQUEST)
+
+        status_value = request.data.get("status")
+        if status_value in (None, ""):
+            status_value = None
+        else:
+            status_value = str(status_value).strip() or None
+
+        try:
+            priority = _parse_task_priority(request.data.get("priority"))
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            entry = CRMTaskHistory.objects.create(
+                task=task,
+                note=note,
+                status=status_value,
+                created_by=request.user.id,
+            )
+            task.updated_at = entry.created_at
+            update_fields = ["updated_at"]
+            if status_value is not None:
+                task.status = status_value
+                update_fields.append("status")
+            if priority is not None:
+                task.priority = priority
+                update_fields.append("priority")
+            task.save(update_fields=update_fields)
+
+        serializer = CRMTaskHistorySerializer(entry)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 class TopicViewSet(viewsets.ModelViewSet):
     """ViewSet for Topic CRUD operations and content discovery"""

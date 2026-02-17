@@ -170,25 +170,37 @@ create index if not exists idx_mind_node_properties_node
     on map.mind_node_properties(node_id);
 
 -- =========================================
--- Telegram tasks
+-- CRM tasks
 -- =========================================
-create table if not exists map.telegram_tasks (
-    id bigserial primary key,
-
-    client_id bigint not null
-        references public.core_client(id)
-        on delete cascade,
-
-    tg_name text not null,
-    telegram_user_id bigint not null,
-    telegram_message_id bigint,
-    message_text text not null,
-
-    received_at timestamptz not null default now()
+create table if not exists map.crm_tasks (
+    id serial primary key,
+    level_id integer references map.crm_level(id) on delete set null,
+    title text not null,
+    description text,
+    status varchar(20) not null default 'open',
+    priority integer not null default 2,
+    created_by integer not null default 0,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
 );
 
-create index if not exists idx_telegram_tasks_client_received
-    on map.telegram_tasks(client_id, received_at desc);
+create index if not exists idx_crm_tasks_level_id
+    on map.crm_tasks(level_id);
+
+create index if not exists idx_crm_tasks_status
+    on map.crm_tasks(status);
+
+create table if not exists map.crm_task_history (
+    id serial primary key,
+    task_id integer not null references map.crm_tasks(id) on delete cascade,
+    note text not null,
+    status varchar(20),
+    created_by integer not null default 0,
+    created_at timestamptz not null default now()
+);
+
+create index if not exists idx_crm_task_history_task_id
+    on map.crm_task_history(task_id);
 
 -- =========================================
 -- User-tenant bindings
@@ -255,6 +267,12 @@ begin
     if not exists (select 1 from pg_trigger where tgname = 'trg_mind_node_properties_updated') then
         create trigger trg_mind_node_properties_updated
         before update on map.mind_node_properties
+        for each row execute function map.set_updated_at();
+    end if;
+
+    if not exists (select 1 from pg_trigger where tgname = 'trg_crm_tasks_updated') then
+        create trigger trg_crm_tasks_updated
+        before update on map.crm_tasks
         for each row execute function map.set_updated_at();
     end if;
 end;

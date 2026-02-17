@@ -26,7 +26,7 @@ from aiogram.types import (
     Message,
 )
 
-from core.models import TelegramTask
+from core.models import CRMTask, TelegramTask
 from core.telegram_bot.dependencies import get_telegram_user_service, init_dependencies
 from core.telegram_bot.meetings import meetings_router, send_meetings, get_binding_meeting_keyboard
 from core.telegram_bot.voice_handlers import voice_router
@@ -299,7 +299,7 @@ def _store_task(
     if improvement is not None:
         stored_text = improvement
 
-    TelegramTask.objects.create(
+    feedback = TelegramTask.objects.create(
         client=binding.tenant,
         tg_name=tg_name,
         telegram_user_id=telegram_id,
@@ -308,6 +308,15 @@ def _store_task(
         received_at=received_at,
         rating=rating,
     )
+    if rating is not None and rating < 8:
+        CRMTask.objects.create(
+            level=feedback,
+            title=f"Связаться с клиентом @{tg_name} и решить вопрос",
+            description=stored_text or None,
+            status="open",
+            priority=1,
+            created_by=0,
+        )
     return True
 
 

@@ -97,6 +97,8 @@ from .unmanaged import (
     ChainSession,
     UserTenantBinding,
     TelegramTask,
+    CRMTask,
+    CRMTaskHistory,
 )
 
 # --- Referral ---
@@ -202,6 +204,8 @@ __all__ = [
     "ChainSession",
     "UserTenantBinding",
     "TelegramTask",
+    "CRMTask",
+    "CRMTaskHistory",
     # Referral
     "ReferralCode",
     "Referral",

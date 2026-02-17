@@ -35,6 +35,9 @@ from .views import (
     GoogleCompetitorsCachedView,
     TelegramAuthView,
     TelegramTaskListView,
+    CRMTaskListCreateView,
+    CRMTaskDetailView,
+    CRMTaskHistoryListCreateView,
     YooKassaCreatePaymentView,
     YooKassaCreatePaymentLinkView,
     YooKassaPaymentStatusView,
@@ -220,6 +223,9 @@ urlpatterns = [
     path('posts-list/', PostsListView.as_view(), name='posts-list'),
     path('schedules/', ScheduleListView.as_view(), name='schedules'),
     path('telegram-tasks/', TelegramTaskListView.as_view(), name='telegram-tasks'),
+    path('telegram-tasks/crm-tasks/', CRMTaskListCreateView.as_view(), name='telegram-crm-tasks'),
+    path('telegram-tasks/crm-tasks/<int:task_id>/', CRMTaskDetailView.as_view(), name='telegram-crm-task-detail'),
+    path('telegram-tasks/crm-tasks/<int:task_id>/history/', CRMTaskHistoryListCreateView.as_view(), name='telegram-crm-task-history'),
 
     # Public RSS feed for Yandex Zen
     path('rss/<slug:client_slug>.xml', DzenRSSFeedView.as_view(), name='api-rss-feed'),

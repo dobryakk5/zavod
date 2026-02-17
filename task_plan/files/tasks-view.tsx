@@ -34,12 +34,6 @@ const STATUS_COLORS: Record<OperatorTaskStatus, string> = {
   done: 'bg-green-100 text-green-700',
 };
 
-function formatTaskAuthor(createdBy: number, username?: string | null): string {
-  if (createdBy === 0) return 'Система';
-  if (username) return username;
-  return `Оператор #${createdBy}`;
-}
-
 // ---------------------------------------------------------------------------
 // Task Modal
 // ---------------------------------------------------------------------------
@@ -65,11 +59,7 @@ function TaskModal({ item, tasks, creating, onClose, onCreateTask, onAddHistory 
   const handleSubmit = async (task: OperatorTask) => {
     const note = (noteInputs[task.id] ?? '').trim();
     if (!note || submitting[task.id]) return;
-    const status = (
-      task.status === 'done'
-        ? 'open'
-        : (statusInputs[task.id] || null)
-    ) as OperatorTaskStatus | null;
+    const status = (statusInputs[task.id] || null) as OperatorTaskStatus | null;
     setSubmitting((prev) => ({ ...prev, [task.id]: true }));
     try {
       await onAddHistory(task.id, note, status);
@@ -145,7 +135,7 @@ function TaskModal({ item, tasks, creating, onClose, onCreateTask, onAddHistory 
                             </span>
                           )}
                           <span className="text-xs text-muted-foreground">
-                            {formatTaskAuthor(entry.created_by, entry.created_by_username)}
+                            {entry.created_by === 0 ? 'Система' : `Оператор #${entry.created_by}`}
                           </span>
                         </div>
                         <p className="text-sm">{entry.note}</p>
@@ -344,7 +334,7 @@ export default function ScheduleTasksView() {
     note: string,
     status: OperatorTaskStatus | null,
   ) => {
-    const entry = await operatorTasksApi.addHistory(taskId, { note, status });
+    const entry = await operatorTasksApi.addHistory(taskId, { note, status, created_by: 1 });
     setTasksByLevelId((prev) => {
       const next = { ...prev };
       for (const levelId of Object.keys(next)) {
@@ -375,7 +365,7 @@ export default function ScheduleTasksView() {
         level_id: item.id,
         title: `Обратная связь от ${item.tg_name ? `@${item.tg_name}` : 'клиента'}`,
         description: item.message_text || null,
-        priority: 1,
+        created_by: 1,
       });
       setTasksByLevelId((prev) => ({
         ...prev,
@@ -386,16 +376,6 @@ export default function ScheduleTasksView() {
     } finally {
       setCreatingTaskFor(null);
     }
-  };
-
-  const handleTaskButtonClick = (item: TelegramTask) => {
-    const existing = tasksByLevelId[item.id] ?? [];
-    if (existing.length > 0) {
-      setModalItem(item);
-      return;
-    }
-    setModalItem(item);
-    void handleCreateTask(item);
   };
 
   const modalTasks = modalItem ? (tasksByLevelId[modalItem.id] ?? []) : [];
@@ -487,14 +467,13 @@ export default function ScheduleTasksView() {
                         size="sm"
                         variant={badge ? (badge.color.includes('green') ? 'outline' : 'secondary') : 'ghost'}
                         className="h-7 text-xs px-2 w-full"
-                        onClick={() => handleTaskButtonClick(item)}
-                        disabled={creatingTaskFor === item.id}
+                        onClick={() => setModalItem(item)}
                       >
                         {badge ? (
                           <span className={`rounded-full px-1.5 text-xs font-medium ${badge.color}`}>
                             {badge.label}
                           </span>
-                        ) : creatingTaskFor === item.id ? 'Создание…' : '+ Задача'}
+                        ) : '+ Задача'}
                       </Button>
                     </TableCell>
                   </TableRow>

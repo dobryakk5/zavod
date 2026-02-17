@@ -315,30 +315,21 @@ export interface TelegramTask {
   rating: number | null;
 }
 
-export type OperatorTaskStatus = 'open' | 'in_progress' | 'done';
+export type TaskType = 1 | 2; // 1 = self, 2 = service_level
+export type OperatorTaskStatus = 'open' | 'done';
 
 export interface OperatorTask {
   id: number;
-  level_id: number | null;
+  type: TaskType;
   title: string;
   description: string | null;
+  resolution_text: string | null;
   status: OperatorTaskStatus;
-  priority: 1 | 2 | 3;
-  created_by: number;
-  created_by_username?: string | null;
+  telegram_task_id: number | null;
+  contact_name: string | null;
+  rating: number | null;
   created_at: string;
   updated_at: string;
-  history?: OperatorTaskHistory[];
-}
-
-export interface OperatorTaskHistory {
-  id: number;
-  task_id: number;
-  note: string;
-  status: OperatorTaskStatus | null;
-  created_by: number;
-  created_by_username?: string | null;
-  created_at: string;
 }
 
 export interface SocialAccount {

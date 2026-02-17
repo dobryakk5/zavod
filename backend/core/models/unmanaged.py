@@ -446,3 +446,44 @@ class TelegramTask(models.Model):
 
     def __str__(self):
         return f"@{self.tg_name}: {self.message_text[:48]}"
+
+
+class CRMTask(models.Model):
+    level = models.ForeignKey(
+        TelegramTask, on_delete=models.SET_NULL, db_column="level_id",
+        related_name="crm_tasks", blank=True, null=True,
+    )
+    title = models.TextField()
+    description = models.TextField(blank=True, null=True)
+    status = models.CharField(max_length=20, default="open")
+    priority = models.IntegerField(default=2)
+    created_by = models.IntegerField(default=0)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."crm_tasks'
+        ordering = ("-updated_at", "-id")
+
+    def __str__(self):
+        return self.title
+
+
+class CRMTaskHistory(models.Model):
+    task = models.ForeignKey(
+        CRMTask, on_delete=models.CASCADE, db_column="task_id",
+        related_name="history_entries",
+    )
+    note = models.TextField()
+    status = models.CharField(max_length=20, blank=True, null=True)
+    created_by = models.IntegerField(default=0)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."crm_task_history'
+        ordering = ("created_at", "id")
+
+    def __str__(self):
+        return f"{self.task_id}:{self.created_at}"

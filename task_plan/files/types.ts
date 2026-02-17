@@ -323,9 +323,7 @@ export interface OperatorTask {
   title: string;
   description: string | null;
   status: OperatorTaskStatus;
-  priority: 1 | 2 | 3;
   created_by: number;
-  created_by_username?: string | null;
   created_at: string;
   updated_at: string;
   history?: OperatorTaskHistory[];
@@ -337,7 +335,6 @@ export interface OperatorTaskHistory {
   note: string;
   status: OperatorTaskStatus | null;
   created_by: number;
-  created_by_username?: string | null;
   created_at: string;
 }
 

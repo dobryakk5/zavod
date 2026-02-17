@@ -60,6 +60,8 @@ from core.models import (
     SemanticCluster,
     SemanticGroup,
     SemanticPhrase,
+    CRMTask,
+    CRMTaskHistory,
 )
 from core.services.product_type_templates import is_system_product_type_name
 from core.telegram_client import normalize_telegram_channel_identifier
@@ -194,6 +196,70 @@ class TelegramTaskSerializer(serializers.ModelSerializer):
             "received_at",
             "rating",
         ]
+
+
+class CRMTaskHistorySerializer(serializers.ModelSerializer):
+    created_by_username = serializers.SerializerMethodField()
+
+    def get_created_by_username(self, obj: CRMTaskHistory) -> str | None:
+        if not obj.created_by:
+            return None
+        cache = self.context.setdefault("_crm_task_username_cache", {})
+        if obj.created_by not in cache:
+            cache[obj.created_by] = (
+                User.objects.filter(id=obj.created_by)
+                .values_list("username", flat=True)
+                .first()
+            )
+        return cache.get(obj.created_by)
+
+    class Meta:
+        model = CRMTaskHistory
+        fields = [
+            "id",
+            "task_id",
+            "note",
+            "status",
+            "created_by",
+            "created_by_username",
+            "created_at",
+        ]
+        read_only_fields = ["id", "task_id", "created_by", "created_by_username", "created_at"]
+
+
+class CRMTaskSerializer(serializers.ModelSerializer):
+    level_id = serializers.IntegerField(allow_null=True, required=False)
+    created_by_username = serializers.SerializerMethodField()
+    history = CRMTaskHistorySerializer(source="history_entries", many=True, read_only=True)
+
+    def get_created_by_username(self, obj: CRMTask) -> str | None:
+        if not obj.created_by:
+            return None
+        cache = self.context.setdefault("_crm_task_username_cache", {})
+        if obj.created_by not in cache:
+            cache[obj.created_by] = (
+                User.objects.filter(id=obj.created_by)
+                .values_list("username", flat=True)
+                .first()
+            )
+        return cache.get(obj.created_by)
+
+    class Meta:
+        model = CRMTask
+        fields = [
+            "id",
+            "level_id",
+            "title",
+            "description",
+            "status",
+            "priority",
+            "created_by",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+            "history",
+        ]
+        read_only_fields = ["id", "created_by", "created_by_username", "created_at", "updated_at", "history"]
 
 class PlatformCountSerializer(serializers.Serializer):
     platform = serializers.CharField()
