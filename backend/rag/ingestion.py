@@ -10,8 +10,6 @@ from django.utils import timezone
 from core.models import KbDocument
 
 from .config import config
-from .context_llm import generate_context_batch
-from .embedder import embed_passages
 from .tiptap_parser import ParsedChunk, parse_tiptap
 
 logger = logging.getLogger(__name__)
@@ -103,6 +101,22 @@ def _build_embed_inputs(chunks: list[ParsedChunk], contexts: list[str]) -> list[
     return payload
 
 
+def _generate_context_batch(
+    document: str,
+    chunks: list[str],
+    chunk_types: list[str],
+) -> list[str]:
+    from .context_llm import generate_context_batch
+
+    return generate_context_batch(document, chunks, chunk_types)
+
+
+def _embed_passages(chunks: list[str]) -> list[list[float]]:
+    from .embedder import embed_passages
+
+    return embed_passages(chunks)
+
+
 def index_document(document_id: int) -> dict:
     document = KbDocument.objects.filter(id=document_id).first()
     if document is None:
@@ -142,9 +156,9 @@ def index_document(document_id: int) -> dict:
         raw_text = " ".join(item.content for item in parsed if item.chunk_type == "text")
         contents = [item.content for item in chunks]
         chunk_types = [item.chunk_type for item in chunks]
-        contexts = generate_context_batch(raw_text, contents, chunk_types)
+        contexts = _generate_context_batch(raw_text, contents, chunk_types)
         embed_inputs = _build_embed_inputs(chunks, contexts)
-        vectors = embed_passages(embed_inputs)
+        vectors = _embed_passages(embed_inputs)
 
         if len(vectors) != len(chunks):
             raise RuntimeError("Embedding result length mismatch")

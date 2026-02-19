@@ -2,31 +2,35 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Iterable, List
+from typing import TYPE_CHECKING, Any, Iterable, List
 
 from .config import config
 
 logger = logging.getLogger(__name__)
 
-try:
+if TYPE_CHECKING:  # pragma: no cover - typing only
     from sentence_transformers import SentenceTransformer
-except ImportError:  # pragma: no cover - optional runtime dependency
-    SentenceTransformer = None  # type: ignore[assignment]
 
 _model_lock = threading.Lock()
-_model: SentenceTransformer | None = None
+_model: Any | None = None
 
 
-def get_model() -> SentenceTransformer:
+def _load_sentence_transformer_class():
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:  # pragma: no cover - optional runtime dependency
+        raise RuntimeError("sentence-transformers is not installed") from exc
+    return SentenceTransformer
+
+
+def get_model() -> "SentenceTransformer":
     global _model
     if _model is not None:
         return _model
 
-    if SentenceTransformer is None:
-        raise RuntimeError("sentence-transformers is not installed")
-
     with _model_lock:
         if _model is None:
+            SentenceTransformer = _load_sentence_transformer_class()
             logger.info("Loading E5 embedding model from %s", config.e5_model_path)
             _model = SentenceTransformer(
                 config.e5_model_path,

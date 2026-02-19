@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
-
-from core.ai_generator import AIContentGenerator
+from typing import Any, Optional
 
 from .config import config
 
 logger = logging.getLogger(__name__)
 
-_generator: Optional[AIContentGenerator] = None
+_generator: Optional[Any] = None
 
 PROMPT_TEXT = """Ты помогаешь улучшить поиск в RAG системе.
 Дан документ и его фрагмент. Напиши краткий контекст (2-3 предложения) для этого фрагмента,
@@ -47,11 +45,13 @@ PROMPT_FORMULA = """Ты помогаешь улучшить поиск в RAG �
 {chunk}"""
 
 
-def _get_generator() -> Optional[AIContentGenerator]:
+def _get_generator() -> Optional[Any]:
     global _generator
     if _generator is not None:
         return _generator
     try:
+        from core.ai_generator import AIContentGenerator
+
         _generator = AIContentGenerator()
         return _generator
     except Exception as exc:  # pragma: no cover - network/env dependent
@@ -123,4 +123,3 @@ def generate_context_batch(
                 results[index] = ""
 
     return results
-

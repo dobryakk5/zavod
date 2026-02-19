@@ -5,7 +5,6 @@ from collections.abc import Iterable
 from django.db import connection
 
 from .config import config
-from .embedder import embed_query
 
 
 def _vector_to_pg(vector: Iterable[float]) -> str:
@@ -18,6 +17,8 @@ def semantic_search_kb(query: str, workspace_id: int, top_k: int | None = None) 
         return []
 
     top_k = max(1, int(top_k or config.top_k))
+    from .embedder import embed_query
+
     query_vector = embed_query(query)
     if not query_vector:
         return []
