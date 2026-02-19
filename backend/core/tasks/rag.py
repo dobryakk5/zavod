@@ -4,7 +4,6 @@ from celery import shared_task
 from django.conf import settings
 
 from core.models import KbDocument
-from rag.ingestion import index_document
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +26,9 @@ def process_pending_kb_rag_indexing(limit: int | None = None) -> dict:
     if batch_size <= 0:
         logger.info("Beat tick process_pending_kb_rag_indexing skipped: batch_size=%s", batch_size)
         return {"total": 0, "indexed": 0, "skipped": 0, "missing": 0, "failed": 0}
+
+    # Import lazily to avoid pulling RAG pipeline at worker startup.
+    from rag.ingestion import index_document
 
     candidate_ids = list(
         KbDocument.objects.filter(
