@@ -92,6 +92,7 @@ export interface ChannelAnalysisRecord {
   task_id?: string;
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   progress: number;
+  error?: string;
   channel_name?: string | null;
   created_at: string;
   updated_at: string;

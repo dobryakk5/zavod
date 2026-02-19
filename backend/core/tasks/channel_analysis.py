@@ -20,7 +20,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..ai_generator import AIContentGenerator
 from ..generation_events import check_generation_limit, record_generation_event
-from ..instagram_client import fetch_instagram_profile, normalize_instagram_username
+from ..instagram_client import (
+    InstagramRateLimitError,
+    fetch_instagram_profile,
+    normalize_instagram_username,
+)
 from ..models import ChannelAnalysis, Client, GenerationEvent, ProjectChannelAnalysisRun, ProjectChannelPostStat
 from ..telegram_client import (
     TelegramContentCollector,
@@ -982,6 +986,15 @@ def analyze_channel_task(self, analysis_id: int):
         )
         return result
 
+    except InstagramRateLimitError as exc:
+        logger.warning("Rate limit при анализе Instagram канала %s: %s", analysis.id, exc)
+        _update_analysis(
+            analysis,
+            status=ChannelAnalysis.STATUS_FAILED,
+            progress=analysis.progress or 0,
+            error=str(exc),
+        )
+        return {"error": str(exc)}
     except Exception as exc:
         logger.error("Ошибка анализа канала %s: %s", analysis.id, exc, exc_info=True)
         _update_analysis(
@@ -1228,6 +1241,15 @@ def analyze_project_channels_task(self, run_id: int):
         )
         return run.result
 
+    except InstagramRateLimitError as exc:
+        logger.warning("Rate limit при анализе каналов проекта %s: %s", run.id, exc)
+        _update_project_run(
+            run,
+            status=ProjectChannelAnalysisRun.STATUS_FAILED,
+            progress=run.progress or 0,
+            error=str(exc),
+        )
+        return {"error": str(exc)}
     except Exception as exc:
         logger.error("Ошибка анализа каналов проекта %s: %s", run.id, exc, exc_info=True)
         _update_project_run(

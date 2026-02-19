@@ -1661,6 +1661,9 @@ export default function AnalyticsPageClient() {
                         <TableCell className="space-y-1">
                           <div className="font-medium text-gray-900">{item.channel_name || item.channel_url}</div>
                           <div className="text-xs text-gray-500">{item.channel_url}</div>
+                          {item.status === 'failed' && item.error?.trim() ? (
+                            <div className="text-xs text-red-600 break-all">{item.error}</div>
+                          ) : null}
                         </TableCell>
                         <TableCell className="text-sm text-gray-600">
                           {channelTypeLabels[item.channel_type] || item.channel_type}

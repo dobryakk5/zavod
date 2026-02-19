@@ -1059,6 +1059,7 @@ class ChannelAnalysisListSerializer(serializers.ModelSerializer):
             "task_id",
             "status",
             "progress",
+            "error",
             "channel_name",
             "created_at",
             "updated_at",
@@ -1076,10 +1077,9 @@ class ChannelAnalysisDetailSerializer(ChannelAnalysisListSerializer):
     """Detailed serializer with AI result payload."""
 
     result = serializers.SerializerMethodField()
-    error = serializers.CharField(allow_blank=True)
 
     class Meta(ChannelAnalysisListSerializer.Meta):
-        fields = ChannelAnalysisListSerializer.Meta.fields + ["result", "error"]
+        fields = ChannelAnalysisListSerializer.Meta.fields + ["result"]
         read_only_fields = fields
 
     def get_result(self, obj: ChannelAnalysis):
