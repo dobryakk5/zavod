@@ -212,20 +212,25 @@ create table if not exists map.user_tenant_binding (
         references public.core_client(id)
         on delete cascade,
 
-    telegram_chat_id bigint not null,
+    provider varchar(16) not null default 'telegram',
+    provider_user_id varchar(255) not null,
+    telegram_chat_id bigint,
     contact_id integer references map.contacts(id) on delete set null,
     bound_at timestamptz not null default now(),
     is_active boolean not null default true
 );
 
 create unique index if not exists idx_user_tenant_binding_unique
-    on map.user_tenant_binding(telegram_chat_id, tenant_id);
+    on map.user_tenant_binding(provider, provider_user_id, tenant_id);
 
 create index if not exists idx_user_tenant_binding_user_active
-    on map.user_tenant_binding(telegram_chat_id, is_active);
+    on map.user_tenant_binding(provider, provider_user_id, is_active);
 
 create index if not exists idx_user_tenant_binding_user_bound
-    on map.user_tenant_binding(telegram_chat_id, bound_at desc);
+    on map.user_tenant_binding(provider, provider_user_id, bound_at desc);
+
+create index if not exists idx_user_tenant_binding_telegram_chat
+    on map.user_tenant_binding(telegram_chat_id);
 
 create index if not exists idx_user_tenant_binding_tenant
     on map.user_tenant_binding(tenant_id);
@@ -310,6 +315,10 @@ create table if not exists map.kb_documents (
     is_published boolean not null default false,
     is_archived boolean not null default false,
     is_template boolean not null default false,
+    index_status text not null default 'pending'
+        check (index_status in ('pending', 'indexing', 'indexed', 'skipped', 'failed')),
+    indexed_at timestamptz,
+    index_error text,
     position int not null default 0,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
@@ -320,6 +329,7 @@ create index if not exists idx_kb_documents_folder on map.kb_documents(folder_id
 create index if not exists idx_kb_documents_parent on map.kb_documents(parent_document_id);
 create index if not exists idx_kb_documents_updated on map.kb_documents(updated_at);
 create index if not exists idx_kb_documents_archived on map.kb_documents(is_archived);
+create index if not exists idx_kb_documents_index_status on map.kb_documents(index_status);
 
 create table if not exists map.kb_document_versions (
     id bigserial primary key,
@@ -395,6 +405,46 @@ create unique index if not exists idx_kb_shares_token on map.kb_shares(share_tok
 create index if not exists idx_kb_shares_document on map.kb_shares(document_id);
 create index if not exists idx_kb_shares_active on map.kb_shares(is_active);
 
+create extension if not exists vector;
+create extension if not exists pg_trgm;
+
+create table if not exists map.kb_chunks (
+    id bigserial primary key,
+    document_id bigint not null references map.kb_documents(id) on delete cascade,
+    workspace_id bigint not null references public.core_client(id) on delete cascade,
+    chunk_index int not null,
+    chunk_type text not null default 'text',
+    content text not null,
+    context text,
+    content_vector vector(384),
+    embedding_model text not null,
+    ts_content tsvector,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint chk_kb_chunks_type check (chunk_type in ('text', 'table', 'formula', 'code'))
+);
+
+create unique index if not exists idx_kb_chunks_doc_chunk on map.kb_chunks(document_id, chunk_index);
+create index if not exists idx_kb_chunks_workspace on map.kb_chunks(workspace_id);
+create index if not exists idx_kb_chunks_document on map.kb_chunks(document_id);
+create index if not exists idx_kb_chunks_vector
+    on map.kb_chunks
+    using hnsw (content_vector vector_cosine_ops)
+    with (m = 16, ef_construction = 64);
+create index if not exists idx_kb_chunks_ts on map.kb_chunks using gin(ts_content);
+
+create or replace function map.kb_chunks_update_ts_content() returns trigger as $$
+begin
+    new.ts_content := to_tsvector('russian', coalesce(new.content, '') || ' ' || coalesce(new.context, ''));
+    return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists trg_kb_chunks_ts_content on map.kb_chunks;
+create trigger trg_kb_chunks_ts_content
+    before insert or update on map.kb_chunks
+    for each row execute function map.kb_chunks_update_ts_content();
+
 do $$
 begin
     if not exists (select 1 from pg_trigger where tgname = 'trg_kb_folders_updated') then
@@ -412,6 +462,12 @@ begin
     if not exists (select 1 from pg_trigger where tgname = 'trg_kb_comments_updated') then
         create trigger trg_kb_comments_updated
         before update on map.kb_comments
+        for each row execute function map.set_updated_at();
+    end if;
+
+    if not exists (select 1 from pg_trigger where tgname = 'trg_kb_chunks_updated') then
+        create trigger trg_kb_chunks_updated
+        before update on map.kb_chunks
         for each row execute function map.set_updated_at();
     end if;
 end;

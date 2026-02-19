@@ -2443,6 +2443,13 @@ class ProductType(models.Model):
 
 
 class ClientProduct(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_ACTIVE = "active"
+    STATUS_CHOICES = (
+        (STATUS_DRAFT, "Черновик"),
+        (STATUS_ACTIVE, "Активный"),
+    )
+
     owner = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="owner_id", related_name="products")
     name = models.TextField()
     product_type = models.ForeignKey(
@@ -2453,6 +2460,7 @@ class ClientProduct(models.Model):
         blank=True,
         null=True,
     )
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     short_description = models.TextField(blank=True, null=True)
     packages = models.JSONField(default=list, blank=True)
     structure = models.JSONField(default=dict, blank=True)

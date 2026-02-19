@@ -34,6 +34,13 @@ from .views import (
     GoogleCompetitorsMarkView,
     GoogleCompetitorsCachedView,
     TelegramAuthView,
+    VkAuthUrlView,
+    VkAuthView,
+    VkMessageCallbackView,
+    SocialAccountsView,
+    LinkVkView,
+    LinkTelegramView,
+    UnlinkView,
     TelegramTaskListView,
     CRMTaskListCreateView,
     CRMTaskDetailView,
@@ -78,6 +85,7 @@ from .views import (
     KbTagViewSet,
     KbSearchViewSet,
     KbLinkPreviewView,
+    ClientChannelView,
 )
 
 from .views_social import (
@@ -181,6 +189,13 @@ urlpatterns = [
 
     # Authentication endpoints
     path('auth/telegram', TelegramAuthView.as_view(), name='telegram-auth'),
+    path('auth/vk', VkAuthView.as_view(), name='vk-auth'),
+    path('auth/vk/url', VkAuthUrlView.as_view(), name='vk-auth-url'),
+    path('auth/vk/messages/callback', VkMessageCallbackView.as_view(), name='vk-messages-callback'),
+    path('auth/social/accounts', SocialAccountsView.as_view(), name='social-accounts'),
+    path('auth/social/link/vk', LinkVkView.as_view(), name='social-link-vk'),
+    path('auth/social/link/telegram', LinkTelegramView.as_view(), name='social-link-telegram'),
+    path('auth/social/unlink/<str:provider>', UnlinkView.as_view(), name='social-unlink'),
     path('auth/token/', LoginView.as_view(), name='token'),
     path('auth/refresh/', RefreshTokenView.as_view(), name='refresh'),
     path('auth/logout/', LogoutView.as_view(), name='logout'),
@@ -190,6 +205,7 @@ urlpatterns = [
     path('client/summary/', ClientSummaryView.as_view(), name='client-summary'),
     path('client/generation-events/', GenerationEventSummaryView.as_view(), name='client-generation-events'),
     path('client/settings/', ClientSettingsView.as_view(), name='client-settings'),
+    path('client/channel', ClientChannelView.as_view(), name='client-channel'),
     path('client/expert-books/', ClientExpertBooksView.as_view(), name='client-expert-books'),
     path('client/book-semantics/', ClientBookSemanticsView.as_view(), name='client-book-semantics'),
 

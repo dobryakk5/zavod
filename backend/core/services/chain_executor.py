@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from django.db import connection
+from django.db.models import Q
 from django.utils import timezone
 
 from core.models import (
@@ -22,31 +23,44 @@ from core.services.chain_service import get_or_create_chain
 
 
 logger = logging.getLogger(__name__)
+MAX_CHAIN_HISTORY_ITEMS = 200
 
 
 class ChainExecutor:
     """
-    Executes a tenant's welcome chain for Telegram users.
+    Executes tenant chains for multiple inbound providers (Telegram, VK).
     """
 
-    def start_chain(self, user_id: int, tenant_id: int) -> dict[str, Any]:
+    def start_chain(
+        self,
+        user_id: int,
+        tenant_id: int,
+        *,
+        provider: str = UserTenantBinding.PROVIDER_TELEGRAM,
+        provider_user_id: str | None = None,
+        channel_meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        provider = _normalize_provider(provider)
+        resolved_provider_user_id = str(provider_user_id or user_id)
         chain = get_or_create_chain_for_tenant(tenant_id)
         if not chain.start_node_id:
             raise ValueError("Chain has no start node")
 
-        session = (
-            ChainSession.objects.filter(
-                user_id=user_id,
-                tenant_id=tenant_id,
-                chain=chain,
-                status="active",
-            )
-            .order_by("-last_activity_at")
-            .first()
+        session = self._get_active_session(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            chain_id=chain.id,
+            provider=provider,
         )
+        context = {
+            "provider": provider,
+            "provider_user_id": resolved_provider_user_id,
+        }
+        if channel_meta:
+            context["channel_meta"] = dict(channel_meta)
 
         if session:
-            session.context = {}
+            session.context = context
             session.current_node_id = chain.start_node_id
             session.status = "active"
             session.last_activity_at = timezone.now()
@@ -58,20 +72,54 @@ class ChainExecutor:
                 chain=chain,
                 current_node_id=chain.start_node_id,
                 status="active",
-                context={},
+                context=context,
             )
 
         actions = self._advance_to_node(session, chain.start_node_id)
         return {"session_id": session.id, "actions": actions}
 
-    def process_user_message(self, user_id: int, tenant_id: int, user_message: dict[str, Any]) -> dict[str, Any]:
-        session = (
-            ChainSession.objects.filter(user_id=user_id, tenant_id=tenant_id, status="active")
-            .order_by("-last_activity_at")
-            .first()
+    def process_user_message(
+        self,
+        user_id: int,
+        tenant_id: int,
+        user_message: dict[str, Any],
+        *,
+        provider: str = UserTenantBinding.PROVIDER_TELEGRAM,
+        provider_user_id: str | None = None,
+        channel_meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        provider = _normalize_provider(provider)
+        resolved_provider_user_id = str(provider_user_id or user_id)
+        session = self._get_active_session(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            provider=provider,
         )
         if not session:
             return {"session_id": None, "actions": [], "session_status": "none"}
+
+        context = dict(session.context or {})
+        context_provider = _normalize_provider(context.get("provider"))
+        if context_provider != provider:
+            context["provider"] = provider
+        if str(context.get("provider_user_id") or "") != resolved_provider_user_id:
+            context["provider_user_id"] = resolved_provider_user_id
+        if channel_meta:
+            current_meta = dict(context.get("channel_meta") or {})
+            merged_meta = {**current_meta, **channel_meta}
+            if merged_meta != current_meta:
+                context["channel_meta"] = merged_meta
+
+        context = self._append_incoming_history(
+            context=context,
+            session=session,
+            user_message=user_message,
+            provider=provider,
+            provider_user_id=resolved_provider_user_id,
+        )
+        session.context = context
+        session.last_activity_at = timezone.now()
+        session.save(update_fields=["context", "last_activity_at", "updated_at"])
 
         if not session.current_node_id:
             logger.warning("Chain session %s has no current node", session.id)
@@ -89,9 +137,11 @@ class ChainExecutor:
             matching_edge = self._select_router_edge(
                 current_node,
                 user_message,
-                session.context or {},
+                context,
                 user_id=session.user_id,
                 tenant_id=session.tenant_id,
+                provider=provider,
+                provider_user_id=resolved_provider_user_id,
             )
             if not matching_edge:
                 session.status = "completed"
@@ -118,12 +168,14 @@ class ChainExecutor:
             if evaluate_conditions(
                 edge["conditions"],
                 user_message,
-                session.context or {},
-                user_id=session.user_id,
-                tenant_id=session.tenant_id,
-            ):
-                matching_edge = edge
-                break
+                    context,
+                    user_id=session.user_id,
+                    tenant_id=session.tenant_id,
+                    provider=provider,
+                    provider_user_id=resolved_provider_user_id,
+                ):
+                    matching_edge = edge
+                    break
 
         if not matching_edge:
             session.status = "completed"
@@ -304,6 +356,8 @@ class ChainExecutor:
         *,
         user_id: int | None = None,
         tenant_id: int | None = None,
+        provider: str = UserTenantBinding.PROVIDER_TELEGRAM,
+        provider_user_id: str | None = None,
     ) -> ChainEdge | None:
         conditions = node.payload.get("conditions") or []
         if not conditions:
@@ -326,6 +380,8 @@ class ChainExecutor:
                     session_context,
                     user_id=user_id,
                     tenant_id=tenant_id,
+                    provider=provider,
+                    provider_user_id=provider_user_id,
                 )
             if not matched:
                 continue
@@ -344,6 +400,56 @@ class ChainExecutor:
 
         return None
 
+    def _get_active_session(
+        self,
+        *,
+        user_id: int,
+        tenant_id: int,
+        provider: str,
+        chain_id: int | None = None,
+    ) -> ChainSession | None:
+        queryset = ChainSession.objects.filter(user_id=user_id, tenant_id=tenant_id, status="active")
+        if chain_id is not None:
+            queryset = queryset.filter(chain_id=chain_id)
+        sessions = list(queryset.order_by("-last_activity_at")[:10])
+        if not sessions:
+            return None
+
+        for session in sessions:
+            context_provider = _normalize_provider((session.context or {}).get("provider"))
+            if context_provider == provider:
+                return session
+
+        # Backward-compatible fallback for legacy sessions without provider in context.
+        return sessions[0]
+
+    def _append_incoming_history(
+        self,
+        *,
+        context: dict[str, Any],
+        session: ChainSession,
+        user_message: dict[str, Any],
+        provider: str,
+        provider_user_id: str,
+    ) -> dict[str, Any]:
+        history_raw = context.get("history")
+        history: list[dict[str, Any]] = history_raw if isinstance(history_raw, list) else []
+        history.append(
+            {
+                "direction": "incoming",
+                "sender": "client",
+                "message": dict(user_message),
+                "summary": _build_history_summary(user_message),
+                "node_id": session.current_node_id,
+                "provider": provider,
+                "provider_user_id": provider_user_id,
+                "received_at": datetime.utcnow().isoformat(),
+            }
+        )
+        context["history"] = history[-MAX_CHAIN_HISTORY_ITEMS:]
+        context["last_message_at"] = datetime.utcnow().isoformat()
+        return context
+
 
 def get_or_create_chain_for_tenant(tenant_id: int):
     from core.models import Client
@@ -361,6 +467,8 @@ def evaluate_conditions(
     *,
     user_id: int | None = None,
     tenant_id: int | None = None,
+    provider: str = UserTenantBinding.PROVIDER_TELEGRAM,
+    provider_user_id: str | None = None,
 ) -> bool:
     if not edge_conditions:
         return True
@@ -375,6 +483,8 @@ def evaluate_conditions(
             session_context,
             user_id=user_id,
             tenant_id=tenant_id,
+            provider=provider,
+            provider_user_id=provider_user_id,
         ):
             return False
     return True
@@ -388,6 +498,8 @@ def _evaluate_single_condition(
     *,
     user_id: int | None = None,
     tenant_id: int | None = None,
+    provider: str = UserTenantBinding.PROVIDER_TELEGRAM,
+    provider_user_id: str | None = None,
 ) -> bool:
     if cond_type == "button_press":
         return _eval_button_press(params, user_message)
@@ -409,6 +521,8 @@ def _evaluate_single_condition(
             session_context,
             user_id=user_id,
             tenant_id=tenant_id,
+            provider=provider,
+            provider_user_id=provider_user_id,
         )
     if cond_type == "client_has_meeting":
         return _eval_client_has_meeting(
@@ -416,6 +530,8 @@ def _evaluate_single_condition(
             session_context,
             user_id=user_id,
             tenant_id=tenant_id,
+            provider=provider,
+            provider_user_id=provider_user_id,
         )
     if cond_type == "client_has_payment":
         return _eval_client_has_payment(
@@ -423,6 +539,8 @@ def _evaluate_single_condition(
             session_context,
             user_id=user_id,
             tenant_id=tenant_id,
+            provider=provider,
+            provider_user_id=provider_user_id,
         )
     if cond_type == "timeout":
         return False
@@ -434,7 +552,11 @@ def _evaluate_single_condition(
 def _eval_button_press(params: dict, user_message: dict) -> bool:
     expected_button = params.get("button_label", "")
     pressed_button = user_message.get("button", "")
-    return pressed_button == expected_button
+    if pressed_button == expected_button:
+        return True
+    # Fallback for channels where keyboard clicks arrive as plain text.
+    text_value = user_message.get("text", "")
+    return text_value == expected_button
 
 
 def _eval_text_contains(params: dict, user_message: dict) -> bool:
@@ -539,6 +661,8 @@ def _resolve_contact_id(
     session_context: dict[str, Any],
     user_id: int | None,
     tenant_id: int | None,
+    provider: str,
+    provider_user_id: str | None,
 ) -> int | None:
     context_contact_id = session_context.get("contact_id")
     if context_contact_id is not None:
@@ -549,12 +673,23 @@ def _resolve_contact_id(
         except (TypeError, ValueError):
             pass
 
-    if user_id is None or tenant_id is None:
+    if tenant_id is None:
         return None
 
+    normalized_provider = _normalize_provider(provider)
+    resolved_provider_user_id = str(provider_user_id or user_id or "").strip()
+    if not resolved_provider_user_id:
+        return None
+
+    filters = Q(
+        provider=normalized_provider,
+        provider_user_id=resolved_provider_user_id,
+    )
+    if normalized_provider == UserTenantBinding.PROVIDER_TELEGRAM and user_id is not None:
+        filters |= Q(provider__isnull=True, telegram_chat_id=user_id)
+
     binding = (
-        UserTenantBinding.objects
-        .filter(telegram_chat_id=user_id, tenant_id=tenant_id, is_active=True)
+        UserTenantBinding.objects.filter(filters, tenant_id=tenant_id, is_active=True)
         .order_by("-bound_at", "-id")
         .first()
     )
@@ -576,6 +711,8 @@ def _eval_client_tag_contains(
     *,
     user_id: int | None,
     tenant_id: int | None,
+    provider: str,
+    provider_user_id: str | None,
 ) -> bool:
     substring = str(params.get("substring") or "").strip()
     if not substring:
@@ -585,6 +722,8 @@ def _eval_client_tag_contains(
         session_context=session_context,
         user_id=user_id,
         tenant_id=tenant_id,
+        provider=provider,
+        provider_user_id=provider_user_id,
     )
     if not contact_id:
         return False
@@ -607,11 +746,15 @@ def _eval_client_has_meeting(
     *,
     user_id: int | None,
     tenant_id: int | None,
+    provider: str,
+    provider_user_id: str | None,
 ) -> bool:
     contact_id = _resolve_contact_id(
         session_context=session_context,
         user_id=user_id,
         tenant_id=tenant_id,
+        provider=provider,
+        provider_user_id=provider_user_id,
     )
     if not contact_id:
         return False
@@ -672,11 +815,15 @@ def _eval_client_has_payment(
     *,
     user_id: int | None,
     tenant_id: int | None,
+    provider: str,
+    provider_user_id: str | None,
 ) -> bool:
     contact_id = _resolve_contact_id(
         session_context=session_context,
         user_id=user_id,
         tenant_id=tenant_id,
+        provider=provider,
+        provider_user_id=provider_user_id,
     )
     if not contact_id:
         return False
@@ -718,6 +865,28 @@ def _extract_nearest_relation(params: dict[str, Any]) -> str:
     if relation in {"before", "after"}:
         return relation
     return ""
+
+
+def _normalize_provider(provider: str | None) -> str:
+    candidate = str(provider or "").strip().lower()
+    if candidate in {UserTenantBinding.PROVIDER_TELEGRAM, UserTenantBinding.PROVIDER_VK}:
+        return candidate
+    return UserTenantBinding.PROVIDER_TELEGRAM
+
+
+def _build_history_summary(user_message: dict[str, Any]) -> str:
+    text_value = str(user_message.get("text") or "").strip()
+    if text_value:
+        return text_value
+
+    message_type = str(user_message.get("message_type") or "").strip().lower()
+    if message_type:
+        return f"[{message_type}]"
+
+    for key in ("photo", "video", "audio", "voice", "document", "sticker", "location", "contact"):
+        if user_message.get(key):
+            return f"[{key}]"
+    return "[unknown]"
 
 
 def _ensure_datetime_aware(value: datetime) -> datetime:

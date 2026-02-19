@@ -27,6 +27,7 @@ from core.models import (
     KbDocumentShare,
     KbTag,
 )
+from core.ai_generator import AIContentGenerator
 from .serializers import (
     KbFolderSerializer,
     KbFolderTreeSerializer,
@@ -39,9 +40,19 @@ from .serializers import (
     KbDocumentMoveSerializer,
     KbDocumentDuplicateSerializer,
     KbBulkDocumentArchiveSerializer,
+    KbSemanticSearchRequestSerializer,
+    KbSemanticSearchResultSerializer,
+    KbChatRequestSerializer,
+    KbChatResponseSerializer,
 )
+from rag.retrieval import semantic_search_kb
 
 logger = logging.getLogger(__name__)
+
+_KB_CHAT_SYSTEM_INSTRUCTIONS = """Ты ассистент по базе знаний пользователя.
+Отвечай только на основе переданного контекста из базы знаний.
+Если данных недостаточно, так и скажи: "В базе знаний нет точного ответа".
+Отвечай кратко и по делу, на русском языке."""
 
 
 def _issue_share_token() -> str:
@@ -90,6 +101,14 @@ def _extract_favicon_url(soup: BeautifulSoup, page_url: str) -> str:
             if href:
                 return urljoin(page_url, href)
     return ""
+
+
+def _mark_document_index_pending(document_id: int) -> None:
+    KbDocument.objects.filter(id=document_id).update(
+        index_status="pending",
+        indexed_at=None,
+        index_error=None,
+    )
 
 
 class KbFolderViewSet(viewsets.ModelViewSet):
@@ -199,7 +218,15 @@ class KbDocumentViewSet(viewsets.ModelViewSet):
             raise ValidationError("Папка не принадлежит текущему клиенту")
         if parent_document and parent_document.workspace_id != client.id:
             raise ValidationError("Родительский документ не принадлежит текущему клиенту")
-        serializer.save(workspace=client, created_by=self.request.user, last_edited_by=self.request.user)
+        document = serializer.save(
+            workspace=client,
+            created_by=self.request.user,
+            last_edited_by=self.request.user,
+            index_status="pending",
+            indexed_at=None,
+            index_error=None,
+        )
+        _mark_document_index_pending(document.id)
 
     def perform_update(self, serializer):
         client = get_active_client(self.request.user)
@@ -209,7 +236,19 @@ class KbDocumentViewSet(viewsets.ModelViewSet):
             raise ValidationError("Папка не принадлежит текущему клиенту")
         if parent_document and parent_document.workspace_id != client.id:
             raise ValidationError("Родительский документ не принадлежит текущему клиенту")
-        serializer.save(last_edited_by=self.request.user)
+        should_reindex = any(field in serializer.validated_data for field in ("title", "content"))
+        save_kwargs = {"last_edited_by": self.request.user}
+        if should_reindex:
+            save_kwargs.update(
+                {
+                    "index_status": "pending",
+                    "indexed_at": None,
+                    "index_error": None,
+                }
+            )
+        document = serializer.save(**save_kwargs)
+        if should_reindex:
+            _mark_document_index_pending(document.id)
 
     @action(detail=True, methods=["post"], url_path="move")
     def move(self, request, pk=None):
@@ -260,9 +299,13 @@ class KbDocumentViewSet(viewsets.ModelViewSet):
                 is_published=source.is_published,
                 is_archived=False,
                 is_template=source.is_template,
+                index_status="pending",
+                indexed_at=None,
+                index_error=None,
                 position=source.position,
             )
             new_doc.tags.set(source.tags.all())
+            _mark_document_index_pending(new_doc.id)
 
             if include_children:
                 for child in source.child_documents.all().order_by("position", "id"):
@@ -332,7 +375,21 @@ class KbDocumentViewSet(viewsets.ModelViewSet):
         document.title = version.title or document.title
         document.content = version.content
         document.last_edited_by = request.user
-        document.save(update_fields=["title", "content", "last_edited_by", "updated_at"])
+        document.index_status = "pending"
+        document.indexed_at = None
+        document.index_error = None
+        document.save(
+            update_fields=[
+                "title",
+                "content",
+                "last_edited_by",
+                "index_status",
+                "indexed_at",
+                "index_error",
+                "updated_at",
+            ]
+        )
+        _mark_document_index_pending(document.id)
         return Response(KbDocumentDetailSerializer(document, context=self.get_serializer_context()).data)
 
     @action(detail=True, methods=["get"], url_path="export")
@@ -516,6 +573,107 @@ class KbSearchViewSet(viewsets.ViewSet):
             qs = qs.filter(Q(title__icontains=query))
         qs = qs.order_by("-updated_at")[:50]
         return Response(KbDocumentListSerializer(qs, many=True, context={"request": request}).data)
+
+    @action(detail=False, methods=["post"], url_path="semantic")
+    def semantic(self, request):
+        serializer = KbSemanticSearchRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        client = get_active_client(request.user)
+        payload = serializer.validated_data
+        try:
+            results = semantic_search_kb(
+                query=payload["query"],
+                workspace_id=client.id,
+                top_k=payload.get("top_k"),
+            )
+        except Exception:
+            logger.exception("KB semantic search failed for client=%s", client.id)
+            return Response(
+                {"detail": "Semantic search failed"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(KbSemanticSearchResultSerializer(results, many=True).data)
+
+    @action(detail=False, methods=["post"], url_path="chat")
+    def chat(self, request):
+        serializer = KbChatRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data
+
+        client = get_active_client(request.user)
+        user_message = payload["message"].strip()
+        top_k = payload.get("top_k", 6)
+        history = payload.get("history", [])[-12:]
+
+        sources = semantic_search_kb(query=user_message, workspace_id=client.id, top_k=top_k)
+        context_blocks = []
+        for index, source in enumerate(sources, start=1):
+            title = source.get("title") or f"Документ {source.get('document_id')}"
+            chunk = (source.get("content") or "").strip()
+            chunk_context = (source.get("context") or "").strip()
+            merged = f"{chunk_context}\n{chunk}".strip() if chunk_context else chunk
+            if not merged:
+                continue
+            context_blocks.append(f"[{index}] {title}\n{merged[:1200]}")
+
+        history_blocks = []
+        for item in history:
+            role = item.get("role")
+            content = (item.get("content") or "").strip()
+            if not content:
+                continue
+            role_label = "Пользователь" if role == "user" else "Ассистент"
+            history_blocks.append(f"{role_label}: {content[:800]}")
+
+        context_text = "\n\n".join(context_blocks) if context_blocks else "Контекст не найден."
+        history_text = "\n".join(history_blocks) if history_blocks else "История отсутствует."
+
+        prompt = (
+            f"{_KB_CHAT_SYSTEM_INSTRUCTIONS}\n\n"
+            f"История диалога:\n{history_text}\n\n"
+            f"Контекст из базы знаний:\n{context_text}\n\n"
+            f"Текущий вопрос пользователя:\n{user_message}\n\n"
+            "Сформируй финальный ответ."
+        )
+
+        try:
+            generator = AIContentGenerator()
+            reply = generator.get_ai_response(
+                prompt,
+                max_tokens=700,
+                temperature=0.2,
+                allow_fallback=True,
+                timeout_seconds=120.0,
+            )
+            if not reply:
+                return Response(
+                    {"detail": "AI response is empty"},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+        except Exception:
+            logger.exception("KB chat generation failed for client=%s", client.id)
+            return Response(
+                {"detail": "KB chat failed"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        response_payload = {
+            "reply": reply.strip(),
+            "model": (generator.model or "").strip(),
+            "sources": [
+                {
+                    "chunk_id": int(item["chunk_id"]),
+                    "document_id": int(item["document_id"]),
+                    "title": str(item.get("title") or ""),
+                    "chunk_index": int(item["chunk_index"]),
+                    "score": float(item.get("score") or 0.0),
+                }
+                for item in sources
+            ],
+        }
+        return Response(KbChatResponseSerializer(response_payload).data)
 
 
 class KbLinkPreviewView(APIView):

@@ -202,6 +202,8 @@ CELERYD_HIJACK_ROOT_LOGGER = False
 SCHEDULES_POLL_SECONDS = int(os.getenv("SCHEDULES_POLL_SECONDS", "60"))
 MEETING_REMINDERS_POLL_SECONDS = int(os.getenv("MEETING_REMINDERS_POLL_SECONDS", "60"))
 PAYMENT_REMINDERS_POLL_SECONDS = int(os.getenv("PAYMENT_REMINDERS_POLL_SECONDS", "60"))
+RAG_INDEX_POLL_SECONDS = int(os.getenv("RAG_INDEX_POLL_SECONDS", "300"))
+RAG_INDEX_BATCH_SIZE = int(os.getenv("RAG_INDEX_BATCH_SIZE", "25"))
 PROJECT_CHANNEL_ANALYSIS_HOUR = int(os.getenv("PROJECT_CHANNEL_ANALYSIS_HOUR", "9"))
 PROJECT_CHANNEL_ANALYSIS_MINUTE = int(os.getenv("PROJECT_CHANNEL_ANALYSIS_MINUTE", "0"))
 CELERY_BEAT_SCHEDULE = {
@@ -217,6 +219,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.payment_reminders.send_payment_reminders",
         "schedule": timedelta(seconds=PAYMENT_REMINDERS_POLL_SECONDS),
     },
+    "kb-rag-indexing": {
+        "task": "core.tasks.process_pending_kb_rag_indexing",
+        "schedule": timedelta(seconds=RAG_INDEX_POLL_SECONDS),
+        "args": (RAG_INDEX_BATCH_SIZE,),
+    },
     "project-channel-analysis-daily": {
         "task": "core.tasks.channel_analysis.schedule_project_channel_analysis_daily",
         "schedule": crontab(hour=PROJECT_CHANNEL_ANALYSIS_HOUR, minute=PROJECT_CHANNEL_ANALYSIS_MINUTE),
@@ -225,6 +232,25 @@ CELERY_BEAT_SCHEDULE = {
 
 # AI Content Generation
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# RAG (KB semantic search)
+RAG_CONFIG = {
+    # RAG_E5* must be used only for embeddings.
+    "E5_MODEL_PATH": os.getenv(
+        "RAG_E5_MODEL_PATH",
+        str(BASE_DIR / "models" / "multilingual-e5-small"),
+    ),
+    "CHUNK_SIZE": int(os.getenv("RAG_CHUNK_SIZE", "512")),
+    "CHUNK_OVERLAP": int(os.getenv("RAG_CHUNK_OVERLAP", "64")),
+    "TOP_K": int(os.getenv("RAG_TOP_K", "10")),
+    "RRF_K": int(os.getenv("RAG_RRF_K", "60")),
+    "TS_LANGUAGE": os.getenv("RAG_TS_LANGUAGE", "russian"),
+    "CONTEXT_ENABLED": os.getenv("RAG_CONTEXT_ENABLED", "True"),
+    "CONTEXT_CONCURRENCY": int(os.getenv("RAG_CONTEXT_CONCURRENCY", "4")),
+    "CONTEXT_MAX_TOKENS": int(os.getenv("RAG_CONTEXT_MAX_TOKENS", "300")),
+    "CONTEXT_TEMPERATURE": float(os.getenv("RAG_CONTEXT_TEMPERATURE", "0.0")),
+    "CONTEXT_TIMEOUT_SECONDS": float(os.getenv("RAG_CONTEXT_TIMEOUT_SECONDS", "120")),
+}
 
 # Опционально: другие AI сервисы (для будущего использования)
 # OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -276,6 +302,13 @@ VK_CLIENT_ID = os.getenv("VK_CLIENT_ID", "")
 VK_CLIENT_SECRET = os.getenv("VK_CLIENT_SECRET", "")
 VK_REDIRECT_URI = os.getenv("VK_REDIRECT_URI", "http://localhost:8000/api/vk/callback/")
 VK_API_VERSION = os.getenv("VK_API_VERSION", "5.131")
+
+# VK auth for user login (separated from VK integrations flow)
+VK_AUTH_APP_ID = os.getenv("VK_AUTH_APP_ID", "")
+VK_AUTH_APP_SECRET = os.getenv("VK_AUTH_APP_SECRET", "")
+VK_AUTH_REDIRECT_URI = os.getenv("VK_AUTH_REDIRECT_URI", "http://localhost:3000/auth/vk/callback")
+VK_CALLBACK_SECRET = os.getenv("VK_CALLBACK_SECRET", "")
+VK_CALLBACK_CONFIRMATION_TOKEN = os.getenv("VK_CALLBACK_CONFIRMATION_TOKEN", "")
 
 # Telegram API Settings (системные credentials для всех клиентов)
 TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID", "")

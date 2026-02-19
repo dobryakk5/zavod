@@ -6,3 +6,4 @@ telegram_sessions
 /logs
 *__pycache__*
 celerybeat*
+/models

@@ -15,7 +15,7 @@ import { clientProductsApi } from '@/lib/api/clientProducts';
 import { productTypesApi } from '@/lib/api/productTypes';
 import { ApiError } from '@/lib/api';
 import { useRole } from '@/lib/hooks';
-import type { ClientProduct, ProductStructure, ProductType } from '@/lib/types';
+import type { ClientProduct, ProductStatus, ProductStructure, ProductType } from '@/lib/types';
 
 type ProductRouteParams = { id: string };
 type ProductRouteParamsInput = ProductRouteParams | Promise<ProductRouteParams> | undefined;
@@ -53,6 +53,7 @@ type ProgramModuleRow = { module: string; result: string };
 type RelatedProductRef = NonNullable<ProductStructure['related_products']>[number];
 type ProductPayload = {
   name: string;
+  status: ProductStatus;
   product_type_id: number | null;
   short_description: string | null;
   packages: Array<{ name: string; description?: string | null; price?: number | null }>;
@@ -92,6 +93,9 @@ const resolveProductId = (result?: Record<string, unknown>) => {
   }
   return null;
 };
+
+const normalizeProductStatus = (value: string | null | undefined): ProductStatus =>
+  value === 'active' ? 'active' : 'draft';
 
 const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure => {
   const base = (raw ?? {}) as Record<string, unknown>;
@@ -246,6 +250,7 @@ const buildPayloadFromProduct = (data: ClientProduct): ProductPayload | null => 
 
   return {
     name: nextName,
+    status: normalizeProductStatus(data.status),
     product_type_id: data.product_type_id ?? null,
     short_description: (data.short_description ?? '').trim() ? (data.short_description ?? '').trim() : null,
     packages: normalizedPackages,
@@ -268,6 +273,7 @@ export default function ProductPage({ params }: ProductPageProps) {
   const lastEditAtRef = useRef(0);
 
   const [productName, setProductName] = useState('');
+  const [productStatus, setProductStatus] = useState<ProductStatus>('draft');
   const [productTypeId, setProductTypeId] = useState<number | null>(null);
   const [shortDescription, setShortDescription] = useState('');
   const [packages, setPackages] = useState<ProductPackage[]>([]);
@@ -334,6 +340,7 @@ export default function ProductPage({ params }: ProductPageProps) {
       const [data, typeData] = await Promise.all([clientProductsApi.detail(productId), productTypesApi.list()]);
       setProduct(data);
       setProductName(data.name ?? '');
+      setProductStatus(normalizeProductStatus(data.status));
       setProductTypeId(data.product_type_id ?? null);
       setShortDescription(data.short_description ?? '');
       setPackages(normalizePackages(data.packages));
@@ -573,6 +580,7 @@ export default function ProductPage({ params }: ProductPageProps) {
 
       return {
         name: nextName,
+        status: productStatus,
         product_type_id: productTypeId,
         short_description: shortDescription.trim() ? shortDescription.trim() : null,
         packages: normalizedPackages,
@@ -581,6 +589,7 @@ export default function ProductPage({ params }: ProductPageProps) {
     },
     [
       productName,
+      productStatus,
       productTypeId,
       shortDescription,
       packages,
@@ -625,6 +634,7 @@ export default function ProductPage({ params }: ProductPageProps) {
         lastSavedHashRef.current = JSON.stringify(payload);
         dirtyRef.current = false;
         setProduct((prev) => (prev ? { ...prev, ...updated } : updated));
+        setProductStatus(normalizeProductStatus(updated.status));
       } catch (err) {
         console.error('Failed to auto-save product', err);
       } finally {
@@ -671,12 +681,14 @@ export default function ProductPage({ params }: ProductPageProps) {
     try {
       const updated = await clientProductsApi.update(productId, {
         name: payload.name,
+        status: payload.status,
         product_type_id: payload.product_type_id,
         short_description: payload.short_description,
         packages: payload.packages,
         structure: payload.structure
       });
       setProduct(updated);
+      setProductStatus(normalizeProductStatus(updated.status));
       setPackages(normalizePackages(updated.packages));
       const updatedStructure = normalizeStructure(updated.structure);
       setAudience(updatedStructure.audience ?? []);
@@ -786,6 +798,26 @@ export default function ProductPage({ params }: ProductPageProps) {
           </Select>
           <div className="text-xs text-muted-foreground">
             Типы редактируются во вкладке «Типы продуктов».
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Статус продукта</div>
+          <Select
+            value={productStatus}
+            onValueChange={(value) => setProductStatus(value === 'active' ? 'active' : 'draft')}
+            disabled={!canEdit || saving}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Выберите статус" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="draft">Черновик</SelectItem>
+              <SelectItem value="active">Активный</SelectItem>
+            </SelectContent>
+          </Select>
+          <div className="text-xs text-muted-foreground">
+            На странице клиента показываются только активные продукты.
           </div>
         </div>
 

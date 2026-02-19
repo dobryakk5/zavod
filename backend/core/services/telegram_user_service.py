@@ -11,6 +11,8 @@ class TelegramUserService:
     def __init__(self, binding_model=UserTenantBinding, client_model=Client):
         self.binding_model = binding_model
         self.client_model = client_model
+        self.provider_telegram = getattr(UserTenantBinding, "PROVIDER_TELEGRAM", "telegram")
+        self.provider_vk = getattr(UserTenantBinding, "PROVIDER_VK", "vk")
 
     def _map_schema(self) -> str:
         schema = os.getenv("MAP_SCHEMA", "map").strip()
@@ -38,40 +40,52 @@ class TelegramUserService:
                 [telegram_user_id, telegram_username, timezone.now().date(), contact_id],
             )
 
-    def bind_user_to_tenant(
+    def bind_identity_to_tenant(
         self,
-        telegram_chat_id: int,
+        *,
+        provider: str,
+        provider_user_id: int | str,
         tenant_id: int | str,
         contact_id: int | None = None,
         telegram_username: str | None = None,
     ) -> dict:
-        """Bind a Telegram user to a client (tenant)."""
+        provider = (provider or "").strip().lower()
+        if provider not in {self.provider_telegram, self.provider_vk}:
+            raise ValueError(f"Unsupported provider: {provider}")
+
+        provider_user_id_str = str(provider_user_id).strip()
+        if not provider_user_id_str:
+            raise ValueError("provider_user_id is required")
+
         tenant = self.client_model.objects.filter(id=tenant_id).first()
         if tenant is None:
             raise ValueError(f"Tenant {tenant_id} not found")
 
         self.binding_model.objects.filter(
-            telegram_chat_id=telegram_chat_id,
+            provider=provider,
+            provider_user_id=provider_user_id_str,
             is_active=True,
         ).exclude(tenant=tenant).update(is_active=False)
 
         defaults = {
             "bound_at": timezone.now(),
             "is_active": True,
+            "telegram_chat_id": int(provider_user_id_str) if provider == self.provider_telegram else None,
         }
         if contact_id is not None:
             defaults["contact_id"] = contact_id
 
         binding, created = self.binding_model.objects.get_or_create(
-            telegram_chat_id=telegram_chat_id,
+            provider=provider,
+            provider_user_id=provider_user_id_str,
             tenant=tenant,
             defaults=defaults,
         )
 
-        if contact_id is not None:
+        if provider == self.provider_telegram and contact_id is not None:
             self._store_contact_telegram_data(
                 contact_id=contact_id,
-                telegram_user_id=telegram_chat_id,
+                telegram_user_id=int(provider_user_id_str),
                 telegram_username=telegram_username,
             )
 
@@ -81,6 +95,11 @@ class TelegramUserService:
             update_fields = ["bound_at", "is_active"]
             binding.bound_at = timezone.now()
             binding.is_active = True
+            if provider == self.provider_telegram:
+                telegram_chat_id = int(provider_user_id_str)
+                if binding.telegram_chat_id != telegram_chat_id:
+                    binding.telegram_chat_id = telegram_chat_id
+                    update_fields.append("telegram_chat_id")
             if contact_id is not None and binding.contact_id != contact_id:
                 binding.contact_id = contact_id
                 update_fields.append("contact_id")
@@ -89,12 +108,39 @@ class TelegramUserService:
 
         return {"status": status, "binding": binding}
 
-    def get_active_binding(self, telegram_chat_id: int) -> UserTenantBinding | None:
+    def bind_user_to_tenant(
+        self,
+        telegram_chat_id: int,
+        tenant_id: int | str,
+        contact_id: int | None = None,
+        telegram_username: str | None = None,
+    ) -> dict:
+        """Bind a Telegram user to a client (tenant)."""
+        return self.bind_identity_to_tenant(
+            provider=self.provider_telegram,
+            provider_user_id=telegram_chat_id,
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            telegram_username=telegram_username,
+        )
+
+    def get_active_binding_by_identity(self, *, provider: str, provider_user_id: int | str) -> UserTenantBinding | None:
+        provider = (provider or "").strip().lower()
+        provider_user_id_str = str(provider_user_id).strip()
+        if not provider_user_id_str:
+            return None
+
         return (
             self.binding_model.objects.select_related("tenant")
-            .filter(telegram_chat_id=telegram_chat_id, is_active=True)
+            .filter(provider=provider, provider_user_id=provider_user_id_str, is_active=True)
             .order_by("-bound_at", "-id")
             .first()
+        )
+
+    def get_active_binding(self, telegram_chat_id: int) -> UserTenantBinding | None:
+        return self.get_active_binding_by_identity(
+            provider=self.provider_telegram,
+            provider_user_id=telegram_chat_id,
         )
 
     def get_active_client(self, telegram_chat_id: int) -> Client | None:
@@ -106,6 +152,6 @@ class TelegramUserService:
     def get_user_tenants(self, telegram_chat_id: int) -> list[UserTenantBinding]:
         return list(
             self.binding_model.objects.select_related("tenant")
-            .filter(telegram_chat_id=telegram_chat_id)
+            .filter(provider=self.provider_telegram, provider_user_id=str(telegram_chat_id))
             .order_by("-bound_at", "-id")
         )

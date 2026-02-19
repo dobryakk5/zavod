@@ -10,6 +10,25 @@ import type {
   KbTag,
 } from '../types';
 
+export type KbChatHistoryItem = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+export type KbChatSource = {
+  chunk_id: number;
+  document_id: number;
+  title: string;
+  chunk_index: number;
+  score: number;
+};
+
+export type KbChatResponse = {
+  reply: string;
+  model: string;
+  sources: KbChatSource[];
+};
+
 const buildQuery = (params: Record<string, string | number | boolean | undefined | null>) => {
   const searchParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -103,6 +122,8 @@ export const kbTagsApi = {
 export const kbSearchApi = {
   search: async (query: string): Promise<KbDocumentList[]> =>
     apiFetch<KbDocumentList[]>(`/kb/search/?q=${encodeURIComponent(query)}`),
+  chat: async (payload: { message: string; history?: KbChatHistoryItem[]; top_k?: number }): Promise<KbChatResponse> =>
+    apiFetch<KbChatResponse>('/kb/search/chat/', { method: 'POST', body: payload }),
 };
 
 export const kbLinkPreviewApi = {

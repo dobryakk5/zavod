@@ -100,3 +100,7 @@ from .views_payments import (  # noqa: F401
     YooKassaOAuthDisconnectView,
     YooKassaSaveCredentialsView,
 )
+from .views_vk_auth import VkAuthUrlView, VkAuthView  # noqa: F401
+from .views_vk_messages import VkMessageCallbackView  # noqa: F401
+from .views_social_accounts import SocialAccountsView, LinkVkView, LinkTelegramView, UnlinkView  # noqa: F401
+from .views_messaging import ClientChannelView  # noqa: F401

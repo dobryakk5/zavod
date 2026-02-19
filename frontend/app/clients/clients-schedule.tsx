@@ -407,10 +407,11 @@ function WeekViewContent({
                 event.preventDefault();
                 const raw = event.dataTransfer.getData('text/plain');
                 const eventId = Number(raw);
-                if (!eventId || !onEventDrop) return;
-                const targetMinutes = dnd.hoverMinutes ?? startHour * 60;
-                onEventDrop(eventId, d, targetMinutes);
-                dnd.onDragLeave();
+                if (eventId && onEventDrop) {
+                  const targetMinutes = dnd.calcSlot(event, event.currentTarget, totalMinutes);
+                  onEventDrop(eventId, d, targetMinutes);
+                }
+                dnd.onDragEnd();
               }}
               style={{ height: hours.length * WEEK_HOUR_ROW_HEIGHT }}
             >
@@ -692,10 +693,11 @@ function DayViewContent({
             event.preventDefault();
             const raw = event.dataTransfer.getData('text/plain');
             const eventId = Number(raw);
-            if (!eventId || !onEventDrop) return;
-            const targetMinutes = dnd.hoverMinutes ?? startHour * 60;
-            onEventDrop(eventId, cursor, targetMinutes);
-            dnd.onDragLeave();
+            if (eventId && onEventDrop) {
+              const targetMinutes = dnd.calcSlot(event, event.currentTarget, totalMinutes);
+              onEventDrop(eventId, cursor, targetMinutes);
+            }
+            dnd.onDragEnd();
           }}
           style={{ height: hours.length * WEEK_HOUR_ROW_HEIGHT }}
         >

@@ -1,28 +1,70 @@
 'use client';
 
 import { useState } from 'react';
-import { Button } from '@/components/ui/button';
 import { TelegramAuth } from '@/components/auth/TelegramAuth';
+import { VKAuth } from '@/components/auth/VKAuth';
 
 export default function LoginPage() {
-  const [open, setOpen] = useState(true);
+  const [telegramOpen, setTelegramOpen] = useState(false);
+  const [vkOpen, setVkOpen] = useState(false);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/40 px-4">
       <div className="w-full max-w-lg space-y-4 rounded-2xl border bg-background p-8 text-center shadow">
         <h1 className="text-2xl font-semibold">Войти в личный кабинет</h1>
-        <p className="text-sm text-muted-foreground">
-          Авторизация проходит через Telegram. Нажмите кнопку ниже и подтвердите вход у нашего бота.
-        </p>
-        <Button className="w-full" size="lg" onClick={() => setOpen(true)}>
-          Войти через Telegram
-        </Button>
-        <p className="text-xs text-muted-foreground">
-          Если у вас нет доступа, напишите в https://t.me/fibonatty_bot, чтобы получить приглашение.
+        <p className="text-sm text-muted-foreground">Выберите удобный способ авторизации</p>
+
+        <div className="space-y-3 pt-2">
+          <button
+            type="button"
+            onClick={() => setTelegramOpen(true)}
+            className="flex w-full items-center gap-4 rounded-xl border bg-background px-4 py-3 text-left transition hover:bg-muted/50"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#0088cc]/10">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="#0088cc" aria-hidden="true">
+                <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.967l-2.965-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.983.592z" />
+              </svg>
+            </span>
+            <span className="flex-1">
+              <span className="block text-sm font-medium">Войти через Telegram</span>
+              <span className="block text-xs text-muted-foreground">Быстрый вход через бота</span>
+            </span>
+            <svg className="h-4 w-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setVkOpen(true)}
+            className="flex w-full items-center gap-4 rounded-xl border bg-background px-4 py-3 text-left transition hover:bg-muted/50"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#0077FF]/10">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="#0077FF" aria-hidden="true">
+                <path d="M15.684 0H8.316C1.592 0 0 1.592 0 8.316v7.368C0 22.408 1.592 24 8.316 24h7.368C22.408 24 24 22.408 24 15.684V8.316C24 1.592 22.408 0 15.684 0zm3.692 17.123h-1.744c-.66 0-.862-.523-2.049-1.727-1.033-1-1.49-1.135-1.744-1.135-.356 0-.458.102-.458.593v1.575c0 .424-.135.678-1.253.678-1.846 0-3.896-1.118-5.335-3.202C5.1 11.366 4.5 9.218 4.5 8.775c0-.254.102-.491.593-.491h1.744c.44 0 .61.203.78.677.863 2.49 2.303 4.675 2.896 4.675.22 0 .322-.102.322-.66V9.633c-.068-1.186-.695-1.287-.695-1.71 0-.204.17-.407.44-.407h2.744c.373 0 .508.203.508.643v3.473c0 .372.17.508.271.508.22 0 .407-.136.813-.542 1.254-1.406 2.151-3.574 2.151-3.574.119-.254.322-.491.763-.491h1.744c.525 0 .644.27.525.643-.22 1.017-2.354 4.031-2.354 4.031-.186.305-.254.44 0 .78.186.254.796.779 1.203 1.253.745.847 1.32 1.558 1.473 2.049.17.491-.085.745-.576.745z" />
+              </svg>
+            </span>
+            <span className="flex-1">
+              <span className="block text-sm font-medium">Войти через ВКонтакте</span>
+              <span className="block text-xs text-muted-foreground">Вход через аккаунт VK</span>
+            </span>
+            <svg className="h-4 w-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
+        </div>
+
+        <p className="pt-2 text-xs text-muted-foreground">
+          Если у вас нет доступа, напишите в{' '}
+          <a href="https://t.me/fibonatty_bot" className="underline underline-offset-2">
+            @fibonatty_bot
+          </a>
+          , чтобы получить приглашение.
         </p>
       </div>
 
-      <TelegramAuth open={open} onClose={() => setOpen(false)} />
+      <TelegramAuth open={telegramOpen} onClose={() => setTelegramOpen(false)} />
+      <VKAuth open={vkOpen} onClose={() => setVkOpen(false)} />
     </div>
   );
 }

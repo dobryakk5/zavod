@@ -741,7 +741,11 @@ class ContactTelegramLinkView(APIView):
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         binding_qs = (
-            UserTenantBinding.objects.filter(tenant=client, contact_id=contact_id)
+            UserTenantBinding.objects.filter(
+                tenant=client,
+                contact_id=contact_id,
+                provider=UserTenantBinding.PROVIDER_TELEGRAM,
+            )
             .order_by("-bound_at", "-id")
         )
         binding = binding_qs.filter(is_active=True).first() or binding_qs.first()

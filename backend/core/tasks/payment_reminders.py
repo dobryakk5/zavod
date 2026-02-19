@@ -181,6 +181,8 @@ def send_payment_reminders() -> int:
             JOIN {schema}.user_tenant_binding b
               ON b.contact_id = p.contact_id
              AND b.is_active = true
+             AND b.provider = 'telegram'
+             AND b.telegram_chat_id IS NOT NULL
             JOIN public.core_client c
               ON c.id = b.tenant_id
             WHERE p.planned_at IS NOT NULL

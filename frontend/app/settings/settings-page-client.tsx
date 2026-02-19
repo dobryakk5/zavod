@@ -4,10 +4,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ClientSettingsForm } from '@/components/settings/client-settings-form';
 import { ClientTimezoneSetting } from '@/components/settings/client-timezone-setting';
+import { ConnectedAccounts } from '@/components/auth/ConnectedAccounts';
 import { SocialAccountsManager } from '@/components/settings/social-accounts-manager';
+import { ChannelSelector } from '@/components/settings/channel-selector';
 import { VkIntegrationsPanel } from '@/components/settings/vk-integrations-panel';
 import { PaymentTab } from '@/components/settings/payment-tab';
 import { KnowledgeBaseTab } from '@/components/settings/knowledge-base-tab';
+import { RagChatWidget } from '@/components/settings/rag-chat-widget';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function SettingsPageClient() {
@@ -59,6 +62,26 @@ export default function SettingsPageClient() {
           <div className="max-w-2xl">
             <ClientTimezoneSetting />
           </div>
+          <div className="max-w-2xl space-y-3 rounded-xl border bg-background p-5">
+            <div>
+              <h3 className="text-base font-semibold">Связанные аккаунты входа</h3>
+              <p className="text-sm text-muted-foreground">
+                Привяжите Telegram и/или VK к системному аккаунту.
+              </p>
+            </div>
+            <ConnectedAccounts />
+          </div>
+
+          <div className="max-w-2xl space-y-3 rounded-xl border bg-background p-5">
+            <div>
+              <h3 className="text-base font-semibold">Канал связи по умолчанию</h3>
+              <p className="text-sm text-muted-foreground">
+                Этот канал будет использоваться первым при коммуникации с клиентом.
+              </p>
+            </div>
+            <ChannelSelector mode="settings" />
+          </div>
+
           <SocialAccountsManager />
         </TabsContent>
 
@@ -74,6 +97,7 @@ export default function SettingsPageClient() {
           <KnowledgeBaseTab />
         </TabsContent>
       </Tabs>
+      <RagChatWidget />
     </div>
   );
 }

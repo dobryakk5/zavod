@@ -76,22 +76,57 @@ class TelegramAuthView(APIView):
         if not user:
             return Response(status=status.HTTP_401_UNAUTHORIZED)
 
+        from core.models import UserSocialAccount, UserTenantBinding
+
+        linked_telegram = (
+            UserSocialAccount.objects.filter(
+                user=user,
+                provider=UserSocialAccount.PROVIDER_TELEGRAM,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        telegram_id = str(linked_telegram.provider_id) if linked_telegram and linked_telegram.provider_id else str(user.id)
+
+        active_client_id = None
+        try:
+            active_client_id = get_active_client(user).id
+        except Exception:
+            active_client_id = None
+
+        binding_qs = UserTenantBinding.objects.filter(
+            provider=UserTenantBinding.PROVIDER_TELEGRAM,
+            provider_user_id=telegram_id,
+            is_active=True,
+        ).order_by("-bound_at", "-id")
+        if active_client_id is not None:
+            binding_qs = binding_qs.filter(tenant_id=active_client_id)
+        binding = binding_qs.first()
+
+        extra_data = linked_telegram.extra_data if linked_telegram and isinstance(linked_telegram.extra_data, dict) else {}
+        first_name = str(extra_data.get("first_name") or "").strip() or user.first_name or user.username
+        last_name = str(extra_data.get("last_name") or "").strip() or user.last_name
+        username = str(extra_data.get("username") or "").strip() or user.username
+        photo_url = extra_data.get("photo_url")
+
         user_data = {
             "user": {
-                "telegramId": str(user.id),
-                "firstName": user.first_name or user.username,
-                "lastName": user.last_name,
-                "username": user.username,
-                "photoUrl": None,
+                "telegramId": telegram_id,
+                "firstName": first_name,
+                "lastName": last_name,
+                "username": username,
+                "photoUrl": photo_url,
                 "authDate": str(user.date_joined),
-                "isDev": _is_dev_user(user)
+                "isDev": _is_dev_user(user),
+                "contactId": int(binding.contact_id) if binding and binding.contact_id is not None else None,
+                "tenantId": int(binding.tenant_id) if binding else (int(active_client_id) if active_client_id is not None else None),
             }
         }
         return Response(user_data)
 
     def post(self, request):
         """Authenticate user via Telegram"""
-        from core.models import Client, UserTenantRole
+        from core.models import Client, UserSocialAccount, UserTenantRole
 
         # TODO: Verify Telegram data hash for security
         # For now, accepting Telegram auth data as-is
@@ -109,17 +144,28 @@ class TelegramAuthView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Get or create user based on telegram username or ID
-        # Use telegram username if available, otherwise fallback to tg_{telegram_id}
-        user_username = username if username else f"tg_{telegram_id}"
-        user, user_created = User.objects.get_or_create(
-            username=user_username,
-            defaults={
-                'first_name': first_name,
-                'last_name': last_name,
-                'email': f"{user_username}@telegram.local"
-            }
+        telegram_id_str = str(telegram_id)
+
+        linked_social = (
+            UserSocialAccount.objects.select_related("user")
+            .filter(provider=UserSocialAccount.PROVIDER_TELEGRAM, provider_id=telegram_id_str)
+            .first()
         )
+
+        if linked_social:
+            user = linked_social.user
+            user_created = False
+        else:
+            # Use telegram username if available, otherwise fallback to tg_{telegram_id}
+            user_username = username if username else f"tg_{telegram_id_str}"
+            user, user_created = User.objects.get_or_create(
+                username=user_username,
+                defaults={
+                    'first_name': first_name,
+                    'last_name': last_name,
+                    'email': f"{user_username}@telegram.local"
+                }
+            )
 
         # Update user info if it changed
         if not user_created:
@@ -128,21 +174,50 @@ class TelegramAuthView(APIView):
                 user.last_name = last_name
                 user.save()
 
-        # Get or create client for this user (using telegram_id as slug)
-        client_slug = str(telegram_id)
-        client, client_created = Client.objects.get_or_create(
-            slug=client_slug,
-            defaults={
-                'name': f"{first_name} {last_name}".strip() or username or f"User {telegram_id}",
+        # Ensure provider link points to this user.
+        linked_for_user = UserSocialAccount.objects.filter(
+            user=user, provider=UserSocialAccount.PROVIDER_TELEGRAM
+        ).first()
+        if linked_for_user and linked_for_user.provider_id != telegram_id_str:
+            return Response(
+                {"error": "У пользователя уже привязан другой Telegram-аккаунт"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if linked_for_user:
+            linked_for_user.extra_data = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "username": username,
+                "photo_url": photo_url,
             }
-        )
+            linked_for_user.save(update_fields=["extra_data", "updated_at"])
+        elif not linked_social:
+            UserSocialAccount.objects.create(
+                user=user,
+                provider=UserSocialAccount.PROVIDER_TELEGRAM,
+                provider_id=telegram_id_str,
+                extra_data={
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "username": username,
+                    "photo_url": photo_url,
+                },
+            )
 
-        # Link user to their client
-        UserTenantRole.objects.get_or_create(
-            user=user,
-            client=client,
-            defaults={'role': 'owner'}
-        )
+        # For first-time users, create client tenant as before.
+        if user_created:
+            client_slug = telegram_id_str
+            client, _ = Client.objects.get_or_create(
+                slug=client_slug,
+                defaults={
+                    'name': f"{first_name} {last_name}".strip() or username or f"User {telegram_id_str}",
+                }
+            )
+            UserTenantRole.objects.get_or_create(
+                user=user,
+                client=client,
+                defaults={'role': 'owner'}
+            )
 
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)

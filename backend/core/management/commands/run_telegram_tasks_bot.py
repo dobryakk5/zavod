@@ -26,7 +26,7 @@ from aiogram.types import (
     Message,
 )
 
-from core.models import CRMTask, TelegramTask
+from core.models import CRMTask, TelegramTask, UserTenantBinding
 from core.telegram_bot.dependencies import get_telegram_user_service, init_dependencies
 from core.telegram_bot.meetings import meetings_router, send_meetings, get_binding_meeting_keyboard
 from core.telegram_bot.voice_handlers import voice_router
@@ -81,7 +81,7 @@ def decode_start_param(start_param: str) -> dict:
 
 async def handle_referral_link(message: Message, start_param: str) -> None:
     """
-    Обрабатывает /start ref_XXXXXXXX.
+    Обрабатывает /start ref_XXXXXXXX / ref_cXXXXXXXX.
     Находит ReferralCode, создаёт Referral, уведомляет пригласившего.
     """
     from_user = message.from_user
@@ -117,39 +117,74 @@ async def handle_referral_link(message: Message, start_param: str) -> None:
             )
         return
 
-    await sync_to_async(Referral.objects.create, thread_sensitive=True)(
+    await sync_to_async(Referral.objects.get_or_create, thread_sensitive=True)(
         referral_code=referral_code,
         referrer=referral_code.client,
         invited_telegram_id=from_user.id,
-        invited_telegram_username=from_user.username or "",
-        expires_at=timezone.now() + timedelta(days=30),
+        status=Referral.STATUS_PENDING,
+        defaults={
+            "invited_telegram_username": from_user.username or "",
+            "expires_at": timezone.now() + timedelta(days=30),
+        },
     )
 
-    await message.answer(
-        "🎁 Вы перешли по реферальной ссылке!\n\n"
-        "После подключения вы и пригласивший вас получите бонус — бесплатный месяц подписки.\n\n"
-        "Используйте вашу персональную ссылку от администратора для привязки аккаунта.",
-        reply_markup=main_menu(),
-    )
+    if referral_code.code_type == ReferralCode.TYPE_CONTACT:
+        await message.answer(
+            "🎁 Вы перешли по реферальной ссылке!\n\n"
+            "После подключения приглашение будет засчитано пользователю, который поделился ссылкой.\n\n"
+            "Используйте вашу персональную ссылку от администратора для привязки аккаунта.",
+            reply_markup=main_menu(),
+        )
+    else:
+        await message.answer(
+            "🎁 Вы перешли по реферальной ссылке!\n\n"
+            "После подключения вы и пригласивший вас получите бонус — бесплатный месяц подписки.\n\n"
+            "Используйте вашу персональную ссылку от администратора для привязки аккаунта.",
+            reply_markup=main_menu(),
+        )
 
     # Уведомляем пригласившего — прямой запрос по binding (метода в сервисе нет)
     try:
         from core.models import UserTenantBinding
 
+        bindings_qs = UserTenantBinding.objects.filter(
+            tenant_id=referral_code.client_id,
+            is_active=True,
+            provider=UserTenantBinding.PROVIDER_TELEGRAM,
+        )
+        if referral_code.code_type == ReferralCode.TYPE_CONTACT and referral_code.contact_id is not None:
+            bindings_qs = bindings_qs.filter(contact_id=referral_code.contact_id)
         referrer_binding = await sync_to_async(
-            UserTenantBinding.objects.filter(tenant_id=referral_code.client_id, is_active=True)
-            .order_by("-bound_at")
-            .first,
+            bindings_qs.order_by("-bound_at").first,
             thread_sensitive=True,
         )()
+        if referrer_binding is None and referral_code.code_type == ReferralCode.TYPE_CONTACT:
+            referrer_binding = await sync_to_async(
+                UserTenantBinding.objects.filter(
+                    tenant_id=referral_code.client_id,
+                    is_active=True,
+                    provider=UserTenantBinding.PROVIDER_TELEGRAM,
+                )
+                .order_by("-bound_at")
+                .first,
+                thread_sensitive=True,
+            )()
         if referrer_binding:
-            await message.bot.send_message(
-                chat_id=referrer_binding.telegram_chat_id,
-                text=(
+            if referral_code.code_type == ReferralCode.TYPE_CONTACT:
+                notification_text = (
+                    "🎉 По вашей реферальной ссылке перешёл пользователь "
+                    f"@{from_user.username or from_user.id}!\n\n"
+                    "После его привязки приглашение будет засчитано."
+                )
+            else:
+                notification_text = (
                     "🎉 По вашей реферальной ссылке перешёл пользователь "
                     f"@{from_user.username or from_user.id}!\n\n"
                     "После его привязки вы оба получите бонус."
-                ),
+                )
+            await message.bot.send_message(
+                chat_id=referrer_binding.telegram_chat_id,
+                text=notification_text,
             )
     except Exception:  # noqa: BLE001
         logger.exception("Failed to notify referrer (client_id=%s)", referral_code.client_id)
@@ -170,7 +205,12 @@ async def _complete_pending_referral(telegram_id: int, tenant_id: int, message: 
 
         referral = await sync_to_async(
             Referral.objects.select_related("referral_code__client", "referrer")
-            .filter(invited_telegram_id=telegram_id, status=Referral.STATUS_PENDING)
+            .filter(
+                invited_telegram_id=telegram_id,
+                status=Referral.STATUS_PENDING,
+                referral_code__client_id=tenant_id,
+            )
+            .order_by("-created_at", "-id")
             .first,
             thread_sensitive=True,
         )()
@@ -178,29 +218,48 @@ async def _complete_pending_referral(telegram_id: int, tenant_id: int, message: 
             return
 
         await sync_to_async(referral.mark_registered, thread_sensitive=True)(referee_client)
-        await sync_to_async(reward_referral_month, thread_sensitive=True)(
-            referrer=referral.referrer,
-            referee=referee_client,
+        should_reward_month = (
+            referral.referral_code.code_type == ReferralCode.TYPE_CLIENT
+            and referral.referrer_id != referee_client.id
         )
+        if should_reward_month:
+            await sync_to_async(reward_referral_month, thread_sensitive=True)(
+                referrer=referral.referrer,
+                referee=referee_client,
+            )
         await sync_to_async(referral.mark_rewarded, thread_sensitive=True)()
 
         referrer_binding = await sync_to_async(
-            UserTenantBinding.objects.filter(tenant_id=referral.referrer_id, is_active=True)
+            UserTenantBinding.objects.filter(
+                tenant_id=referral.referrer_id,
+                is_active=True,
+                provider=UserTenantBinding.PROVIDER_TELEGRAM,
+            )
             .order_by("-bound_at")
             .first,
             thread_sensitive=True,
         )()
 
         if referrer_binding:
-            await message.bot.send_message(
-                chat_id=referrer_binding.telegram_chat_id,
-                text=(
+            if should_reward_month:
+                referrer_text = (
                     "✅ Ваш реферал успешно зарегистрировался!\n\n"
                     "🎁 Вы получили бонус — бесплатный месяц подписки."
-                ),
+                )
+            else:
+                referrer_text = (
+                    "✅ Ваш реферал успешно зарегистрировался.\n\n"
+                    "Приглашение засчитано."
+                )
+            await message.bot.send_message(
+                chat_id=referrer_binding.telegram_chat_id,
+                text=referrer_text,
             )
 
-        await message.answer("🎁 Реферальный бонус активирован! Вы получили бесплатный месяц подписки.")
+        if should_reward_month:
+            await message.answer("🎁 Реферальный бонус активирован! Вы получили бесплатный месяц подписки.")
+        else:
+            await message.answer("✅ Регистрация по реферальной ссылке успешно засчитана.")
 
     except Exception:  # noqa: BLE001
         logger.exception("Failed to complete pending referral (telegram_id=%s)", telegram_id)
@@ -732,6 +791,8 @@ async def handle_chain_button(callback: CallbackQuery) -> None:
         user_id=from_user.id,
         tenant_id=binding.tenant_id,
         user_message={"button": button_label},
+        provider=UserTenantBinding.PROVIDER_TELEGRAM,
+        provider_user_id=str(from_user.id),
     )
     await _execute_chain_actions(
         bot=callback.message.bot,
@@ -768,8 +829,6 @@ async def handle_message(message: Message, state: FSMContext) -> None:
         return
 
     message_text = (message.text or message.caption or "").strip()
-    if not message_text:
-        return
 
     if message_text == WELCOME_BUTTON_TEXT:
         binding = await _get_binding_for_user(from_user.id)
@@ -785,7 +844,12 @@ async def handle_message(message: Message, state: FSMContext) -> None:
         result = await sync_to_async(
             executor.start_chain,
             thread_sensitive=True,
-        )(user_id=from_user.id, tenant_id=binding.tenant_id)
+        )(
+            user_id=from_user.id,
+            tenant_id=binding.tenant_id,
+            provider=UserTenantBinding.PROVIDER_TELEGRAM,
+            provider_user_id=str(from_user.id),
+        )
         await _execute_chain_actions(
             bot=message.bot,
             chat_id=from_user.id,
@@ -884,6 +948,8 @@ async def handle_message(message: Message, state: FSMContext) -> None:
                 user_id=from_user.id,
                 tenant_id=binding.tenant_id,
                 user_message=user_message,
+                provider=UserTenantBinding.PROVIDER_TELEGRAM,
+                provider_user_id=str(from_user.id),
             )
             if result.get("session_status") != "none":
                 await _execute_chain_actions(

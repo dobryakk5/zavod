@@ -21,7 +21,7 @@ from .client import Client, UserTenantRole
 from .crm import ClientCategory, CRMClient, Event, EventType, Payment, Note
 
 # --- Integrations ---
-from .integrations import VkIntegration, SocialAccount, Connection
+from .integrations import VkIntegration, SocialAccount, Connection, UserSocialAccount
 
 # --- Content ---
 from .story import Topic, TrendItem, Story
@@ -124,6 +124,7 @@ __all__ = [
     "VkIntegration",
     "SocialAccount",
     "Connection",
+    "UserSocialAccount",
     # Story / Topics
     "Topic",
     "TrendItem",

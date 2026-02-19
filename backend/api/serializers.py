@@ -1542,6 +1542,9 @@ class KbDocumentListSerializer(serializers.ModelSerializer):
             "title",
             "icon",
             "cover_image",
+            "index_status",
+            "indexed_at",
+            "index_error",
             "workspace",
             "folder",
             "parent_document",
@@ -1573,6 +1576,9 @@ class KbDocumentDetailSerializer(serializers.ModelSerializer):
             "icon",
             "cover_image",
             "content",
+            "index_status",
+            "indexed_at",
+            "index_error",
             "workspace",
             "folder",
             "parent_document",
@@ -1587,7 +1593,16 @@ class KbDocumentDetailSerializer(serializers.ModelSerializer):
             "tags",
             "child_documents",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "created_by", "workspace"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            "created_by",
+            "workspace",
+            "index_status",
+            "indexed_at",
+            "index_error",
+        ]
 
     def update(self, instance, validated_data):
         request = self.context.get("request")
@@ -1744,6 +1759,48 @@ class KbBulkDocumentArchiveSerializer(serializers.Serializer):
     archive = serializers.BooleanField(default=True)
 
 
+class KbSemanticSearchRequestSerializer(serializers.Serializer):
+    query = serializers.CharField()
+    top_k = serializers.IntegerField(required=False, min_value=1, max_value=100, default=10)
+
+
+class KbSemanticSearchResultSerializer(serializers.Serializer):
+    chunk_id = serializers.IntegerField()
+    document_id = serializers.IntegerField()
+    chunk_index = serializers.IntegerField()
+    chunk_type = serializers.CharField()
+    content = serializers.CharField()
+    context = serializers.CharField(allow_blank=True, allow_null=True)
+    title = serializers.CharField()
+    is_archived = serializers.BooleanField()
+    score = serializers.FloatField()
+
+
+class KbChatHistoryItemSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=["user", "assistant"])
+    content = serializers.CharField()
+
+
+class KbChatRequestSerializer(serializers.Serializer):
+    message = serializers.CharField()
+    history = KbChatHistoryItemSerializer(many=True, required=False, default=list)
+    top_k = serializers.IntegerField(required=False, min_value=1, max_value=20, default=6)
+
+
+class KbChatSourceSerializer(serializers.Serializer):
+    chunk_id = serializers.IntegerField()
+    document_id = serializers.IntegerField()
+    title = serializers.CharField()
+    chunk_index = serializers.IntegerField()
+    score = serializers.FloatField()
+
+
+class KbChatResponseSerializer(serializers.Serializer):
+    reply = serializers.CharField()
+    model = serializers.CharField(allow_blank=True)
+    sources = KbChatSourceSerializer(many=True)
+
+
 class ChainSerializer(serializers.ModelSerializer):
     tenant_id = serializers.IntegerField(read_only=True)
 
@@ -1875,6 +1932,7 @@ class ClientProductSerializer(serializers.ModelSerializer):
             "product_type_id",
             "product_type_name",
             "product_type",
+            "status",
             "short_description",
             "packages",
             "structure",

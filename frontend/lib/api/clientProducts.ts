@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { ClientProduct, MindMap, ProductGenerationResponse } from '../types';
+import type { ClientProduct, MindMap, ProductGenerationResponse, ProductStatus } from '../types';
 
 export const clientProductsApi = {
   list: async (): Promise<ClientProduct[]> => {
@@ -26,6 +26,7 @@ export const clientProductsApi = {
 
   create: async (payload: {
     name: string;
+    status?: ProductStatus;
     product_type_id?: number | null;
     short_description?: string | null;
     packages?: Array<{ name: string; description?: string | null; price?: number | null }>;
@@ -61,6 +62,7 @@ export const clientProductsApi = {
     id: string | number,
     payload: Partial<{
       name: string;
+      status: ProductStatus;
       product_type_id: number | null;
       short_description: string | null;
       packages: Array<{ name: string; description?: string | null; price?: number | null }>;

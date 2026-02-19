@@ -116,3 +116,37 @@ class Connection(models.Model):
     @property
     def is_expired(self) -> bool:
         return bool(self.expires_at and self.expires_at <= timezone.now())
+
+
+class UserSocialAccount(models.Model):
+    PROVIDER_TELEGRAM = "telegram"
+    PROVIDER_VK = "vk"
+
+    PROVIDER_CHOICES = (
+        (PROVIDER_TELEGRAM, "Telegram"),
+        (PROVIDER_VK, "VK"),
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="social_accounts_auth",
+    )
+    provider = models.CharField(max_length=32, choices=PROVIDER_CHOICES)
+    provider_id = models.CharField(max_length=128)
+    extra_data = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = (
+            models.UniqueConstraint(fields=("provider", "provider_id"), name="uniq_user_social_provider_id"),
+            models.UniqueConstraint(fields=("user", "provider"), name="uniq_user_social_user_provider"),
+        )
+        indexes = (
+            models.Index(fields=("provider", "provider_id"), name="idx_user_social_provider_id"),
+            models.Index(fields=("user", "provider"), name="idx_user_social_user_provider"),
+        )
+
+    def __str__(self):
+        return f"{self.user_id}:{self.provider}:{self.provider_id}"

@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { ClientProduct } from '@/lib/types';
+import type { ClientProduct, ProductStatus } from '@/lib/types';
 import { ApiError } from '@/lib/api';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import { mindMapsApi } from '@/lib/api/mindmaps';
@@ -19,6 +19,7 @@ import { formatInTenantTimezone } from '@/lib/timezone';
 type PendingProduct = {
   id: number;
   name: string;
+  status?: ProductStatus;
   product_type_id?: number | null;
   product_type_name?: string | null;
   short_description?: string | null;
@@ -48,6 +49,14 @@ const resolveProductId = (result?: Record<string, unknown>) => {
 const isPendingProduct = (product: ProductRow): product is PendingProduct =>
   (product as PendingProduct).__pending === true;
 
+const normalizeProductStatus = (value: string | null | undefined): ProductStatus =>
+  value === 'active' ? 'active' : 'draft';
+
+const PRODUCT_STATUS_LABEL: Record<ProductStatus, string> = {
+  draft: 'Черновик',
+  active: 'Активный',
+};
+
 export function ClientProductsTab() {
   const router = useRouter();
   const { timezone: tenantTimezone } = useTenantTimezone();
@@ -66,6 +75,7 @@ export function ClientProductsTab() {
   const [creatingProductsMap, setCreatingProductsMap] = useState(false);
 
   const [duplicatingId, setDuplicatingId] = useState<number | null>(null);
+  const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null);
   const [productToDelete, setProductToDelete] = useState<ClientProduct | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
@@ -161,6 +171,7 @@ export function ClientProductsTab() {
         const pending: PendingProduct = {
           id: -Date.now(),
           name,
+          status: 'draft',
           product_type_id: coreTypeId,
           product_type_name: coreTypeName,
           short_description,
@@ -313,6 +324,26 @@ export function ClientProductsTab() {
     }
   };
 
+  const handleStatusChange = async (product: ClientProduct, nextStatus: ProductStatus) => {
+    if (statusUpdatingId || product.status === nextStatus) return;
+    setStatusUpdatingId(product.id);
+    setError(null);
+    const prev = products;
+    setProducts((items) =>
+      items.map((item) => (item.id === product.id ? { ...item, status: nextStatus } : item))
+    );
+    try {
+      const updated = await clientProductsApi.update(product.id, { status: nextStatus });
+      setProducts((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+    } catch (err) {
+      console.error('Failed to update product status', err);
+      setError('Не удалось обновить статус продукта.');
+      setProducts(prev);
+    } finally {
+      setStatusUpdatingId(null);
+    }
+  };
+
   const rows = useMemo(() => {
     const combined: ProductRow[] = [...pendingProducts, ...products];
     if (filterTypeId == null) return combined;
@@ -437,6 +468,7 @@ export function ClientProductsTab() {
                   </Select>
                 </TableHead>
                 <TableHead>Краткое описание</TableHead>
+                <TableHead className="w-[170px]">Статус</TableHead>
                 <TableHead>Обновлено</TableHead>
                 <TableHead className="text-right">Действия</TableHead>
               </TableRow>
@@ -465,6 +497,28 @@ export function ClientProductsTab() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{product.product_type_name || '—'}</TableCell>
                   <TableCell className="text-muted-foreground">{product.short_description || '—'}</TableCell>
+                  <TableCell>
+                    {pending ? (
+                      <span className="text-muted-foreground">{PRODUCT_STATUS_LABEL[normalizeProductStatus(product.status)]}</span>
+                    ) : (
+                      <Select
+                        value={normalizeProductStatus(product.status)}
+                        onValueChange={(value) => {
+                          const nextStatus = value === 'active' ? 'active' : 'draft';
+                          void handleStatusChange(product, nextStatus);
+                        }}
+                        disabled={statusUpdatingId === product.id}
+                      >
+                        <SelectTrigger className="h-8">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="draft">{PRODUCT_STATUS_LABEL.draft}</SelectItem>
+                          <SelectItem value="active">{PRODUCT_STATUS_LABEL.active}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">
                     {formatDate(product.updated_at, tenantTimezone)}
                   </TableCell>

@@ -4,6 +4,7 @@ export type PostStatus = 'draft' | 'ready' | 'approved' | 'scheduled' | 'publish
 export type ScheduleStatus = 'pending' | 'in_progress' | 'published' | 'failed';
 export type StoryStatus = 'draft' | 'ready' | 'approved' | 'generating_posts' | 'completed';
 export type SEOStatus = 'pending' | 'generating' | 'completed' | 'failed';
+export type ProductStatus = 'draft' | 'active';
 export type ArticleStatus =
   | 'wordstat'
   | 'context_suggested'
@@ -369,6 +370,7 @@ export interface VkIntegration {
 export interface ClientProduct {
   id: number;
   name: string;
+  status?: ProductStatus;
   product_type_id?: number | null;
   product_type_name?: string | null;
   product_type?: ProductType | null;

@@ -103,6 +103,9 @@ from .chains import (
     chains_send_delayed_message,
     chains_check_timeout,
 )
+from .rag import (
+    process_pending_kb_rag_indexing,
+)
 
 __all__ = [
     # Publishing (2)
@@ -172,4 +175,5 @@ __all__ = [
     # Chains (2)
     'chains_send_delayed_message',
     'chains_check_timeout',
+    'process_pending_kb_rag_indexing',
 ]

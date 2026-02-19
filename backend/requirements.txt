@@ -37,6 +37,9 @@ aiogram>=3.6,<4.0
 # openai>=1.0,<2.0  # для будущего использования OpenAI API
 # stability-sdk>=0.8,<1.0  # для будущего использования Stability AI
 gradio_client>=1.4,<2.0
+sentence-transformers>=3.0,<4.0
+torch>=2.4,<3.0
+pgvector>=0.3,<1.0
 
 # Дополнительные утилиты
 Pillow>=10.0,<11.0

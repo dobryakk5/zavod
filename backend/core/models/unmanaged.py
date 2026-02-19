@@ -42,12 +42,20 @@ class ProductType(models.Model):
 
 
 class ClientProduct(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_ACTIVE = "active"
+    STATUS_CHOICES = (
+        (STATUS_DRAFT, "Черновик"),
+        (STATUS_ACTIVE, "Активный"),
+    )
+
     owner = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="owner_id", related_name="products")
     name = models.TextField()
     product_type = models.ForeignKey(
         ProductType, on_delete=models.SET_NULL, db_column="product_type_id",
         related_name="products", blank=True, null=True,
     )
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     short_description = models.TextField(blank=True, null=True)
     packages = models.JSONField(default=list, blank=True)
     structure = models.JSONField(default=dict, blank=True)
@@ -209,6 +217,9 @@ class KbDocument(models.Model):
     is_published = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
     is_template = models.BooleanField(default=False)
+    index_status = models.TextField(default="pending")
+    indexed_at = models.DateTimeField(blank=True, null=True)
+    index_error = models.TextField(blank=True, null=True)
     position = models.IntegerField(default=0)
     tags = models.ManyToManyField("KbTag", through="KbDocumentTag", related_name="documents")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -410,10 +421,15 @@ class ChainSession(models.Model):
 # ============================================================================
 
 class UserTenantBinding(models.Model):
+    PROVIDER_TELEGRAM = "telegram"
+    PROVIDER_VK = "vk"
+
     tenant = models.ForeignKey(
         Client, on_delete=models.CASCADE, db_column="tenant_id", related_name="telegram_user_bindings"
     )
-    telegram_chat_id = models.BigIntegerField()
+    provider = models.CharField(max_length=16, default=PROVIDER_TELEGRAM)
+    provider_user_id = models.CharField(max_length=255)
+    telegram_chat_id = models.BigIntegerField(blank=True, null=True)
     contact_id = models.IntegerField(blank=True, null=True)
     bound_at = models.DateTimeField(default=timezone.now)
     is_active = models.BooleanField(default=True)
@@ -421,11 +437,11 @@ class UserTenantBinding(models.Model):
     class Meta:
         managed = False
         db_table = 'map"."user_tenant_binding'
-        unique_together = ("telegram_chat_id", "tenant")
+        unique_together = (("provider", "provider_user_id", "tenant"),)
         ordering = ("-bound_at", "-id")
 
     def __str__(self):
-        return f"{self.telegram_chat_id} -> {self.tenant_id}"
+        return f"{self.provider}:{self.provider_user_id} -> {self.tenant_id}"
 
 
 class TelegramTask(models.Model):

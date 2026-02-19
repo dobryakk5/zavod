@@ -8,6 +8,14 @@ from django.db import models
 
 class Client(models.Model):
     SYSTEM_SLUG = "system"
+    CHANNEL_TELEGRAM = "telegram"
+    CHANNEL_VK = "vk"
+    CHANNEL_EMAIL = "email"
+    CHANNEL_CHOICES = (
+        (CHANNEL_TELEGRAM, "Telegram"),
+        (CHANNEL_VK, "ВКонтакте"),
+        (CHANNEL_EMAIL, "Email"),
+    )
 
     name = models.CharField(max_length=255)
     brand_name = models.CharField(
@@ -32,6 +40,13 @@ class Client(models.Model):
     )
     slug = models.SlugField(unique=True)
     timezone = models.CharField(max_length=64, default="Europe/Moscow")
+    preferred_channel = models.CharField(
+        max_length=32,
+        choices=CHANNEL_CHOICES,
+        null=True,
+        blank=True,
+        help_text="Предпочтительный канал связи с клиентом",
+    )
 
     # --- AI Analysis settings ---
     ai_analysis_channel_url = models.CharField(

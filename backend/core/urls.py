@@ -13,8 +13,10 @@ urlpatterns = [
     path('admin/client/<int:client_id>/analyze-channel/', views.analyze_telegram_channel, name='analyze_telegram_channel'),
 
     # --- referral API ---
+    path('api/referral/apply_code/', views_referral.apply_code, name='referral_apply_code'),
     path('api/referral/create_code/', views_referral.create_code, name='referral_create_code'),
     path('api/referral/my_code/', views_referral.my_code, name='referral_my_code'),
     path('api/referral/delete_code/', views_referral.delete_code, name='referral_delete_code'),
     path('api/referral/stats/', views_referral.stats, name='referral_stats'),
+    path('api/referral/invitations/', views_referral.invitations, name='referral_invitations'),
 ]

@@ -7,6 +7,8 @@ celery -A config worker -l info -Q celery --concurrency=5
 celery -A config beat -l info
 python manage.py runserver
 python manage.py run_telegram_tasks_bot
+python scripts/download_e5_model.py --output models/multilingual-e5-small
+python manage.py rag_reindex_kb --workspace-id <client_id>
 
 celery -A config worker -l info -Q media --concurrency=1 
 
@@ -36,12 +38,14 @@ Next.js reads environment variables at build time. Create `frontend/.env.local` 
 ```env
 NEXT_PUBLIC_API_URL=https://api.example.com           # Base URL of backend REST API (no trailing slash)
 NEXT_PUBLIC_TELEGRAM_BOT_USERNAME=MyAwesomeBot        # Telegram bot username shown in the login modal
+NEXT_PUBLIC_VK_AUTH_REDIRECT_URI=https://app.example.com/auth/vk/callback  # VK callback page on frontend
 NEXT_PUBLIC_DEV_MODE=false                            # 'true' enables dev-only UI (video generation, dev login)
 ```
 
 Notes:
 - `NEXT_PUBLIC_API_URL` is used by all fetches (`/api/auth/…`, `/api/...`). Because fetch calls use `credentials: 'include'`, the backend must send `Access-Control-Allow-Credentials: true` and `Access-Control-Allow-Origin` must match the frontend origin.
 - `NEXT_PUBLIC_DEV_MODE` gates `useCanGenerateVideo` and enables the PUT `/api/auth/telegram` dev login shortcut. Leave `false` in production.
+- `NEXT_PUBLIC_VK_AUTH_REDIRECT_URI` must match the VK app trusted redirect and Django `VK_AUTH_REDIRECT_URI`.
 - Any change requires rebuilding because the values are baked into the client bundle.
 
 ## Installing Dependencies
@@ -104,18 +108,34 @@ Expose via proxy:
 - All API calls go through `NEXT_PUBLIC_API_URL` (default fallback `http://localhost:4000`). Endpoints used today:
   - `POST /api/auth/logout/` (AppShell logout)
   - `GET/POST/PUT/DELETE /api/auth/telegram` (TelegramAuth component)
+  - `GET /api/auth/vk/url`, `GET/POST/DELETE /api/auth/vk` (VKAuth component)
   - `GET /api/...` routes consumed in other `app/*` pages
 - Cookies: the frontend always sends cookies; configure backend CORS accordingly (allow credentials + allowed origin = frontend URL).
 - When serving from a different domain than the backend, remember to set `SameSite=None; Secure` on auth cookies.
+
+Backend env for VK login:
+```env
+VK_AUTH_APP_ID=12345678
+VK_AUTH_APP_SECRET=your-vk-app-secret
+VK_AUTH_REDIRECT_URI=https://app.example.com/auth/vk/callback
+```
+
+VK app settings must include the same trusted redirect URI.
 
 ## Telegram Auth Integration
 - `components/auth/TelegramAuth.tsx` displays instructions that mention the bot username. Keep `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` in sync with the real bot.
 - The optional dev login (`PUT /api/auth/telegram`) only renders when `NEXT_PUBLIC_DEV_MODE === 'true'`. Keep it disabled in prod to hide the control.
 
+## VK Auth Integration
+- `components/auth/VKAuth.tsx` starts popup login via `GET /api/auth/vk/url`.
+- Callback page is `app/auth/vk/callback/page.tsx`; it uses `postMessage` for popup flow and direct `POST /api/auth/vk` fallback when popup is blocked.
+- `VK_AUTH_REDIRECT_URI` (backend) and `NEXT_PUBLIC_VK_AUTH_REDIRECT_URI` (frontend) must be identical and registered in VK app settings.
+
 ## Verification Checklist
 - `curl -I https://frontend-domain/` returns `200`.
 - Browser console has no `NEXT_PUBLIC_API_URL` warning.
 - Login modal reaches `/api/auth/telegram` without CORS errors (check Network tab).
+- VK login works in both modes: popup + fallback redirect when popup is blocked.
 - `npm run lint` passes in CI before deploy.
 
 ## Troubleshooting
@@ -127,7 +147,7 @@ Expose via proxy:
 ## Housekeeping
 - Keep `package-lock.json` committed; it defines reproducible installs.
 - Renovate/Dependabot should watch for Next.js canary updates; React 19 RC can change APIs quickly.
-- When rotating backend URLs or Telegram bots, update `.env.local` + redeploy; no code changes required unless routes change.
+- When rotating backend URLs, Telegram bots, or VK redirect URIs, update env vars + redeploy; no code changes required unless routes change.
 
 
 ### REDIS ubuntu###

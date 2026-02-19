@@ -8,6 +8,7 @@ from datetime import timedelta
 from dateutil.relativedelta import relativedelta
 from django.conf import settings
 from django.db import models, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from core.models.client import Client
@@ -17,14 +18,25 @@ class ReferralCode(models.Model):
     """
     Реферальный код пользователя.
     Создаётся ТОЛЬКО по запросу через API — не автоматически.
-    Формат кода: ref_XXXXXXXX  (префикс отличает от tenant deeplink base64).
+    Типы:
+      - client  -> ref_XXXXXXXX
+      - contact -> ref_cXXXXXXXX
     """
 
-    client = models.OneToOneField(
+    TYPE_CLIENT = "client"
+    TYPE_CONTACT = "contact"
+    TYPE_CHOICES = [
+        (TYPE_CLIENT, "Client"),
+        (TYPE_CONTACT, "Contact"),
+    ]
+
+    client = models.ForeignKey(
         Client,
         on_delete=models.CASCADE,
-        related_name="referral_code",
+        related_name="referral_codes",
     )
+    code_type = models.CharField(max_length=16, choices=TYPE_CHOICES, default=TYPE_CLIENT, db_index=True)
+    contact_id = models.IntegerField(null=True, blank=True, db_index=True)
     code = models.CharField(max_length=24, unique=True, db_index=True)
     is_active = models.BooleanField(default=True)
 
@@ -37,8 +49,29 @@ class ReferralCode(models.Model):
 
     class Meta:
         db_table = "referral_codes"
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    (Q(code_type="client") & Q(contact_id__isnull=True))
+                    | (Q(code_type="contact") & Q(contact_id__isnull=False))
+                ),
+                name="ref_code_type_contact_consistency",
+            ),
+            models.UniqueConstraint(
+                fields=["client", "code_type"],
+                condition=Q(code_type="client"),
+                name="uniq_ref_code_client_type",
+            ),
+            models.UniqueConstraint(
+                fields=["client", "contact_id", "code_type"],
+                condition=Q(code_type="contact"),
+                name="uniq_ref_code_contact_type",
+            ),
+        ]
 
     def __str__(self) -> str:
+        if self.code_type == self.TYPE_CONTACT and self.contact_id is not None:
+            return f"{self.client_id}:{self.contact_id} → {self.code}"
         return f"{self.client_id} → {self.code}"
 
     # ------------------------------------------------------------------
@@ -46,15 +79,19 @@ class ReferralCode(models.Model):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def generate_code(length: int = 8) -> str:
+    def generate_code(length: int = 8, code_type: str = TYPE_CLIENT) -> str:
         """
-        Генерирует уникальный код с префиксом ref_.
-        Пример: ref_A3BK92XZ
+        Генерирует уникальный код с префиксом по типу.
+        Пример:
+          client  -> ref_A3BK92XZ
+          contact -> ref_cA3BK92XZ
         """
         chars = string.ascii_uppercase + string.digits
+        normalized_type = code_type if code_type in {ReferralCode.TYPE_CLIENT, ReferralCode.TYPE_CONTACT} else ReferralCode.TYPE_CLIENT
+        prefix = "ref_c" if normalized_type == ReferralCode.TYPE_CONTACT else "ref_"
         while True:
             random_part = "".join(secrets.choice(chars) for _ in range(length))
-            code = f"ref_{random_part}"
+            code = f"{prefix}{random_part}"
             if not ReferralCode.objects.filter(code=code).exists():
                 return code
 
@@ -62,10 +99,10 @@ class ReferralCode(models.Model):
     def is_referral_code(start_param: str) -> bool:
         """
         Проверяет является ли параметр /start реферальным кодом.
-        Реферальные коды начинаются с 'ref_'.
+        Реферальные коды начинаются с 'ref_' или 'ref_c'.
         Все остальное — tenant deeplink (base64 от TenantService).
         """
-        return bool(start_param and start_param.startswith("ref_"))
+        return bool(start_param and (start_param.startswith("ref_") or start_param.startswith("ref_c")))
 
     def get_telegram_link(self, bot_username: str | None = None) -> str:
         """Возвращает Telegram deep link для приглашения."""

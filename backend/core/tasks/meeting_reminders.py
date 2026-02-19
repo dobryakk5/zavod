@@ -161,6 +161,8 @@ def send_meeting_reminders() -> int:
                 JOIN {schema}.user_tenant_binding b
                   ON b.contact_id = e.contact_id
                  AND b.is_active = true
+                 AND b.provider = 'telegram'
+                 AND b.telegram_chat_id IS NOT NULL
                 JOIN public.core_client c
                   ON c.id = b.tenant_id
                 LEFT JOIN {schema}.crm_event_types et ON et.id = e.event_type_id
