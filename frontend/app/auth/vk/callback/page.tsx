@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
@@ -30,6 +30,14 @@ const parseResponse = async (response: Response) => {
 };
 
 export default function VkCallbackPage() {
+  return (
+    <Suspense fallback={<VkCallbackLoading statusText="Авторизация ВКонтакте..." />}>
+      <VkCallbackContent />
+    </Suspense>
+  );
+}
+
+function VkCallbackContent() {
   const router = useRouter();
   const params = useSearchParams();
   const [statusText, setStatusText] = useState('Авторизация ВКонтакте...');
@@ -127,6 +135,10 @@ export default function VkCallbackPage() {
       });
   }, [params, router]);
 
+  return <VkCallbackLoading statusText={statusText} />;
+}
+
+function VkCallbackLoading({ statusText }: { statusText: string }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-white">
       <div className="space-y-4 text-center">
