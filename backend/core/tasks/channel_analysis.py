@@ -1313,6 +1313,8 @@ def schedule_project_channel_analysis_daily():
         Q(project_instagram_channel__gt="") |
         Q(project_youtube_channel__gt="")
     )
+    clients_count = clients.count()
+    logger.info("Beat tick schedule_project_channel_analysis_daily: candidate_clients=%s", clients_count)
 
     created = 0
     for client in clients:
@@ -1346,4 +1348,9 @@ def schedule_project_channel_analysis_daily():
         record_generation_event(client, GenerationEvent.EVENT_CHANNEL_ANALYSIS, meta={"source": "schedule"})
         created += 1
 
+    logger.info(
+        "Beat tick schedule_project_channel_analysis_daily done: candidate_clients=%s created_runs=%s",
+        clients_count,
+        created,
+    )
     return created

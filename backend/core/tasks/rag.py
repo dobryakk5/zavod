@@ -11,7 +11,9 @@ logger = logging.getLogger(__name__)
 
 @shared_task
 def process_pending_kb_rag_indexing(limit: int | None = None) -> dict:
+    logger.info("Beat tick process_pending_kb_rag_indexing: limit=%s", limit)
     if not getattr(settings, "RAG_INDEXING_ENABLED", True):
+        logger.info("Beat tick process_pending_kb_rag_indexing skipped: RAG indexing disabled")
         return {
             "total": 0,
             "indexed": 0,
@@ -23,6 +25,7 @@ def process_pending_kb_rag_indexing(limit: int | None = None) -> dict:
 
     batch_size = int(limit or getattr(settings, "RAG_INDEX_BATCH_SIZE", 25))
     if batch_size <= 0:
+        logger.info("Beat tick process_pending_kb_rag_indexing skipped: batch_size=%s", batch_size)
         return {"total": 0, "indexed": 0, "skipped": 0, "missing": 0, "failed": 0}
 
     candidate_ids = list(
@@ -55,14 +58,13 @@ def process_pending_kb_rag_indexing(limit: int | None = None) -> dict:
         else:
             stats["skipped"] += 1
 
-    if stats["total"] > 0:
-        logger.info(
-            "KB RAG background indexing: total=%s indexed=%s skipped=%s missing=%s failed=%s",
-            stats["total"],
-            stats["indexed"],
-            stats["skipped"],
-            stats["missing"],
-            stats["failed"],
-        )
+    logger.info(
+        "Beat tick process_pending_kb_rag_indexing done: total=%s indexed=%s skipped=%s missing=%s failed=%s",
+        stats["total"],
+        stats["indexed"],
+        stats["skipped"],
+        stats["missing"],
+        stats["failed"],
+    )
 
     return stats

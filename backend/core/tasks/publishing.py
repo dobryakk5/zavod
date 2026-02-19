@@ -68,6 +68,7 @@ def process_due_schedules():
         .filter(status="pending", scheduled_at__lte=now)
         .values_list("id", flat=True)
     )
+    logger.info("Beat tick process_due_schedules: now=%s due=%s", now.isoformat(), len(due_ids))
     scheduled = 0
 
     for schedule_id in due_ids:
@@ -82,6 +83,7 @@ def process_due_schedules():
             continue
         scheduled += 1
 
+    logger.info("Beat tick process_due_schedules done: enqueued=%s", scheduled)
     return scheduled
 
 

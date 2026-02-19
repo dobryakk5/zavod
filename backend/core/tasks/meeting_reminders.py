@@ -112,6 +112,13 @@ def send_meeting_reminders() -> int:
     reminder_minutes = int(os.getenv("MEETING_REMINDER_MINUTES", "60"))
     reminder_24h_minutes = int(os.getenv("MEETING_REMINDER_24H_MINUTES", "1440"))
     reminder_24h_min_lead_hours = int(os.getenv("MEETING_REMINDER_24H_MIN_LEAD_HOURS", "5"))
+    logger.info(
+        "Beat tick send_meeting_reminders: schema=%s window=%sm reminder=%sm reminder_24h=%sm",
+        schema,
+        window_minutes,
+        reminder_minutes,
+        reminder_24h_minutes,
+    )
 
     reminder_configs = [
         {
@@ -220,8 +227,7 @@ def send_meeting_reminders() -> int:
                     )
 
         total_sent += sent
-        log_fn = logger.info if sent > 0 else logger.debug
-        log_fn(
+        logger.info(
             "Meeting reminders (%s): sent=%s skipped=%s window=%s..%s",
             reminder_type,
             sent,
@@ -230,4 +236,5 @@ def send_meeting_reminders() -> int:
             window_end,
         )
 
+    logger.info("Beat tick send_meeting_reminders done: total_sent=%s", total_sent)
     return total_sent

@@ -146,6 +146,7 @@ def send_payment_reminders() -> int:
     window_minutes = int(os.getenv("PAYMENT_REMINDER_WINDOW_MINUTES", "2"))
     if window_minutes <= 0:
         return 0
+    logger.info("Beat tick send_payment_reminders: schema=%s window=%sm", schema, window_minutes)
 
     morning_hour, morning_minute = _parse_time(
         os.getenv("PAYMENT_REMINDER_MORNING_TIME"),
@@ -234,8 +235,7 @@ def send_payment_reminders() -> int:
 
         _delete_notification(schema, notification_id)
 
-    log_fn = logger.info if total_sent > 0 else logger.debug
-    log_fn(
+    logger.info(
         "Payment reminders: sent=%s window=%sm morning=%02d:%02d evening=%02d:%02d",
         total_sent,
         window_minutes,
@@ -244,5 +244,6 @@ def send_payment_reminders() -> int:
         evening_hour,
         evening_minute,
     )
+    logger.info("Beat tick send_payment_reminders done: total_sent=%s", total_sent)
 
     return total_sent

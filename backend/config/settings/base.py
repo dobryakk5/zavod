@@ -199,6 +199,13 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERYD_HIJACK_ROOT_LOGGER = False
+CELERY_BEAT_DEBUG = os.getenv("CELERY_BEAT_DEBUG", "False").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+CELERY_BEAT_LOG_LEVEL = "DEBUG" if CELERY_BEAT_DEBUG else "INFO"
 CELERY_BEAT_MAX_LOOP_INTERVAL = 30
 CELERY_BEAT_SCHEDULER = "celery.beat:PersistentScheduler"
 SCHEDULES_POLL_SECONDS = int(os.getenv("SCHEDULES_POLL_SECONDS", "60"))
@@ -386,6 +393,21 @@ LOGGING = {
             "propagate": False,
         },
         "celery": {
+            "handlers": ["console", "celery_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "celery.beat": {
+            "handlers": ["console", "celery_file"],
+            "level": CELERY_BEAT_LOG_LEVEL,
+            "propagate": False,
+        },
+        "celery.apps.beat": {
+            "handlers": ["console", "celery_file"],
+            "level": CELERY_BEAT_LOG_LEVEL,
+            "propagate": False,
+        },
+        "core.tasks": {
             "handlers": ["console", "celery_file"],
             "level": "INFO",
             "propagate": False,
