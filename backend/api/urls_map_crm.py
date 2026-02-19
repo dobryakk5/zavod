@@ -1,3 +1,11 @@
+"""
+DEPRECATED.
+
+Legacy raw-SQL CRM routes from `views_map_crm.py`.
+This module is intentionally kept only for transition and must not be wired into runtime URLs.
+Active CRM surface is `backend/api/urls.py` + `backend/api/views_crm_orm.py`.
+"""
+
 from django.urls import path
 from .views_map_crm import (
     ContactsListView,

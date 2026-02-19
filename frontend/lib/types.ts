@@ -588,6 +588,7 @@ export interface MindNodeProperty {
 
 export interface ClientSettings {
   slug?: string;
+  rag_assistant_enabled?: boolean;
   brand_name?: string;
   niche?: string;
   product_service?: string;

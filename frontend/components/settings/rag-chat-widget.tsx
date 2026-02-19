@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { kbSearchApi } from '@/lib/api/knowledgeBase';
+import { clientApi } from '@/lib/api/client';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
@@ -11,6 +12,7 @@ type ChatMessage = {
 };
 
 export function RagChatWidget() {
+  const [assistantEnabled, setAssistantEnabled] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -27,6 +29,29 @@ export function RagChatWidget() {
     if (!isOpen) return;
     messagesEndRef.current?.scrollIntoView({ block: 'end' });
   }, [messages, isLoading, isOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadAssistantFlag = async () => {
+      try {
+        const settings = await clientApi.getSettings();
+        if (!cancelled) {
+          setAssistantEnabled(Boolean(settings.rag_assistant_enabled));
+        }
+      } catch {
+        if (!cancelled) {
+          setAssistantEnabled(false);
+        }
+      }
+    };
+
+    void loadAssistantFlag();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const sendMessage = async () => {
     const text = input.trim();
@@ -70,6 +95,10 @@ export function RagChatWidget() {
       setIsLoading(false);
     }
   };
+
+  if (!assistantEnabled) {
+    return null;
+  }
 
   return (
     <div className="fixed bottom-4 right-4 z-[80]">

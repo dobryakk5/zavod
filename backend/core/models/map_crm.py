@@ -7,6 +7,8 @@ from decimal import Decimal
 from django.db import models
 from django.core.validators import MinValueValidator
 
+from .client import Client
+
 
 class MapContact(models.Model):
     """
@@ -35,6 +37,9 @@ class MapContact(models.Model):
         blank=True,
         verbose_name="ID родительского клиента",
     )
+    tg_user_id = models.BigIntegerField(null=True, blank=True, verbose_name="Telegram user ID")
+    tg_username = models.TextField(blank=True, verbose_name="Telegram username")
+    tg_connected_at = models.DateField(null=True, blank=True, verbose_name="Дата привязки Telegram")
 
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата обновления")
@@ -233,3 +238,160 @@ class MapCRMCategory(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class MapCRMEventType(models.Model):
+    """
+    Тип встречи (map.crm_event_types)
+    """
+    name = models.CharField(max_length=100, unique=True, verbose_name="Название")
+    description = models.TextField(blank=True, verbose_name="Описание")
+    duration_minutes = models.IntegerField(default=60, verbose_name="Длительность, минут")
+    color = models.CharField(max_length=7, default="#4A90E2", verbose_name="Цвет (HEX)")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
+
+    class Meta:
+        db_table = '"map"."crm_event_types"'
+        managed = False
+        ordering = ["name"]
+        verbose_name = "Тип встречи (map)"
+        verbose_name_plural = "Типы встреч (map)"
+
+    def __str__(self):
+        return self.name
+
+
+class MapCRMEvent(models.Model):
+    """
+    Встреча/событие клиента (map.crm_events)
+    """
+    contact = models.ForeignKey(
+        MapContact,
+        on_delete=models.CASCADE,
+        db_column="contact_id",
+        related_name="events",
+        verbose_name="Контакт",
+    )
+    event_type = models.ForeignKey(
+        MapCRMEventType,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column="event_type_id",
+        related_name="events",
+        verbose_name="Тип встречи",
+    )
+    title = models.CharField(max_length=255, verbose_name="Название")
+    description = models.TextField(blank=True, verbose_name="Описание")
+    start_time = models.DateTimeField(verbose_name="Начало")
+    end_time = models.DateTimeField(verbose_name="Окончание")
+    location = models.CharField(max_length=255, blank=True, verbose_name="Место")
+    status = models.CharField(
+        max_length=20,
+        default="scheduled",
+        choices=[
+            ("scheduled", "Запланировано"),
+            ("completed", "Завершено"),
+            ("cancelled", "Отменено"),
+            ("no_show", "Не пришел"),
+        ],
+        verbose_name="Статус",
+    )
+    notes = models.TextField(blank=True, verbose_name="Заметки")
+    price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.01"))],
+        verbose_name="Стоимость",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата обновления")
+
+    class Meta:
+        db_table = '"map"."crm_events"'
+        managed = False
+        ordering = ["-start_time"]
+        verbose_name = "Встреча (map)"
+        verbose_name_plural = "Встречи (map)"
+        indexes = [
+            models.Index(fields=["contact", "start_time"]),
+            models.Index(fields=["event_type"]),
+            models.Index(fields=["status"]),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.start_time})"
+
+
+class MapAvailabilityEvent(models.Model):
+    """
+    Доступные слоты календаря тенанта (map.events)
+    """
+    tenant = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        db_column="tenant_id",
+        related_name="availability_events",
+        verbose_name="Тенант",
+    )
+    start_time = models.DateTimeField(verbose_name="Начало")
+    duration_minutes = models.SmallIntegerField(default=60, verbose_name="Длительность, минут")
+    repeat_type = models.SmallIntegerField(
+        default=0,
+        choices=[
+            (0, "Не повторять"),
+            (1, "Еженедельно"),
+            (2, "Каждые 2 недели"),
+            (3, "Ежемесячно"),
+        ],
+        verbose_name="Тип повторения",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата обновления")
+
+    class Meta:
+        db_table = '"map"."events"'
+        managed = False
+        ordering = ["-start_time"]
+        verbose_name = "Слот доступности (map)"
+        verbose_name_plural = "Слоты доступности (map)"
+        indexes = [
+            models.Index(fields=["tenant", "start_time"]),
+            models.Index(fields=["tenant", "repeat_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.tenant_id}: {self.start_time}"
+
+
+class MapCRMNote(models.Model):
+    """
+    Заметка по контакту (map.crm_notes)
+    """
+    contact = models.ForeignKey(
+        MapContact,
+        on_delete=models.CASCADE,
+        db_column="contact_id",
+        related_name="notes_items",
+        verbose_name="Контакт",
+    )
+    title = models.CharField(max_length=255, verbose_name="Заголовок")
+    content = models.TextField(verbose_name="Содержимое")
+    is_important = models.BooleanField(default=False, verbose_name="Важная")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата обновления")
+
+    class Meta:
+        db_table = '"map"."crm_notes"'
+        managed = False
+        ordering = ["-created_at"]
+        verbose_name = "Заметка (map)"
+        verbose_name_plural = "Заметки (map)"
+        indexes = [
+            models.Index(fields=["contact", "is_important"]),
+        ]
+
+    def __str__(self):
+        return self.title

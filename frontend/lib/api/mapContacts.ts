@@ -1,51 +1,51 @@
-import { apiFetch } from '../api';
-import type { MapClient } from './mapClients';
-import type { MapTag } from './mapTags';
+import {
+  crmContactTagsApi,
+  crmContactsApi,
+  type Contact,
+} from './crm';
 
-export type { MapClient } from './mapClients';
+export type MapClient = Contact;
 
+type Id = number | string;
+
+const toNumericId = (value: Id): number => (typeof value === 'number' ? value : Number(value));
+
+// DEPRECATED: use `@/lib/api/crm` (`crmContactsApi`, `crmContactTagsApi`) directly.
+// Kept as a compatibility alias while legacy imports are being removed.
 export const mapContactsApi = {
   list: async (): Promise<MapClient[]> => {
-    return apiFetch<MapClient[]>('/crm/contacts/');
+    return crmContactsApi.list();
   },
 
-  detail: async (id: number | string): Promise<MapClient> => {
-    return apiFetch<MapClient>(`/crm/contacts/${id}/`);
+  detail: async (id: Id): Promise<MapClient> => {
+    return crmContactsApi.detail(id);
   },
 
   create: async (payload: { name: string }) => {
-    return apiFetch<MapClient>('/crm/contacts/', {
-      method: 'POST',
-      body: payload
-    });
+    return crmContactsApi.create({ name: payload.name });
   },
 
-  update: async (id: number | string, payload: { name: string }) => {
-    return apiFetch<MapClient>(`/crm/contacts/${id}/`, {
-      method: 'PATCH',
-      body: payload
-    });
+  update: async (id: Id, payload: { name: string }) => {
+    return crmContactsApi.update(id, { name: payload.name });
   },
 
-  delete: async (id: number | string) => {
-    return apiFetch<void>(`/crm/contacts/${id}/`, {
-      method: 'DELETE'
-    });
+  delete: async (id: Id) => {
+    return crmContactsApi.delete(id);
   }
 };
 
 export const contactTagsApi = {
-  assign: async (contactId: number | string, tagId: number | string) => {
-    return apiFetch<{ success: boolean }>('/crm/contact-tags/', {
-      method: 'POST',
-      body: { contactId, tagId }
+  assign: async (contactId: Id, tagId: Id) => {
+    return crmContactTagsApi.create({
+      contact_id: toNumericId(contactId),
+      tag_id: toNumericId(tagId),
     });
   },
 
-  remove: async (contactId: number | string, tagId: number | string) => {
-    return apiFetch<void>('/crm/contact-tags/', {
-      method: 'DELETE',
-      body: { contactId, tagId }
+  remove: async (contactId: Id, tagId: Id) => {
+    return crmContactTagsApi.delete({
+      contact_id: toNumericId(contactId),
+      tag_id: toNumericId(tagId),
     });
   }
 };

@@ -965,10 +965,13 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
     Excludes secret fields - they cannot be accessed by frontend.
     """
 
+    rag_assistant_enabled = serializers.SerializerMethodField()
+
     class Meta:
         model = Client
         fields = [
             "slug",
+            "rag_assistant_enabled",
             "brand_name",
             "niche",
             "product_service",
@@ -993,6 +996,9 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "last_video_generation_at",
         ]
         read_only_fields = ["slug", "last_image_generation_at", "last_video_generation_at"]  # slug is readonly
+
+    def get_rag_assistant_enabled(self, obj) -> bool:
+        return bool(getattr(settings, "RAG_INDEXING_ENABLED", True))
 
     def validate_timezone(self, value: str | None) -> str:
         if value is None:

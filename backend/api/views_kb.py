@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from django.conf import settings
 from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -53,6 +54,10 @@ _KB_CHAT_SYSTEM_INSTRUCTIONS = """Ты ассистент по базе знан
 Отвечай только на основе переданного контекста из базы знаний.
 Если данных недостаточно, так и скажи: "В базе знаний нет точного ответа".
 Отвечай кратко и по делу, на русском языке."""
+
+
+def _is_rag_assistant_enabled() -> bool:
+    return bool(getattr(settings, "RAG_INDEXING_ENABLED", True))
 
 
 def _issue_share_token() -> str:
@@ -576,6 +581,12 @@ class KbSearchViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["post"], url_path="semantic")
     def semantic(self, request):
+        if not _is_rag_assistant_enabled():
+            return Response(
+                {"detail": "RAG indexing is disabled"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         serializer = KbSemanticSearchRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -598,6 +609,12 @@ class KbSearchViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["post"], url_path="chat")
     def chat(self, request):
+        if not _is_rag_assistant_enabled():
+            return Response(
+                {"detail": "RAG indexing is disabled"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         serializer = KbChatRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         payload = serializer.validated_data

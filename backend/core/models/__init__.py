@@ -71,6 +71,10 @@ from .map_crm import (
     MapCRMTag,
     MapContactTag,
     MapCRMCategory,
+    MapCRMEventType,
+    MapCRMEvent,
+    MapAvailabilityEvent,
+    MapCRMNote,
 )
 
 # --- Unmanaged (managed=False, map.* и chains.*) ---
@@ -182,6 +186,10 @@ __all__ = [
     "MapCRMTag",
     "MapContactTag",
     "MapCRMCategory",
+    "MapCRMEventType",
+    "MapCRMEvent",
+    "MapAvailabilityEvent",
+    "MapCRMNote",
     # Unmanaged
     "ProductType",
     "ClientProduct",

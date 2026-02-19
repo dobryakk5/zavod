@@ -225,3 +225,23 @@ python-dotenv
 4. python manage.py runserver        # запустить Django
 5. POST /api/rag/migrate/            # мигрировать документы
 ```
+
+---
+
+## Фоновая индексация KB (в проекте)
+
+Индексация запускается в фоне задачей Celery:
+- задача: `core.tasks.process_pending_kb_rag_indexing`
+- расписание: `RAG_INDEX_POLL_SECONDS` (по умолчанию `300`, то есть 5 минут)
+- размер батча: `RAG_INDEX_BATCH_SIZE` (по умолчанию `25`)
+
+Включение/выключение через ENV:
+
+```bash
+RAG_INDEXING_ENABLED=True   # включить
+RAG_INDEXING_ENABLED=False  # выключить
+```
+
+Какой процесс этим занимается:
+- `celery beat` ставит задачу по расписанию
+- `celery worker` выполняет задачу и делает индексацию

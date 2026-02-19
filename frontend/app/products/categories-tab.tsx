@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Trash2 } from 'lucide-react';
-import { mapTagsApi, type MapTag, type TagType } from '@/lib/api/mapTags';
+import { crmTagsApi, type Tag as MapTag, type TagType } from '@/lib/api/crm';
 
 const TAG_TYPES: TagType[] = ['goal', 'pain', 'experience'];
 const TAG_LABELS: Record<TagType, string> = {
@@ -29,7 +29,7 @@ export function CategoriesTab() {
     setLoading(true);
     setError(null);
     try {
-      const tagsData = await mapTagsApi.list();
+      const tagsData = await crmTagsApi.list();
       setTags(tagsData);
     } catch (err) {
       console.error('Failed to load tags', err);
@@ -49,7 +49,7 @@ export function CategoriesTab() {
     setCreatingTag(true);
     setError(null);
     try {
-      const created = await mapTagsApi.create({ type: createTagType, value });
+      const created = await crmTagsApi.create({ type: createTagType, value });
       setTags(prev => [created, ...prev]);
       setCreateTagValue('');
     } catch (err) {
@@ -64,7 +64,7 @@ export function CategoriesTab() {
     const prev = tags;
     setTags(prev => prev.filter(item => item.id !== tag.id));
     try {
-      await mapTagsApi.delete(tag.id);
+      await crmTagsApi.delete(tag.id);
     } catch (err) {
       console.error('Failed to delete tag', err);
       setTags(prev); // Restore if deletion failed

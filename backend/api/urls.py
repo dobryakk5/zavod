@@ -100,23 +100,17 @@ from .views_tgstat import (
     TgstatTagListView,
 )
 
-from .views_map_crm import (
-    ContactTelegramLinkView,
-    EventTypesListView,
-    EventTypeDetailView,
-    EventsListView,
-    EventDetailView,
-    AvailabilityEventsListView,
-    AvailabilityEventDetailView,
-    NotesListView,
-    NoteDetailView,
-)
 from .views_crm_orm import (
+    ContactTelegramLinkView,
     MapContactViewSet,
     MapCRMPaymentViewSet,
     MapCRMTagViewSet,
     MapCRMCategoryViewSet,
     MapContactTagsViewSet,
+    MapCRMEventTypeViewSet,
+    MapCRMEventViewSet,
+    MapAvailabilityEventViewSet,
+    MapCRMNoteViewSet,
 )
 from .views_chains import (
     ChainsListView,
@@ -170,13 +164,17 @@ router.register(r'kb/shares', KbDocumentShareViewSet, basename='kb-share')
 router.register(r'kb/tags', KbTagViewSet, basename='kb-tag')
 router.register(r'kb/search', KbSearchViewSet, basename='kb-search')
 
-# CRM router (ORM для contacts, payments, tags, categories)
+# CRM router (ORM для CRM сущностей map.*)
 crm_router = DefaultRouter()
 crm_router.register(r'contacts', MapContactViewSet, basename='crm-contact')
 crm_router.register(r'payments', MapCRMPaymentViewSet, basename='crm-payment')
 crm_router.register(r'tags', MapCRMTagViewSet, basename='crm-tag')
 crm_router.register(r'categories', MapCRMCategoryViewSet, basename='crm-category')
 crm_router.register(r'contact-tags', MapContactTagsViewSet, basename='crm-contact-tag')
+crm_router.register(r'event-types', MapCRMEventTypeViewSet, basename='crm-event-type')
+crm_router.register(r'events', MapCRMEventViewSet, basename='crm-event')
+crm_router.register(r'availability-events', MapAvailabilityEventViewSet, basename='crm-availability-event')
+crm_router.register(r'notes', MapCRMNoteViewSet, basename='crm-note')
 
 urlpatterns = [
     # Analytics endpoint (must be before router to avoid conflicts)
@@ -257,18 +255,9 @@ urlpatterns = [
     # Mind map endpoints
     path('map/nodes/<uuid:node_id>/position/', MindNodePositionView.as_view(), name='mind-node-position'),
 
-    # CRM endpoints: ORM для contacts, tags, categories, payments, contact-tags
+    # CRM endpoints: ORM для CRM сущностей
     path('crm/contacts/<int:contact_id>/telegram-link/', ContactTelegramLinkView.as_view(), name='crm-contact-telegram-link'),
     path('crm/', include(crm_router.urls)),
-    # CRM: Raw SQL для events, notes (пока)
-    path('crm/event-types/', EventTypesListView.as_view(), name='crm-event-types-list'),
-    path('crm/event-types/<int:event_type_id>/', EventTypeDetailView.as_view(), name='crm-event-type-detail'),
-    path('crm/events/', EventsListView.as_view(), name='crm-events-list'),
-    path('crm/events/<int:event_id>/', EventDetailView.as_view(), name='crm-event-detail'),
-    path('crm/availability-events/', AvailabilityEventsListView.as_view(), name='crm-availability-events-list'),
-    path('crm/availability-events/<int:event_id>/', AvailabilityEventDetailView.as_view(), name='crm-availability-event-detail'),
-    path('crm/notes/', NotesListView.as_view(), name='crm-notes-list'),
-    path('crm/notes/<int:note_id>/', NoteDetailView.as_view(), name='crm-note-detail'),
 
     # Chains / chatbot endpoints
     path('chains/', ChainsListView.as_view(), name='chains-list'),

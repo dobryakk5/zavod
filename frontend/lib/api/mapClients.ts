@@ -1,38 +1,4 @@
-import { apiFetch } from '../api';
-import type { TagType } from './mapTags';
-
-export type MapClient = {
-  id: number;
-  name: string;
-  tags?: Partial<Record<TagType, number[]>>;
-};
-
-export const mapContactsApi = {
-  list: async (): Promise<MapClient[]> => {
-    return apiFetch<MapClient[]>('/crm/contacts/');
-  },
-
-  detail: async (id: number | string): Promise<MapClient> => {
-    return apiFetch<MapClient>(`/crm/contacts/${id}/`);
-  },
-
-  create: async (payload: { name: string }) => {
-    return apiFetch<MapClient>('/crm/contacts/', {
-      method: 'POST',
-      body: payload
-    });
-  },
-
-  update: async (id: number | string, payload: { name: string }) => {
-    return apiFetch<MapClient>(`/crm/contacts/${id}/`, {
-      method: 'PATCH',
-      body: payload
-    });
-  },
-
-  delete: async (id: number | string) => {
-    return apiFetch<void>(`/crm/contacts/${id}/`, {
-      method: 'DELETE'
-    });
-  }
-};
+// DEPRECATED: use `@/lib/api/crm` (`crmContactsApi`) directly.
+// Kept only as a compatibility alias while legacy imports are being removed.
+export type { MapClient } from './mapContacts';
+export { mapContactsApi } from './mapContacts';

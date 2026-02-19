@@ -12,6 +12,17 @@
 2. Полностью убрать Raw SQL из активной CRM-ветки, сохранив поведение и совместимость по endpoint-ам.
 3. Подготовить архитектуру для дальнейшего развития без повторного смешивания transport/domain/data access.
 
+## Статус выполнения (на 2026-02-19)
+
+- `P1.1` выполнено: добавлен `docs/docs-new/01-architecture/crm-api-contract-snapshot.md`.
+- `P1.2` частично выполнено:
+  - добавлен `docs/docs-new/01-architecture/adr-single-crm-surface.md`,
+  - `frontend/lib/api/mapClients.ts`, `frontend/lib/api/mapContacts.ts`, `frontend/lib/api/mapTags.ts` переведены в deprecated-совместимость поверх `frontend/lib/api/crm.ts`,
+  - активные экраны `frontend/app/products/clients-tab.tsx` и `frontend/app/products/categories-tab.tsx` переключены на `crm.ts`.
+- `P2.1` частично выполнено: добавлены unmanaged ORM-модели для `map.crm_event_types`, `map.crm_events`, `map.events`, `map.crm_notes` (+ поля Telegram в `MapContact`).
+- `P2.3` частично выполнено: в активный CRM router переведены `event-types`, `events`, `availability-events`, `notes` на ORM viewsets.
+- `P2.6` начато: добавлен guardrail-тест `backend/tests/unit/test_crm_architecture_guardrails.py` против возврата Raw SQL в активный CRM слой.
+
 ---
 
 ## Priority 1. Консолидация CRM в одну рабочую ветку

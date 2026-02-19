@@ -2,6 +2,8 @@
 import { apiFetch } from '../api';
 
 // Types for the map CRM system
+export type TagType = 'goal' | 'pain' | 'experience';
+
 export type Contact = {
   id: number;
   name: string;
@@ -13,13 +15,14 @@ export type Contact = {
   photo_url: string;
   notes: string;
   parent_id: number | null;
+  tags?: Partial<Record<TagType, number[]>>;
   created_at: string;
   updated_at: string;
 };
 
 export type Tag = {
   id: number;
-  type: 'goal' | 'pain' | 'experience';
+  type: TagType;
   value: string;
   created_at: string;
 };
@@ -36,7 +39,7 @@ export type Category = {
 export type ContactTag = {
   contact_id: number;
   tag_id: number;
-  type: 'goal' | 'pain' | 'experience';
+  type: TagType;
   value: string;
   description: string;
 };
@@ -44,12 +47,16 @@ export type ContactTag = {
 type ContactTagApiRow = {
   contact_id: number;
   tag_id: number;
-  type?: 'goal' | 'pain' | 'experience';
+  type?: TagType;
   value?: string;
-  tag_type?: 'goal' | 'pain' | 'experience';
+  tag_type?: TagType;
   tag_value?: string;
   description?: string | null;
 };
+
+export type ContactCreatePayload = Pick<Contact, 'name'> &
+  Partial<Omit<Contact, 'id' | 'name' | 'created_at' | 'updated_at'>>;
+export type ContactUpdatePayload = Partial<Omit<Contact, 'id' | 'created_at' | 'updated_at'>>;
 
 export type EventType = {
   id: number;
@@ -139,14 +146,14 @@ export const crmContactsApi = {
     return apiFetch<Contact>(`/crm/contacts/${id}/`);
   },
 
-  create: async (data: Omit<Contact, 'id' | 'created_at' | 'updated_at'>): Promise<Contact> => {
+  create: async (data: ContactCreatePayload): Promise<Contact> => {
     return apiFetch<Contact>('/crm/contacts/', {
       method: 'POST',
       body: data,
     });
   },
 
-  update: async (id: number | string, data: Partial<Omit<Contact, 'id' | 'created_at' | 'updated_at'>>): Promise<Contact> => {
+  update: async (id: number | string, data: ContactUpdatePayload): Promise<Contact> => {
     return apiFetch<Contact>(`/crm/contacts/${id}/`, {
       method: 'PATCH',
       body: data,

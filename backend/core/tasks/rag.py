@@ -11,6 +11,16 @@ logger = logging.getLogger(__name__)
 
 @shared_task
 def process_pending_kb_rag_indexing(limit: int | None = None) -> dict:
+    if not getattr(settings, "RAG_INDEXING_ENABLED", True):
+        return {
+            "total": 0,
+            "indexed": 0,
+            "skipped": 0,
+            "missing": 0,
+            "failed": 0,
+            "disabled": True,
+        }
+
     batch_size = int(limit or getattr(settings, "RAG_INDEX_BATCH_SIZE", 25))
     if batch_size <= 0:
         return {"total": 0, "indexed": 0, "skipped": 0, "missing": 0, "failed": 0}

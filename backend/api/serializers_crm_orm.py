@@ -4,7 +4,17 @@
 """
 from rest_framework import serializers
 
-from core.models import MapContact, MapCRMPayment, MapCRMTag, MapContactTag, MapCRMCategory
+from core.models import (
+    MapAvailabilityEvent,
+    MapContact,
+    MapContactTag,
+    MapCRMCategory,
+    MapCRMEvent,
+    MapCRMEventType,
+    MapCRMNote,
+    MapCRMPayment,
+    MapCRMTag,
+)
 
 
 class MapCRMCategorySerializer(serializers.ModelSerializer):
@@ -156,3 +166,85 @@ class MapCRMPaymentListSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+
+class MapCRMEventTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MapCRMEventType
+        fields = [
+            "id",
+            "name",
+            "description",
+            "duration_minutes",
+            "color",
+            "created_at",
+        ]
+        read_only_fields = ["created_at"]
+
+
+class MapCRMEventSerializer(serializers.ModelSerializer):
+    contact_id = serializers.PrimaryKeyRelatedField(source="contact", queryset=MapContact.objects.all())
+    event_type_id = serializers.PrimaryKeyRelatedField(
+        source="event_type",
+        queryset=MapCRMEventType.objects.all(),
+        allow_null=True,
+        required=False,
+    )
+
+    class Meta:
+        model = MapCRMEvent
+        fields = [
+            "id",
+            "contact_id",
+            "event_type_id",
+            "title",
+            "description",
+            "start_time",
+            "end_time",
+            "location",
+            "status",
+            "notes",
+            "price",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+
+class MapAvailabilityEventSerializer(serializers.ModelSerializer):
+    tenant_id = serializers.IntegerField(source="tenant.id", read_only=True)
+
+    class Meta:
+        model = MapAvailabilityEvent
+        fields = [
+            "id",
+            "tenant_id",
+            "start_time",
+            "duration_minutes",
+            "repeat_type",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["tenant_id", "created_at", "updated_at"]
+
+    def validate_repeat_type(self, value):
+        if value not in {0, 1, 2, 3}:
+            raise serializers.ValidationError("Недопустимое значение.")
+        return value
+
+
+class MapCRMNoteSerializer(serializers.ModelSerializer):
+    contact_id = serializers.PrimaryKeyRelatedField(source="contact", queryset=MapContact.objects.all())
+
+    class Meta:
+        model = MapCRMNote
+        fields = [
+            "id",
+            "contact_id",
+            "title",
+            "content",
+            "is_important",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]

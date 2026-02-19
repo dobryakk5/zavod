@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""
+DEPRECATED raw-SQL CRM views.
+
+Kept only for migration compatibility and must not be used in active CRM routing.
+Active CRM endpoints are implemented in `views_crm_orm.py`.
+"""
+
 import os
 import re
 from datetime import datetime
@@ -16,7 +23,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.models import TelegramTask, UserTenantBinding
+from core.models import MapContact, TelegramTask, UserTenantBinding
 from core.services.tenant_service import TenantService
 
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
@@ -722,16 +729,10 @@ class ContactTelegramLinkView(APIView):
     permission_classes = [IsTenantMember]
 
     def get(self, request, contact_id: int):
-        schema = _map_schema()
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"SELECT tg_username FROM {schema}.contacts WHERE id = %s",
-                [contact_id],
-            )
-            row = cursor.fetchone()
-            if row is None:
-                return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
-            contact_tg_username = row[0]
+        contact_row = MapContact.objects.filter(id=contact_id).values("tg_username").first()
+        if contact_row is None:
+            return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
+        contact_tg_username = contact_row.get("tg_username")
 
         client = get_active_client(request.user)
         tenant_service = TenantService()

@@ -5,10 +5,18 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { ApiError, apiFetch } from '@/lib/api';
-import { mapContactsApi, type MapClient } from '@/lib/api/mapContacts';
-import { mapTagsApi, type MapTag, type TagType } from '@/lib/api/mapTags';
+import { ApiError } from '@/lib/api';
+import {
+  crmContactTagsApi,
+  crmContactsApi,
+  crmTagsApi,
+  type Contact,
+  type Tag as MapTag,
+  type TagType,
+} from '@/lib/api/crm';
 import { Trash2, X } from 'lucide-react';
+
+type MapClient = Contact;
 
 type ClientDraft = {
   name: string;
@@ -153,8 +161,8 @@ export function ClientsTab() {
     setError(null);
     try {
       const [clientsData, tagsData] = await Promise.all([
-        mapContactsApi.list(),
-        mapTagsApi.list()
+        crmContactsApi.list(),
+        crmTagsApi.list()
       ]);
 
       const normalizedClients = clientsData.map(normalizeClient);
@@ -266,7 +274,7 @@ export function ClientsTab() {
     });
 
     try {
-      const updated = await mapContactsApi.update(clientId, { name });
+      const updated = await crmContactsApi.update(clientId, { name });
       setClients((prev) => prev.map((client) => (client.id === clientId ? { ...client, name: updated.name ?? name } : client)));
       setClientDrafts((prev) => {
         const existing = prev[clientId];
@@ -320,7 +328,7 @@ export function ClientsTab() {
     });
 
     try {
-      const updated = await mapTagsApi.update(tagId, { type, value });
+      const updated = await crmTagsApi.update(tagId, { type, value });
       setTags((prev) => prev.map((tag) => (tag.id === tagId ? { ...tag, ...updated } : tag)));
       if (current && updated.type && updated.type !== current.type) {
         setClients((prev) =>
@@ -415,10 +423,11 @@ export function ClientsTab() {
     });
 
     try {
-      await apiFetch('/crm/contact-tags/', {
-        method: exists ? 'DELETE' : 'POST',
-        body: { contactId: clientId, tagId: tag.id }
-      });
+      if (exists) {
+        await crmContactTagsApi.delete({ contact_id: clientId, tag_id: tag.id });
+      } else {
+        await crmContactTagsApi.create({ contact_id: clientId, tag_id: tag.id });
+      }
     } catch (err) {
       console.error('Failed to update client tag', err);
       toast.error('Не удалось обновить тег клиента');
@@ -497,7 +506,7 @@ export function ClientsTab() {
     setCreatingClient(true);
     setError(null);
     try {
-      const results = await Promise.allSettled(names.map((name) => mapContactsApi.create({ name })));
+      const results = await Promise.allSettled(names.map((name) => crmContactsApi.create({ name })));
       const created = results
         .filter((result): result is PromiseFulfilledResult<MapClient> => result.status === 'fulfilled')
         .map((result) => normalizeClient(result.value));
@@ -533,7 +542,7 @@ export function ClientsTab() {
       return next;
     });
     try {
-      await mapContactsApi.delete(client.id);
+      await crmContactsApi.delete(client.id);
     } catch (err) {
       console.error('Failed to delete client', err);
       toast.error('Не удалось удалить клиента.');
@@ -548,7 +557,7 @@ export function ClientsTab() {
     setCreatingTag(true);
     setError(null);
     try {
-      const created = await mapTagsApi.create({ type: createTagType, value });
+      const created = await crmTagsApi.create({ type: createTagType, value });
       const next = [created, ...tags];
       setTags(next);
       syncTagDrafts(next);
@@ -579,7 +588,7 @@ export function ClientsTab() {
       })
     );
     try {
-      await mapTagsApi.delete(tag.id);
+      await crmTagsApi.delete(tag.id);
     } catch (err) {
       console.error('Failed to delete tag', err);
       toast.error('Не удалось удалить тег.');
