@@ -2,6 +2,8 @@
 Celery задачи для AI анализа каналов.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import re
@@ -18,7 +20,6 @@ from django.db.models import Q
 from django.utils import timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from ..ai_generator import AIContentGenerator
 from ..generation_events import check_generation_limit, record_generation_event
 from ..instagram_client import (
     InstagramRateLimitError,
@@ -38,6 +39,12 @@ logger = logging.getLogger(__name__)
 SUPPORTED_TYPES = {"telegram", "instagram", "youtube"}
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 DEFAULT_ALERT_CHAT_ID = "7852511755"
+
+
+def _new_ai_generator():
+    from ..ai_generator import AIContentGenerator
+
+    return AIContentGenerator()
 
 
 def _update_analysis(analysis: ChannelAnalysis, **fields) -> None:
@@ -311,7 +318,7 @@ def _extract_ai_topics(messages: List[Dict], analysis: Optional[ChannelAnalysis]
   "content_types": ["format1", "format2"]
 }}
 """
-    generator = AIContentGenerator()
+    generator = _new_ai_generator()
     data = _request_ai_json(
         prompt,
         max_tokens=800,
@@ -372,7 +379,7 @@ def _extract_audience_profile(messages: List[Dict], analysis: Optional[ChannelAn
   "objections": "их страхи"
 }}
 """
-    generator = AIContentGenerator()
+    generator = _new_ai_generator()
     data = _request_ai_json(
         prompt,
         max_tokens=1200,
@@ -555,7 +562,7 @@ Schema:
   ]
 }}
 """
-    generator = AIContentGenerator()
+    generator = _new_ai_generator()
 
     attempts = [
         {"limit": 30},

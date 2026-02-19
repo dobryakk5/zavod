@@ -3,10 +3,15 @@ import logging
 from typing import Dict
 
 from ..models import Topic, SEOKeywordSet, Client
-from ..ai_generator import AIContentGenerator
 from ..services.seo_generation import has_active_generation
 
 logger = logging.getLogger(__name__)
+
+
+def _new_ai_generator():
+    from ..ai_generator import AIContentGenerator
+
+    return AIContentGenerator()
 
 
 def _get_latest_seo_keywords_for_client(client: Client) -> Dict[str, list]:
@@ -92,7 +97,7 @@ def _generate_seo_keywords_for_client_instance(client: Client, language: str = "
         return None
 
     try:
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
     except ValueError as e:
         logger.error(f"Ошибка инициализации AI генератора: {e}")
         logger.error("Убедитесь, что OPENROUTER_API_KEY установлен в переменных окружения")

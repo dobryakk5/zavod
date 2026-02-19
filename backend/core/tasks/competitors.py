@@ -5,7 +5,6 @@ from django.db import transaction
 from django.utils import timezone
 
 from core.models import CompetitorSite
-from core.services.website_ai_analyzer import analyze_website_for_competitor_insights
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +35,8 @@ def analyze_competitor_site_task(site_id: int) -> int | None:
         return None
 
     try:
+        from core.services.website_ai_analyzer import analyze_website_for_competitor_insights
+
         analysis = analyze_website_for_competitor_insights(site.base_url or f"https://{site.domain}/", max_pages=3)
         with transaction.atomic():
             site = CompetitorSite.objects.select_for_update().get(id=site_id)
@@ -78,4 +79,3 @@ def analyze_competitor_site_task(site_id: int) -> int | None:
         return None
 
     return site_id
-

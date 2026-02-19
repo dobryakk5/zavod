@@ -15,9 +15,14 @@ from ..aggregator import (
     deduplicate_trends
 )
 from ..telegram_client import TelegramContentCollector, run_async_task
-from ..ai_generator import AIContentGenerator
 
 logger = logging.getLogger(__name__)
+
+
+def _new_ai_generator():
+    from ..ai_generator import AIContentGenerator
+
+    return AIContentGenerator()
 
 
 @shared_task
@@ -1026,7 +1031,7 @@ def analyze_telegram_channel_task(self, client_id: int):
 Важно: возвращай ТОЛЬКО JSON, без дополнительного текста."""
 
         # Используем AI для анализа (модель берется из системных настроек автоматически)
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
 
         logger.info(f"Отправка запроса к AI модели {generator.model} для анализа")
 

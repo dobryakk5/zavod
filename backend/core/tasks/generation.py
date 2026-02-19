@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from celery import shared_task
 import logging
 import os
@@ -34,13 +36,6 @@ from ..models import (
     SocialAccount,
     WordstatResult,
 )
-from ..ai_generator import AIContentGenerator, merge_video_prompt_with_additional
-from ..system_settings import get_image_generation_method
-from ..video_postprocessing import (
-    apply_text_overlays_to_video,
-    build_overlay_scenes_from_post,
-)
-from ..photo_postprocessing import apply_text_overlay_to_image
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +54,63 @@ WEEKDAY_LABELS = [
 MAX_WEEKLY_POSTS = 21
 TIE_BREAKER_DAY_ORDER = [0, 2, 4, 1, 3, 5, 6]
 DEFAULT_TEMPLATE_LENGTH = 1200
+
+_AI_GENERATOR_CLASS = None
+_MERGE_VIDEO_PROMPT_FUNC = None
+
+
+def _get_ai_generator_class():
+    global _AI_GENERATOR_CLASS, _MERGE_VIDEO_PROMPT_FUNC
+    if _AI_GENERATOR_CLASS is None or _MERGE_VIDEO_PROMPT_FUNC is None:
+        from ..ai_generator import AIContentGenerator, merge_video_prompt_with_additional
+
+        _AI_GENERATOR_CLASS = AIContentGenerator
+        _MERGE_VIDEO_PROMPT_FUNC = merge_video_prompt_with_additional
+    return _AI_GENERATOR_CLASS
+
+
+def _new_ai_generator():
+    return _get_ai_generator_class()()
+
+
+def _merge_video_prompt_with_additional(base_prompt: Optional[str], additional_prompt: Optional[str]) -> str:
+    if _MERGE_VIDEO_PROMPT_FUNC is None:
+        _get_ai_generator_class()
+    return _MERGE_VIDEO_PROMPT_FUNC(base_prompt, additional_prompt)
+
+
+def _get_image_generation_method_lazy() -> str:
+    from ..system_settings import get_image_generation_method
+
+    return get_image_generation_method()
+
+
+def _build_overlay_scenes_from_post_lazy(title: Optional[str], body: Optional[str]) -> List[Dict[str, float]]:
+    from ..video_postprocessing import build_overlay_scenes_from_post
+
+    return build_overlay_scenes_from_post(title, body)
+
+
+def _apply_text_overlays_to_video_lazy(input_video_path: str, scenes: List[Dict[str, float]]) -> Dict[str, Any]:
+    from ..video_postprocessing import apply_text_overlays_to_video
+
+    return apply_text_overlays_to_video(input_video_path, scenes)
+
+
+def _apply_text_overlay_to_image_lazy(
+    input_image_path: str,
+    text: str,
+    font_path: Optional[str] = None,
+    output_path: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    from ..photo_postprocessing import apply_text_overlay_to_image
+
+    return apply_text_overlay_to_image(
+        input_image_path=input_image_path,
+        text=text,
+        font_path=font_path,
+        output_path=output_path,
+    )
 
 
 def _configure_custom_generator_model(generator: AIContentGenerator) -> None:
@@ -601,7 +653,7 @@ def generate_post_from_trend(trend_item_id: int, template_id: int = None):
 
         # Создать AI генератор
         try:
-            generator = AIContentGenerator()
+            generator = _new_ai_generator()
         except ValueError as e:
             logger.error(f"Ошибка инициализации AI генератора: {e}")
             logger.error("Убедитесь, что OPENROUTER_API_KEY установлен в переменных окружения")
@@ -805,7 +857,7 @@ def generate_posts_from_seo_keyword_set(
     wordstat_phrases = _select_wordstat_phrases(client)
 
     try:
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
     except ValueError as exc:
         logger.error("Ошибка инициализации AI генератора: %s", exc)
         return {"success": False, "error": "ai_generator_error"}
@@ -965,7 +1017,7 @@ def generate_posts_from_custom_task(
     wordstat_phrases = _select_wordstat_phrases(client)
 
     try:
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
     except ValueError as exc:
         logger.error("Ошибка инициализации AI генератора (custom): %s", exc)
         return {"success": False, "error": "ai_generator_error"}
@@ -1370,7 +1422,7 @@ def _generate_three_scene_videos_for_single_post(
         for attempt_no in range(1, max_attempts + 1):
             attempts += 1
             try:
-                generator = AIContentGenerator()
+                generator = _new_ai_generator()
             except ValueError as exc:
                 last_error = str(exc)
                 break
@@ -1573,7 +1625,7 @@ def generate_posts_with_videos_from_custom_task(
     wordstat_phrases = _select_wordstat_phrases(client)
 
     try:
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
     except ValueError as exc:
         logger.error("Ошибка инициализации AI генератора (custom+video): %s", exc)
         return {"success": False, "error": "ai_generator_error"}
@@ -1655,7 +1707,7 @@ def generate_posts_with_videos_from_custom_task(
         }
 
     try:
-        prompt_generator = AIContentGenerator()
+        prompt_generator = _new_ai_generator()
     except ValueError as exc:
         logger.error("Ошибка инициализации AI генератора (custom+video prompt): %s", exc)
         return {
@@ -1806,7 +1858,7 @@ def generate_videos_from_trend_item_description(
         created_post = True
 
     try:
-        prompt_generator = AIContentGenerator()
+        prompt_generator = _new_ai_generator()
     except ValueError as exc:
         logger.error("Ошибка инициализации AI генератора (trend video): %s", exc)
         return {"success": True, "post_id": post.id, "created_post": created_post, "videos": {"success": False}}
@@ -1951,7 +2003,7 @@ def generate_posts_with_videos_from_seo_keyword_set(
     wordstat_phrases = _select_wordstat_phrases(client)
 
     try:
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
     except ValueError as exc:
         logger.error("Ошибка инициализации AI генератора (SEO+видео): %s", exc)
         return {"success": False, "error": "ai_generator_error"}
@@ -2004,7 +2056,7 @@ def generate_posts_with_videos_from_seo_keyword_set(
     def _video_worker():
         nonlocal video_saved, video_attempts
         try:
-            video_prompt_generator = AIContentGenerator()
+            video_prompt_generator = _new_ai_generator()
         except ValueError as exc:
             logger.error("[SEO %s] Невозможно запустить видео-поток: %s", seo_keyword_set_id, exc)
             text_generation_done.wait()
@@ -2230,7 +2282,7 @@ def generate_weekly_posts_from_template(
         return {"success": False, "error": "no_slots"}
 
     try:
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
     except ValueError as exc:
         logger.error("Failed to init AI generator for weekly posts: %s", exc)
         return {"success": False, "error": "ai_generator_error"}
@@ -2501,7 +2553,7 @@ def _generate_videos_for_single_post(
             prompt_to_use = (
                 f"{video_prompt_body}\nVariation #{video_idx}: distinct cinematic take, camera work and pacing."
             )
-        prompts[video_idx] = merge_video_prompt_with_additional(prompt_to_use, extra_instructions)
+        prompts[video_idx] = _merge_video_prompt_with_additional(prompt_to_use, extra_instructions)
 
     video_state: Dict[int, Dict[str, Any]] = {
         idx: {"attempts": 0, "success": False}
@@ -2594,7 +2646,7 @@ def _generate_videos_for_single_post(
 
     def _run_video_generation(prompt_text: str) -> Dict[str, Any]:
         try:
-            generator = AIContentGenerator()
+            generator = _new_ai_generator()
         except ValueError as exc:
             return {"success": False, "error": str(exc), "cleanup_paths": []}
         return generator.generate_video_from_text(
@@ -2678,7 +2730,7 @@ def _generate_videos_batch(posts: List[Post], videos_per_post: int = 1, language
     )
 
     try:
-        prompt_generator = AIContentGenerator()
+        prompt_generator = _new_ai_generator()
     except ValueError as exc:
         logger.error("Ошибка инициализации AI генератора: %s", exc)
         return {"success": False, "error": "ai_generator_error"}
@@ -2816,10 +2868,10 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
             return alias_map.get(value, value)
 
         provided_method = _normalize_method(model)
-        generation_method = provided_method or _normalize_method(get_image_generation_method())
+        generation_method = provided_method or _normalize_method(_get_image_generation_method_lazy())
         allowed_methods = {"openrouter", "veo_photo", "giga_photo"}
         if generation_method not in allowed_methods:
-            fallback = _normalize_method(get_image_generation_method()) or "openrouter"
+            fallback = _normalize_method(_get_image_generation_method_lazy()) or "openrouter"
             if fallback not in allowed_methods:
                 fallback = "openrouter"
             logger.warning(
@@ -2839,7 +2891,7 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
 
         # Создать AI генератор
         try:
-            generator = AIContentGenerator()
+            generator = _new_ai_generator()
         except ValueError as e:
             logger.error(f"Ошибка инициализации AI генератора: {e}")
             logger.error("Убедитесь, что OPENROUTER_API_KEY установлен в переменных окружения")
@@ -2950,7 +3002,7 @@ def generate_image_for_post(post_id: int, model: Optional[str] = None):
         processed_image_path = final_image_path
         if post.hook_title and post.hook_title.strip():
             logger.info(f"Нанесение hook_title на изображение: '{post.hook_title}'")
-            overlay_result = apply_text_overlay_to_image(
+            overlay_result = _apply_text_overlay_to_image_lazy(
                 input_image_path=final_image_path,
                 text=post.hook_title.strip(),
             )
@@ -3008,7 +3060,7 @@ def generate_video_from_image(post_id: int, method: Optional[str] = None, source
         import uuid
 
         try:
-            generator = AIContentGenerator()
+            generator = _new_ai_generator()
         except ValueError as exc:
             logger.error("OPENROUTER_API_KEY обязателен для генерации видео: %s", exc)
             return False
@@ -3054,7 +3106,7 @@ def generate_video_from_image(post_id: int, method: Optional[str] = None, source
                 return False
 
             base_prompt_body = video_prompt or _build_text_video_prompt(post)
-            final_prompt = merge_video_prompt_with_additional(base_prompt_body, client_instructions)
+            final_prompt = _merge_video_prompt_with_additional(base_prompt_body, client_instructions)
             result = generator.generate_video_from_text(
                 prompt=final_prompt,
                 method=selected_method
@@ -3080,7 +3132,7 @@ def generate_video_from_image(post_id: int, method: Optional[str] = None, source
                     base_prompt_body +
                     "\nUse the provided post image as the starting frame and animate it with cinematic motion."
                 )
-            final_prompt = merge_video_prompt_with_additional(base_prompt_body, client_instructions)
+            final_prompt = _merge_video_prompt_with_additional(base_prompt_body, client_instructions)
             result = generator.generate_video_from_image(
                 image_path=primary_image.image.path,
                 prompt=final_prompt,
@@ -3100,12 +3152,12 @@ def generate_video_from_image(post_id: int, method: Optional[str] = None, source
         temp_video_paths: List[str] = [video_temp_path]
         final_video_path = video_temp_path
 
-        overlay_scenes = build_overlay_scenes_from_post(
+        overlay_scenes = _build_overlay_scenes_from_post_lazy(
             post.title,
             post.text,
         )
         if overlay_scenes:
-            overlay_result = apply_text_overlays_to_video(video_temp_path, overlay_scenes)
+            overlay_result = _apply_text_overlays_to_video_lazy(video_temp_path, overlay_scenes)
             if overlay_result.get("success") and overlay_result.get("video_path"):
                 final_video_path = overlay_result["video_path"]
                 temp_video_paths.append(final_video_path)
@@ -3193,7 +3245,7 @@ def generate_story_from_trend(trend_item_id: int, episode_count: int = 5, templa
         logger.info(f"Генерация истории из тренда: {trend.title[:60]} ({episode_count} эпизодов)")
 
         # Инициализация AI генератора
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
 
         # Генерация эпизодов истории
         result = generator.generate_story_episodes(
@@ -3292,7 +3344,7 @@ def generate_posts_from_story(story_id: int):
         }
 
         # Инициализация AI генератора
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
 
         created_count = 0
         total_episodes = len(story.episodes)
@@ -3372,7 +3424,7 @@ def regenerate_post_text(post_id: int):
 
         logger.info(f"Регенерация текста для поста: {post.title[:60]}")
 
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
         existing_tags = post.tags if isinstance(post.tags, list) else []
         generated_by = (post.generated_by or "").lower()
         has_seo_tag = any(isinstance(tag, str) and tag.lower() == "seo" for tag in existing_tags)

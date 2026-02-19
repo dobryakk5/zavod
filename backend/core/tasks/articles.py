@@ -8,8 +8,6 @@ from string import Template
 from celery import shared_task
 from django.db import transaction
 
-from core.ai_generator import AIContentGenerator
-from core.ai_generator_content import _parse_ai_json_response
 from core.article_prompt_codes import (
     ARTICLE_BLOCK_PROMPT_CODES,
     ARTICLE_BLUEPRINT_DETAILS_CODE,
@@ -20,6 +18,12 @@ from core.prompt_settings import render_generator_prompt
 from core.services.article_blocks import ARTICLE_BLOCK_TITLES, get_system_block_prompt_template, sync_blocks_from_seo_blocks
 
 logger = logging.getLogger(__name__)
+
+
+def _new_ai_generator():
+    from core.ai_generator import AIContentGenerator
+
+    return AIContentGenerator()
 
 
 def _strip_code_fences(text: str) -> str:
@@ -102,6 +106,8 @@ def _normalize_inline_text(value: str) -> str:
 def _parse_ai_json_object(raw_response: str):
     if not raw_response:
         return None
+    from core.ai_generator_content import _parse_ai_json_response
+
     parsed, _, _ = _parse_ai_json_response(raw_response)
     if isinstance(parsed, dict):
         return parsed
@@ -212,7 +218,7 @@ def _generate_block_content(article: Article, block: ArticleBlock) -> ArticleBlo
     ai_raw = ""
     ai_raw = ""
     try:
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
     except Exception:
         block.status = "failed"
         block.save(update_fields=["status", "updated_at"])
@@ -747,7 +753,7 @@ H2: "{h2_title}"
 """
 
     try:
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
 
         outline_schema_hint = """
 {

@@ -8,12 +8,17 @@ from celery import shared_task
 from django.db import IntegrityError, connection
 from django.db import transaction
 
-from core.ai_generator import AIContentGenerator
 from core.models import Client, ClientProduct, ProductType, WordstatResult
 from core.services.product_relations import merge_related_products
 from core.services.product_type_templates import ensure_system_product_type_templates
 
 logger = logging.getLogger(__name__)
+
+
+def _new_ai_generator():
+    from core.ai_generator import AIContentGenerator
+
+    return AIContentGenerator()
 
 
 def _attach_related_product_to_core_structure(core_product: ClientProduct, related_product: ClientProduct) -> None:
@@ -148,7 +153,7 @@ def generate_client_product_for_type_task(self, client_id: int, product_type_id:
         requirements_override = _requirements_payload(product_type)
         extra_context = _extra_context_for_client(client)
 
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
         result = generator.generate_client_product_from_type(
             product_type_name=product_type.name,
             product_type_value=product_type.value or "",
@@ -220,7 +225,7 @@ def generate_core_product_task(
 
         extra_context = _extra_context_for_client(client)
 
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
         result = generator.generate_client_product_from_type(
             product_type_name=core_type.name,
             product_type_value=core_type.value or "",
@@ -316,7 +321,7 @@ def generate_related_product_task(
         extra_context = _extra_context_for_client(client)
         additional_context = "\n\n".join([x for x in [core_context, extra_context] if x]).strip()
 
-        generator = AIContentGenerator()
+        generator = _new_ai_generator()
         result = generator.generate_client_product_from_type(
             product_type_name=product_type.name,
             product_type_value=product_type.value or "",

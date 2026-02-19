@@ -12,7 +12,6 @@ from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 
-from ..ai_generator import AIContentGenerator
 from ..aggregator import fetch_rss_feeds
 from ..instagram_client import fetch_instagram_profile, normalize_instagram_username
 from ..models import Client, WeeklySourceReport, WeeklySourceBatch
@@ -30,6 +29,12 @@ from .channel_analysis import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _new_ai_generator():
+    from ..ai_generator import AIContentGenerator
+
+    return AIContentGenerator()
 
 
 def _filter_last_week(items: List[Dict]) -> List[Dict]:
@@ -133,7 +138,7 @@ def _summarize_posts(source_type: str, source_value: str, posts: List[Dict]) -> 
 
 Короткий вывод:"""
 
-    generator = AIContentGenerator()
+    generator = _new_ai_generator()
     response = generator.get_ai_response(prompt, max_tokens=220, temperature=0.4)
     return response.strip() if response else "Не удалось получить краткий вывод."
 
@@ -168,7 +173,7 @@ def _summarize_post_ideas(posts: List[Dict], audience_avatar: str | None) -> Dic
 Посты:
 {chr(10).join(lines)}
 """
-    generator = AIContentGenerator()
+    generator = _new_ai_generator()
     data = _request_ai_json(
         prompt,
         max_tokens=600,
