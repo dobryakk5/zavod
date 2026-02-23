@@ -268,9 +268,11 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
         popup.close();
 
         const url = new URL(event.data);
-        const code = (url.searchParams.get('code') || '').trim();
-        const returnedState = (url.searchParams.get('state') || '').trim();
-        const errorParam = (url.searchParams.get('error') || '').trim();
+        // VK may return auth result either in query (?code=...) or hash (#code=...)
+        const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+        const code = (url.searchParams.get('code') || hashParams.get('code') || '').trim();
+        const returnedState = (url.searchParams.get('state') || hashParams.get('state') || '').trim();
+        const errorParam = (url.searchParams.get('error') || hashParams.get('error') || '').trim();
         const savedState = (sessionStorage.getItem('vk_auth_state') || '').trim();
         sessionStorage.removeItem('vk_auth_state');
         sessionStorage.removeItem('vk_auth_mode');
