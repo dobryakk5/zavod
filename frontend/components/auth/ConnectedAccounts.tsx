@@ -205,6 +205,7 @@ export function ConnectedAccounts() {
 
         const code = ((event.data as { code?: string }).code || '').trim();
         const returnedState = ((event.data as { state?: string }).state || '').trim();
+        const deviceId = ((event.data as { deviceId?: string }).deviceId || '').trim();
         const savedState = (sessionStorage.getItem('vk_auth_state') || '').trim();
         const finalState = returnedState || savedState;
 
@@ -212,7 +213,7 @@ export function ConnectedAccounts() {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code, state: finalState, redirect_uri: VK_REDIRECT_URI }),
+          body: JSON.stringify({ code, state: finalState, device_id: deviceId, redirect_uri: VK_REDIRECT_URI }),
         });
 
         const linkData = await linkResponse.json().catch(() => ({}));

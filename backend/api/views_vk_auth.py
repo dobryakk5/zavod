@@ -21,7 +21,7 @@ from .authentication import CookieJWTAuthentication
 from .views_accounts import COOKIE_MAX_AGE, COOKIE_SAMESITE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
 
 VK_OAUTH_URL = "https://id.vk.com/authorize"
-VK_TOKEN_URL = "https://id.vk.com/oauth2/token"
+VK_TOKEN_URL = "https://id.vk.com/oauth2/auth"
 VK_USERINFO_URL = "https://id.vk.com/oauth2/user_info"
 VK_API_VERSION = "5.199"
 VK_AUTH_SCOPE = "email"
@@ -57,7 +57,11 @@ def _exchange_code_for_token(
     app_id: str,
     app_secret: str,
     code_verifier: str,
+    device_id: str,
 ) -> dict | None:
+    import logging
+
+    logger = logging.getLogger(__name__)
     try:
         response = requests.post(
             VK_TOKEN_URL,
@@ -67,17 +71,22 @@ def _exchange_code_for_token(
                 "redirect_uri": redirect_uri,
                 "code": code,
                 "code_verifier": code_verifier,
+                "device_id": device_id,
                 "grant_type": "authorization_code",
             },
             timeout=10,
         )
-        response.raise_for_status()
-        payload = response.json()
-    except (requests.RequestException, ValueError):
+    except requests.RequestException as error:
+        logger.error("VK token exchange request error: %s", error)
         return None
 
-    if "error" in payload:
+    try:
+        payload = response.json()
+    except ValueError as error:
+        logger.error("VK token response parse error: status=%s body=%r error=%s", response.status_code, response.text, error)
         return None
+
+    logger.error("VK token response debug: status=%s payload=%s", response.status_code, payload)
     return payload
 
 
@@ -253,6 +262,7 @@ class VkAuthView(APIView):
     def post(self, request):
         code = (request.data.get("code") or "").strip()
         state = (request.data.get("state") or "").strip()
+        device_id = (request.data.get("device_id") or "").strip()
         redirect_uri = (request.data.get("redirect_uri") or "").strip()
         config = _get_vk_config()
 
@@ -260,6 +270,8 @@ class VkAuthView(APIView):
             return Response({"error": "Missing code"}, status=status.HTTP_400_BAD_REQUEST)
         if not state:
             return Response({"error": "Missing state"}, status=status.HTTP_400_BAD_REQUEST)
+        if not device_id:
+            return Response({"error": "Missing device_id"}, status=status.HTTP_400_BAD_REQUEST)
         if not config["app_id"] or not config["app_secret"] or not config["redirect_uri"]:
             return Response(
                 {"error": "VK auth is not configured on server"},
@@ -282,9 +294,15 @@ class VkAuthView(APIView):
             app_id=config["app_id"],
             app_secret=config["app_secret"],
             code_verifier=code_verifier,
+            device_id=device_id,
         )
         if not token_data:
             return Response({"error": "Failed to exchange code"}, status=status.HTTP_400_BAD_REQUEST)
+        if token_data.get("error"):
+            return Response(
+                {"error": token_data.get("error_description") or token_data.get("error") or "Failed to exchange code"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         access_token = token_data.get("access_token")
         vk_user_id = token_data.get("user_id")

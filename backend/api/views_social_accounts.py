@@ -118,6 +118,7 @@ class LinkVkView(APIView):
 
         code = (request.data.get("code") or "").strip()
         state = (request.data.get("state") or "").strip()
+        device_id = (request.data.get("device_id") or "").strip()
         redirect_uri = (request.data.get("redirect_uri") or "").strip()
         config = _get_vk_config()
 
@@ -125,6 +126,8 @@ class LinkVkView(APIView):
             return Response({"error": "Missing code"}, status=status.HTTP_400_BAD_REQUEST)
         if not state:
             return Response({"error": "Missing state"}, status=status.HTTP_400_BAD_REQUEST)
+        if not device_id:
+            return Response({"error": "Missing device_id"}, status=status.HTTP_400_BAD_REQUEST)
         if not config["app_id"] or not config["app_secret"] or not config["redirect_uri"]:
             return Response({"error": "VK auth is not configured on server"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
@@ -136,7 +139,8 @@ class LinkVkView(APIView):
         from django.core.cache import cache
 
         cache_key = f"vk_auth_state:{state}"
-        if not cache.get(cache_key):
+        code_verifier = cache.get(cache_key)
+        if not code_verifier:
             return Response({"error": "Invalid or expired state"}, status=status.HTTP_400_BAD_REQUEST)
         cache.delete(cache_key)
 
@@ -145,9 +149,16 @@ class LinkVkView(APIView):
             redirect_uri=redirect_uri,
             app_id=config["app_id"],
             app_secret=config["app_secret"],
+            code_verifier=code_verifier,
+            device_id=device_id,
         )
         if not token_data:
             return Response({"error": "Failed to exchange code"}, status=status.HTTP_400_BAD_REQUEST)
+        if token_data.get("error"):
+            return Response(
+                {"error": token_data.get("error_description") or token_data.get("error") or "Failed to exchange code"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         access_token = token_data.get("access_token")
         vk_user_id = token_data.get("user_id")
@@ -165,8 +176,8 @@ class LinkVkView(APIView):
                 "first_name": profile.get("first_name", ""),
                 "last_name": profile.get("last_name", ""),
                 "screen_name": profile.get("screen_name", ""),
-                "photo_url": profile.get("photo_200"),
-                "email": email,
+                "photo_url": profile.get("avatar"),
+                "email": email or profile.get("email"),
             },
         )
         if not ok:
@@ -178,7 +189,7 @@ class LinkVkView(APIView):
                 "linked": True,
                 "provider": UserSocialAccount.PROVIDER_VK,
                 "providerDisplayName": display_name,
-                "photoUrl": profile.get("photo_200"),
+                "photoUrl": profile.get("avatar"),
             }
         )
 

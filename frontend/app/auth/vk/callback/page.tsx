@@ -56,9 +56,11 @@ function VkCallbackContent() {
 
     const resolveSuccessRoute = () => (isLinkMode ? '/settings?tab=social&linked=vk' : '/welcome');
 
-    const code = (params.get('code') || '').trim();
-    const state = (params.get('state') || '').trim();
-    const error = (params.get('error') || '').trim();
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const code = (params.get('code') || hashParams.get('code') || '').trim();
+    const state = (params.get('state') || hashParams.get('state') || '').trim();
+    const error = (params.get('error') || hashParams.get('error') || '').trim();
+    const deviceId = (params.get('device_id') || hashParams.get('device_id') || '').trim();
 
     if (error) {
       setStatusText(isLinkMode ? 'Привязка VK отменена' : 'Авторизация отменена');
@@ -85,7 +87,7 @@ function VkCallbackContent() {
     }
 
     if (window.opener) {
-      window.opener.postMessage({ type: 'VK_AUTH_SUCCESS', code, state }, window.location.origin);
+      window.opener.postMessage({ type: 'VK_AUTH_SUCCESS', code, state, deviceId }, window.location.origin);
       window.close();
       return;
     }
@@ -113,6 +115,7 @@ function VkCallbackContent() {
       body: JSON.stringify({
         code,
         state: resolvedState,
+        device_id: deviceId,
         redirect_uri: VK_REDIRECT_URI
       })
     })

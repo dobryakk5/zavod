@@ -80,12 +80,16 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
   }, []);
 
   const exchangeCode = useCallback(
-    async (code: string, state: string) => {
+    async (code: string, state: string, deviceId: string) => {
       if (!ensureApiConfigured()) {
         return;
       }
       if (!code) {
         setStatus({ type: 'error', text: 'VK не вернул код авторизации' });
+        return;
+      }
+      if (!deviceId) {
+        setStatus({ type: 'error', text: 'VK не вернул device_id' });
         return;
       }
 
@@ -101,6 +105,7 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
           body: JSON.stringify({
             code,
             state,
+            device_id: deviceId,
             redirect_uri: VK_REDIRECT_URI
           })
         });
@@ -222,9 +227,10 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
         popup.close();
         const code = ((event.data as { code?: string }).code || '').trim();
         const returnedState = ((event.data as { state?: string }).state || '').trim();
+        const deviceId = ((event.data as { deviceId?: string }).deviceId || '').trim();
         const savedState = (sessionStorage.getItem('vk_auth_state') || '').trim();
         const state = returnedState || savedState;
-        await exchangeCode(code, state);
+        await exchangeCode(code, state, deviceId);
       };
 
       messageHandlerRef.current = onMessage;
