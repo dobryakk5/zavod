@@ -34,9 +34,11 @@ const hasApiUrl = Boolean(API_URL);
 const buildUrl = (path: string) => `${API_URL}${path}`;
 const VK_BLANK_REDIRECT_URI = 'https://oauth.vk.com/blank.html';
 const API_MISSING_MESSAGE = 'NEXT_PUBLIC_API_URL не задан — настроите URL бэкенда в .env';
+type VkBridgeWindow = { vkBridge?: { send?: Function } };
 
 const isVkMiniApp = () =>
-  typeof window !== 'undefined' && typeof (window as { vkBridge?: { send?: Function } }).vkBridge?.send === 'function';
+  typeof window !== 'undefined' &&
+  typeof (window as unknown as VkBridgeWindow).vkBridge?.send === 'function';
 
 const parseVkResponse = async (response: Response) => {
   const text = await response.text();
@@ -140,7 +142,7 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
     setStatus(null);
 
     try {
-      const bridge = (window as { vkBridge: { send: Function } }).vkBridge;
+      const bridge = (window as unknown as { vkBridge: { send: Function } }).vkBridge;
       const result = (await bridge.send('VKWebAppGetAuthToken', {
         app_id: appId,
         scope: ''
