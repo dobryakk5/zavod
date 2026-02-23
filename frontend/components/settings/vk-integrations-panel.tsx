@@ -111,7 +111,7 @@ export function VkIntegrationsPanel() {
     <section className="space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
-          <h3 className="text-xl font-semibold">Группы VKontakte</h3>
+          <h3 className="text-xl font-semibold">Авторизация ВК группы</h3>
           <p className="text-sm text-muted-foreground max-w-2xl">
             Подключите сообщество VK для публикации постов.
           </p>

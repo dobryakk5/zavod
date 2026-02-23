@@ -67,11 +67,19 @@ const formatOffsetLabel = (offsetMinutes: number) => {
 
 export const getTimeZonesForSelect = (date: Date = new Date()): TimeZoneOption[] => {
   return TIMEZONE_CHOICES.map((timeZone) => {
-    const offsetMinutes = getTimeZoneOffsetMinutes(date, timeZone);
-    const offsetLabel = formatOffsetLabel(offsetMinutes);
-    return {
-      value: timeZone,
-      label: `${offsetLabel} → ${timeZone}`,
-    };
+    try {
+      const offsetMinutes = getTimeZoneOffsetMinutes(date, timeZone);
+      const offsetLabel = formatOffsetLabel(offsetMinutes);
+      return {
+        value: timeZone,
+        label: `${offsetLabel} → ${timeZone}`,
+      };
+    } catch {
+      // Some runtimes may not support all IANA zones; keep the option without offset.
+      return {
+        value: timeZone,
+        label: timeZone,
+      };
+    }
   });
 };

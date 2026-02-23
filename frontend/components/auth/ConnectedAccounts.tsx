@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { TelegramAuthButton } from '@/components/auth/TelegramAuthButton';
+import ConflictResolutionModal from '@/ConflictResolutionModal.jsx';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
 const hasApiUrl = Boolean(API_URL);
@@ -11,6 +12,7 @@ const buildUrl = (path: string) => `${API_URL}${path}`;
 const VK_REDIRECT_URI =
   process.env.NEXT_PUBLIC_VK_AUTH_REDIRECT_URI ??
   (typeof window !== 'undefined' ? `${window.location.origin}/auth/vk/callback` : '');
+const ConflictResolutionModalComponent = ConflictResolutionModal as unknown as ComponentType<Record<string, unknown>>;
 
 type ProviderId = 'telegram' | 'vk';
 
@@ -25,6 +27,25 @@ interface LinkedAccount {
     photo_url?: string;
   };
 }
+
+type ConflictProfile = {
+  user_id: number;
+  username: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  date_joined: string;
+  clients?: Array<{ id?: number; name: string; slug: string; role?: string; is_empty?: boolean }>;
+  social_accounts?: Array<{ provider: ProviderId | string; extra_data?: Record<string, unknown> }>;
+};
+
+type ConflictPayload = {
+  conflict: true;
+  conflict_type: string;
+  resolution_token: string;
+  current_profile: ConflictProfile;
+  existing_profile: ConflictProfile;
+};
 
 const PROVIDERS: Array<{
   id: ProviderId;
@@ -62,7 +83,9 @@ export function ConnectedAccounts() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<ProviderId | null>(null);
   const [errors, setErrors] = useState<Partial<Record<ProviderId, string>>>({});
+  const [globalWarning, setGlobalWarning] = useState<string | null>(null);
   const [showTgWidget, setShowTgWidget] = useState(false);
+  const [conflict, setConflict] = useState<ConflictPayload | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const messageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
 
@@ -150,6 +173,7 @@ export function ConnectedAccounts() {
 
     setActionLoading('vk');
     clearError('vk');
+    setGlobalWarning(null);
     clearPopupHandlers();
 
     try {
@@ -221,6 +245,8 @@ export function ConnectedAccounts() {
         sessionStorage.removeItem('vk_auth_state');
         if (linkResponse.ok && linkData?.linked) {
           await fetchAccounts();
+        } else if (linkResponse.status === 409 && linkData?.conflict) {
+          setConflict(linkData as ConflictPayload);
         } else {
           setError('vk', linkData?.error || 'Ошибка привязки VK');
         }
@@ -254,6 +280,7 @@ export function ConnectedAccounts() {
 
     setActionLoading('telegram');
     clearError('telegram');
+    setGlobalWarning(null);
     setShowTgWidget(false);
     try {
       const response = await fetch(buildUrl('/auth/social/link/telegram'), {
@@ -265,6 +292,8 @@ export function ConnectedAccounts() {
       const data = await response.json().catch(() => ({}));
       if (response.ok && data?.linked) {
         await fetchAccounts();
+      } else if (response.status === 409 && data?.conflict) {
+        setConflict(data as ConflictPayload);
       } else {
         setError('telegram', data?.error || 'Ошибка привязки Telegram');
       }
@@ -286,7 +315,31 @@ export function ConnectedAccounts() {
   }
 
   return (
-    <div className="space-y-3">
+    <>
+      {conflict && (
+        <ConflictResolutionModalComponent
+          conflictData={conflict}
+          resolveUrl={buildUrl('/auth/social/conflict/resolve')}
+          onResolved={(result: { warnings?: string[]; deleted?: { clients_detached?: Array<{ name: string }> } }) => {
+            const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+            const detached = result?.deleted?.clients_detached ?? [];
+            const detachedText = detached.length
+              ? ` Оставлены общие клиенты: ${detached.map((c) => c.name).join(', ')}.`
+              : '';
+            setGlobalWarning(warnings.length ? `${warnings.join(' ')}${detachedText}`.trim() : detachedText.trim() || null);
+            setConflict(null);
+            void fetchAccounts();
+          }}
+          onCancel={() => setConflict(null)}
+        />
+      )}
+
+      <div className="space-y-3">
+      {globalWarning && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {globalWarning}
+        </div>
+      )}
       {PROVIDERS.map((provider) => {
         const account = findLinked(provider.id);
         const isLoading = actionLoading === provider.id;
@@ -382,6 +435,7 @@ export function ConnectedAccounts() {
           </div>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }
