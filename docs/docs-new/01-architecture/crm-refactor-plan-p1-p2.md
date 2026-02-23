@@ -20,7 +20,6 @@
   - `frontend/lib/api/mapClients.ts`, `frontend/lib/api/mapContacts.ts`, `frontend/lib/api/mapTags.ts` переведены в deprecated-совместимость поверх `frontend/lib/api/crm.ts`,
   - активные экраны `frontend/app/products/clients-tab.tsx` и `frontend/app/products/categories-tab.tsx` переключены на `crm.ts`.
 - `P2.1` частично выполнено: добавлены unmanaged ORM-модели для `map.crm_event_types`, `map.crm_events`, `map.events`, `map.crm_notes` (+ поля Telegram в `MapContact`).
-- `P2.2` выполнено для активного CRM ORM surface: QuerySet/data access вынесены в `backend/core/repositories/crm/*`, use-case логика вынесена в `backend/core/services/crm/*`, `backend/api/views_crm_orm.py` оставлен orchestration-only.
 - `P2.3` частично выполнено: в активный CRM router переведены `event-types`, `events`, `availability-events`, `notes` на ORM viewsets.
 - `P2.6` начато: добавлен guardrail-тест `backend/tests/unit/test_crm_architecture_guardrails.py` против возврата Raw SQL в активный CRM слой.
 

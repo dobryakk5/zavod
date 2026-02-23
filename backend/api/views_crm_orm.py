@@ -1,31 +1,30 @@
 """
-ViewSets для CRM API (map schema, Django ORM).
-Active CRM surface: orchestration only, use-cases and data access are delegated
-to `core.services.crm.*` and `core.repositories.crm.*`.
+ViewSets для CRM API (map schema, Django ORM)
+Замена Raw SQL views из views_map_crm.py для contacts, tags, categories, payments
 """
+from decimal import Decimal
 
+from django.db.models import Count, Prefetch, Q, Sum
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.repositories.crm import (
-    categories_repository,
-    contact_tags_repository,
-    contacts_repository,
-    events_repository,
-    payments_repository,
-    tags_repository,
+from core.models import (
+    MapAvailabilityEvent,
+    MapContact,
+    MapContactTag,
+    MapCRMCategory,
+    MapCRMEvent,
+    MapCRMEventType,
+    MapCRMNote,
+    MapCRMPayment,
+    MapCRMTag,
+    TelegramTask,
+    UserTenantBinding,
 )
-from core.services.crm import (
-    availability_events_service,
-    contact_tags_service,
-    events_service,
-    payments_service,
-    tags_service,
-    telegram_link_service,
-)
+from core.services.tenant_service import TenantService
 
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers_crm_orm import (
@@ -43,13 +42,55 @@ from .serializers_crm_orm import (
 from .utils import get_active_client
 
 
+def _upsert_event_payment(event: MapCRMEvent) -> int | None:
+    if event.price is None:
+        return None
+
+    description = f"Оплата встречи: {event.title}".strip() or "Оплата встречи"
+    amount = Decimal(event.price)
+    payment = MapCRMPayment.objects.filter(event_id=event.id).order_by("-id").first()
+
+    if payment:
+        if payment.status == "pending":
+            payment.contact_id = event.contact_id
+            payment.amount = amount
+            payment.currency = "RUB"
+            payment.description = description
+            payment.planned_at = event.start_time
+            payment.save(
+                update_fields=[
+                    "contact",
+                    "amount",
+                    "currency",
+                    "description",
+                    "planned_at",
+                    "updated_at",
+                ]
+            )
+        return int(payment.id)
+
+    created = MapCRMPayment.objects.create(
+        contact_id=event.contact_id,
+        event_id=event.id,
+        product_id=None,
+        amount=amount,
+        currency="RUB",
+        status="pending",
+        payment_method="",
+        transaction_id="",
+        description=description,
+        planned_at=event.start_time,
+        paid_at=None,
+    )
+    return int(created.id)
+
+
 class MapContactViewSet(viewsets.ModelViewSet):
     """
     ViewSet для контактов (map.contacts)
     Эндпоинты: list, create, retrieve, update, partial_update, destroy
     Дополнительно: add_tag, remove_tag
     """
-
     serializer_class = MapContactSerializer
     permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -59,7 +100,12 @@ class MapContactViewSet(viewsets.ModelViewSet):
     ordering = ["name"]
 
     def get_queryset(self):
-        return contacts_repository.get_contacts_queryset()
+        return MapContact.objects.prefetch_related(
+            Prefetch(
+                "contact_tags",
+                queryset=MapContactTag.objects.select_related("tag"),
+            )
+        )
 
     @action(detail=True, methods=["post"])
     def add_tag(self, request, pk=None):
@@ -67,37 +113,47 @@ class MapContactViewSet(viewsets.ModelViewSet):
         tag_id = request.data.get("tag_id") or request.data.get("tagId")
         description = request.data.get("description", "")
 
-        try:
-            contact_tag, created = contact_tags_service.add_tag_to_contact(
-                contact=contact,
-                tag_id=tag_id,
-                description=description,
+        if not tag_id:
+            return Response(
+                {"error": "Укажите tag_id"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except LookupError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
 
-        return Response(
-            {
-                "success": True,
-                "created": created,
-                "contact_tag": MapContactTagSerializer(contact_tag).data,
-            }
+        try:
+            tag = MapCRMTag.objects.get(id=tag_id)
+        except MapCRMTag.DoesNotExist:
+            return Response(
+                {"error": "Тег не найден"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        contact_tag, created = MapContactTag.objects.update_or_create(
+            contact=contact,
+            tag=tag,
+            defaults={"description": description},
         )
+
+        return Response({
+            "success": True,
+            "created": created,
+            "contact_tag": MapContactTagSerializer(contact_tag).data,
+        })
 
     @action(detail=True, methods=["delete", "post"])
     def remove_tag(self, request, pk=None):
         contact = self.get_object()
         tag_id = request.data.get("tag_id") or request.data.get("tagId")
 
-        try:
-            deleted_count = contact_tags_service.remove_tag_from_contact(
-                contact=contact,
-                tag_id=tag_id,
+        if not tag_id:
+            return Response(
+                {"error": "Укажите tag_id"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        deleted_count, _ = MapContactTag.objects.filter(
+            contact=contact,
+            tag_id=tag_id,
+        ).delete()
 
         return Response(
             {"success": True, "deleted": deleted_count > 0},
@@ -111,7 +167,6 @@ class MapCRMPaymentViewSet(viewsets.ModelViewSet):
     Эндпоинты: list, create, retrieve, update, partial_update, destroy
     Дополнительно: summary, by_contact
     """
-
     permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ["status", "currency", "contact_id", "product_id", "event_id"]
@@ -124,31 +179,44 @@ class MapCRMPaymentViewSet(viewsets.ModelViewSet):
         return MapCRMPaymentSerializer
 
     def get_queryset(self):
-        return payments_repository.get_payments_queryset()
+        return MapCRMPayment.objects.select_related("contact")
 
     @action(detail=False, methods=["get"])
     def summary(self, request):
-        payload = payments_service.build_payments_summary(self.get_queryset())
-        return Response(payload)
+        queryset = self.get_queryset()
+        stats = queryset.aggregate(
+            total_paid=Sum("amount", filter=Q(status="paid")) or 0,
+            total_pending=Sum("amount", filter=Q(status="pending")) or 0,
+            count_paid=Count("id", filter=Q(status="paid")),
+            count_pending=Count("id", filter=Q(status="pending")),
+        )
+        by_currency = list(
+            queryset.values("currency")
+            .annotate(total=Sum("amount"), count=Count("id"))
+            .order_by("currency")
+        )
+        return Response({
+            **stats,
+            "by_currency": by_currency,
+            "total_count": queryset.count(),
+        })
 
     @action(detail=False, methods=["get"])
     def by_contact(self, request):
         contact_id = request.query_params.get("contact_id")
-        try:
-            queryset = payments_service.filter_payments_by_contact(
-                self.get_queryset(),
-                contact_id=contact_id,
+        if not contact_id:
+            return Response(
+                {"error": "Укажите contact_id"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
+        queryset = self.get_queryset().filter(contact_id=contact_id)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
 
 class MapCRMTagViewSet(viewsets.ModelViewSet):
     """ViewSet для тегов (map.crm_tags)."""
-
+    queryset = MapCRMTag.objects.all()
     serializer_class = MapCRMTagSerializer
     permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
@@ -156,31 +224,24 @@ class MapCRMTagViewSet(viewsets.ModelViewSet):
     ordering_fields = ["type", "value", "created_at"]
     ordering = ["type", "value"]
 
-    def get_queryset(self):
-        return tags_repository.get_tags_queryset()
-
     @action(detail=False, methods=["get"])
     def by_type(self, request):
-        grouped = tags_service.group_tags_by_type(list(self.get_queryset()))
-        return Response(
-            {
-                key: MapCRMTagSerializer(items, many=True).data
-                for key, items in grouped.items()
-            }
-        )
+        tags = self.get_queryset()
+        result = {"goal": [], "pain": [], "experience": []}
+        for tag in tags:
+            if tag.type in result:
+                result[tag.type].append(MapCRMTagSerializer(tag).data)
+        return Response(result)
 
 
 class MapCRMCategoryViewSet(viewsets.ModelViewSet):
     """ViewSet для категорий (map.crm_categories)."""
-
+    queryset = MapCRMCategory.objects.all()
     serializer_class = MapCRMCategorySerializer
     permission_classes = [IsTenantMember]
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ["name", "created_at"]
     ordering = ["name"]
-
-    def get_queryset(self):
-        return categories_repository.get_categories_queryset()
 
 
 # Алиас для совместимости с ContactTagsView (CRUD по contact-tags)
@@ -193,30 +254,26 @@ class MapContactTagsViewSet(viewsets.ModelViewSet):
     DELETE /contact-tags/remove/ body {contact_id, tag_id} — совместимость со старым API
     DELETE /contact-tags/<id>/ — удалить по pk
     """
-
+    queryset = MapContactTag.objects.select_related("contact", "tag")
     serializer_class = MapContactTagSerializer
     permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ["contact_id", "tag_id"]
 
-    def get_queryset(self):
-        return contact_tags_repository.get_contact_tags_queryset()
-
     @action(detail=False, methods=["delete"], url_path="remove")
     def remove_by_ids(self, request):
         """DELETE с body {contact_id, tag_id} — совместимость со старым ContactTagsView."""
-
         contact_id = request.data.get("contact_id") or request.data.get("contactId")
         tag_id = request.data.get("tag_id") or request.data.get("tagId")
-
-        try:
-            deleted = contact_tags_service.remove_tag_by_ids(
-                contact_id=contact_id,
-                tag_id=tag_id,
+        if contact_id is None or tag_id is None:
+            return Response(
+                {"error": "contact_id и tag_id обязательны."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
+        deleted, _ = MapContactTag.objects.filter(
+            contact_id=contact_id,
+            tag_id=tag_id,
+        ).delete()
         if deleted:
             return Response(status=status.HTTP_204_NO_CONTENT)
         return Response(
@@ -226,14 +283,12 @@ class MapContactTagsViewSet(viewsets.ModelViewSet):
 
 
 class MapCRMEventTypeViewSet(viewsets.ModelViewSet):
+    queryset = MapCRMEventType.objects.all()
     serializer_class = MapCRMEventTypeSerializer
     permission_classes = [IsTenantMember]
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ["name", "created_at"]
     ordering = ["name"]
-
-    def get_queryset(self):
-        return events_repository.get_event_types_queryset()
 
     def get_permissions(self):
         if self.request.method in {"POST", "PATCH", "PUT", "DELETE"}:
@@ -255,15 +310,16 @@ class MapCRMEventViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
-        return events_repository.get_events_queryset()
+        return MapCRMEvent.objects.select_related("contact", "event_type").order_by("-start_time")
 
     def perform_create(self, serializer):
         event = serializer.save()
-        events_service.on_event_created(event)
+        _upsert_event_payment(event)
 
     def perform_update(self, serializer):
         event = serializer.save()
-        events_service.on_event_updated(event, request_data=self.request.data)
+        if "price" in self.request.data and event.price is not None:
+            _upsert_event_payment(event)
 
 
 class MapAvailabilityEventViewSet(viewsets.ModelViewSet):
@@ -281,14 +337,11 @@ class MapAvailabilityEventViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         client = get_active_client(self.request.user)
-        return events_repository.get_availability_events_queryset(tenant_id=client.id)
+        return MapAvailabilityEvent.objects.filter(tenant_id=client.id).order_by("-start_time")
 
     def perform_create(self, serializer):
         client = get_active_client(self.request.user)
-        availability_events_service.create_availability_event_for_tenant(
-            serializer=serializer,
-            tenant_id=client.id,
-        )
+        serializer.save(tenant_id=client.id)
 
 
 class MapCRMNoteViewSet(viewsets.ModelViewSet):
@@ -306,22 +359,64 @@ class MapCRMNoteViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
-        return events_repository.get_notes_queryset()
+        return MapCRMNote.objects.select_related("contact").order_by("-created_at")
 
 
 class ContactTelegramLinkView(APIView):
     permission_classes = [IsTenantMember]
 
     def get(self, request, contact_id: int):
+        contact_row = MapContact.objects.filter(id=contact_id).values("tg_username").first()
+        if contact_row is None:
+            return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
+        contact_tg_username = contact_row.get("tg_username")
+
         client = get_active_client(request.user)
+        tenant_service = TenantService()
         try:
-            payload = telegram_link_service.build_contact_telegram_link_payload(
-                client=client,
-                contact_id=contact_id,
-            )
-        except LookupError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+            link = tenant_service.generate_telegram_link(client.id, contact_id=contact_id)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(payload)
 
+        binding_qs = (
+            UserTenantBinding.objects.filter(
+                tenant=client,
+                contact_id=contact_id,
+                provider=UserTenantBinding.PROVIDER_TELEGRAM,
+            )
+            .order_by("-bound_at", "-id")
+        )
+        binding = binding_qs.filter(is_active=True).first() or binding_qs.first()
+
+        telegram_chat_id = None
+        tg_name = None
+        is_connected = False
+        if binding is not None:
+            telegram_chat_id = binding.telegram_chat_id
+            is_connected = bool(binding.is_active)
+            if contact_tg_username:
+                tg_name = contact_tg_username
+            else:
+                task = (
+                    TelegramTask.objects.filter(
+                        client=client,
+                        telegram_user_id=telegram_chat_id,
+                    )
+                    .order_by("-received_at", "-id")
+                    .first()
+                )
+                if task and task.tg_name:
+                    tg_name = task.tg_name
+                else:
+                    tg_name = f"tg_{telegram_chat_id}"
+
+        return Response(
+            {
+                "contact_id": int(contact_id),
+                "tenant_id": client.id,
+                "telegram_chat_id": telegram_chat_id,
+                "tg_name": tg_name,
+                "is_connected": is_connected,
+                "link": link,
+            }
+        )
