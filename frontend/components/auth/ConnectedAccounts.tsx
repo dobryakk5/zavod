@@ -8,7 +8,9 @@ import { TelegramAuthButton } from '@/components/auth/TelegramAuthButton';
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
 const hasApiUrl = Boolean(API_URL);
 const buildUrl = (path: string) => `${API_URL}${path}`;
-const VK_REDIRECT_URI = 'https://oauth.vk.com/blank.html';
+const VK_REDIRECT_URI =
+  process.env.NEXT_PUBLIC_VK_AUTH_REDIRECT_URI ??
+  (typeof window !== 'undefined' ? `${window.location.origin}/auth/vk/callback` : '');
 
 type ProviderId = 'telegram' | 'vk';
 
@@ -182,19 +184,10 @@ export function ConnectedAccounts() {
       }
 
       const onMessage = async (event: MessageEvent) => {
-        if (typeof event.data !== 'string') {
+        if (event.origin !== window.location.origin || !event.data || typeof event.data !== 'object') {
           return;
         }
-        if (!event.data.startsWith('https://oauth.vk.com/blank.html')) {
-          return;
-        }
-
-        const vkUrl = new URL(event.data);
-        const code = (vkUrl.searchParams.get('code') || '').trim();
-        const returnedState = (vkUrl.searchParams.get('state') || '').trim();
-        const errorParam = (vkUrl.searchParams.get('error') || '').trim();
-
-        if (errorParam || !code) {
+        if ((event.data as { type?: string }).type === 'VK_AUTH_ERROR') {
           clearPopupHandlers();
           popup.close();
           sessionStorage.removeItem('vk_auth_mode');
@@ -203,9 +196,14 @@ export function ConnectedAccounts() {
           setError('vk', 'Авторизация VK отменена или завершилась ошибкой');
           return;
         }
+        if ((event.data as { type?: string }).type !== 'VK_AUTH_SUCCESS') {
+          return;
+        }
 
         clearPopupHandlers();
         popup.close();
+        const code = ((event.data as { code?: string }).code || '').trim();
+        const returnedState = ((event.data as { state?: string }).state || '').trim();
         const savedState = (sessionStorage.getItem('vk_auth_state') || '').trim();
         const finalState = returnedState || savedState;
 

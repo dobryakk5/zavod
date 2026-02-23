@@ -32,7 +32,9 @@ type Status = {
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
 const hasApiUrl = Boolean(API_URL);
 const buildUrl = (path: string) => `${API_URL}${path}`;
-const VK_BLANK_REDIRECT_URI = 'https://oauth.vk.com/blank.html';
+const VK_REDIRECT_URI =
+  process.env.NEXT_PUBLIC_VK_AUTH_REDIRECT_URI ??
+  (typeof window !== 'undefined' ? `${window.location.origin}/auth/vk/callback` : '');
 const API_MISSING_MESSAGE = 'NEXT_PUBLIC_API_URL не задан — настроите URL бэкенда в .env';
 type VkBridgeWindow = { vkBridge?: { send?: Function } };
 
@@ -104,7 +106,7 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
           body: JSON.stringify({
             code,
             state,
-            redirect_uri: VK_BLANK_REDIRECT_URI
+            redirect_uri: VK_REDIRECT_URI
           })
         });
         const { payload, text } = await parseVkResponse(response);
@@ -257,33 +259,31 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
       }
 
       const onMessage = async (event: MessageEvent) => {
-        if (typeof event.data !== 'string') {
-          return;
-        }
-        if (!event.data.startsWith('https://oauth.vk.com/blank.html')) {
+        if (event.origin !== window.location.origin || !event.data || typeof event.data !== 'object') {
           return;
         }
 
-        cleanupPopupFlow();
-        popup.close();
-
-        const url = new URL(event.data);
-        // VK may return auth result either in query (?code=...) or hash (#code=...)
-        const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
-        const code = (url.searchParams.get('code') || hashParams.get('code') || '').trim();
-        const returnedState = (url.searchParams.get('state') || hashParams.get('state') || '').trim();
-        const errorParam = (url.searchParams.get('error') || hashParams.get('error') || '').trim();
-        const savedState = (sessionStorage.getItem('vk_auth_state') || '').trim();
-        sessionStorage.removeItem('vk_auth_state');
-        sessionStorage.removeItem('vk_auth_mode');
-
-        if (errorParam || !code) {
+        if ((event.data as { type?: string }).type === 'VK_AUTH_ERROR') {
+          cleanupPopupFlow();
+          popup.close();
+          sessionStorage.removeItem('vk_auth_state');
+          sessionStorage.removeItem('vk_auth_mode');
           setLoading(false);
           setStatus({ type: 'error', text: 'Авторизация VK отменена или завершилась ошибкой' });
           return;
         }
 
-        await exchangeCode(code, returnedState || savedState || authState);
+        if ((event.data as { type?: string }).type !== 'VK_AUTH_SUCCESS') {
+          return;
+        }
+
+        cleanupPopupFlow();
+        popup.close();
+        const code = ((event.data as { code?: string }).code || '').trim();
+        const returnedState = ((event.data as { state?: string }).state || '').trim();
+        const savedState = (sessionStorage.getItem('vk_auth_state') || '').trim();
+        const state = returnedState || savedState || authState;
+        await exchangeCode(code, state);
       };
 
       messageHandlerRef.current = onMessage;
