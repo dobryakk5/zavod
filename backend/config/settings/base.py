@@ -321,7 +321,7 @@ VK_API_VERSION = os.getenv("VK_API_VERSION", "5.131")
 # VK auth for user login (separated from VK integrations flow)
 VK_AUTH_APP_ID = os.getenv("VK_AUTH_APP_ID", "")
 VK_AUTH_APP_SECRET = os.getenv("VK_AUTH_APP_SECRET", "")
-VK_AUTH_REDIRECT_URI = os.getenv("VK_AUTH_REDIRECT_URI", "http://localhost:3000/auth/vk/callback")
+VK_AUTH_REDIRECT_URI = os.getenv("VK_AUTH_REDIRECT_URI", "https://oauth.vk.com/blank.html")
 VK_CALLBACK_SECRET = os.getenv("VK_CALLBACK_SECRET", "")
 VK_CALLBACK_CONFIRMATION_TOKEN = os.getenv("VK_CALLBACK_CONFIRMATION_TOKEN", "")
 
