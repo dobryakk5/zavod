@@ -36,7 +36,6 @@ from .views import (
     TelegramAuthView,
     VkAuthUrlView,
     VkAuthView,
-    VkBridgeAuthView,
     VkMessageCallbackView,
     SocialAccountsView,
     LinkVkView,
@@ -189,7 +188,6 @@ urlpatterns = [
     # Authentication endpoints
     path('auth/telegram', TelegramAuthView.as_view(), name='telegram-auth'),
     path('auth/vk', VkAuthView.as_view(), name='vk-auth'),
-    path('auth/vk/bridge', VkBridgeAuthView.as_view(), name='vk-auth-bridge'),
     path('auth/vk/url', VkAuthUrlView.as_view(), name='vk-auth-url'),
     path('auth/vk/messages/callback', VkMessageCallbackView.as_view(), name='vk-messages-callback'),
     path('auth/social/accounts', SocialAccountsView.as_view(), name='social-accounts'),
