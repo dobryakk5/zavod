@@ -20,7 +20,7 @@ from core.models import Client, UserSocialAccount, UserTenantRole
 from .authentication import CookieJWTAuthentication
 from .views_accounts import COOKIE_MAX_AGE, COOKIE_SAMESITE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
 
-VK_OAUTH_URL = "https://id.vk.com/oauth2/auth"
+VK_OAUTH_URL = "https://id.vk.com/authorize"
 VK_TOKEN_URL = "https://id.vk.com/oauth2/token"
 VK_USERINFO_URL = "https://id.vk.com/oauth2/user_info"
 VK_API_VERSION = "5.199"
