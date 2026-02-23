@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 interface TelegramAuthButtonProps {
   botUsername: string;
@@ -36,57 +36,14 @@ export function TelegramAuthButton({
 }: TelegramAuthButtonProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const normalizedBotUsername = useMemo(() => sanitizeBotUsername(botUsername), [botUsername]);
-  const [widgetError, setWidgetError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!containerRef.current || !normalizedBotUsername) return;
-    setWidgetError(null);
 
     // Create global callback function
     const callbackName = `onTelegramAuth_${Date.now()}`;
     (window as any)[callbackName] = (user: any) => {
       onAuthCallback(user);
-    };
-
-    const container = containerRef.current;
-    let cancelled = false;
-    let probeInterval: number | null = null;
-    let probeTimeout: number | null = null;
-
-    const cleanupProbes = () => {
-      if (probeInterval !== null) {
-        window.clearInterval(probeInterval);
-        probeInterval = null;
-      }
-      if (probeTimeout !== null) {
-        window.clearTimeout(probeTimeout);
-        probeTimeout = null;
-      }
-    };
-
-    const widgetRendered = () => {
-      if (!container.isConnected) return false;
-      return Boolean(container.querySelector("iframe")) || container.childElementCount > 1;
-    };
-
-    const startRenderProbe = () => {
-      cleanupProbes();
-      probeInterval = window.setInterval(() => {
-        if (cancelled) return;
-        if (widgetRendered()) {
-          cleanupProbes();
-          setWidgetError(null);
-        }
-      }, 250);
-      probeTimeout = window.setTimeout(() => {
-        if (cancelled) return;
-        if (!widgetRendered()) {
-          setWidgetError(
-            "Виджет Telegram не загрузился. Проверьте блокировщик рекламы, VPN/сеть и доступ к telegram.org."
-          );
-        }
-        cleanupProbes();
-      }, 4000);
     };
 
     // Create script element for Telegram widget
@@ -100,26 +57,13 @@ export function TelegramAuthButton({
     script.setAttribute("data-onauth", `${callbackName}(user)`);
     script.setAttribute("data-request-access", "write");
     script.async = true;
-    script.onerror = () => {
-      if (!cancelled) {
-        cleanupProbes();
-        setWidgetError("Не удалось загрузить скрипт Telegram. Проверьте доступ к telegram.org.");
-      }
-    };
-    script.onload = () => {
-      if (!cancelled) {
-        startRenderProbe();
-      }
-    };
 
     // Clear container and append script
-    container.innerHTML = "";
-    container.appendChild(script);
+    containerRef.current.innerHTML = "";
+    containerRef.current.appendChild(script);
 
     return () => {
       // Cleanup
-      cancelled = true;
-      cleanupProbes();
       delete (window as any)[callbackName];
     };
   }, [normalizedBotUsername, onAuthCallback, buttonSize, cornerRadius, showAvatar, lang]);
@@ -132,22 +76,5 @@ export function TelegramAuthButton({
     );
   }
 
-  return (
-    <div className="space-y-2">
-      <div ref={containerRef} className="flex justify-center" />
-      {widgetError && (
-        <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
-          {widgetError}{" "}
-          <a
-            href={`https://t.me/${normalizedBotUsername}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2"
-          >
-            Открыть @{normalizedBotUsername}
-          </a>
-        </div>
-      )}
-    </div>
-  );
+  return <div ref={containerRef} />;
 }
