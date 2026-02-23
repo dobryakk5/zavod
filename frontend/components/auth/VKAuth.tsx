@@ -32,10 +32,11 @@ type Status = {
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
 const hasApiUrl = Boolean(API_URL);
 const buildUrl = (path: string) => `${API_URL}${path}`;
-const VK_REDIRECT_URI =
-  process.env.NEXT_PUBLIC_VK_AUTH_REDIRECT_URI ??
-  (typeof window !== 'undefined' ? `${window.location.origin}/auth/vk/callback` : '');
+const VK_BLANK_REDIRECT_URI = 'https://oauth.vk.com/blank.html';
 const API_MISSING_MESSAGE = 'NEXT_PUBLIC_API_URL не задан — настроите URL бэкенда в .env';
+
+const isVkMiniApp = () =>
+  typeof window !== 'undefined' && typeof (window as { vkBridge?: { send?: Function } }).vkBridge?.send === 'function';
 
 const parseVkResponse = async (response: Response) => {
   const text = await response.text();
@@ -101,7 +102,7 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
           body: JSON.stringify({
             code,
             state,
-            redirect_uri: VK_REDIRECT_URI
+            redirect_uri: VK_BLANK_REDIRECT_URI
           })
         });
         const { payload, text } = await parseVkResponse(response);
@@ -123,6 +124,60 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
     },
     [ensureApiConfigured, onClose, router]
   );
+
+  const handleVkBridgeLogin = useCallback(async () => {
+    if (!ensureApiConfigured()) {
+      return;
+    }
+
+    const appId = Number.parseInt(process.env.NEXT_PUBLIC_VK_APP_ID ?? '', 10);
+    if (!Number.isFinite(appId) || appId <= 0) {
+      setStatus({ type: 'error', text: 'NEXT_PUBLIC_VK_APP_ID не задан' });
+      return;
+    }
+
+    setLoading(true);
+    setStatus(null);
+
+    try {
+      const bridge = (window as { vkBridge: { send: Function } }).vkBridge;
+      const result = (await bridge.send('VKWebAppGetAuthToken', {
+        app_id: appId,
+        scope: ''
+      })) as { access_token?: string; user_id?: number | string };
+
+      const accessToken = (result.access_token || '').trim();
+      const userId = result.user_id;
+      if (!accessToken || !userId) {
+        setStatus({ type: 'error', text: 'VK Bridge не вернул токен' });
+        return;
+      }
+
+      const response = await fetch(buildUrl('/auth/vk/bridge'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ access_token: accessToken, user_id: userId })
+      });
+
+      const { payload, text } = await parseVkResponse(response);
+      if (response.ok && payload?.user) {
+        setUser(payload.user);
+        setStatus({ type: 'success', text: 'Успешная авторизация!' });
+        onClose();
+        router.push('/welcome');
+      } else {
+        setStatus({ type: 'error', text: resolveErrorMessage(payload, text, 'Ошибка авторизации VK') });
+      }
+    } catch (error: unknown) {
+      const bridgeError = error as { error_data?: { error_message?: string } };
+      setStatus({ type: 'error', text: bridgeError?.error_data?.error_message || 'Ошибка VK Bridge' });
+    } finally {
+      setLoading(false);
+    }
+  }, [ensureApiConfigured, onClose, router]);
 
   const checkAuth = useCallback(async () => {
     if (!ensureApiConfigured()) {
@@ -158,7 +213,7 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
 
   useEffect(() => () => cleanupPopupFlow(), [cleanupPopupFlow]);
 
-  const handleVkLogin = useCallback(async () => {
+  const handleVkWebLogin = useCallback(async () => {
     if (!ensureApiConfigured()) {
       return;
     }
@@ -200,31 +255,31 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
       }
 
       const onMessage = async (event: MessageEvent) => {
-        if (event.origin !== window.location.origin || !event.data || typeof event.data !== 'object') {
+        if (typeof event.data !== 'string') {
           return;
         }
-
-        if ((event.data as { type?: string }).type === 'VK_AUTH_ERROR') {
-          cleanupPopupFlow();
-          popup.close();
-          sessionStorage.removeItem('vk_auth_state');
-          sessionStorage.removeItem('vk_auth_mode');
-          setLoading(false);
-          setStatus({ type: 'error', text: 'Авторизация VK отменена или завершилась ошибкой' });
-          return;
-        }
-
-        if ((event.data as { type?: string }).type !== 'VK_AUTH_SUCCESS') {
+        if (!event.data.startsWith('https://oauth.vk.com/blank.html')) {
           return;
         }
 
         cleanupPopupFlow();
         popup.close();
-        const code = ((event.data as { code?: string }).code || '').trim();
-        const returnedState = ((event.data as { state?: string }).state || '').trim();
+
+        const url = new URL(event.data);
+        const code = (url.searchParams.get('code') || '').trim();
+        const returnedState = (url.searchParams.get('state') || '').trim();
+        const errorParam = (url.searchParams.get('error') || '').trim();
         const savedState = (sessionStorage.getItem('vk_auth_state') || '').trim();
-        const state = returnedState || savedState;
-        await exchangeCode(code, state);
+        sessionStorage.removeItem('vk_auth_state');
+        sessionStorage.removeItem('vk_auth_mode');
+
+        if (errorParam || !code) {
+          setLoading(false);
+          setStatus({ type: 'error', text: 'Авторизация VK отменена или завершилась ошибкой' });
+          return;
+        }
+
+        await exchangeCode(code, returnedState || savedState || authState);
       };
 
       messageHandlerRef.current = onMessage;
@@ -245,6 +300,14 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
       setLoading(false);
     }
   }, [cleanupPopupFlow, ensureApiConfigured, exchangeCode]);
+
+  const handleVkLogin = useCallback(async () => {
+    if (isVkMiniApp()) {
+      await handleVkBridgeLogin();
+      return;
+    }
+    await handleVkWebLogin();
+  }, [handleVkBridgeLogin, handleVkWebLogin]);
 
   const handleLogout = async () => {
     if (!ensureApiConfigured()) {
