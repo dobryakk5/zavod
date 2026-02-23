@@ -22,6 +22,7 @@ VK_OAUTH_URL = "https://oauth.vk.com/authorize"
 VK_TOKEN_URL = "https://oauth.vk.com/access_token"
 VK_API_URL = "https://api.vk.com/method"
 VK_API_VERSION = "5.199"
+VK_SCOPE_EMAIL = "4194304"  # email permission bitmask for VK OAuth
 STATE_CACHE_TIMEOUT = 60 * 10  # 10 minutes
 
 User = get_user_model()
@@ -39,7 +40,7 @@ def _build_auth_url(state: str, redirect_uri: str, app_id: str) -> str:
     params = {
         "client_id": app_id,
         "redirect_uri": redirect_uri,
-        "scope": "email",
+        "scope": VK_SCOPE_EMAIL,
         "response_type": "code",
         "v": VK_API_VERSION,
         "state": state,

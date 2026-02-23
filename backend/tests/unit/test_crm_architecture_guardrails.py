@@ -19,6 +19,10 @@ class TestCRMArchitectureGuardrails(SimpleTestCase):
         self.assertNotIn("connection.cursor(", source)
         self.assertNotIn("cursor.execute(", source)
 
+    def test_crm_orm_views_do_not_access_models_directly(self):
+        source = _read(CRM_ORM_VIEWS_FILE)
+        self.assertNotIn(".objects.", source)
+
     def test_active_api_urls_do_not_reference_legacy_raw_crm_module(self):
         api_urls_source = _read(API_URLS_FILE)
         project_urls_source = _read(PROJECT_URLS_FILE)
