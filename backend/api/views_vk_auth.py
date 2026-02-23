@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import secrets
 import urllib.parse
 
@@ -18,10 +20,11 @@ from core.models import Client, UserSocialAccount, UserTenantRole
 from .authentication import CookieJWTAuthentication
 from .views_accounts import COOKIE_MAX_AGE, COOKIE_SAMESITE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
 
-VK_OAUTH_URL = "https://oauth.vk.com/authorize"
-VK_TOKEN_URL = "https://oauth.vk.com/access_token"
-VK_API_URL = "https://api.vk.com/method"
+VK_OAUTH_URL = "https://id.vk.com/oauth2/auth"
+VK_TOKEN_URL = "https://id.vk.com/oauth2/token"
+VK_USERINFO_URL = "https://id.vk.com/oauth2/user_info"
 VK_API_VERSION = "5.199"
+VK_AUTH_SCOPE = "email"
 STATE_CACHE_TIMEOUT = 60 * 10  # 10 minutes
 
 User = get_user_model()
@@ -35,28 +38,36 @@ def _get_vk_config() -> dict[str, str]:
     }
 
 
-def _build_auth_url(state: str, redirect_uri: str, app_id: str) -> str:
+def _build_auth_url(state: str, redirect_uri: str, app_id: str, code_challenge: str) -> str:
     params = {
         "client_id": app_id,
         "redirect_uri": redirect_uri,
-        "scope": "email",
+        "scope": VK_AUTH_SCOPE,
         "response_type": "code",
-        "v": VK_API_VERSION,
         "state": state,
-        "display": "page",
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     }
     return f"{VK_OAUTH_URL}?{urllib.parse.urlencode(params)}"
 
 
-def _exchange_code_for_token(code: str, redirect_uri: str, app_id: str, app_secret: str) -> dict | None:
+def _exchange_code_for_token(
+    code: str,
+    redirect_uri: str,
+    app_id: str,
+    app_secret: str,
+    code_verifier: str,
+) -> dict | None:
     try:
-        response = requests.get(
+        response = requests.post(
             VK_TOKEN_URL,
-            params={
+            data={
                 "client_id": app_id,
                 "client_secret": app_secret,
                 "redirect_uri": redirect_uri,
                 "code": code,
+                "code_verifier": code_verifier,
+                "grant_type": "authorization_code",
             },
             timeout=10,
         )
@@ -72,14 +83,9 @@ def _exchange_code_for_token(code: str, redirect_uri: str, app_id: str, app_secr
 
 def _fetch_vk_profile(access_token: str, user_id: int | str) -> dict | None:
     try:
-        response = requests.get(
-            f"{VK_API_URL}/users.get",
-            params={
-                "user_ids": user_id,
-                "fields": "photo_200,screen_name",
-                "access_token": access_token,
-                "v": VK_API_VERSION,
-            },
+        response = requests.post(
+            VK_USERINFO_URL,
+            data={"access_token": access_token},
             timeout=10,
         )
         response.raise_for_status()
@@ -87,8 +93,7 @@ def _fetch_vk_profile(access_token: str, user_id: int | str) -> dict | None:
     except (requests.RequestException, ValueError):
         return None
 
-    items = payload.get("response") or []
-    return items[0] if items else None
+    return payload if payload.get("user_id") or payload.get("id") else None
 
 
 def _get_or_create_user_and_client(profile: dict, vk_user_id: int | str, email: str | None):
@@ -102,7 +107,7 @@ def _get_or_create_user_and_client(profile: dict, vk_user_id: int | str, email: 
         defaults={
             "first_name": first_name,
             "last_name": last_name,
-            "email": email or f"{username}@vk.local",
+            "email": email or (profile.get("email") or "").strip() or f"{username}@vk.local",
         },
     )
 
@@ -163,8 +168,8 @@ def _link_vk_to_user(user, vk_user_id: int | str, profile: dict, email: str | No
         "first_name": profile.get("first_name", ""),
         "last_name": profile.get("last_name", ""),
         "screen_name": profile.get("screen_name", ""),
-        "photo_url": profile.get("photo_200"),
-        "email": email,
+        "photo_url": profile.get("avatar"),
+        "email": email or profile.get("email"),
     }
 
     if linked_for_user:
@@ -194,7 +199,10 @@ class VkAuthUrlView(APIView):
             )
 
         state = secrets.token_urlsafe(32)
-        cache.set(f"vk_auth_state:{state}", True, STATE_CACHE_TIMEOUT)
+        code_verifier = secrets.token_urlsafe(64)
+        digest = hashlib.sha256(code_verifier.encode()).digest()
+        code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+        cache.set(f"vk_auth_state:{state}", code_verifier, STATE_CACHE_TIMEOUT)
 
         return Response(
             {
@@ -202,6 +210,7 @@ class VkAuthUrlView(APIView):
                     state=state,
                     redirect_uri=config["redirect_uri"],
                     app_id=config["app_id"],
+                    code_challenge=code_challenge,
                 ),
                 "state": state,
             }
@@ -262,7 +271,8 @@ class VkAuthView(APIView):
             return Response({"error": "Invalid redirect_uri"}, status=status.HTTP_400_BAD_REQUEST)
 
         cache_key = f"vk_auth_state:{state}"
-        if not cache.get(cache_key):
+        code_verifier = cache.get(cache_key)
+        if not code_verifier:
             return Response({"error": "Invalid or expired state"}, status=status.HTTP_400_BAD_REQUEST)
         cache.delete(cache_key)
 
@@ -271,6 +281,7 @@ class VkAuthView(APIView):
             redirect_uri=redirect_uri,
             app_id=config["app_id"],
             app_secret=config["app_secret"],
+            code_verifier=code_verifier,
         )
         if not token_data:
             return Response({"error": "Failed to exchange code"}, status=status.HTTP_400_BAD_REQUEST)
@@ -301,7 +312,7 @@ class VkAuthView(APIView):
                     "firstName": profile.get("first_name", "") or user.first_name,
                     "lastName": profile.get("last_name", "") or user.last_name,
                     "username": profile.get("screen_name", "") or user.username,
-                    "photoUrl": profile.get("photo_200"),
+                    "photoUrl": profile.get("avatar"),
                     "authDate": str(user.date_joined),
                 }
             }
