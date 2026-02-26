@@ -197,12 +197,12 @@ export function validateGraph(state) {
   }
 
   if (nodes.length === 0) {
-    errors.push({ type: 'empty', msg: 'Цепочка пустая — добавьте хотя бы один узел.' });
+    errors.push({ type: 'empty', severity: 'error', msg: 'Цепочка пустая — добавьте хотя бы один узел.' });
     return errors;
   }
 
   if (!chain.start_node_id) {
-    errors.push({ type: 'no_start', msg: 'Не выбран стартовый узел. Правый клик → «Сделать стартом».' });
+    errors.push({ type: 'no_start', severity: 'error', msg: 'Не выбран стартовый узел. Правый клик → «Сделать стартом».' });
   }
 
   const hasOutgoing = new Set(edges.map(e => e.source_node_id));
@@ -210,7 +210,12 @@ export function validateGraph(state) {
 
   nodes.forEach(n => {
     if (n.id !== chain.start_node_id && !hasIncoming.has(n.id)) {
-      errors.push({ type: 'orphan', msg: `Узел «${nodeLabel(n)}» недоступен — нет входящих рёбер.`, nodeId: n.id });
+      errors.push({
+        type: 'orphan',
+        severity: 'warning',
+        msg: `Узел «${nodeLabel(n)}» недоступен — нет входящих рёбер.`,
+        nodeId: n.id,
+      });
     }
   });
 
@@ -232,7 +237,12 @@ export function validateGraph(state) {
     const hasDefault = outEdges.some(e => (e.conditions || []).length === 0);
     btns.forEach(b => {
       if (!coveredBtns.includes(b) && !hasDefault) {
-        errors.push({ type: 'uncovered_btn', msg: `Кнопка «${b}» в узле не обработана.`, nodeId: n.id });
+        errors.push({
+          type: 'uncovered_btn',
+          severity: 'error',
+          msg: `Кнопка «${b}» в узле не обработана.`,
+          nodeId: n.id,
+        });
       }
     });
   });

@@ -148,6 +148,128 @@ describe('VKAuth', () => {
     expect(sessionStorage.getItem('vk_auth_mode')).toBeNull();
   });
 
+  it('does not redirect when authenticated user is bound to another tenant', async () => {
+    const fetchMock = getFetchMock();
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        ok: true,
+        body: {
+          user: {
+            vkId: '501',
+            firstName: 'Виктор',
+            username: 'victor',
+            authDate: '2026-02-25T00:00:00Z',
+            tenantId: 100,
+            contactId: 12,
+          },
+        },
+      })
+    );
+
+    const VKAuth = await loadComponent();
+    const onClose = vi.fn();
+    render(<VKAuth open onClose={onClose} tenantId={7} />);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(testState.push).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Войти через ВКонтакте' })).toBeInTheDocument();
+    expect(screen.getByText(/После авторизации произойдет вход в кабинет/i)).toBeInTheDocument();
+  });
+
+  it('allows logout after authenticated state is loaded', async () => {
+    const fetchMock = getFetchMock();
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse({
+          ok: true,
+          body: {
+            user: {
+              vkId: '77',
+              firstName: 'Олег',
+              lastName: 'Сидоров',
+              username: 'oleg',
+              authDate: '2026-02-25T00:00:00Z',
+            },
+          },
+        })
+      )
+      .mockResolvedValueOnce(makeResponse({ ok: true, body: {} }));
+
+    const VKAuth = await loadComponent();
+    const onClose = vi.fn();
+    render(<VKAuth open onClose={onClose} />);
+
+    const logoutButton = await screen.findByRole('button', { name: 'Выйти' });
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(testState.push).toHaveBeenCalledWith('/welcome');
+    });
+
+    onClose.mockClear();
+    testState.push.mockClear();
+
+    fireEvent.click(logoutButton);
+
+    expect(await screen.findByText('Вы вышли из аккаунта')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(testState.push).toHaveBeenCalledWith('/login');
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://api.example.com/auth/vk',
+      expect.objectContaining({
+        method: 'DELETE',
+        credentials: 'include',
+      })
+    );
+  });
+
+  it('shows validation error when VK popup success message has no device_id', async () => {
+    const fetchMock = getFetchMock();
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ ok: false, status: 401, text: '' }))
+      .mockResolvedValueOnce(
+        makeResponse({
+          ok: true,
+          body: {
+            url: 'https://id.vk.com/authorize?test=1',
+            state: 'vk-state-nodevice',
+          },
+        })
+      );
+
+    const popup = { closed: false, close: vi.fn() };
+    vi.spyOn(window, 'open').mockImplementation(() => popup as any);
+
+    const VKAuth = await loadComponent();
+    render(<VKAuth open onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Войти через ВКонтакте' }));
+
+    await waitFor(() => {
+      expect(sessionStorage.getItem('vk_auth_state')).toBe('vk-state-nodevice');
+    });
+
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: window.location.origin,
+        data: {
+          type: 'VK_AUTH_SUCCESS',
+          code: 'code-1',
+          state: 'vk-state-nodevice',
+          deviceId: '',
+        },
+      })
+    );
+
+    expect(await screen.findByText('VK не вернул device_id')).toBeInTheDocument();
+    expect(popup.close).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('exchanges popup success message code and redirects on successful VK login', async () => {
     const fetchMock = getFetchMock();
     fetchMock

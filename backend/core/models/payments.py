@@ -127,6 +127,28 @@ class ContactProductPurchase(models.Model):
     )
     currency = models.CharField(max_length=3, default="RUB", verbose_name="Валюта")
     paid_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата оплаты")
+    service_package_mode = models.CharField(
+        max_length=16,
+        blank=True,
+        default="",
+        verbose_name="Режим сервисного пакета",
+        help_text="count | minutes; пусто если продукт не является пакетом услуг",
+    )
+    service_package_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="Название пакета услуг",
+    )
+    service_package_total_units = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="Всего единиц в пакете услуг",
+    )
+    service_package_used_units = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Израсходовано единиц в пакете услуг",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -147,3 +169,52 @@ class ContactProductPurchase(models.Model):
 
     def __str__(self):
         return f"client={self.client_id} contact={self.contact_id} product={self.product_id}"
+
+
+class ContactProductServiceUsage(models.Model):
+    """
+    Идемпотентное списание пакета услуг по встречам CRM.
+
+    На одну CRM-встречу приходится максимум одна запись списания.
+    Это позволяет безопасно пересчитывать списание при изменении статуса/времени встречи.
+    """
+
+    MODE_COUNT = "count"
+    MODE_MINUTES = "minutes"
+    MODE_CHOICES = [
+        (MODE_COUNT, "По количеству встреч"),
+        (MODE_MINUTES, "По минутам"),
+    ]
+
+    purchase = models.ForeignKey(
+        ContactProductPurchase,
+        on_delete=models.CASCADE,
+        related_name="service_usages",
+        verbose_name="Покупка пакета",
+    )
+    client = models.ForeignKey(
+        "Client",
+        on_delete=models.CASCADE,
+        related_name="contact_product_service_usages",
+        verbose_name="Клиент",
+    )
+    contact_id = models.BigIntegerField(db_index=True, verbose_name="ID контакта (map.contact)")
+    event_id = models.BigIntegerField(db_index=True, unique=True, verbose_name="ID встречи (map.crm_events)")
+    mode = models.CharField(max_length=16, choices=MODE_CHOICES, verbose_name="Режим списания")
+    units = models.PositiveIntegerField(verbose_name="Списанные единицы (встречи/минуты)")
+    event_started_at = models.DateTimeField(null=True, blank=True, verbose_name="Начало встречи")
+    event_ended_at = models.DateTimeField(null=True, blank=True, verbose_name="Окончание встречи")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Списание пакета услуг по встрече"
+        verbose_name_plural = "Списания пакетов услуг по встречам"
+        ordering = ("-updated_at", "-id")
+        indexes = [
+            models.Index(fields=("client", "contact_id"), name="idx_cpsu_client_contact"),
+            models.Index(fields=("purchase",), name="idx_cpsu_purchase"),
+        ]
+
+    def __str__(self) -> str:
+        return f"purchase={self.purchase_id} event={self.event_id} units={self.units}"

@@ -35,8 +35,21 @@ def _normalize_buttons(buttons: list) -> list[str]:
     return normalized
 
 
-def _build_inline_keyboard(buttons: list[str]) -> dict:
-    keyboard = [[{"text": label, "callback_data": f"{CHAIN_BUTTON_PREFIX}{label}"}] for label in buttons]
+def _build_inline_keyboard(
+    buttons: list[str],
+    *,
+    session_id: int | None = None,
+    node_id: int | None = None,
+) -> dict:
+    keyboard = []
+    for label in buttons:
+        callback_data = f"{CHAIN_BUTTON_PREFIX}{label}"
+        if session_id is not None and node_id is not None:
+            try:
+                callback_data = f"{CHAIN_BUTTON_PREFIX}{int(session_id)}:{int(node_id)}:{label}"
+            except (TypeError, ValueError):
+                callback_data = f"{CHAIN_BUTTON_PREFIX}{label}"
+        keyboard.append([{"text": label, "callback_data": callback_data}])
     return {"inline_keyboard": keyboard}
 
 
@@ -47,13 +60,39 @@ def _safe_int(value: Any, fallback: int) -> int:
         return fallback
 
 
+def _session_chain_is_active(session: ChainSession | None) -> bool:
+    if not session:
+        return False
+    chain = getattr(session, "chain", None)
+    return str(getattr(chain, "status", "") or "").lower() == "active"
+
+
 def _strip_html(value: str | None) -> str:
     text = (value or "").replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
     text = html.unescape(text)
     return _HTML_TAG_RE.sub("", text).strip()
 
 
-def _build_vk_keyboard(buttons: list[str]) -> str:
+def _build_vk_keyboard(
+    buttons: list[str],
+    *,
+    session_id: int | None = None,
+    node_id: int | None = None,
+) -> str:
+    def _build_button_payload(label: str) -> str:
+        payload: dict[str, Any] = {"chain_button": label}
+        if session_id is not None:
+            try:
+                payload["chain_session_id"] = int(session_id)
+            except (TypeError, ValueError):
+                pass
+        if node_id is not None:
+            try:
+                payload["chain_node_id"] = int(node_id)
+            except (TypeError, ValueError):
+                pass
+        return json.dumps(payload, ensure_ascii=False)
+
     return json.dumps(
         {
             "one_time": False,
@@ -63,7 +102,7 @@ def _build_vk_keyboard(buttons: list[str]) -> str:
                         "action": {
                             "type": "text",
                             "label": label,
-                            "payload": json.dumps({"chain_button": label}, ensure_ascii=False),
+                            "payload": _build_button_payload(label),
                         },
                         "color": "primary",
                     }
@@ -202,6 +241,8 @@ def _send_telegram_message(
     photo_url: str | None = None,
     caption: str | None = None,
     buttons: list[str] | None = None,
+    session_id: int | None = None,
+    node_id: int | None = None,
 ) -> bool:
     token = getattr(settings, "TELEGRAM_BOT_TOKEN", "") or ""
     if not token:
@@ -215,13 +256,13 @@ def _send_telegram_message(
             payload["caption"] = caption
             payload["parse_mode"] = "HTML"
         if buttons:
-            payload["reply_markup"] = _build_inline_keyboard(buttons)
+            payload["reply_markup"] = _build_inline_keyboard(buttons, session_id=session_id, node_id=node_id)
     else:
         endpoint = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat_id, "text": text or ""}
         payload["parse_mode"] = "HTML"
         if buttons:
-            payload["reply_markup"] = _build_inline_keyboard(buttons)
+            payload["reply_markup"] = _build_inline_keyboard(buttons, session_id=session_id, node_id=node_id)
 
     try:
         response = requests.post(endpoint, json=payload, timeout=10)
@@ -243,6 +284,8 @@ def _send_vk_message(
     caption: str | None = None,
     buttons: list[str] | None = None,
     group_id: int | None = None,
+    session_id: int | None = None,
+    node_id: int | None = None,
 ) -> bool:
     integration = _resolve_vk_integration(tenant_id=tenant_id, group_id=group_id)
     if not integration or not integration.access_token:
@@ -270,7 +313,7 @@ def _send_vk_message(
         "v": getattr(settings, "VK_API_VERSION", "5.199"),
     }
     if buttons:
-        payload["keyboard"] = _build_vk_keyboard(buttons)
+        payload["keyboard"] = _build_vk_keyboard(buttons, session_id=session_id, node_id=node_id)
 
     data = _vk_messages_send(payload)
     if data is None:
@@ -311,12 +354,16 @@ def _send_node_message(session: ChainSession, node: ChainNode) -> bool:
                     text=node.payload.get("text", ""),
                     buttons=buttons,
                     group_id=vk_group_id,
+                    session_id=session.id,
+                    node_id=node.id,
                 )
                 if provider == UserTenantBinding.PROVIDER_VK
                 else _send_telegram_message(
                     _safe_int(provider_user_id, session.user_id),
                     text=node.payload.get("text", ""),
                     buttons=buttons,
+                    session_id=session.id,
+                    node_id=node.id,
                 )
             )
         return (
@@ -353,12 +400,16 @@ def _send_node_message(session: ChainSession, node: ChainNode) -> bool:
                 text=node.payload.get("text", ""),
                 buttons=buttons,
                 group_id=vk_group_id,
+                session_id=session.id,
+                node_id=node.id,
             )
             if provider == UserTenantBinding.PROVIDER_VK
             else _send_telegram_message(
                 _safe_int(provider_user_id, session.user_id),
                 text=node.payload.get("text", ""),
                 buttons=buttons,
+                session_id=session.id,
+                node_id=node.id,
             )
         )
     if node.node_type == "start":
@@ -370,12 +421,16 @@ def _send_node_message(session: ChainSession, node: ChainNode) -> bool:
                 text=node.payload.get("text", ""),
                 buttons=buttons,
                 group_id=vk_group_id,
+                session_id=session.id,
+                node_id=node.id,
             )
             if provider == UserTenantBinding.PROVIDER_VK
             else _send_telegram_message(
                 _safe_int(provider_user_id, session.user_id),
                 text=node.payload.get("text", ""),
                 buttons=buttons,
+                session_id=session.id,
+                node_id=node.id,
             )
         )
     return False
@@ -387,14 +442,14 @@ def _execute_action(action: dict, session_id: int) -> None:
     delay = int(action.get("delay_seconds", 0) or 0)
 
     if action_type in {"send_text", "send_photo", "send_buttons"}:
+        session = ChainSession.objects.select_related("chain").filter(id=session_id).first()
+        if not _session_chain_is_active(session):
+            return
+
         if delay > 0:
             node_id = payload.get("node_id")
             if node_id:
                 chains_send_delayed_message.apply_async(args=[session_id, node_id], countdown=delay)
-            return
-
-        session = ChainSession.objects.filter(id=session_id).first()
-        if not session:
             return
 
         context = dict(session.context or {})
@@ -442,15 +497,22 @@ def _execute_action(action: dict, session_id: int) -> None:
                     text=payload.get("text", ""),
                     buttons=buttons,
                     group_id=vk_group_id,
+                    session_id=session.id,
+                    node_id=payload.get("node_id"),
                 )
             else:
                 _send_telegram_message(
                     _safe_int(provider_user_id, session.user_id),
                     text=payload.get("text", ""),
                     buttons=buttons,
+                    session_id=session.id,
+                    node_id=payload.get("node_id"),
                 )
 
     if action_type == "schedule_timeout":
+        session = ChainSession.objects.select_related("chain").filter(id=session_id).first()
+        if not _session_chain_is_active(session):
+            return
         timeout_payload = payload
         chains_check_timeout.apply_async(
             args=[timeout_payload["session_id"], timeout_payload["edge_id"]],
@@ -460,11 +522,13 @@ def _execute_action(action: dict, session_id: int) -> None:
 
 @shared_task
 def chains_send_delayed_message(session_id: int, node_id: int) -> None:
-    session = ChainSession.objects.filter(id=session_id).first()
+    session = ChainSession.objects.select_related("chain").filter(id=session_id).first()
     if not session:
         return
 
     if session.status != "active":
+        return
+    if not _session_chain_is_active(session):
         return
 
     if session.current_node_id != node_id:

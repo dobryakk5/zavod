@@ -11,6 +11,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from core.models import (
+    Chain,
     ChainCondition,
     ChainEdge,
     ChainNode,
@@ -19,7 +20,7 @@ from core.models import (
     MapContactTag,
     UserTenantBinding,
 )
-from core.services.chain_service import get_or_create_chain
+from core.services.chain_service import get_or_create_chain, get_or_create_chain_by_key
 
 
 logger = logging.getLogger(__name__)
@@ -39,12 +40,17 @@ class ChainExecutor:
         provider: str = UserTenantBinding.PROVIDER_TELEGRAM,
         provider_user_id: str | None = None,
         channel_meta: dict[str, Any] | None = None,
+        chain_id: int | None = None,
+        chain_key: str | None = None,
+        initial_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         provider = _normalize_provider(provider)
         resolved_provider_user_id = str(provider_user_id or user_id)
-        chain = get_or_create_chain_for_tenant(tenant_id)
+        chain = get_or_create_chain_for_tenant(tenant_id, chain_id=chain_id, chain_key=chain_key)
         if not chain.start_node_id:
             raise ValueError("Chain has no start node")
+        if str(getattr(chain, "status", "") or "").lower() != "active":
+            return {"session_id": None, "actions": [], "session_status": "chain_not_active"}
 
         session = self._get_active_session(
             user_id=user_id,
@@ -58,6 +64,11 @@ class ChainExecutor:
         }
         if channel_meta:
             context["channel_meta"] = dict(channel_meta)
+        if initial_context:
+            for key, value in dict(initial_context).items():
+                if key in {"provider", "provider_user_id"}:
+                    continue
+                context[key] = value
 
         if session:
             session.context = context
@@ -87,6 +98,7 @@ class ChainExecutor:
         provider: str = UserTenantBinding.PROVIDER_TELEGRAM,
         provider_user_id: str | None = None,
         channel_meta: dict[str, Any] | None = None,
+        session_id: int | None = None,
     ) -> dict[str, Any]:
         provider = _normalize_provider(provider)
         resolved_provider_user_id = str(provider_user_id or user_id)
@@ -94,9 +106,12 @@ class ChainExecutor:
             user_id=user_id,
             tenant_id=tenant_id,
             provider=provider,
+            session_id=session_id,
         )
         if not session:
             return {"session_id": None, "actions": [], "session_status": "none"}
+        if str(getattr(getattr(session, "chain", None), "status", "") or "").lower() != "active":
+            return {"session_id": session.id, "actions": [], "session_status": "chain_not_active"}
 
         context = dict(session.context or {})
         context_provider = _normalize_provider(context.get("provider"))
@@ -207,6 +222,8 @@ class ChainExecutor:
             return {"actions": []}
 
         if session.status != "active":
+            return {"actions": []}
+        if str(getattr(getattr(session, "chain", None), "status", "") or "").lower() != "active":
             return {"actions": []}
 
         if session.current_node_id != edge.source_node_id:
@@ -407,11 +424,15 @@ class ChainExecutor:
         tenant_id: int,
         provider: str,
         chain_id: int | None = None,
+        session_id: int | None = None,
     ) -> ChainSession | None:
         queryset = ChainSession.objects.filter(user_id=user_id, tenant_id=tenant_id, status="active")
+        if session_id is not None:
+            queryset = queryset.filter(id=session_id)
         if chain_id is not None:
             queryset = queryset.filter(chain_id=chain_id)
-        sessions = list(queryset.order_by("-last_activity_at")[:10])
+        limit = 1 if session_id is not None else 10
+        sessions = list(queryset.order_by("-last_activity_at")[:limit])
         if not sessions:
             return None
 
@@ -421,7 +442,10 @@ class ChainExecutor:
                 return session
 
         # Backward-compatible fallback for legacy sessions without provider in context.
-        return sessions[0]
+        # For explicit session targeting we prefer strict routing and do not fallback.
+        if session_id is None:
+            return sessions[0]
+        return None
 
     def _append_incoming_history(
         self,
@@ -451,12 +475,27 @@ class ChainExecutor:
         return context
 
 
-def get_or_create_chain_for_tenant(tenant_id: int):
+def get_or_create_chain_for_tenant(
+    tenant_id: int,
+    *,
+    chain_id: int | None = None,
+    chain_key: str | None = None,
+) -> Chain:
     from core.models import Client
+
+    if chain_id is not None and chain_key is not None:
+        raise ValueError("Specify either chain_id or chain_key, not both")
 
     client = Client.objects.filter(id=tenant_id).first()
     if client is None:
         raise ValueError(f"Tenant {tenant_id} not found")
+    if chain_id is not None:
+        chain = Chain.objects.filter(tenant=client, id=chain_id).first()
+        if chain is None:
+            raise ValueError(f"Chain {chain_id} not found for tenant {tenant_id}")
+        return chain
+    if chain_key is not None:
+        return get_or_create_chain_by_key(client, chain_key)
     return get_or_create_chain(client)
 
 

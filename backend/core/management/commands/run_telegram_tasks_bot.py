@@ -41,6 +41,7 @@ from core.referral import Referral, ReferralCode, reward_referral_month
 logger = logging.getLogger(__name__)
 debug_logger = logging.getLogger('telegram_bot_debug')
 router = Router()
+CHAIN_NOT_ACTIVE_MESSAGE = "Этот сценарий сейчас выключен. Попробуйте позже или обратитесь к администратору."
 
 SUPPORT_CHAT = -5038963606  # Групповой чат для уведомлений поддержки
 
@@ -391,12 +392,46 @@ def _normalize_buttons(buttons: list) -> list[str]:
     return normalized
 
 
-def _build_chain_keyboard(buttons: list[str]) -> InlineKeyboardMarkup:
-    keyboard = [
-        [InlineKeyboardButton(text=label, callback_data=f"{CHAIN_BUTTON_PREFIX}{label}")]
-        for label in buttons
-    ]
+def _build_chain_keyboard(
+    buttons: list[str],
+    *,
+    session_id: int | None = None,
+    node_id: int | None = None,
+) -> InlineKeyboardMarkup:
+    keyboard = []
+    for label in buttons:
+        callback_data = f"{CHAIN_BUTTON_PREFIX}{label}"
+        if session_id is not None and node_id is not None:
+            try:
+                callback_data = f"{CHAIN_BUTTON_PREFIX}{int(session_id)}:{int(node_id)}:{label}"
+            except (TypeError, ValueError):
+                callback_data = f"{CHAIN_BUTTON_PREFIX}{label}"
+        keyboard.append([InlineKeyboardButton(text=label, callback_data=callback_data)])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def _parse_chain_button_callback(data: str | None) -> tuple[int | None, int | None, str | None]:
+    raw = str(data or "")
+    if not raw.startswith(CHAIN_BUTTON_PREFIX):
+        return None, None, None
+
+    payload = raw[len(CHAIN_BUTTON_PREFIX):]
+    if not payload:
+        return None, None, None
+
+    parts = payload.split(":", 2)
+    if len(parts) == 3:
+        try:
+            session_id = int(parts[0])
+            node_id = int(parts[1])
+        except (TypeError, ValueError):
+            session_id = None
+            node_id = None
+        else:
+            label = parts[2].strip()
+            return session_id, node_id, (label or None)
+
+    return None, None, (payload.strip() or None)
 
 
 async def _execute_chain_actions(
@@ -434,7 +469,11 @@ async def _execute_chain_actions(
             await bot.send_message(
                 chat_id,
                 text=payload.get("text", ""),
-                reply_markup=_build_chain_keyboard(buttons),
+                reply_markup=_build_chain_keyboard(
+                    buttons,
+                    session_id=session_id,
+                    node_id=payload.get("node_id"),
+                ),
                 parse_mode="HTML",
             )
         elif action_type == "schedule_timeout":
@@ -780,8 +819,9 @@ async def handle_chain_button(callback: CallbackQuery) -> None:
     # ИСПРАВЛЕНИЕ: Отвечаем на callback сразу, чтобы убрать "часики" в Telegram
     await callback.answer()
 
-    data = callback.data or ""
-    button_label = data[len(CHAIN_BUTTON_PREFIX):]
+    callback_session_id, _callback_node_id, button_label = _parse_chain_button_callback(callback.data)
+    if not button_label:
+        return
 
     executor = ChainExecutor()
     result = await sync_to_async(
@@ -793,6 +833,7 @@ async def handle_chain_button(callback: CallbackQuery) -> None:
         user_message={"button": button_label},
         provider=UserTenantBinding.PROVIDER_TELEGRAM,
         provider_user_id=str(from_user.id),
+        session_id=callback_session_id,
     )
     await _execute_chain_actions(
         bot=callback.message.bot,
@@ -800,6 +841,9 @@ async def handle_chain_button(callback: CallbackQuery) -> None:
         session_id=result.get("session_id"),
         actions=result.get("actions", []),
     )
+    if result.get("session_status") == "chain_not_active":
+        await callback.message.answer(CHAIN_NOT_ACTIVE_MESSAGE, reply_markup=main_menu())
+        return
     if result.get("session_status") == "completed":
         await callback.message.answer("Цепочка завершена.", reply_markup=main_menu())
 
@@ -850,6 +894,9 @@ async def handle_message(message: Message, state: FSMContext) -> None:
             provider=UserTenantBinding.PROVIDER_TELEGRAM,
             provider_user_id=str(from_user.id),
         )
+        if result.get("session_status") == "chain_not_active":
+            await message.answer(CHAIN_NOT_ACTIVE_MESSAGE, reply_markup=main_menu())
+            return
         await _execute_chain_actions(
             bot=message.bot,
             chat_id=from_user.id,
@@ -952,6 +999,9 @@ async def handle_message(message: Message, state: FSMContext) -> None:
                 provider_user_id=str(from_user.id),
             )
             if result.get("session_status") != "none":
+                if result.get("session_status") == "chain_not_active":
+                    await message.answer(CHAIN_NOT_ACTIVE_MESSAGE, reply_markup=main_menu())
+                    return
                 await _execute_chain_actions(
                     bot=message.bot,
                     chat_id=from_user.id,

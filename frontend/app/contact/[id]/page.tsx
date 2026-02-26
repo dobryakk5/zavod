@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
+  ArrowLeftIcon,
   CalendarIcon, 
   CheckIcon,
   Copy,
@@ -25,7 +26,17 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
-import { crmContactsApi, crmCategoriesApi, crmEventTypesApi, crmEventsApi, crmPaymentsApi, crmNotesApi, crmContactTagsApi, type ContactTelegramInfo } from '@/lib/api/crm';
+import {
+  crmContactsApi,
+  crmCategoriesApi,
+  crmEventTypesApi,
+  crmEventsApi,
+  crmPaymentsApi,
+  crmNotesApi,
+  crmContactTagsApi,
+  type ContactServicePackageItem,
+  type ContactTelegramInfo,
+} from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import { PaymentsTable } from '@/components/crm/payments-table';
@@ -217,6 +228,8 @@ export default function ContactDetailPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [servicePackages, setServicePackages] = useState<ContactServicePackageItem[]>([]);
+  const [servicePackagesError, setServicePackagesError] = useState<string | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
   const [contactTags, setContactTags] = useState<ContactTag[]>([]);
   const [tagDescriptions, setTagDescriptions] = useState<Record<number, string>>({});
@@ -293,6 +306,19 @@ export default function ContactDetailPage() {
   const [savingPaymentEdit, setSavingPaymentEdit] = useState(false);
   const [paymentLinkLoadingId, setPaymentLinkLoadingId] = useState<number | null>(null);
   const [paymentDeletingId, setPaymentDeletingId] = useState<number | null>(null);
+
+  const refreshServicePackages = useCallback(async () => {
+    if (Number.isNaN(contactId)) return;
+    try {
+      const response = await crmContactsApi.servicePackages(contactId);
+      setServicePackages(Array.isArray(response.items) ? response.items : []);
+      setServicePackagesError(null);
+    } catch (err) {
+      console.error('Failed to load service packages:', err);
+      setServicePackages([]);
+      setServicePackagesError('Не удалось загрузить остатки пакетов услуг.');
+    }
+  }, [contactId]);
   const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'payments' | 'notes'>('overview');
   const [telegramInfo, setTelegramInfo] = useState<ContactTelegramInfo | null>(null);
   const [telegramInfoError, setTelegramInfoError] = useState<string | null>(null);
@@ -366,6 +392,16 @@ export default function ContactDetailPage() {
             }
             return { data: null as ContactTelegramInfo | null, error: message };
           });
+        const servicePackagesPromise = crmContactsApi
+          .servicePackages(contactId)
+          .then((data) => ({ data, error: null as string | null }))
+          .catch((err) => {
+            console.error('Failed to load contact service packages:', err);
+            return {
+              data: { contact_id: contactId, items: [] as ContactServicePackageItem[] },
+              error: 'Не удалось загрузить остатки пакетов услуг.',
+            };
+          });
         const [
           contactData,
           categoriesData,
@@ -376,6 +412,7 @@ export default function ContactDetailPage() {
           notesData,
           contactTagsData,
           telegramInfoData,
+          servicePackagesData,
         ] = await Promise.all([
           crmContactsApi.detail(contactId),
           crmCategoriesApi.list(),
@@ -386,6 +423,7 @@ export default function ContactDetailPage() {
           crmNotesApi.list(),
           crmContactTagsApi.list(contactId),
           telegramInfoPromise,
+          servicePackagesPromise,
         ]);
 
         setContact(contactData);
@@ -396,6 +434,8 @@ export default function ContactDetailPage() {
         // Filter events, payments, and notes for this contact
         setEvents(eventsData.filter(event => event.contact_id === contactId));
         setPayments(paymentsData.filter(payment => payment.contact_id === contactId));
+        setServicePackages(Array.isArray(servicePackagesData.data.items) ? servicePackagesData.data.items : []);
+        setServicePackagesError(servicePackagesData.error);
         setNotes(notesData.filter(note => note.contact_id === contactId));
         setContactTags(contactTagsData);
         setTelegramInfo(telegramInfoData.data);
@@ -576,6 +616,7 @@ export default function ContactDetailPage() {
       setNewEventLocation('');
       setNewEventPrice('');
       setNewEventTypeId('none');
+      void refreshServicePackages();
       toast.success('Встреча добавлена');
     } catch (err) {
       console.error('Error creating event:', err);
@@ -632,6 +673,7 @@ export default function ContactDetailPage() {
       setNewPaymentPlannedAt(getDefaultEventStart(tenantTimezone));
       setNewPaymentPaid(false);
       setNewPaymentProductId('none');
+      void refreshServicePackages();
       toast.success('Платёж добавлен');
     } catch (err) {
       console.error('Error creating payment:', err);
@@ -695,6 +737,7 @@ export default function ContactDetailPage() {
     try {
       await crmPaymentsApi.delete(payment.id);
       setPayments((prev) => prev.filter((item) => item.id !== payment.id));
+      void refreshServicePackages();
       toast.success('Платёж удалён');
     } catch (err) {
       console.error('Failed to delete payment:', err);
@@ -738,6 +781,7 @@ export default function ContactDetailPage() {
       });
 
       setPayments((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      void refreshServicePackages();
       toast.success('Платёж обновлен');
       handleCancelEditPayment();
     } catch (err) {
@@ -1091,12 +1135,25 @@ export default function ContactDetailPage() {
   return (
     <div className="container mx-auto py-6 space-y-6">
       <div className="flex items-center justify-between">
-        <div>
+        <div className="flex items-start gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="mt-0.5 shrink-0"
+            onClick={() => router.push('/clients')}
+            aria-label="Вернуться к списку клиентов"
+            title="К списку клиентов"
+          >
+            <ArrowLeftIcon className="h-4 w-4" />
+          </Button>
+          <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
             <UserIcon className="h-8 w-8" />
             {contact.name}
           </h1>
           <p className="text-muted-foreground">Детали контакта #{contact.id}</p>
+          </div>
         </div>
         <Badge 
           variant={
@@ -1876,6 +1933,78 @@ export default function ContactDetailPage() {
         </TabsContent>
 
         <TabsContent value="payments" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Пакеты услуг</CardTitle>
+              <CardDescription>Остаток оплаченных пакетов по этому контакту</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {servicePackagesError && (
+                <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  {servicePackagesError}
+                </div>
+              )}
+              {servicePackages.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Оплаченных пакетов услуг пока нет.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {servicePackages.map((item) => {
+                    const servicePackage = item.service_package;
+                    const remainingLabel = (servicePackage?.remaining_label || '').trim() || '—';
+                    const usedLabel = (servicePackage?.used_label || '').trim() || '—';
+                    const totalLabel = (servicePackage?.total_label || '').trim() || '—';
+                    const modeLabel =
+                      servicePackage?.mode === 'minutes' ? 'Пакет по времени' : 'Пакет по количеству';
+                    const isExhausted = Boolean(servicePackage?.is_exhausted);
+                    const paidAtLabel = item.paid_at
+                      ? formatInTenantTimezone(item.paid_at, tenantTimezone, {
+                          year: 'numeric',
+                          month: '2-digit',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                      : '—';
+
+                    return (
+                      <div key={item.purchase_id} className="rounded-lg border p-4 space-y-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <div className="font-medium">{item.product_name || `Продукт #${item.product_id}`}</div>
+                            <div className="text-xs text-muted-foreground">{modeLabel}</div>
+                          </div>
+                          <Badge variant={isExhausted ? 'destructive' : 'secondary'}>
+                            {isExhausted ? 'Закончился' : 'Активен'}
+                          </Badge>
+                        </div>
+                        <div className="grid gap-2 text-sm sm:grid-cols-3">
+                          <div>
+                            <div className="text-xs text-muted-foreground">Осталось</div>
+                            <div className="font-medium">{remainingLabel}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-muted-foreground">Израсходовано</div>
+                            <div>{usedLabel}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-muted-foreground">Всего</div>
+                            <div>{totalLabel}</div>
+                          </div>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Оплата: {paidAtLabel}
+                          {item.amount ? ` · ${item.amount} ${item.currency || 'RUB'}` : ''}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>Новый платёж</CardTitle>

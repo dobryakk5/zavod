@@ -1,5 +1,12 @@
 import { apiFetch } from '../api';
-import type { ClientProduct, KbDocumentDetail, MindMap, ProductGenerationResponse, ProductStatus } from '../types';
+import type {
+  ClientProduct,
+  KbDocumentDetail,
+  MindMap,
+  ProductGenerationResponse,
+  ProductPackageConfig,
+  ProductStatus,
+} from '../types';
 
 export const clientProductsApi = {
   list: async (): Promise<ClientProduct[]> => {
@@ -29,7 +36,7 @@ export const clientProductsApi = {
     status?: ProductStatus;
     product_type_id?: number | null;
     short_description?: string | null;
-    packages?: Array<{ name: string; description?: string | null; price?: number | null }>;
+    packages?: ProductPackageConfig[];
     structure?: Record<string, unknown>;
   }) => {
     return apiFetch<ClientProduct>('/products/list/', {
@@ -76,7 +83,7 @@ export const clientProductsApi = {
       status: ProductStatus;
       product_type_id: number | null;
       short_description: string | null;
-      packages: Array<{ name: string; description?: string | null; price?: number | null }>;
+      packages: ProductPackageConfig[];
       structure: Record<string, unknown>;
     }>
   ) => {

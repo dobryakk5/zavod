@@ -25,6 +25,11 @@ from core.models import (
     UserTenantBinding,
     YooKassaPayment,
 )
+from core.services.contact_service_packages import (
+    build_service_package_payload,
+    grant_service_package_to_purchase,
+)
+from core.services.crm_workflow_dispatcher import CRMWorkflowDispatcher
 
 from .authentication import CookieJWTAuthentication
 from .views_payments import (
@@ -32,6 +37,9 @@ from .views_payments import (
     _get_yookassa_credentials,
     _yookassa_request,
 )
+
+
+crm_workflow_dispatcher = CRMWorkflowDispatcher()
 
 
 def _resolve_product_price(product: ClientProduct) -> Decimal | None:
@@ -219,7 +227,7 @@ def _record_contact_product_purchase(
     product = (
         ClientProduct.objects
         .filter(owner_id=client.id, id=product_id)
-        .only("id", "name")
+        .only("id", "name", "packages")
         .first()
     )
 
@@ -238,6 +246,17 @@ def _record_contact_product_purchase(
         or str(metadata.get("product_name") or "").strip()[:255]
     )
 
+    existing_purchase = (
+        ContactProductPurchase.objects
+        .filter(client=client, contact_id=contact_id, product_id=product_id)
+        .only("id", "last_payment_id")
+        .first()
+    )
+    already_processed_same_payment = bool(
+        existing_purchase is not None
+        and existing_purchase.last_payment_id == yk_payment.id
+    )
+
     purchase, _ = ContactProductPurchase.objects.update_or_create(
         client=client,
         contact_id=contact_id,
@@ -250,6 +269,8 @@ def _record_contact_product_purchase(
             "paid_at": paid_at,
         },
     )
+    if not already_processed_same_payment:
+        grant_service_package_to_purchase(purchase=purchase, product=product, top_up=True)
     return purchase
 
 
@@ -452,6 +473,7 @@ class PublicClientPagePaymentStatusView(APIView):
         yk_payment = YooKassaPayment.objects.filter(payment_id=payment_id, client=client).first()
         if not yk_payment:
             return Response({"detail": "Платеж не найден."}, status=status.HTTP_404_NOT_FOUND)
+        previous_payment_status = str(yk_payment.status or "")
 
         shop_id, secret_or_token, auth_type = _get_yookassa_credentials(client)
         if not secret_or_token:
@@ -499,6 +521,27 @@ class PublicClientPagePaymentStatusView(APIView):
                 payment_payload=data,
                 fallback_contact_id=fallback_contact_id,
             )
+            if previous_payment_status != "succeeded":
+                metadata_contact_id = None
+                try:
+                    metadata_contact_raw = metadata.get("contact_id")
+                    if metadata_contact_raw not in (None, ""):
+                        metadata_contact_id = int(str(metadata_contact_raw))
+                except (TypeError, ValueError):
+                    metadata_contact_id = None
+                crm_workflow_dispatcher.dispatch_payment_paid(
+                    tenant_id=client.id,
+                    contact_id=metadata_contact_id or fallback_contact_id,
+                    payment_payload={
+                        "payment_id": payment_id,
+                        "status": payment_status,
+                        "paid": bool(data.get("paid")),
+                        "amount": (data.get("amount") or {}).get("value"),
+                        "currency": (data.get("amount") or {}).get("currency"),
+                        "provider": "yookassa",
+                        "provider_payment_id": payment_id,
+                    },
+                )
             try:
                 product_id = int(str(metadata.get("product_id")))
             except (TypeError, ValueError):
@@ -567,6 +610,7 @@ class PublicClientPagePurchasesView(APIView):
                     "currency": purchase.currency or "RUB",
                     "payment_id": purchase.last_payment.payment_id if purchase.last_payment_id else None,
                     "delivery": _build_digital_product_delivery_payload(client, product),
+                    "service_package": build_service_package_payload(purchase),
                 }
             )
 

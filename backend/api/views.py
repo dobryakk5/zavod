@@ -104,3 +104,4 @@ from .views_vk_auth import VkAuthUrlView, VkAuthView  # noqa: F401
 from .views_vk_messages import VkMessageCallbackView  # noqa: F401
 from .views_social_accounts import SocialAccountsView, LinkVkView, LinkTelegramView, UnlinkView, ResolveConflictView  # noqa: F401
 from .views_messaging import ClientChannelView  # noqa: F401
+from .views_unified_inbox import EmailInboxWebhookView, UnifiedInboxReplyView, UnifiedInboxThreadsView  # noqa: F401

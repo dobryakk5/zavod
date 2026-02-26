@@ -134,6 +134,18 @@ type ContactPurchaseListItem = {
     message?: string;
     missing_product_page?: boolean;
   } | null;
+  service_package?: {
+    enabled?: boolean;
+    mode?: 'count' | 'minutes';
+    package_name?: string | null;
+    total_units?: number;
+    used_units?: number;
+    remaining_units?: number;
+    is_exhausted?: boolean;
+    total_label?: string;
+    used_label?: string;
+    remaining_label?: string;
+  } | null;
 };
 
 type ContactPurchasesResponse = {
@@ -1359,6 +1371,18 @@ export default function ContactClientPage() {
     }
   };
 
+  const formatServicePackageRemaining = (item: ContactPurchaseListItem) => {
+    const servicePackage = item.service_package;
+    if (!servicePackage?.enabled) {
+      return '';
+    }
+    const remainingLabel = (servicePackage.remaining_label || '').trim();
+    if (!remainingLabel) {
+      return '';
+    }
+    return `Осталось: ${remainingLabel}`;
+  };
+
   if (loading) {
     return (
       <div className="mx-auto max-w-3xl p-6">
@@ -1545,8 +1569,10 @@ export default function ContactClientPage() {
                 const itemKey = String(item.id ?? `${item.product_id ?? 'product'}:${item.payment_id ?? ''}`);
                 const title = (item.product_name || '').trim() || `Продукт #${item.product_id ?? '—'}`;
                 const amountLabel = formatPurchaseAmount(item);
+                const serviceRemainingLabel = formatServicePackageRemaining(item);
                 const delivery = item.delivery || null;
                 const deliveryReady = Boolean(delivery?.ready && delivery?.url);
+                const isServicePackage = Boolean(item.service_package?.enabled);
 
                 return (
                   <li
@@ -1560,6 +1586,11 @@ export default function ContactClientPage() {
                           {formatPurchaseTimestamp(item.paid_at)}
                           {amountLabel ? ` · ${amountLabel}` : ''}
                         </div>
+                        {serviceRemainingLabel && (
+                          <div className="text-xs text-emerald-700">
+                            {serviceRemainingLabel}
+                          </div>
+                        )}
                       </div>
                       {deliveryReady && (
                         <a
@@ -1573,7 +1604,7 @@ export default function ContactClientPage() {
                       )}
                     </div>
 
-                    {!deliveryReady && (
+                    {!deliveryReady && !isServicePackage && (
                       <div className="text-sm text-muted-foreground">
                         {(delivery?.message || '').trim() || 'Покажите информацию об оплате владельцу портала'}
                       </div>

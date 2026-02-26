@@ -5,10 +5,18 @@ import { chainsApi } from '@/lib/api/chains';
 
 import { NODE_W, NODE_H } from './constants';
 import { graphReducer } from './reducer';
-import { getCurvedPath, getNodeDimensions, getPortPosition, getRouterConditionPortPosition, inferSideBetweenPoints } from './utils';
+import {
+  getCurvedPath,
+  getNodeDimensions,
+  getPortPosition,
+  getRouterConditionPortPosition,
+  inferSideBetweenPoints,
+  validateGraph,
+} from './utils';
 
 import { Alert } from './components/Alert';
 import { Toolbar } from './components/Toolbar';
+import { ValidationPanel } from './components/ValidationPanel';
 import { NodeCard } from './components/NodeCard';
 import { EdgeLine } from './components/EdgeLine';
 import { ContextMenu } from './components/ContextMenu';
@@ -36,6 +44,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
   const [hoveredNodeId, setHoveredNodeId] = useState(null);
   const [addMenu, setAddMenu] = useState(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [validationOpen, setValidationOpen] = useState(false);
 
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -50,6 +59,7 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
   const pendingEdgeCreatesRef = useRef(new Set());
   const stateRef = useRef(state);
   const chainApi = useMemo(() => chainsApi.forChain(chainId), [chainId]);
+  const validationErrors = useMemo(() => validateGraph(state), [state]);
 
   const ANIM_MS = 500;
   const makeTempId = useCallback((prefix) => `tmp_${prefix}_${Date.now()}_${Math.floor(Math.random() * 100000)}`, []);
@@ -890,6 +900,16 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
   };
 
   const handleStatusChange = async (newStatus) => {
+    if (newStatus === 'active') {
+      const errors = validateGraph(stateRef.current);
+      const criticalErrors = errors.filter((e) => e?.severity !== 'warning');
+      if (criticalErrors.length > 0) {
+        setValidationOpen(true);
+        setError('Нельзя активировать цепочку: исправьте ошибки валидации');
+        return;
+      }
+    }
+
     setSaving(true);
     setError(null);
     try {
@@ -961,6 +981,8 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
         onSave={handleSave}
         onAddNode={handleAddNode}
         onStatusChange={handleStatusChange}
+        onValidate={() => setValidationOpen(true)}
+        validationErrorsCount={validationErrors.length}
       />
 
       {error && (
@@ -974,6 +996,13 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
           <span className="text-sm text-blue-900">🔗 Кликните на целевой узел для соединения</span>
           <button onClick={() => setConnectingFrom(null)} className="text-sm text-blue-700 underline">отменить</button>
         </div>
+      )}
+
+      {validationOpen && (
+        <ValidationPanel
+          errors={validationErrors}
+          onClose={() => setValidationOpen(false)}
+        />
       )}
 
       <div className="flex-1 relative overflow-hidden">

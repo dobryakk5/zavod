@@ -136,6 +136,40 @@ export type ContactTelegramInfo = {
   link: string;
 };
 
+export type ServicePackageBalance = {
+  enabled: boolean;
+  mode: 'count' | 'minutes';
+  package_name?: string | null;
+  total_units: number;
+  used_units: number;
+  remaining_units: number;
+  is_exhausted: boolean;
+  total_label: string;
+  used_label: string;
+  remaining_label: string;
+  total_sessions?: number;
+  used_sessions?: number;
+  remaining_sessions?: number;
+  total_minutes?: number;
+  used_minutes?: number;
+  remaining_minutes?: number;
+};
+
+export type ContactServicePackageItem = {
+  purchase_id: number;
+  product_id: number;
+  product_name: string;
+  paid_at: string | null;
+  amount: string | null;
+  currency: string;
+  service_package: ServicePackageBalance;
+};
+
+export type ContactServicePackagesResponse = {
+  contact_id: number;
+  items: ContactServicePackageItem[];
+};
+
 // API functions for contacts
 export const crmContactsApi = {
   list: async (): Promise<Contact[]> => {
@@ -168,6 +202,10 @@ export const crmContactsApi = {
 
   telegramLink: async (id: number | string): Promise<ContactTelegramInfo> => {
     return apiFetch<ContactTelegramInfo>(`/crm/contacts/${id}/telegram-link/`);
+  },
+
+  servicePackages: async (id: number | string): Promise<ContactServicePackagesResponse> => {
+    return apiFetch<ContactServicePackagesResponse>(`/crm/contacts/${id}/service-packages/`);
   },
 };
 

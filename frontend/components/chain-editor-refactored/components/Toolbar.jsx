@@ -8,7 +8,16 @@ const ADD_NODE_OPTIONS = [
   { type: 'router', label: 'Условие', icon: '🔀' },
 ];
 
-export function Toolbar({ chain, dirty, onSave, onAddNode, onStatusChange, saving }) {
+export function Toolbar({
+  chain,
+  dirty,
+  onSave,
+  onAddNode,
+  onStatusChange,
+  saving,
+  onValidate,
+  validationErrorsCount = 0,
+}) {
   const [statusOpen, setStatusOpen] = useState(false);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
 
@@ -74,6 +83,13 @@ export function Toolbar({ chain, dirty, onSave, onAddNode, onStatusChange, savin
           </>
         )}
       </div>
+      <Button
+        variant="outline"
+        onClick={onValidate}
+        className={validationErrorsCount > 0 ? 'border-red-300 text-red-700 hover:bg-red-50' : ''}
+      >
+        {validationErrorsCount > 0 ? `Проверить (${validationErrorsCount})` : 'Проверить'}
+      </Button>
       <Button variant="primary" onClick={onSave} disabled={!dirty || saving}>
         {saving ? 'Сохранение...' : dirty ? '💾 Сохранить' : 'Сохранено'}
       </Button>

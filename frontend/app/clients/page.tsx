@@ -5,16 +5,23 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Calendar } from 'lucide-react';
-import { crmContactsApi, crmEventsApi } from '@/lib/api/crm';
+import {
+  crmContactsApi,
+  crmEventsApi,
+  crmPaymentsApi,
+  type Contact,
+  type Event,
+  type Payment,
+} from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
 import { chainsApi, type ChainCatalogItem } from '@/lib/api/chains';
 import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezone } from '@/lib/timezone';
 import { OperatorTasksTab } from './operator-tasks-tab';
 import { ClientsTab } from '../products/clients-tab';
 import { CategoriesTab } from '../products/categories-tab';
-import ScheduleTasksView from '../schedule/tasks-view';
 import NewClientsEditor from './new/new-clients-editor';
 import ClientsSchedule from './clients-schedule';
+import UnifiedInboxTab from './unified-inbox-tab';
 
 type ClientsStats = {
   upcomingEvents: number;
@@ -25,11 +32,180 @@ type ClientsStats = {
     contactName: string;
     contactId: number;
   }>;
+  salesFunnel: SalesFunnelStats;
 };
+
+type SalesFunnelStageKey =
+  | 'new_lead'
+  | 'interest'
+  | 'call'
+  | 'payment_expected'
+  | 'paid';
+
+type SalesFunnelStageStat = {
+  key: SalesFunnelStageKey;
+  label: string;
+  description: string;
+  currentCount: number;
+  reachedCount: number;
+  stepConversionPct: number | null;
+  overallConversionPct: number | null;
+};
+
+type SalesFunnelStats = {
+  totalLeads: number;
+  archivedExcluded: number;
+  dealsInWork: number;
+  stages: SalesFunnelStageStat[];
+};
+
+const SALES_FUNNEL_STAGE_DEFS: Array<Pick<SalesFunnelStageStat, 'key' | 'label' | 'description'>> = [
+  {
+    key: 'new_lead',
+    label: 'Новый лид',
+    description: 'Контакт создан, без активности',
+  },
+  {
+    key: 'interest',
+    label: 'Интерес',
+    description: 'Есть признаки интереса/обработки',
+  },
+  {
+    key: 'call',
+    label: 'Созвон',
+    description: 'Есть встреча/созвон',
+  },
+  {
+    key: 'payment_expected',
+    label: 'Оплата ожидается',
+    description: 'Есть pending-платёж',
+  },
+  {
+    key: 'paid',
+    label: 'Оплачено',
+    description: 'Есть paid-платёж',
+  },
+];
+
+function createEmptyFunnelCounts(): Record<SalesFunnelStageKey, number> {
+  return {
+    new_lead: 0,
+    interest: 0,
+    call: 0,
+    payment_expected: 0,
+    paid: 0,
+  };
+}
+
+function createEmptySalesFunnelStats(): SalesFunnelStats {
+  return {
+    totalLeads: 0,
+    archivedExcluded: 0,
+    dealsInWork: 0,
+    stages: SALES_FUNNEL_STAGE_DEFS.map((stage) => ({
+      ...stage,
+      currentCount: 0,
+      reachedCount: 0,
+      stepConversionPct: null,
+      overallConversionPct: null,
+    })),
+  };
+}
+
+function hasContactInterestSignal(contact: Contact): boolean {
+  const hasTags = Object.values(contact.tags ?? {}).some((ids) => Array.isArray(ids) && ids.length > 0);
+  return Boolean(contact.category_id || contact.source?.trim() || contact.notes?.trim() || hasTags);
+}
+
+function toPercent(numerator: number, denominator: number): number | null {
+  if (denominator <= 0) return null;
+  return (numerator / denominator) * 100;
+}
+
+function formatPercent(value: number | null): string {
+  if (value == null) return '—';
+  if (value === 0 || value >= 10) return `${Math.round(value)}%`;
+  return `${value.toFixed(1)}%`;
+}
+
+function buildSalesFunnelStats(contacts: Contact[], events: Event[], payments: Payment[]): SalesFunnelStats {
+  const contactsInFunnel = contacts.filter((contact) => contact.status !== 'archived');
+  const archivedExcluded = contacts.length - contactsInFunnel.length;
+
+  const eventsByContact = new Map<number, number>();
+  events.forEach((event) => {
+    eventsByContact.set(event.contact_id, (eventsByContact.get(event.contact_id) ?? 0) + 1);
+  });
+
+  const paymentFlagsByContact = new Map<number, { hasPending: boolean; hasPaid: boolean }>();
+  payments.forEach((payment) => {
+    const current = paymentFlagsByContact.get(payment.contact_id) ?? { hasPending: false, hasPaid: false };
+    if (payment.status === 'pending') current.hasPending = true;
+    if (payment.status === 'paid') current.hasPaid = true;
+    paymentFlagsByContact.set(payment.contact_id, current);
+  });
+
+  const currentCounts = createEmptyFunnelCounts();
+  const reachedCounts = createEmptyFunnelCounts();
+
+  contactsInFunnel.forEach((contact) => {
+    const paymentFlags = paymentFlagsByContact.get(contact.id);
+    const hasPendingPayment = paymentFlags?.hasPending ?? false;
+    const hasPaidPayment = paymentFlags?.hasPaid ?? false;
+    const hasCall = (eventsByContact.get(contact.id) ?? 0) > 0;
+    const hasInterest = hasContactInterestSignal(contact) || hasCall || hasPendingPayment || hasPaidPayment;
+
+    let currentStage: SalesFunnelStageKey = 'new_lead';
+    if (hasPaidPayment) {
+      currentStage = 'paid';
+    } else if (hasPendingPayment) {
+      currentStage = 'payment_expected';
+    } else if (hasCall) {
+      currentStage = 'call';
+    } else if (hasInterest) {
+      currentStage = 'interest';
+    }
+
+    currentCounts[currentStage] += 1;
+
+    reachedCounts.new_lead += 1;
+    if (hasInterest) reachedCounts.interest += 1;
+    if (hasCall || hasPendingPayment || hasPaidPayment) reachedCounts.call += 1;
+    if (hasPendingPayment || hasPaidPayment) reachedCounts.payment_expected += 1;
+    if (hasPaidPayment) reachedCounts.paid += 1;
+  });
+
+  const totalLeads = contactsInFunnel.length;
+  const stages = SALES_FUNNEL_STAGE_DEFS.map((stage, index) => {
+    const prevStage = index > 0 ? SALES_FUNNEL_STAGE_DEFS[index - 1] : null;
+    const reachedCount = reachedCounts[stage.key];
+    const prevReachedCount = prevStage ? reachedCounts[prevStage.key] : 0;
+
+    return {
+      ...stage,
+      currentCount: currentCounts[stage.key],
+      reachedCount,
+      stepConversionPct: prevStage ? toPercent(reachedCount, prevReachedCount) : null,
+      overallConversionPct: toPercent(reachedCount, totalLeads),
+    };
+  });
+
+  return {
+    totalLeads,
+    archivedExcluded,
+    dealsInWork:
+      currentCounts.new_lead +
+      currentCounts.interest +
+      currentCounts.call +
+      currentCounts.payment_expected,
+    stages,
+  };
+}
 
 const emptyStats: ClientsStats = {
   upcomingEvents: 0,
   nextEvents: [],
+  salesFunnel: createEmptySalesFunnelStats(),
 };
 
 const CLIENTS_TABS = [
@@ -105,9 +281,10 @@ export default function ClientsPage() {
       setStatsError(null);
 
       try {
-        const [contacts, events, settings] = await Promise.all([
+        const [contacts, events, payments, settings] = await Promise.all([
           crmContactsApi.list(),
           crmEventsApi.list(),
+          crmPaymentsApi.list(),
           clientApi.getSettings(),
         ]);
 
@@ -137,8 +314,9 @@ export default function ClientsPage() {
         }));
 
         setStats({
-          upcomingEvents: nextEvents.length,
+          upcomingEvents: upcomingEventsSorted.length,
           nextEvents,
+          salesFunnel: buildSalesFunnelStats(contacts, events, payments),
         });
       } catch (err) {
         if (!isActive) return;
@@ -192,12 +370,14 @@ export default function ClientsPage() {
         totalClients: null,
         upcomingEvents: null,
         nextEvents: [],
+        salesFunnel: createEmptySalesFunnelStats(),
       };
     }
 
     return {
       upcomingEvents: stats.upcomingEvents,
       nextEvents: stats.nextEvents,
+      salesFunnel: stats.salesFunnel,
     };
   }, [stats, statsError, statsLoading]);
 
@@ -237,6 +417,112 @@ export default function ClientsPage() {
         </div>
       </div>
 
+      <div className="mb-8 rounded-xl border bg-white p-5">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Воронка продаж</h2>
+              <p className="text-sm text-muted-foreground">
+                Лиды/сделки по стадиям и конверсия по этапам (по контактам, встречам и платежам)
+              </p>
+            </div>
+            {!statsLoading && !statsError && (
+              <div className="flex flex-wrap gap-2 text-xs">
+                <div className="rounded-md border px-3 py-1.5">
+                  Лидов в воронке: <span className="font-semibold">{displayStats.salesFunnel.totalLeads}</span>
+                </div>
+                <div className="rounded-md border px-3 py-1.5">
+                  Сделок в работе:{' '}
+                  <span className="font-semibold">{displayStats.salesFunnel.dealsInWork}</span>
+                </div>
+                <div className="rounded-md border px-3 py-1.5">
+                  Конверсия в оплату:{' '}
+                  <span className="font-semibold">
+                    {formatPercent(
+                      displayStats.salesFunnel.stages.find((stage) => stage.key === 'paid')
+                        ?.overallConversionPct ?? null
+                    )}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {statsLoading && (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, index) => (
+                <div
+                  key={`funnel-skeleton-${index}`}
+                  className="rounded-lg border p-4 animate-pulse"
+                >
+                  <div className="h-3 w-24 rounded bg-slate-200" />
+                  <div className="mt-3 h-7 w-12 rounded bg-slate-200" />
+                  <div className="mt-3 h-2 w-full rounded bg-slate-100" />
+                  <div className="mt-3 h-3 w-28 rounded bg-slate-200" />
+                  <div className="mt-2 h-3 w-20 rounded bg-slate-200" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!statsLoading && !statsError && (
+            <>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+                {displayStats.salesFunnel.stages.map((stage, index) => (
+                  <div key={stage.key} className="rounded-lg border p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-xs text-muted-foreground">
+                          Этап {index + 1}
+                        </div>
+                        <div className="mt-1 text-sm font-medium">{stage.label}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-2xl font-semibold leading-none">{stage.currentCount}</div>
+                        <div className="mt-1 text-[11px] text-muted-foreground">в стадии</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 h-2 rounded-full bg-slate-100">
+                      <div
+                        className="h-full rounded-full bg-slate-900"
+                        style={{ width: `${Math.max(0, Math.min(100, stage.overallConversionPct ?? 0))}%` }}
+                      />
+                    </div>
+
+                    <p className="mt-3 text-[11px] text-muted-foreground">{stage.description}</p>
+
+                    <div className="mt-3 space-y-1 text-xs">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Дошли до этапа</span>
+                        <span className="font-medium">{stage.reachedCount}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Из предыдущего</span>
+                        <span className="font-medium">{formatPercent(stage.stepConversionPct)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">От всех лидов</span>
+                        <span className="font-medium">{formatPercent(stage.overallConversionPct)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="text-xs text-muted-foreground">
+                Воронка рассчитана автоматически из текущих данных CRM: контакты + встречи + статусы
+                платежей. Архивные контакты исключены
+                {displayStats.salesFunnel.archivedExcluded > 0
+                  ? ` (${displayStats.salesFunnel.archivedExcluded})`
+                  : ''}
+                .
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
       <Tabs
         value={activeClientsTab}
         onValueChange={(value) => {
@@ -251,7 +537,7 @@ export default function ClientsPage() {
         <TabsList className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
           <TabsTrigger value="clients">Клиенты</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
-          <TabsTrigger value="service-level">Уровень сервиса</TabsTrigger>
+          <TabsTrigger value="service-level">Входящие</TabsTrigger>
           <TabsTrigger value="categories">Теги</TabsTrigger>
           <TabsTrigger value="payments">Платежи</TabsTrigger>
           <TabsTrigger value="welcome-chain">ChatBot</TabsTrigger>
@@ -293,7 +579,7 @@ export default function ClientsPage() {
 
         <TabsContent value="service-level" className="space-y-6">
           <div className="bg-white rounded-lg p-6">
-            <ScheduleTasksView />
+            <UnifiedInboxTab />
           </div>
         </TabsContent>
 

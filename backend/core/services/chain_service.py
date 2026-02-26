@@ -9,6 +9,7 @@ DEFAULT_CHAIN_NAME = "Welcome"
 WELCOME_CHAIN_KEY = "welcome"
 POST_MEETING_CHAIN_KEY = "post_meeting"
 RESCHEDULE_MEETING_CHAIN_KEY = "reschedule_meeting"
+PAYMENT_PAID_CHAIN_KEY = "payment_paid"
 
 CHAIN_DEFINITIONS = (
     {
@@ -32,7 +33,15 @@ CHAIN_DEFINITIONS = (
         "description": "",
         "build_start_payload": lambda: build_empty_start_payload(),
     },
+    {
+        "key": PAYMENT_PAID_CHAIN_KEY,
+        "name": "После оплаты",
+        "title": "После оплаты",
+        "description": "",
+        "build_start_payload": lambda: build_empty_start_payload(),
+    },
 )
+CHAIN_DEFINITIONS_BY_KEY = {item["key"]: item for item in CHAIN_DEFINITIONS}
 
 
 def build_start_payload() -> dict:
@@ -121,3 +130,11 @@ def ensure_predefined_chains(client) -> dict[str, Chain]:
 def get_or_create_chain(client) -> Chain:
     chains = ensure_predefined_chains(client)
     return chains[WELCOME_CHAIN_KEY]
+
+
+def get_or_create_chain_by_key(client, chain_key: str) -> Chain:
+    chains = ensure_predefined_chains(client)
+    normalized_key = str(chain_key or "").strip().lower()
+    if normalized_key not in CHAIN_DEFINITIONS_BY_KEY:
+        raise ValueError(f"Unknown chain key: {chain_key}")
+    return chains[normalized_key]

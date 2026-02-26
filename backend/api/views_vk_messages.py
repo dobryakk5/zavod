@@ -19,6 +19,7 @@ from core.tasks.chains import _send_vk_message, dispatch_chain_actions
 
 logger = logging.getLogger(__name__)
 VK_CALLBACK_DEDUP_TTL_SECONDS = 120
+CHAIN_NOT_ACTIVE_MESSAGE = "Этот сценарий сейчас выключен. Попробуйте позже или обратитесь к администратору."
 VK_START_TRIGGERS = {
     "welcome",
     "start",
@@ -50,7 +51,7 @@ def _normalize_entities(text: str) -> list[str]:
     return sorted(normalized)
 
 
-def _parse_vk_button_payload(raw_payload: Any) -> str | None:
+def _parse_vk_button_payload(raw_payload: Any) -> dict[str, Any] | None:
     if not raw_payload:
         return None
     payload = raw_payload
@@ -68,7 +69,23 @@ def _parse_vk_button_payload(raw_payload: Any) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
-    return text or None
+    if not text:
+        return None
+
+    result: dict[str, Any] = {"button": text}
+    session_id_raw = payload.get("chain_session_id")
+    if session_id_raw is not None:
+        try:
+            result["session_id"] = int(session_id_raw)
+        except (TypeError, ValueError):
+            pass
+    node_id_raw = payload.get("chain_node_id")
+    if node_id_raw is not None:
+        try:
+            result["node_id"] = int(node_id_raw)
+        except (TypeError, ValueError):
+            pass
+    return result
 
 
 def _build_vk_callback_dedupe_key(payload: dict[str, Any]) -> str | None:
@@ -110,14 +127,18 @@ def _is_duplicate_vk_callback(payload: dict[str, Any]) -> bool:
 
 def _build_user_message(message: dict[str, Any]) -> dict[str, Any]:
     text = str(message.get("text") or "").strip()
-    payload = _parse_vk_button_payload(message.get("payload"))
+    button_payload = _parse_vk_button_payload(message.get("payload"))
     attachments = message.get("attachments") or []
 
     user_message: dict[str, Any] = {}
     if text:
         user_message["text"] = text
-    if payload:
-        user_message["button"] = payload
+    if button_payload:
+        user_message["button"] = button_payload.get("button")
+        if button_payload.get("session_id") is not None:
+            user_message["_chain_session_id"] = button_payload.get("session_id")
+        if button_payload.get("node_id") is not None:
+            user_message["_chain_node_id"] = button_payload.get("node_id")
 
     message_type = "text" if text else None
     for attachment in attachments:
@@ -238,6 +259,14 @@ class VkMessageCallbackView(APIView):
                 provider_user_id=str(from_id),
                 channel_meta=channel_meta,
             )
+            if result.get("session_status") == "chain_not_active":
+                _send_vk_message(
+                    tenant_id=integration.client_id,
+                    vk_user_id=from_id,
+                    text=CHAIN_NOT_ACTIVE_MESSAGE,
+                    group_id=group_id,
+                )
+                return
             dispatch_chain_actions(
                 session_id=result.get("session_id"),
                 actions=result.get("actions", []),
@@ -248,6 +277,9 @@ class VkMessageCallbackView(APIView):
         if not user_message:
             return
 
+        chain_session_id = user_message.pop("_chain_session_id", None)
+        user_message.pop("_chain_node_id", None)
+
         result = executor.process_user_message(
             user_id=from_id,
             tenant_id=integration.client_id,
@@ -255,12 +287,21 @@ class VkMessageCallbackView(APIView):
             provider=UserTenantBinding.PROVIDER_VK,
             provider_user_id=str(from_id),
             channel_meta=channel_meta,
+            session_id=chain_session_id,
         )
         if result.get("session_status") == "none":
             _send_vk_message(
                 tenant_id=integration.client_id,
                 vk_user_id=from_id,
                 text='Напишите "старт" / "начать", чтобы начать диалог.',
+                group_id=group_id,
+            )
+            return
+        if result.get("session_status") == "chain_not_active":
+            _send_vk_message(
+                tenant_id=integration.client_id,
+                vk_user_id=from_id,
+                text=CHAIN_NOT_ACTIVE_MESSAGE,
                 group_id=group_id,
             )
             return

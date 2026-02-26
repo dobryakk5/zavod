@@ -14,14 +14,18 @@
 from ._mixins import TaskStatusMixin
 
 # --- Core entities ---
-from .payments import ContactProductPurchase, PaymentPlan, YooKassaPayment
+from .payments import ContactProductPurchase, ContactProductServiceUsage, PaymentPlan, YooKassaPayment
 from .client import Client, UserTenantRole
 
 # --- CRM ---
 from .crm import ClientCategory, CRMClient, Event, EventType, Payment, Note
+from .amocrm import AmoCRMAccount, AmoCRMContactMapping, AmoCRMLogEntry
 
 # --- Integrations ---
 from .integrations import VkIntegration, SocialAccount, Connection, UserSocialAccount
+
+# --- Messaging / Inbox ---
+from .inbox import InboxEmailMessage, InboxReplyMessage
 
 # --- Content ---
 from .story import Topic, TrendItem, Story
@@ -118,6 +122,7 @@ __all__ = [
     "PaymentPlan",
     "YooKassaPayment",
     "ContactProductPurchase",
+    "ContactProductServiceUsage",
     # CRM
     "ClientCategory",
     "CRMClient",
@@ -125,11 +130,16 @@ __all__ = [
     "EventType",
     "Payment",
     "Note",
+    "AmoCRMAccount",
+    "AmoCRMContactMapping",
+    "AmoCRMLogEntry",
     # Integrations
     "VkIntegration",
     "SocialAccount",
     "Connection",
     "UserSocialAccount",
+    "InboxEmailMessage",
+    "InboxReplyMessage",
     # Story / Topics
     "Topic",
     "TrendItem",

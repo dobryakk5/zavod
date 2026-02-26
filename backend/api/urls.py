@@ -87,6 +87,9 @@ from .views import (
     KbSearchViewSet,
     KbLinkPreviewView,
     ClientChannelView,
+    EmailInboxWebhookView,
+    UnifiedInboxReplyView,
+    UnifiedInboxThreadsView,
 )
 
 from .views_social import (
@@ -216,6 +219,9 @@ urlpatterns = [
     path('client/generation-events/', GenerationEventSummaryView.as_view(), name='client-generation-events'),
     path('client/settings/', ClientSettingsView.as_view(), name='client-settings'),
     path('client/channel', ClientChannelView.as_view(), name='client-channel'),
+    path('client/unified-inbox/', UnifiedInboxThreadsView.as_view(), name='client-unified-inbox'),
+    path('client/unified-inbox/reply/', UnifiedInboxReplyView.as_view(), name='client-unified-inbox-reply'),
+    path('inbox/email/webhook/<uuid:client_uuid>/', EmailInboxWebhookView.as_view(), name='inbox-email-webhook'),
     path('client/expert-books/', ClientExpertBooksView.as_view(), name='client-expert-books'),
     path('client/book-semantics/', ClientBookSemanticsView.as_view(), name='client-book-semantics'),
 

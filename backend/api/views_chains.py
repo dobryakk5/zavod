@@ -59,6 +59,115 @@ def _get_existing_start_node(chain: Chain) -> ChainNode | None:
     )
 
 
+def _normalize_node_buttons(node: ChainNode) -> list[str]:
+    payload = node.payload if isinstance(node.payload, dict) else {}
+    raw_buttons = payload.get("buttons") or []
+    result: list[str] = []
+    for item in raw_buttons:
+        label = item if isinstance(item, str) else (item or {}).get("text")
+        text = str(label or "").strip()
+        if text:
+            result.append(text)
+    return result
+
+
+def _node_label(node: ChainNode) -> str:
+    payload = node.payload if isinstance(node.payload, dict) else {}
+    if node.node_type in {"router", "timer"} and payload.get("label"):
+        return str(payload.get("label"))[:28]
+    if payload.get("text"):
+        return str(payload.get("text"))[:28]
+    if payload.get("caption"):
+        return str(payload.get("caption"))[:28]
+    return str(node.node_type)
+
+
+def _validate_chain_graph_for_activation(chain: Chain, *, start_node_id: int | None = None) -> dict:
+    errors: list[dict] = []
+    warnings: list[dict] = []
+
+    nodes = list(ChainNode.objects.filter(chain=chain).order_by("created_at", "id"))
+    if not nodes:
+        errors.append({
+            "type": "empty",
+            "severity": "error",
+            "msg": "Цепочка пустая — добавьте хотя бы один узел.",
+        })
+        return {"errors": errors, "warnings": warnings}
+
+    effective_start_node_id = start_node_id if start_node_id is not None else chain.start_node_id
+    node_ids = {int(node.id) for node in nodes}
+    if not effective_start_node_id or int(effective_start_node_id) not in node_ids:
+        errors.append({
+            "type": "no_start",
+            "severity": "error",
+            "msg": "Не выбран корректный стартовый узел.",
+        })
+
+    edges = list(ChainEdge.objects.filter(chain=chain).order_by("priority", "id"))
+    edge_ids = [edge.id for edge in edges]
+    conditions_by_edge: dict[int, list[ChainCondition]] = {edge_id: [] for edge_id in edge_ids}
+    if edge_ids:
+        for condition in ChainCondition.objects.filter(edge_id__in=edge_ids).order_by("created_at", "id"):
+            conditions_by_edge[condition.edge_id].append(condition)
+
+    has_incoming = {int(edge.target_node_id) for edge in edges}
+    edges_by_source: dict[int, list[ChainEdge]] = {}
+    for edge in edges:
+        edges_by_source.setdefault(int(edge.source_node_id), []).append(edge)
+
+    for node in nodes:
+        if effective_start_node_id and node.id == int(effective_start_node_id):
+            continue
+        if int(node.id) not in has_incoming:
+            warnings.append({
+                "type": "orphan",
+                "severity": "warning",
+                "nodeId": int(node.id),
+                "msg": f"Узел «{_node_label(node)}» недоступен — нет входящих рёбер.",
+            })
+
+    for node in nodes:
+        payload = node.payload if isinstance(node.payload, dict) else {}
+        has_buttons = (
+            node.node_type in {"buttons", "start"}
+            or (node.node_type == "text" and isinstance(payload.get("buttons"), list) and len(payload.get("buttons")) > 0)
+        )
+        if not has_buttons:
+            continue
+
+        buttons = _normalize_node_buttons(node)
+        if not buttons:
+            continue
+
+        out_edges = edges_by_source.get(int(node.id), [])
+        covered_buttons: set[str] = set()
+        has_default_edge = False
+        for edge in out_edges:
+            edge_conditions = conditions_by_edge.get(edge.id, [])
+            if not edge_conditions:
+                has_default_edge = True
+            for cond in edge_conditions:
+                if getattr(cond, "condition_type", None) != "button_press":
+                    continue
+                params = cond.params if isinstance(cond.params, dict) else {}
+                label = str(params.get("button_label") or "").strip()
+                if label:
+                    covered_buttons.add(label)
+
+        for button_label in buttons:
+            if button_label in covered_buttons or has_default_edge:
+                continue
+            errors.append({
+                "type": "uncovered_btn",
+                "severity": "error",
+                "nodeId": int(node.id),
+                "msg": f"Кнопка «{button_label}» в узле не обработана.",
+            })
+
+    return {"errors": errors, "warnings": warnings}
+
+
 class CurrentChainView(APIView):
     permission_classes = [IsTenantMember]
 
@@ -83,6 +192,19 @@ class CurrentChainView(APIView):
             node_exists = ChainNode.objects.filter(chain=chain, id=start_node_id).exists()
             if not node_exists:
                 return Response({"detail": "start_node_id не относится к этой цепочке"}, status=status.HTTP_400_BAD_REQUEST)
+
+        requested_status = serializer.validated_data.get("status")
+        if requested_status == "active":
+            validation = _validate_chain_graph_for_activation(chain, start_node_id=start_node_id)
+            if validation["errors"]:
+                return Response(
+                    {
+                        "detail": "Нельзя активировать цепочку: исправьте ошибки валидации",
+                        "validation_errors": validation["errors"],
+                        "validation_warnings": validation["warnings"],
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         serializer.save()
         return Response(ChainSerializer(chain).data)

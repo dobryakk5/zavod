@@ -15,7 +15,7 @@ import { clientProductsApi } from '@/lib/api/clientProducts';
 import { productTypesApi } from '@/lib/api/productTypes';
 import { ApiError } from '@/lib/api';
 import { useRole } from '@/lib/hooks';
-import type { ClientProduct, ProductStatus, ProductStructure, ProductType } from '@/lib/types';
+import type { ClientProduct, ProductPackageConfig, ProductStatus, ProductStructure, ProductType } from '@/lib/types';
 
 type ProductRouteParams = { id: string };
 type ProductRouteParamsInput = ProductRouteParams | Promise<ProductRouteParams> | undefined;
@@ -24,7 +24,11 @@ interface ProductPageProps {
   params?: Promise<ProductRouteParams>;
 }
 
-type ProductPackage = { name: string; description?: string | null; price?: number | null };
+type ProductPackage = ProductPackageConfig & {
+  kind?: 'regular' | 'service_package' | null;
+  service_unit?: 'sessions' | 'minutes' | null;
+  service_quantity?: number | null;
+};
 
 const normalizePackages = (raw: ClientProduct['packages']): ProductPackage[] => {
   if (!Array.isArray(raw)) return [];
@@ -39,7 +43,29 @@ const normalizePackages = (raw: ClientProduct['packages']): ProductPackage[] => 
           : typeof rawPrice === 'string'
             ? Number.parseFloat(rawPrice.replace(',', '.'))
             : null;
-      return { name, description, price: Number.isFinite(price) ? price : null };
+      const rawKind = typeof item?.kind === 'string' ? item.kind.trim().toLowerCase() : '';
+      const rawServiceUnit = typeof item?.service_unit === 'string' ? item.service_unit.trim().toLowerCase() : '';
+      const rawServiceQuantity = (item as { service_quantity?: unknown } | null)?.service_quantity;
+      const serviceQuantity =
+        typeof rawServiceQuantity === 'number'
+          ? rawServiceQuantity
+          : typeof rawServiceQuantity === 'string'
+            ? Number.parseFloat(rawServiceQuantity.replace(',', '.'))
+            : null;
+
+      const kind: ProductPackage['kind'] =
+        rawKind === 'service_package' ? 'service_package' : 'regular';
+      const service_unit: ProductPackage['service_unit'] =
+        rawServiceUnit === 'minutes' ? 'minutes' : rawServiceUnit === 'sessions' ? 'sessions' : null;
+
+      return {
+        name,
+        description,
+        price: Number.isFinite(price) ? price : null,
+        kind,
+        service_unit,
+        service_quantity: Number.isFinite(serviceQuantity) && (serviceQuantity as number) > 0 ? serviceQuantity : null,
+      };
     })
     .filter((pkg) => pkg.name.trim().length > 0);
 };
@@ -56,7 +82,7 @@ type ProductPayload = {
   status: ProductStatus;
   product_type_id: number | null;
   short_description: string | null;
-  packages: Array<{ name: string; description?: string | null; price?: number | null }>;
+  packages: ProductPackageConfig[];
   structure: Record<string, unknown>;
 };
 type StructurePayloadInput = {
@@ -230,7 +256,16 @@ const buildPayloadFromProduct = (data: ClientProduct): ProductPayload | null => 
     .map((pkg) => ({
       name: pkg.name.trim(),
       description: (pkg.description ?? '').trim() || null,
-      price: typeof pkg.price === 'number' && Number.isFinite(pkg.price) ? pkg.price : null
+      price: typeof pkg.price === 'number' && Number.isFinite(pkg.price) ? pkg.price : null,
+      kind: pkg.kind === 'service_package' ? 'service_package' : 'regular',
+      service_unit:
+        pkg.kind === 'service_package' && (pkg.service_unit === 'sessions' || pkg.service_unit === 'minutes')
+          ? pkg.service_unit
+          : null,
+      service_quantity:
+        pkg.kind === 'service_package' && typeof pkg.service_quantity === 'number' && Number.isFinite(pkg.service_quantity) && pkg.service_quantity > 0
+          ? Math.round(pkg.service_quantity)
+          : null,
     }))
     .filter((pkg) => pkg.name.length > 0);
 
@@ -388,7 +423,10 @@ export default function ProductPage({ params }: ProductPageProps) {
   const handleAddProgramModuleRow = () => setProgramModules((prev) => [...prev, { module: '', result: '' }]);
 
   const handleAddPackage = () => {
-    setPackages((prev) => [...prev, { name: '', description: '', price: null }]);
+    setPackages((prev) => [
+      ...prev,
+      { name: '', description: '', price: null, kind: 'regular', service_unit: null, service_quantity: null },
+    ]);
   };
 
   const handleDeletePackage = (index: number) => {
@@ -580,7 +618,19 @@ export default function ProductPage({ params }: ProductPageProps) {
         .map((pkg) => ({
           name: pkg.name.trim(),
           description: (pkg.description ?? '').trim() || null,
-          price: typeof pkg.price === 'number' && Number.isFinite(pkg.price) ? pkg.price : null
+          price: typeof pkg.price === 'number' && Number.isFinite(pkg.price) ? pkg.price : null,
+          kind: pkg.kind === 'service_package' ? 'service_package' : 'regular',
+          service_unit:
+            pkg.kind === 'service_package' && (pkg.service_unit === 'sessions' || pkg.service_unit === 'minutes')
+              ? pkg.service_unit
+              : null,
+          service_quantity:
+            pkg.kind === 'service_package' &&
+            typeof pkg.service_quantity === 'number' &&
+            Number.isFinite(pkg.service_quantity) &&
+            pkg.service_quantity > 0
+              ? Math.round(pkg.service_quantity)
+              : null,
         }))
         .filter((pkg) => pkg.name.length > 0);
 
@@ -1483,7 +1533,10 @@ export default function ProductPage({ params }: ProductPageProps) {
         <div className="flex items-center justify-between gap-3">
           <div className="space-y-1">
             <div className="text-sm font-medium">Пакеты</div>
-            <div className="text-xs text-muted-foreground">Добавьте пакеты (например, Basic/Pro) и их описания.</div>
+            <div className="text-xs text-muted-foreground">
+              Добавьте пакеты (например, Basic/Pro). Для пакета услуг укажите тип списания: по встречам или по минутам.
+              Для автосписания используйте один сервисный пакет на продукт.
+            </div>
           </div>
           {canEdit && (
             <Button type="button" variant="secondary" size="sm" onClick={handleAddPackage} disabled={saving}>
@@ -1547,6 +1600,98 @@ export default function ProductPage({ params }: ProductPageProps) {
                       className="sm:text-right"
                     />
                   </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="space-y-1">
+                    <div className="text-xs font-medium text-muted-foreground">Тип пакета</div>
+                    <Select
+                      value={pkg.kind === 'service_package' ? 'service_package' : 'regular'}
+                      onValueChange={(value) => {
+                        setPackages((prev) =>
+                          prev.map((p, i) =>
+                            i === index
+                              ? {
+                                  ...p,
+                                  kind: value === 'service_package' ? 'service_package' : 'regular',
+                                  service_unit:
+                                    value === 'service_package' ? (p.service_unit === 'minutes' ? 'minutes' : 'sessions') : null,
+                                  service_quantity: value === 'service_package' ? p.service_quantity : null,
+                                }
+                              : p
+                          )
+                        );
+                      }}
+                      disabled={!canEdit || saving}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="regular">Обычный пакет</SelectItem>
+                        <SelectItem value="service_package">Пакет услуг</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {pkg.kind === 'service_package' && (
+                    <>
+                      <div className="space-y-1">
+                        <div className="text-xs font-medium text-muted-foreground">Списание</div>
+                        <Select
+                          value={pkg.service_unit === 'minutes' ? 'minutes' : 'sessions'}
+                          onValueChange={(value) => {
+                            setPackages((prev) =>
+                              prev.map((p, i) =>
+                                i === index
+                                  ? { ...p, service_unit: value === 'minutes' ? 'minutes' : 'sessions' }
+                                  : p
+                              )
+                            );
+                          }}
+                          disabled={!canEdit || saving}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="sessions">По количеству встреч</SelectItem>
+                            <SelectItem value="minutes">По минутам</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-xs font-medium text-muted-foreground">
+                          {pkg.service_unit === 'minutes' ? 'Минут в пакете' : 'Встреч в пакете'}
+                        </div>
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          min="1"
+                          step="1"
+                          value={
+                            typeof pkg.service_quantity === 'number' && Number.isFinite(pkg.service_quantity)
+                              ? String(Math.round(pkg.service_quantity))
+                              : ''
+                          }
+                          onChange={(e) => {
+                            const raw = e.target.value.trim();
+                            const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+                            setPackages((prev) =>
+                              prev.map((p, i) =>
+                                i === index
+                                  ? {
+                                      ...p,
+                                      service_quantity:
+                                        Number.isFinite(parsed) && parsed > 0 ? parsed : null,
+                                    }
+                                  : p
+                              )
+                            );
+                          }}
+                          disabled={!canEdit || saving}
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <div className="text-xs font-medium text-muted-foreground">Наполнение</div>

@@ -106,6 +106,11 @@ from .chains import (
 from .rag import (
     process_pending_kb_rag_indexing,
 )
+from .amocrm import (
+    sync_crm_client_to_amocrm_contact_task,
+    resync_all_crm_clients_to_amocrm_task,
+    process_amocrm_contacts_webhook_task,
+)
 
 __all__ = [
     # Publishing (2)
@@ -176,4 +181,8 @@ __all__ = [
     'chains_send_delayed_message',
     'chains_check_timeout',
     'process_pending_kb_rag_indexing',
+    # amoCRM
+    'sync_crm_client_to_amocrm_contact_task',
+    'resync_all_crm_clients_to_amocrm_task',
+    'process_amocrm_contacts_webhook_task',
 ]

@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.models import (
+    ClientProduct,
     MapAvailabilityEvent,
     MapContact,
     MapContactTag,
@@ -21,9 +22,17 @@ from core.models import (
     MapCRMNote,
     MapCRMPayment,
     MapCRMTag,
+    ContactProductPurchase,
     TelegramTask,
     UserTenantBinding,
 )
+from core.services.contact_service_packages import (
+    grant_service_package_to_purchase,
+    list_contact_service_package_items,
+    remove_service_package_usage_for_event,
+    sync_service_package_usage_for_event,
+)
+from core.services.crm_workflow_dispatcher import CRMWorkflowDispatcher
 from core.services.tenant_service import TenantService
 
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
@@ -40,6 +49,9 @@ from .serializers_crm_orm import (
     MapContactTagSerializer,
 )
 from .utils import get_active_client
+
+
+crm_workflow_dispatcher = CRMWorkflowDispatcher()
 
 
 def _upsert_event_payment(event: MapCRMEvent) -> int | None:
@@ -106,6 +118,16 @@ class MapContactViewSet(viewsets.ModelViewSet):
                 queryset=MapContactTag.objects.select_related("tag"),
             )
         )
+
+    @action(detail=True, methods=["get"], url_path="service-packages")
+    def service_packages(self, request, pk=None):
+        contact = self.get_object()
+        client = get_active_client(request.user)
+        items = list_contact_service_package_items(client=client, contact_id=int(contact.id))
+        return Response({
+            "contact_id": int(contact.id),
+            "items": items,
+        })
 
     @action(detail=True, methods=["post"])
     def add_tag(self, request, pk=None):
@@ -180,6 +202,58 @@ class MapCRMPaymentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return MapCRMPayment.objects.select_related("contact")
+
+    def _record_paid_product_purchase(self, payment: MapCRMPayment) -> None:
+        if str(getattr(payment, "status", "") or "") != "paid":
+            return
+        product_id = getattr(payment, "product_id", None)
+        contact_id = getattr(payment, "contact_id", None)
+        if not product_id or not contact_id:
+            return
+
+        client = get_active_client(self.request.user)
+        product = (
+            ClientProduct.objects
+            .filter(owner_id=client.id, id=product_id)
+            .only("id", "name", "packages")
+            .first()
+        )
+        if product is None:
+            return
+
+        purchase, _ = ContactProductPurchase.objects.update_or_create(
+            client=client,
+            contact_id=int(contact_id),
+            product_id=int(product_id),
+            defaults={
+                "product_name": (product.name or "").strip()[:255],
+                "amount": getattr(payment, "amount", None),
+                "currency": str(getattr(payment, "currency", "RUB") or "RUB").strip().upper()[:3] or "RUB",
+                "paid_at": getattr(payment, "paid_at", None),
+            },
+        )
+        grant_service_package_to_purchase(purchase=purchase, product=product, top_up=True)
+
+    def perform_create(self, serializer):
+        payment = serializer.save()
+        self._record_paid_product_purchase(payment)
+        if str(getattr(payment, "status", "") or "") == "paid":
+            client = get_active_client(self.request.user)
+            crm_workflow_dispatcher.dispatch_payment_paid(
+                tenant_id=client.id,
+                payment=payment,
+            )
+
+    def perform_update(self, serializer):
+        previous_status = str(getattr(serializer.instance, "status", "") or "")
+        payment = serializer.save()
+        if previous_status != "paid" and str(getattr(payment, "status", "") or "") == "paid":
+            self._record_paid_product_purchase(payment)
+            client = get_active_client(self.request.user)
+            crm_workflow_dispatcher.dispatch_payment_paid(
+                tenant_id=client.id,
+                payment=payment,
+            )
 
     @action(detail=False, methods=["get"])
     def summary(self, request):
@@ -315,11 +389,37 @@ class MapCRMEventViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         event = serializer.save()
         _upsert_event_payment(event)
+        client = get_active_client(self.request.user)
+        sync_service_package_usage_for_event(client=client, event=event)
+        crm_workflow_dispatcher.dispatch_event_created(
+            tenant_id=client.id,
+            event=event,
+        )
 
     def perform_update(self, serializer):
+        prev_status = str(getattr(serializer.instance, "status", "") or "")
+        prev_start_time = getattr(serializer.instance, "start_time", None)
+        prev_end_time = getattr(serializer.instance, "end_time", None)
         event = serializer.save()
         if "price" in self.request.data and event.price is not None:
             _upsert_event_payment(event)
+        client = get_active_client(self.request.user)
+        sync_service_package_usage_for_event(client=client, event=event)
+        next_status = str(getattr(event, "status", "") or "")
+        if prev_status != "cancelled" and next_status == "cancelled":
+            crm_workflow_dispatcher.dispatch_event_cancelled(
+                tenant_id=client.id,
+                event=event,
+            )
+        elif prev_start_time != getattr(event, "start_time", None) or prev_end_time != getattr(event, "end_time", None):
+            crm_workflow_dispatcher.dispatch_event_rescheduled(
+                tenant_id=client.id,
+                event=event,
+            )
+
+    def perform_destroy(self, instance):
+        remove_service_package_usage_for_event(event_id=int(instance.id))
+        instance.delete()
 
 
 class MapAvailabilityEventViewSet(viewsets.ModelViewSet):

@@ -367,6 +367,15 @@ export interface VkIntegration {
   extra?: Record<string, unknown>;
 }
 
+export interface ProductPackageConfig {
+  name: string;
+  description?: string | null;
+  price?: number | null;
+  kind?: 'regular' | 'service_package' | string | null;
+  service_unit?: 'sessions' | 'minutes' | string | null;
+  service_quantity?: number | null;
+}
+
 export interface ClientProduct {
   id: number;
   name: string;
@@ -377,7 +386,7 @@ export interface ClientProduct {
   short_description?: string | null;
   digital_product_document_id?: number | null;
   digital_product_document_title?: string | null;
-  packages?: Array<{ name: string; description?: string | null; price?: number | null }> | null;
+  packages?: ProductPackageConfig[] | null;
   structure?: ProductStructure | null;
   owner_id?: number;
   created_at?: string;

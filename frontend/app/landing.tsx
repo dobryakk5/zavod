@@ -16,6 +16,7 @@ export default function FibonattyNewLanding() {
         </div>
         <nav className="flex items-center gap-5">
           <a href="#platform" className="text-sm text-gray-700 hover:underline">Платформа</a>
+          <Link href="/features" className="text-sm text-gray-700 hover:underline">Возможности</Link>
           <a href="#process" className="text-sm text-gray-700 hover:underline">Pipeline</a>
           <a href="#pricing" className="text-sm text-gray-700 hover:underline">Тарифы</a>
           <Link href="/login" className="ml-4 inline-flex items-center px-4 py-2 border border-gray-200 rounded-md text-sm font-medium hover:shadow">
@@ -199,7 +200,12 @@ export default function FibonattyNewLanding() {
 
         <section id="pricing" className="py-20">
           <h2 className="text-3xl font-semibold">Тарифы</h2>
-          <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div className="mt-10 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8">
+            <Price
+              name="Free"
+              desc="Для старта работы с клиентами"
+              bullets={["CRM: встречи", "CRM: оплаты", "Воронка продаж", "Базовая работа с клиентами"]}
+            />
             <Price name="Starter" desc="Для теста и понимания" bullets={["Аналитика","AI‑контент","Ограничения"]} />
             <Price name="Growth" desc="Для роста" bullets={["Pipeline","Продуктовая линейка","Автоматизация"]} highlight />
             <Price name="Lab" desc="Для команд" bullets={["Кастом AI","Интеграции","RAG база знаний"]} />
@@ -253,11 +259,28 @@ function FAQItem({ q, a }: any) {
 }
 
 function Price({ name, desc, bullets, highlight }: any) {
+  const isFree = name === "Free";
   return (
-    <div className={`p-8 rounded-3xl border ${highlight ? "bg-yellow-50 border-yellow-300" : ""}`}>
-      <div className="text-xl font-semibold">{name}</div>
+    <div
+      className={`p-8 rounded-3xl border ${
+        highlight
+          ? "bg-yellow-50 border-yellow-300"
+          : isFree
+            ? "bg-slate-50 border-slate-300"
+            : ""
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xl font-semibold">{name}</div>
+        {isFree && (
+          <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+            Старт без оплаты
+          </span>
+        )}
+      </div>
       <div className="mt-1 text-sm text-gray-600">{desc}</div>
-      <ul className="mt-4 space-y-2">
+      {!isFree && <div className="mt-4 text-xs font-semibold uppercase tracking-wide text-gray-500">Что входит</div>}
+      <ul className="mt-3 space-y-2">
         {bullets.map((b: string) => (
           <li key={b} className="text-gray-600">• {b}</li>
         ))}
