@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Вход, старт и навигация — Каталог функций Zavod</title>
+  <meta name="description" content='Как пользователь входит в систему, что видит первым и как перемещается между разделами.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link active" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">Вход, старт и навигация</div>
+        <h1>Вход, старт и навигация</h1>
+        <p>Как пользователь входит в систему, что видит первым и как перемещается между разделами.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">16</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">4</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>Публичный вход: `/login`</li>
+<li>Callback VK: `/auth/vk/callback`</li>
+<li>Старт после входа: `/welcome`</li>
+<li>Публичный лендинг: `/`</li>
+</ul>
+<div class="route-badges">
+<code>/</code>
+<code>/login</code>
+<code>/auth/vk/callback</code>
+<code>/welcome</code>
+</div>
+</section>
+      <div class="toc-box">
+<div class="toc-title">Быстрый переход по странице</div>
+<div class="toc-links">
+<a href="#sec-1">1. Авторизация и доступ</a>
+<a href="#sec-2">2. Стартовый экран (Welcome)</a>
+<a href="#sec-3">3. Меню и навигация по системе</a>
+<a href="#sec-4">4. Роли и ограничения редактирования</a>
+</div></div>
+<section id="sec-1" class="content-section">
+  <h2>1. Авторизация и доступ</h2>
+  <p class="section-intro">Система поддерживает несколько сценариев входа для сотрудников и контактов клиентов.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Вход через Telegram</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь авторизуется через Telegram-виджет/бот из страницы `/login`.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрый вход в личный кабинет без отдельного пароля.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы собираете цепочку приветствия: сообщение → кнопки → напоминание через 1 день.</p>
+</article>
+<article class="function-card">
+  <h4>Вход через VK</h4>
+  <p><span class="label">Простыми словами:</span> Авторизация через ВКонтакте запускается с `/login`, а обратный переход обрабатывается на `/auth/vk/callback`.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает использовать VK как способ входа и привязки аккаунта.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Режим входа контакта клиента</h4>
+  <p><span class="label">Простыми словами:</span> Страница `/login` умеет режим «Войти как контакт» (через `tenant_id`).</p>
+  <p><span class="label">Зачем это нужно:</span> Контакт получает доступ к клиентской странице для записи, покупок и рефералов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент поделился своей ссылкой с другом и потом видит в кабинете, что приглашение зарегистрировалось.</p>
+</article>
+<article class="function-card">
+  <h4>Обработка VK callback</h4>
+  <p><span class="label">Простыми словами:</span> После авторизации VK сервис автоматически завершает вход/привязку и возвращает пользователя в нужный раздел.</p>
+  <p><span class="label">Зачем это нужно:</span> Убирает ручные шаги после авторизации.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, сотрудник заходит через Telegram за 1 минуту и сразу попадает на главный экран с нужными разделами.</p>
+</article>
+<article class="function-card">
+  <h4>Публичные страницы без входа</h4>
+  <p><span class="label">Простыми словами:</span> Без авторизации доступны маркетинговый лендинг, login, публичная страница клиента и публичные ссылки KB.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент может просматривать и переходить по ссылкам без доступа в кабинет.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+  </div>
+</section>
+<section id="sec-2" class="content-section">
+  <h2>2. Стартовый экран (Welcome)</h2>
+  <p class="section-intro">После входа пользователь попадает на экран с двумя ветками: маркетинг/SEO и управление клиентами.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Обзор двух веток работы</h4>
+  <p><span class="label">Простыми словами:</span> Стартовая страница показывает блоки «маркетинг/SEO» и «управление клиентами».</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь сразу понимает, где искать нужный сценарий.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Быстрые переходы по шагам</h4>
+  <p><span class="label">Простыми словами:</span> Карточки на welcome ведут в аналитику, SEO, посты, клиентов, настройки и другие разделы.</p>
+  <p><span class="label">Зачем это нужно:</span> Сокращает путь до ключевых функций системы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Счётчики выполненных AI-действий</h4>
+  <p><span class="label">Простыми словами:</span> На welcome отображаются счётчики событий генерации/аналитики (посты, Wordstat, SEO-группы и др.).</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает быстро оценить прогресс работ по проекту.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы продаёте кухни и хотите понять, что люди ищут чаще: «кухня на заказ» или «кухня под ключ».</p>
+</article>
+<article class="function-card">
+  <h4>Навигация по клиентским сценариям</h4>
+  <p><span class="label">Простыми словами:</span> Отдельные карточки ведут к встречам, чат-цепочкам, оплатам и сбору обратной связи.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно для менеджера/оператора в ежедневной работе.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+  </div>
+</section>
+<section id="sec-3" class="content-section">
+  <h2>3. Меню и навигация по системе</h2>
+  <p class="section-intro">Навигация единая для desktop и mobile, с адаптацией под публичные/приватные маршруты.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Боковое меню разделов</h4>
+  <p><span class="label">Простыми словами:</span> Основные разделы: Приветствие, Аналитика, Посты, SEO, Статьи, Продукты, Клиенты, Настройки.</p>
+  <p><span class="label">Зачем это нужно:</span> Даёт постоянный доступ к основным функциям системы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Мобильное меню</h4>
+  <p><span class="label">Простыми словами:</span> На мобильных устройствах нужно для выезжающее меню со списком разделов.</p>
+  <p><span class="label">Зачем это нужно:</span> Сохраняет доступность функций на телефоне/планшете.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Подсветка активного раздела</h4>
+  <p><span class="label">Простыми словами:</span> Текущий раздел автоматически подсвечивается в меню.</p>
+  <p><span class="label">Зачем это нужно:</span> Снижает вероятность ошибок навигации.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Выход из системы</h4>
+  <p><span class="label">Простыми словами:</span> Кнопка «Выйти» завершает сессию и возвращает пользователя на публичный вход.</p>
+  <p><span class="label">Зачем это нужно:</span> Нужна для безопасной работы на общих устройствах.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, сотрудник заходит через Telegram за 1 минуту и сразу попадает на главный экран с нужными разделами.</p>
+</article>
+  </div>
+</section>
+<section id="sec-4" class="content-section">
+  <h2>4. Роли и ограничения редактирования</h2>
+  <p class="section-intro">Во многих разделах система различает просмотр и редактирование (через проверку прав роли).</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Режим просмотра</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь без прав видит данные, но не может запускать генерацию или менять настройки.</p>
+  <p><span class="label">Зачем это нужно:</span> Безопасный доступ для наблюдателей/ассистентов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы один раз настраиваете часовой пояс и соцаккаунты, чтобы публикации и встречи шли в правильное время.</p>
+</article>
+<article class="function-card">
+  <h4>Режим редактирования</h4>
+  <p><span class="label">Простыми словами:</span> Владелец/редактор может запускать AI-процессы, создавать записи, изменять настройки и удалять элементы.</p>
+  <p><span class="label">Зачем это нужно:</span> Полный рабочий режим для операционной команды.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы один раз настраиваете часовой пояс и соцаккаунты, чтобы публикации и встречи шли в правильное время.</p>
+</article>
+<article class="function-card">
+  <h4>Подсказки при отсутствии прав</h4>
+  <p><span class="label">Простыми словами:</span> В разделах показываются сообщения о нехватке прав на запуск/изменение данных.</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь понимает, почему действие недоступно.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+  </div>
+</section>
+      
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="analytics.html"><span class="related-title">Аналитика: каналы, сайт, подборки и TGStat</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="clients-crm.html"><span class="related-title">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="settings-integrations.html"><span class="related-title">Настройки клиента, интеграции и оплата</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="public-client-page-payments.html"><span class="related-title">Публичная страница клиента, записи, покупки и рефералы</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="index.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">Каталог функций системы Zavod</span></a><a class="pager-card" href="analytics.html"><span class="pager-label">Следующая →</span><span class="pager-title">Аналитика: каналы, сайт, подборки и TGStat</span></a></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>welcome-access.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

@@ -49,7 +49,7 @@ from .serializers import (
 )
 from .utils import enforce_generation_limit, get_active_client
 
-VK_SCOPE = "wall photos groups"
+VK_SCOPE = "wall photos groups messages"
 VK_TIMEOUT = 15
 VK_ID_AUTHORIZE_URL = "https://id.vk.ru/authorize"
 VK_ID_TOKEN_URL = "https://id.vk.ru/oauth2/auth"

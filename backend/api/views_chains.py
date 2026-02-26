@@ -50,6 +50,15 @@ def _build_graph(chain: Chain) -> dict:
     }
 
 
+def _get_existing_start_node(chain: Chain) -> ChainNode | None:
+    return (
+        ChainNode.objects
+        .filter(chain=chain, node_type="start")
+        .order_by("created_at", "id")
+        .first()
+    )
+
+
 class CurrentChainView(APIView):
     permission_classes = [IsTenantMember]
 
@@ -114,7 +123,19 @@ class ChainNodesView(APIView):
         chain = _get_or_create_chain(client, chain_id=chain_id)
         serializer = ChainNodeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        if serializer.validated_data.get("node_type") == "start":
+            existing_start = _get_existing_start_node(chain)
+            if existing_start:
+                if chain.start_node_id != existing_start.id:
+                    chain.start_node_id = existing_start.id
+                    chain.save(update_fields=["start_node_id"])
+                return Response(ChainNodeSerializer(existing_start).data, status=status.HTTP_200_OK)
+
         node = serializer.save(chain=chain)
+        if node.node_type == "start" and chain.start_node_id != node.id:
+            chain.start_node_id = node.id
+            chain.save(update_fields=["start_node_id"])
         return Response(ChainNodeSerializer(node).data, status=status.HTTP_201_CREATED)
 
 

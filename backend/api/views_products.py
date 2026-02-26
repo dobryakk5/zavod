@@ -19,6 +19,7 @@ from core.models import (
     Client,
     ClientProduct,
     GenerationEvent,
+    KbDocument,
     MindEdge,
     MindMap,
     MindNode,
@@ -44,6 +45,7 @@ from core.services.product_mindmap import (
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers import (
     ClientProductSerializer,
+    KbDocumentDetailSerializer,
     MindEdgeSerializer,
     MindMapDetailSerializer,
     MindMapSerializer,
@@ -66,7 +68,7 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
 
     def get_permissions(self):
-        if self.action in {"create", "update", "partial_update", "destroy"}:
+        if self.action in {"create", "update", "partial_update", "destroy", "create_digital_product_page"}:
             return [IsTenantOwnerOrEditor()]
         return super().get_permissions()
 
@@ -432,6 +434,71 @@ class ClientProductViewSet(viewsets.ModelViewSet):
         client = get_active_client(self.request.user)
         self._ensure_product_type_belongs_to_client(serializer, client)
         serializer.save()
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="create-digital-product-page",
+        permission_classes=[IsTenantOwnerOrEditor],
+    )
+    def create_digital_product_page(self, request, pk=None):
+        client = get_active_client(request.user)
+        product = get_object_or_404(ClientProduct.objects.select_related("digital_product_document"), pk=pk, owner=client)
+
+        existing_document = getattr(product, "digital_product_document", None)
+        if existing_document and existing_document.workspace_id == client.id:
+            serializer = ClientProductSerializer(product, context=self.get_serializer_context())
+            return Response(
+                {
+                    "created": False,
+                    "product": serializer.data,
+                    "document": KbDocumentDetailSerializer(existing_document, context={"request": request}).data,
+                    "kb_url": f"/kb/{existing_document.id}",
+                }
+            )
+
+        title = (product.name or "").strip() or f"Продукт #{product.id}"
+        short_description = (product.short_description or "").strip()
+        initial_content = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "heading",
+                    "attrs": {"level": 1},
+                    "content": [{"type": "text", "text": title}],
+                },
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": short_description or "Описание цифрового продукта"}],
+                },
+            ],
+        }
+
+        document = KbDocument.objects.create(
+            workspace=client,
+            title=title,
+            icon="📦",
+            content=initial_content,
+            created_by=request.user,
+            last_edited_by=request.user,
+            document_type=KbDocument.DOCUMENT_TYPE_PRODUCT,
+            is_published=True,
+            is_archived=False,
+            is_template=False,
+        )
+        product.digital_product_document = document
+        product.save(update_fields=["digital_product_document"])
+
+        product_serializer = ClientProductSerializer(product, context=self.get_serializer_context())
+        return Response(
+            {
+                "created": True,
+                "product": product_serializer.data,
+                "document": KbDocumentDetailSerializer(document, context={"request": request}).data,
+                "kb_url": f"/kb/{document.id}",
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class WeeklySalesPlanViewSet(viewsets.ModelViewSet):

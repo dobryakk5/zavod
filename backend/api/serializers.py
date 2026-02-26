@@ -975,6 +975,8 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "brand_name",
             "niche",
             "product_service",
+            "client_page_config",
+            "client_page_content",
             "timezone",
             "avatar",
             "pains",
@@ -1548,6 +1550,7 @@ class KbDocumentListSerializer(serializers.ModelSerializer):
             "title",
             "icon",
             "cover_image",
+            "document_type",
             "index_status",
             "indexed_at",
             "index_error",
@@ -1581,6 +1584,7 @@ class KbDocumentDetailSerializer(serializers.ModelSerializer):
             "title",
             "icon",
             "cover_image",
+            "document_type",
             "content",
             "index_status",
             "indexed_at",
@@ -1923,6 +1927,8 @@ class ClientProductSerializer(serializers.ModelSerializer):
     )
     product_type_name = serializers.CharField(source="product_type.name", read_only=True)
     product_type = serializers.SerializerMethodField()
+    digital_product_document_id = serializers.IntegerField(read_only=True)
+    digital_product_document_title = serializers.CharField(source="digital_product_document.title", read_only=True)
 
     def get_product_type(self, obj: ClientProduct):
         product_type = getattr(obj, "product_type", None)
@@ -1940,6 +1946,8 @@ class ClientProductSerializer(serializers.ModelSerializer):
             "product_type",
             "status",
             "short_description",
+            "digital_product_document_id",
+            "digital_product_document_title",
             "packages",
             "structure",
             "owner_id",

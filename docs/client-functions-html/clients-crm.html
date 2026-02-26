@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CRM: клиенты, расписание, обратная связь, оплаты и ChatBot — Каталог функций Zavod</title>
+  <meta name="description" content='Операционный раздел для ведения клиентской базы, встреч, обратной связи, задач и платежей.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link active" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</div>
+        <h1>CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</h1>
+        <p>Операционный раздел для ведения клиентской базы, встреч, обратной связи, задач и платежей.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">37</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">2</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>CRM: `/clients`</li>
+<li>Редактор чат-цепочки: `/clients/chatbot/[chainId]`</li>
+</ul>
+<div class="route-badges">
+<code>/clients</code>
+<code>/clients/chatbot/[chainId]</code>
+</div>
+</section>
+      <div class="toc-box">
+<div class="toc-title">Быстрый переход по странице</div>
+<div class="toc-links">
+<a href="#sec-1">1. Раздел «Клиенты» (`/clients`) — общая структура</a>
+<a href="#sec-2">2. Вкладка «Клиенты» (карта клиентов и тегов)</a>
+<a href="#sec-3">3. Вкладка «Расписание» (календарь + задачи оператора)</a>
+<a href="#sec-4">4. Вкладка «Уровень сервиса» (обратная связь + задачи)</a>
+<a href="#sec-5">5. Вкладка «Теги»</a>
+<a href="#sec-6">6. Вкладка «Платежи» (CRM-платежи)</a>
+<a href="#sec-7">7. Вкладка «ChatBot» и редактор цепочек</a>
+</div></div>
+<section id="sec-1" class="content-section">
+  <h2>1. Раздел «Клиенты» (`/clients`) — общая структура</h2>
+  <p class="section-intro">Главный CRM-раздел объединяет несколько вкладок и быстрый индикатор ближайшей встречи.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Индикатор ближайшей встречи</h4>
+  <p><span class="label">Простыми словами:</span> Вверху страницы показывается ближайшая запланированная встреча с ссылкой на карточку контакта.</p>
+  <p><span class="label">Зачем это нужно:</span> Менеджер быстро видит следующий важный контакт.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Вкладки CRM</h4>
+  <p><span class="label">Простыми словами:</span> Доступны вкладки: Клиенты, Расписание, Уровень сервиса, Теги, Платежи, ChatBot.</p>
+  <p><span class="label">Зачем это нужно:</span> Один раздел закрывает ключевые CRM-процессы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Навигация вкладок через URL-параметры</h4>
+  <p><span class="label">Простыми словами:</span> Активные вкладки сохраняются в query-параметрах (`tab`, `scheduleTab`).</p>
+  <p><span class="label">Зачем это нужно:</span> Можно отправлять коллегам точные ссылки на нужный экран.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы отправляете коллеге ссылку сразу на нужную вкладку, а не объясняете по шагам, куда нажимать.</p>
+</article>
+  </div>
+</section>
+<section id="sec-2" class="content-section">
+  <h2>2. Вкладка «Клиенты» (карта клиентов и тегов)</h2>
+  <p class="section-intro">Рабочий экран для клиентской базы и теговой карты (цели/боли/опыт).</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Список клиентов</h4>
+  <p><span class="label">Простыми словами:</span> Показывается список клиентов с возможностью быстрого открытия карточки контакта в новом окне.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет переход к детальной работе с клиентом.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Создание клиентов пачкой/через чипы</h4>
+  <p><span class="label">Простыми словами:</span> Есть добавление клиентов из строки ввода с разбиением на элементы.</p>
+  <p><span class="label">Зачем это нужно:</span> Экономит время при первичном заполнении базы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Автосохранение имени клиента</h4>
+  <p><span class="label">Простыми словами:</span> Изменения имени клиента сохраняются автоматически.</p>
+  <p><span class="label">Зачем это нужно:</span> Снижает количество ручных действий при чистке базы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Теги трёх типов: цель/боль/опыт</h4>
+  <p><span class="label">Простыми словами:</span> Сервис ведёт отдельные типы тегов и назначение тегов клиентам.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает сегментировать базу по смыслу.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Фильтры по тегам и имени</h4>
+  <p><span class="label">Простыми словами:</span> Можно отбирать клиентов по выбранным тегам и строке поиска.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно готовить сегменты для маркетинга и продаж.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Автосохранение тегов</h4>
+  <p><span class="label">Простыми словами:</span> Изменения тегов и их значений сохраняются без сложного workflow.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрое редактирование карты клиента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Статистика по тегам и назначениям</h4>
+  <p><span class="label">Простыми словами:</span> Видны агрегаты по количеству клиентов/тегов/назначений.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает оценить качество заполнения CRM.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+  </div>
+</section>
+<section id="sec-3" class="content-section">
+  <h2>3. Вкладка «Расписание» (календарь + задачи оператора)</h2>
+  <p class="section-intro">Комбинация календаря встреч и списка операторских задач.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Календарь встреч клиентов</h4>
+  <p><span class="label">Простыми словами:</span> Показывает встречи и доступные окна времени (availability) в дневном/недельном/месячном представлении.</p>
+  <p><span class="label">Зачем это нужно:</span> Даёт полный обзор занятости и слотов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Доступные слоты (availability)</h4>
+  <p><span class="label">Простыми словами:</span> В календаре отображаются отдельные карточки доступного времени, их можно редактировать.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно настраивать окна для записей клиентов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Перетаскивание встреч</h4>
+  <p><span class="label">Простыми словами:</span> Календарь поддерживает перенос встреч по времени/датам.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрое перепланирование без перехода в карточку встречи.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Переход в карточку контакта из события</h4>
+  <p><span class="label">Простыми словами:</span> Событие календаря ведёт в карточку контакта на вкладку расписания.</p>
+  <p><span class="label">Зачем это нужно:</span> Связывает планирование с контекстом клиента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Задачи оператора</h4>
+  <p><span class="label">Простыми словами:</span> Второй таб внутри расписания ведёт на список операторских задач по CRM.</p>
+  <p><span class="label">Зачем это нужно:</span> Отдельный контроль ручных задач команды.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Создание операторской задачи</h4>
+  <p><span class="label">Простыми словами:</span> Можно создать задачу с названием, описанием и приоритетом.</p>
+  <p><span class="label">Зачем это нужно:</span> Подходит для внутренней работы команды по клиенту.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Статусы и история задач</h4>
+  <p><span class="label">Простыми словами:</span> Для задач ведётся статус (открыта/в работе/выполнена) и история шагов с комментариями.</p>
+  <p><span class="label">Зачем это нужно:</span> Прозрачный контроль исполнения.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Фильтры по статусу и источнику</h4>
+  <p><span class="label">Простыми словами:</span> Задачи фильтруются по статусу и автору (сервис/оператор).</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно разделять системные и ручные задачи.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+  </div>
+</section>
+<section id="sec-4" class="content-section">
+  <h2>4. Вкладка «Уровень сервиса» (обратная связь + задачи)</h2>
+  <p class="section-intro">Экран обратной связи из Telegram с возможностью создания/ведения операторских задач по записи обратной связи.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Список обратной связи клиентов</h4>
+  <p><span class="label">Простыми словами:</span> Показываются дата, оценка, комментарий и Telegram-имя клиента.</p>
+  <p><span class="label">Зачем это нужно:</span> Команда видит фактический сервисный фидбек.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Сортировка обратной связи</h4>
+  <p><span class="label">Простыми словами:</span> Можно сортировать по дате, оценке, тексту комментария и клиенту.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно разбирать негатив/приоритетные кейсы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Задача по записи обратной связи</h4>
+  <p><span class="label">Простыми словами:</span> Для строки обратной связи можно создать связанную операторскую задачу.</p>
+  <p><span class="label">Зачем это нужно:</span> Негатив и запросы клиента превращаются в контролируемые действия.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Просмотр задач по уровню сервиса</h4>
+  <p><span class="label">Простыми словами:</span> Для каждой записи показывается бейдж статуса связанных задач и открывается модальное окно задач.</p>
+  <p><span class="label">Зачем это нужно:</span> Менеджер быстро видит, обработан ли отзыв.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, после услуги клиент оставил отзыв, а менеджер сразу пометил его как обработанный и поставил задачу на ответ.</p>
+</article>
+<article class="function-card">
+  <h4>Добавление истории по задаче из модального окна</h4>
+  <p><span class="label">Простыми словами:</span> По связанным задачам можно добавлять шаги и обновлять статус.</p>
+  <p><span class="label">Зачем это нужно:</span> Замыкает цикл обработки обратной связи.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+  </div>
+</section>
+<section id="sec-5" class="content-section">
+  <h2>5. Вкладка «Теги»</h2>
+  <p class="section-intro">Простой справочник тегов CRM (цель/боль/опыт).</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Создание тега</h4>
+  <p><span class="label">Простыми словами:</span> Новый тег создаётся с выбором типа и значением.</p>
+  <p><span class="label">Зачем это нужно:</span> Сервис поддерживает единую классификацию клиентов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Группировка по типам</h4>
+  <p><span class="label">Простыми словами:</span> Теги автоматически разбиваются на карточки: Цель, Боль, Опыт.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобный обзор справочника для команды.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление тега</h4>
+  <p><span class="label">Простыми словами:</span> Ненужный тег удаляется из справочника.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает поддерживать качество таксономии.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+  </div>
+</section>
+<section id="sec-6" class="content-section">
+  <h2>6. Вкладка «Платежи» (CRM-платежи)</h2>
+  <p class="section-intro">Рабочий экран CRM-платежей на базе нового редактора клиентов (`NewClientsEditor` в режиме payments).</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Список CRM-платежей</h4>
+  <p><span class="label">Простыми словами:</span> Таблица платежей с привязкой к клиентам и событиям.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно контролировать денежный поток по клиентской базе.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Добавление платежа</h4>
+  <p><span class="label">Простыми словами:</span> Создание нового платежа с суммой, валютой, статусом и описанием.</p>
+  <p><span class="label">Зачем это нужно:</span> Регистрация плановых и фактических оплат.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Генерация ссылки YooKassa</h4>
+  <p><span class="label">Простыми словами:</span> Для CRM-платежа можно сгенерировать и скопировать ссылку на оплату.</p>
+  <p><span class="label">Зачем это нужно:</span> Менеджер быстро отправляет ссылку клиенту.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление платежа</h4>
+  <p><span class="label">Простыми словами:</span> Платёж можно удалить с подтверждением.</p>
+  <p><span class="label">Зачем это нужно:</span> Очищает ошибочно созданные записи.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+  </div>
+</section>
+<section id="sec-7" class="content-section">
+  <h2>7. Вкладка «ChatBot» и редактор цепочек</h2>
+  <p class="section-intro">Список цепочек и визуальный редактор логики диалога для чат-бота.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Список чат-цепочек</h4>
+  <p><span class="label">Простыми словами:</span> Во вкладке отображаются цепочки с ID и статусом, по клику открывается редактор.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно управлять несколькими сценариями бота.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы собираете цепочку приветствия: сообщение → кнопки → напоминание через 1 день.</p>
+</article>
+<article class="function-card">
+  <h4>Редактор цепочки (`/clients/chatbot/[chainId]`)</h4>
+  <p><span class="label">Простыми словами:</span> Открывает графовый редактор цепочки с узлами и связями.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно визуально проектировать логику общения с клиентом.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы собираете цепочку приветствия: сообщение → кнопки → напоминание через 1 день.</p>
+</article>
+<article class="function-card">
+  <h4>Добавление узлов</h4>
+  <p><span class="label">Простыми словами:</span> В редакторе доступны типы узлов: сообщение, кнопки, задержка, условие и др.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает строить сценарий без программиста.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы собираете цепочку приветствия: сообщение → кнопки → напоминание через 1 день.</p>
+</article>
+<article class="function-card">
+  <h4>Редактирование узлов</h4>
+  <p><span class="label">Простыми словами:</span> Узел можно редактировать (текст, кнопки, таймеры, фото и пр.).</p>
+  <p><span class="label">Зачем это нужно:</span> Гибкая настройка поведения бота.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы собираете цепочку приветствия: сообщение → кнопки → напоминание через 1 день.</p>
+</article>
+<article class="function-card">
+  <h4>Условия и роутинг</h4>
+  <p><span class="label">Простыми словами:</span> Для переходов доступны условия, включая условия роутера и обработку кнопок.</p>
+  <p><span class="label">Зачем это нужно:</span> Даёт сложные сценарии ветвления диалога.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы собираете цепочку приветствия: сообщение → кнопки → напоминание через 1 день.</p>
+</article>
+<article class="function-card">
+  <h4>Проверка валидности цепочки</h4>
+  <p><span class="label">Простыми словами:</span> Редактор показывает ошибки (нет стартового узла, пустая цепочка, необработанные кнопки и т.п.).</p>
+  <p><span class="label">Зачем это нужно:</span> Снижает риск сломанного сценария в продакшене.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы собираете цепочку приветствия: сообщение → кнопки → напоминание через 1 день.</p>
+</article>
+<article class="function-card">
+  <h4>Сохранение цепочки</h4>
+  <p><span class="label">Простыми словами:</span> Изменения сохраняются из верхней панели редактора, статус цепочки можно переключать.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает рабочий цикл «черновик/активна/пауза».</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы собираете цепочку приветствия: сообщение → кнопки → напоминание через 1 день.</p>
+</article>
+  </div>
+</section>
+      
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="contact-meetings.html"><span class="related-title">Карточка контакта и управление встречами</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="public-client-page-payments.html"><span class="related-title">Публичная страница клиента, записи, покупки и рефералы</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="settings-integrations.html"><span class="related-title">Настройки клиента, интеграции и оплата</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="products-mindmap.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">Продукты, продажи и mind map</span></a><a class="pager-card" href="contact-meetings.html"><span class="pager-label">Следующая →</span><span class="pager-title">Карточка контакта и управление встречами</span></a></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>clients-crm.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

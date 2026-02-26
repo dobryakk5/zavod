@@ -15,7 +15,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from core.models import Client, UserSocialAccount, UserTenantRole
+from core.models import Client, MapContact, UserSocialAccount, UserTenantBinding, UserTenantRole
+from core.services.telegram_user_service import TelegramUserService
 
 from .authentication import CookieJWTAuthentication
 from .views_accounts import COOKIE_MAX_AGE, COOKIE_SAMESITE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
@@ -105,7 +106,13 @@ def _fetch_vk_profile(access_token: str, user_id: int | str) -> dict | None:
     return payload if payload.get("user_id") or payload.get("id") else None
 
 
-def _get_or_create_user_and_client(profile: dict, vk_user_id: int | str, email: str | None):
+def _get_or_create_user_and_client(
+    profile: dict,
+    vk_user_id: int | str,
+    email: str | None,
+    *,
+    create_client_tenant: bool = True,
+):
     first_name = (profile.get("first_name") or "").strip()
     last_name = (profile.get("last_name") or "").strip()
     screen_name = (profile.get("screen_name") or "").strip()
@@ -131,18 +138,19 @@ def _get_or_create_user_and_client(profile: dict, vk_user_id: int | str, email: 
         if changed:
             user.save(update_fields=["first_name", "last_name"])
 
-    client_slug = str(vk_user_id)
-    client, _ = Client.objects.get_or_create(
-        slug=client_slug,
-        defaults={
-            "name": f"{first_name} {last_name}".strip() or username or f"User {vk_user_id}",
-        },
-    )
-    UserTenantRole.objects.get_or_create(
-        user=user,
-        client=client,
-        defaults={"role": "owner"},
-    )
+    if create_client_tenant:
+        client_slug = str(vk_user_id)
+        client, _ = Client.objects.get_or_create(
+            slug=client_slug,
+            defaults={
+                "name": f"{first_name} {last_name}".strip() or username or f"User {vk_user_id}",
+            },
+        )
+        UserTenantRole.objects.get_or_create(
+            user=user,
+            client=client,
+            defaults={"role": "owner"},
+        )
 
     return user
 
@@ -246,15 +254,36 @@ class VkAuthView(APIView):
         if not user:
             return Response(status=status.HTTP_401_UNAUTHORIZED)
 
+        linked_vk = (
+            UserSocialAccount.objects.filter(
+                user=user,
+                provider=UserSocialAccount.PROVIDER_VK,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        vk_provider_id = str(linked_vk.provider_id) if linked_vk and linked_vk.provider_id else str(user.id)
+        binding = (
+            UserTenantBinding.objects.filter(
+                provider=UserTenantBinding.PROVIDER_VK,
+                provider_user_id=vk_provider_id,
+                is_active=True,
+            )
+            .order_by("-bound_at", "-id")
+            .first()
+        )
+        extra = linked_vk.extra_data if linked_vk and isinstance(linked_vk.extra_data, dict) else {}
         return Response(
             {
                 "user": {
-                    "vkId": str(user.id),
-                    "firstName": user.first_name or user.username,
-                    "lastName": user.last_name,
-                    "username": user.username,
-                    "photoUrl": None,
+                    "vkId": vk_provider_id,
+                    "firstName": extra.get("first_name") or user.first_name or user.username,
+                    "lastName": extra.get("last_name") or user.last_name,
+                    "username": extra.get("screen_name") or user.username,
+                    "photoUrl": extra.get("photo_url"),
                     "authDate": str(user.date_joined),
+                    "contactId": int(binding.contact_id) if binding and binding.contact_id is not None else None,
+                    "tenantId": int(binding.tenant_id) if binding else None,
                 }
             }
         )
@@ -264,7 +293,17 @@ class VkAuthView(APIView):
         state = (request.data.get("state") or "").strip()
         device_id = (request.data.get("device_id") or "").strip()
         redirect_uri = (request.data.get("redirect_uri") or "").strip()
+        tenant_id_raw = request.data.get("tenant_id")
+        tenant_id_hint = None
         config = _get_vk_config()
+
+        if tenant_id_raw not in (None, ""):
+            try:
+                tenant_id_hint = int(tenant_id_raw)
+            except (TypeError, ValueError):
+                return Response({"error": "Некорректный tenant_id"}, status=status.HTTP_400_BAD_REQUEST)
+            if tenant_id_hint <= 0:
+                return Response({"error": "Некорректный tenant_id"}, status=status.HTTP_400_BAD_REQUEST)
 
         if not code:
             return Response({"error": "Missing code"}, status=status.HTTP_400_BAD_REQUEST)
@@ -314,11 +353,59 @@ class VkAuthView(APIView):
 
         user = _find_user_by_vk_provider_id(vk_user_id)
         if user is None:
-            user = _get_or_create_user_and_client(profile=profile, vk_user_id=vk_user_id, email=email)
+            user = _get_or_create_user_and_client(
+                profile=profile,
+                vk_user_id=vk_user_id,
+                email=email,
+                create_client_tenant=(tenant_id_hint is None),
+            )
 
         linked, error = _link_vk_to_user(user=user, vk_user_id=vk_user_id, profile=profile, email=email)
         if not linked:
             return Response({"error": error}, status=status.HTTP_409_CONFLICT)
+
+        if tenant_id_hint is not None:
+            existing_tenant_binding = (
+                UserTenantBinding.objects.filter(
+                    provider=UserTenantBinding.PROVIDER_VK,
+                    provider_user_id=str(vk_user_id),
+                    tenant_id=tenant_id_hint,
+                )
+                .order_by("-bound_at", "-id")
+                .first()
+            )
+            contact_id = int(existing_tenant_binding.contact_id) if (
+                existing_tenant_binding and existing_tenant_binding.contact_id is not None
+            ) else None
+            if contact_id is None:
+                contact_name = (
+                    f"{(profile.get('first_name') or '').strip()} {(profile.get('last_name') or '').strip()}".strip()
+                    or (profile.get("screen_name") or "").strip()
+                    or f"VK {vk_user_id}"
+                )
+                contact = MapContact.objects.create(name=contact_name)
+                contact_id = int(contact.id)
+
+            try:
+                TelegramUserService().bind_identity_to_tenant(
+                    provider=UserTenantBinding.PROVIDER_VK,
+                    provider_user_id=str(vk_user_id),
+                    tenant_id=tenant_id_hint,
+                    contact_id=contact_id,
+                    telegram_username=None,
+                )
+            except ValueError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        binding = (
+            UserTenantBinding.objects.filter(
+                provider=UserTenantBinding.PROVIDER_VK,
+                provider_user_id=str(vk_user_id),
+                is_active=True,
+            )
+            .order_by("-bound_at", "-id")
+            .first()
+        )
 
         refresh = RefreshToken.for_user(user)
         access = refresh.access_token
@@ -332,6 +419,8 @@ class VkAuthView(APIView):
                     "username": profile.get("screen_name", "") or user.username,
                     "photoUrl": profile.get("avatar"),
                     "authDate": str(user.date_joined),
+                    "contactId": int(binding.contact_id) if binding and binding.contact_id is not None else None,
+                    "tenantId": int(binding.tenant_id) if binding else None,
                 }
             }
         )

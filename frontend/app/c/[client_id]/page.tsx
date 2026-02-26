@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { generateHTML } from '@tiptap/html';
 import {
   ApiError,
+  API_BASE_URL,
   BACKEND_BASE_URL,
   apiFetch,
 } from '@/lib/api';
@@ -18,6 +20,7 @@ import {
   type Event,
 } from '@/lib/api/crm';
 import type { ClientProduct, ClientSettings } from '@/lib/types';
+import { createKbExtensions } from '@/components/kb/tiptapExtensions';
 import {
   DEFAULT_TENANT_TIMEZONE,
   formatInTenantTimezone,
@@ -69,6 +72,91 @@ type TelegramAuthResponse = {
   };
 };
 
+type VkAuthResponse = {
+  user?: {
+    vkId?: string;
+    firstName?: string;
+    lastName?: string;
+    username?: string;
+    photoUrl?: string | null;
+    authDate?: string;
+    contactId?: number | null;
+    tenantId?: number | null;
+  };
+};
+
+type PublicClientPageResponse = {
+  client?: {
+    id?: number;
+    name?: string;
+  };
+  settings?: Partial<ClientSettings> | null;
+  products?: ClientProduct[];
+  availability_events?: AvailabilityEvent[];
+  events?: Event[];
+};
+
+type PublicBuyProductResponse = {
+  id?: string;
+  status?: string;
+  payment_url?: string;
+  confirmation_url?: string;
+  product_id?: number;
+};
+
+type PublicProductPaymentStatusResponse = {
+  payment_id?: string;
+  status?: string;
+  paid?: boolean;
+  delivery?: {
+    ready?: boolean;
+    url?: string;
+    document_id?: number;
+    document_title?: string;
+    message?: string;
+    missing_product_page?: boolean;
+  } | null;
+};
+
+type ContactPurchaseListItem = {
+  id?: number;
+  product_id?: number;
+  product_name?: string;
+  paid_at?: string | null;
+  amount?: string | null;
+  currency?: string | null;
+  payment_id?: string | null;
+  delivery?: {
+    ready?: boolean;
+    url?: string;
+    document_id?: number;
+    document_title?: string;
+    message?: string;
+    missing_product_page?: boolean;
+  } | null;
+};
+
+type ContactPurchasesResponse = {
+  contact_id?: number;
+  items?: ContactPurchaseListItem[];
+};
+
+type ClientPageBlockKey =
+  | 'header'
+  | 'product'
+  | 'purchases'
+  | 'custom_content'
+  | 'booking'
+  | 'planned_meetings'
+  | 'referrals';
+
+type ClientPageBlocksConfig = Record<ClientPageBlockKey, boolean>;
+
+type ClientPageTemplateConfig = {
+  blocks: ClientPageBlocksConfig;
+  selected_product_id: number | null;
+};
+
 type Slot = {
   id: string;
   startAt: string;
@@ -96,6 +184,71 @@ const REFERRAL_STATUS_LABELS: Record<string, string> = {
   registered: 'Зарегистрирован',
   rewarded: 'Засчитан',
   expired: 'Истек',
+};
+
+const DEFAULT_CLIENT_PAGE_BLOCKS: ClientPageBlocksConfig = {
+  header: true,
+  product: true,
+  purchases: true,
+  custom_content: true,
+  booking: true,
+  planned_meetings: true,
+  referrals: true,
+};
+
+const normalizeClientPageTemplateConfig = (value: unknown): ClientPageTemplateConfig => {
+  if (!value || typeof value !== 'object') {
+    return { blocks: { ...DEFAULT_CLIENT_PAGE_BLOCKS }, selected_product_id: null };
+  }
+
+  const raw = value as Record<string, unknown>;
+  const rawBlocks = (raw.blocks && typeof raw.blocks === 'object' ? raw.blocks : {}) as Record<string, unknown>;
+  const blocks = { ...DEFAULT_CLIENT_PAGE_BLOCKS };
+  (Object.keys(DEFAULT_CLIENT_PAGE_BLOCKS) as ClientPageBlockKey[]).forEach((key) => {
+    if (typeof rawBlocks[key] === 'boolean') {
+      blocks[key] = rawBlocks[key] as boolean;
+    }
+  });
+
+  const selectedProduct = raw.selected_product_id;
+  return {
+    blocks,
+    selected_product_id: typeof selectedProduct === 'number' && Number.isFinite(selectedProduct) ? selectedProduct : null,
+  };
+};
+
+const normalizeTiptapJson = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+};
+
+const replaceTemplateTokens = (input: string, values: Record<string, string>) => {
+  return input.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_, key: string) => values[key] ?? `{{${key}}}`);
+};
+
+const replaceTemplateTokensInTiptapNode = (node: unknown, values: Record<string, string>): unknown => {
+  if (typeof node === 'string') {
+    return replaceTemplateTokens(node, values);
+  }
+  if (Array.isArray(node)) {
+    return node.map((item) => replaceTemplateTokensInTiptapNode(item, values));
+  }
+  if (!node || typeof node !== 'object') {
+    return node;
+  }
+
+  const source = node as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  Object.entries(source).forEach(([key, value]) => {
+    if (key === 'text' && typeof value === 'string') {
+      next[key] = replaceTemplateTokens(value, values);
+      return;
+    }
+    next[key] = replaceTemplateTokensInTiptapNode(value, values);
+  });
+  return next;
 };
 
 const buildCompactReferralUrl = (stats: ReferralStatsResponse): string => {
@@ -183,6 +336,42 @@ const copyTextToClipboard = async (value: string): Promise<void> => {
   }
 };
 
+const fetchTelegramAuthOptional = async (): Promise<TelegramAuthResponse | null> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/telegram`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (response.status === 401) {
+      return null;
+    }
+    if (!response.ok) {
+      return null;
+    }
+    return (await response.json()) as TelegramAuthResponse;
+  } catch {
+    return null;
+  }
+};
+
+const fetchVkAuthOptional = async (): Promise<VkAuthResponse | null> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/vk`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (response.status === 401) {
+      return null;
+    }
+    if (!response.ok) {
+      return null;
+    }
+    return (await response.json()) as VkAuthResponse;
+  } catch {
+    return null;
+  }
+};
+
 const overlaps = (startA: number, endA: number, startB: number, endB: number) =>
   startA < endB && endA > startB;
 
@@ -251,6 +440,8 @@ const formatMeetingRange = (startAt: string, endAt: string, timeZone: string) =>
   });
   return `${dateLabel}, ${startLabel} - ${endLabel}`;
 };
+
+const getPendingProductPurchaseStorageKey = (clientId: number) => `client-page:pending-product-purchase:${clientId}`;
 
 const availabilityMatchesDate = (baseStart: Date, checkDate: Date, repeatType: AvailabilityEvent['repeat_type']) => {
   const baseDate = normalizeDay(baseStart);
@@ -439,6 +630,7 @@ const toPlannedMeeting = (event: Event, timezone: string): PlannedMeeting | null
 export default function ContactClientPage() {
   const { client_id: rawClientId } = useParams<{ client_id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const pageClientId = Number(rawClientId);
 
@@ -451,6 +643,7 @@ export default function ContactClientPage() {
 
   const [activeClientId, setActiveClientId] = useState<number | null>(null);
   const [activeClientName, setActiveClientName] = useState('');
+  const [hasTenantSession, setHasTenantSession] = useState(false);
   const [bookingContactId, setBookingContactId] = useState<number | null>(null);
   const [bookingContactName, setBookingContactName] = useState('');
   const [settings, setSettings] = useState<ClientSettings | null>(null);
@@ -471,6 +664,16 @@ export default function ContactClientPage() {
   const [inviterCodeLoading, setInviterCodeLoading] = useState(false);
   const [inviterCodeMessage, setInviterCodeMessage] = useState<string | null>(null);
   const [inviterCodeError, setInviterCodeError] = useState<string | null>(null);
+  const [buyingProductId, setBuyingProductId] = useState<number | null>(null);
+  const [purchaseStatusLoading, setPurchaseStatusLoading] = useState(false);
+  const [purchaseStatusMessage, setPurchaseStatusMessage] = useState<string | null>(null);
+  const [purchaseStatusError, setPurchaseStatusError] = useState<string | null>(null);
+  const [purchaseDeliveryLink, setPurchaseDeliveryLink] = useState<string | null>(null);
+  const [purchaseDeliveryTitle, setPurchaseDeliveryTitle] = useState<string | null>(null);
+  const [checkedPurchasePaymentId, setCheckedPurchasePaymentId] = useState<string | null>(null);
+  const [purchasesLoading, setPurchasesLoading] = useState(false);
+  const [purchases, setPurchases] = useState<ContactPurchaseListItem[]>([]);
+  const [purchasesError, setPurchasesError] = useState<string | null>(null);
 
   const activeProducts = useMemo(
     () => products.filter((product) => isProductActive(product)),
@@ -585,54 +788,98 @@ export default function ContactClientPage() {
 
       setLoading(true);
       setError(null);
+      setHasTenantSession(false);
+      setBookingContactId(null);
+      setBookingContactName('');
 
       try {
-        const [info, settingsData, productsData, availabilityData, eventsData, contactsData, authData] = await Promise.all([
-          clientApi.info(),
-          clientApi.getSettings(),
-          clientProductsApi.list(),
-          crmAvailabilityEventsApi.list(),
-          crmEventsApi.list(),
-          crmContactsApi.list(),
-          apiFetch<TelegramAuthResponse>('/auth/telegram'),
+        const [telegramAuthData, vkAuthData] = await Promise.all([
+          fetchTelegramAuthOptional(),
+          fetchVkAuthOptional(),
         ]);
-
-        const activeId = Number(info?.client?.id || 0);
-        const activeName = (info?.client?.name || '').trim();
-        const brandName = (settingsData?.brand_name || '').trim();
-
-        setActiveClientId(Number.isFinite(activeId) && activeId > 0 ? activeId : null);
-        setActiveClientName(activeName);
-        setSettings(settingsData);
-        setProducts(productsData);
-        setAvailabilityEvents(availabilityData);
-        setEvents(eventsData);
-        setTimezone(normalizeTenantTimezone(settingsData?.timezone));
-
-        const bindingContactId = (() => {
-          const raw = authData?.user?.contactId;
-          return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
+        const authData = (() => {
+          const tgTenant = Number(telegramAuthData?.user?.tenantId || 0);
+          const tgContact = Number(telegramAuthData?.user?.contactId || 0);
+          if (Number.isFinite(tgTenant) && Number.isFinite(tgContact) && tgTenant === pageClientId && tgContact > 0) {
+            return telegramAuthData;
+          }
+          const vkTenant = Number(vkAuthData?.user?.tenantId || 0);
+          const vkContact = Number(vkAuthData?.user?.contactId || 0);
+          if (Number.isFinite(vkTenant) && Number.isFinite(vkContact) && vkTenant === pageClientId && vkContact > 0) {
+            return vkAuthData as TelegramAuthResponse;
+          }
+          return (telegramAuthData || (vkAuthData as TelegramAuthResponse | null));
         })();
-        const bookingContact = bindingContactId
-          ? contactsData.find((contact) => contact.id === bindingContactId) || null
-          : resolveBookingContact(contactsData, activeName, brandName);
-        setBookingContactId(bookingContact?.id ?? null);
-        setBookingContactName((bookingContact?.name || '').trim());
 
-        if (!Number.isFinite(activeId) || activeId <= 0) {
-          setError('Не удалось определить текущего клиента.');
-          return;
-        }
+        const authTenantId = Number(authData?.user?.tenantId || 0);
+        const authContactId = Number(authData?.user?.contactId || 0);
+        const boundContactId = Number.isFinite(authContactId) && authContactId > 0
+          && (!Number.isFinite(authTenantId) || authTenantId <= 0 || authTenantId === pageClientId)
+          ? authContactId
+          : null;
 
-        if (activeId !== pageClientId) {
-          setError(`Страница /c/${pageClientId} недоступна для этого аккаунта. Ваша страница: /c/${activeId}.`);
-          return;
+        try {
+          const [info, settingsData, productsData, availabilityData, eventsData, contactsData] = await Promise.all([
+            clientApi.info(),
+            clientApi.getSettings(),
+            clientProductsApi.list(),
+            crmAvailabilityEventsApi.list(),
+            crmEventsApi.list(),
+            crmContactsApi.list(),
+          ]);
+
+          const activeId = Number(info?.client?.id || 0);
+          const activeName = (info?.client?.name || '').trim();
+
+          setHasTenantSession(true);
+          setActiveClientId(Number.isFinite(activeId) && activeId > 0 ? activeId : null);
+          setActiveClientName(activeName);
+          setSettings(settingsData);
+          setProducts(productsData);
+          setAvailabilityEvents(availabilityData);
+          setEvents(eventsData);
+          setTimezone(normalizeTenantTimezone(settingsData?.timezone));
+
+          if (!Number.isFinite(activeId) || activeId <= 0) {
+            setError('Не удалось определить текущего клиента.');
+            return;
+          }
+
+          if (activeId !== pageClientId) {
+            setError(`Страница /c/${pageClientId} недоступна для этого аккаунта. Ваша страница: /c/${activeId}.`);
+            return;
+          }
+
+          if (boundContactId) {
+            const bookingContact = contactsData.find((contact) => contact.id === boundContactId) || null;
+            setBookingContactId(bookingContact?.id ?? boundContactId);
+            setBookingContactName((bookingContact?.name || '').trim());
+          } else {
+            setBookingContactId(null);
+            setBookingContactName('');
+          }
+        } catch (privateLoadError) {
+          if (!(privateLoadError instanceof ApiError) || privateLoadError.status !== 401) {
+            throw privateLoadError;
+          }
+
+          const publicData = await apiFetch<PublicClientPageResponse>(`/public/client-page/${pageClientId}/`);
+          const publicClientId = Number(publicData?.client?.id || pageClientId);
+          const publicClientName = String(publicData?.client?.name || '').trim();
+          const publicSettings = (publicData?.settings || null) as ClientSettings | null;
+
+          setHasTenantSession(false);
+          setActiveClientId(Number.isFinite(publicClientId) && publicClientId > 0 ? publicClientId : pageClientId);
+          setActiveClientName(publicClientName);
+          setSettings(publicSettings);
+          setProducts(Array.isArray(publicData?.products) ? publicData.products : []);
+          setAvailabilityEvents(Array.isArray(publicData?.availability_events) ? publicData.availability_events : []);
+          setEvents(Array.isArray(publicData?.events) ? publicData.events : []);
+          setTimezone(normalizeTenantTimezone(publicSettings?.timezone));
+          setBookingContactId(boundContactId);
+          setBookingContactName('');
         }
       } catch (loadError) {
-        if (loadError instanceof ApiError && loadError.status === 401) {
-          router.push('/login');
-          return;
-        }
         setError('Не удалось загрузить страницу клиента.');
       } finally {
         setLoading(false);
@@ -648,13 +895,20 @@ export default function ContactClientPage() {
         return;
       }
 
+      if (!bookingContactId) {
+        setReferralLoading(false);
+        setReferralCount(0);
+        setReferralLink('');
+        setReferralInvitations([]);
+        setReferralError(null);
+        return;
+      }
+
       setReferralLoading(true);
       setReferralError(null);
       try {
         const referralParams = new URLSearchParams({ type: 'contact' });
-        if (bookingContactId) {
-          referralParams.set('contact_id', String(bookingContactId));
-        }
+        referralParams.set('contact_id', String(bookingContactId));
         const referralQuery = `?${referralParams.toString()}`;
 
         let stats = await apiFetch<ReferralStatsResponse>(`${BACKEND_BASE_URL}/core/api/referral/stats/${referralQuery}`);
@@ -688,7 +942,8 @@ export default function ContactClientPage() {
         setReferralInvitations(invitations);
       } catch (referralLoadError) {
         if (referralLoadError instanceof ApiError && referralLoadError.status === 401) {
-          router.push('/login');
+          setReferralInvitations([]);
+          setReferralError('Войдите как контакт через Telegram или VK, чтобы использовать партнёрскую программу.');
           return;
         }
         setReferralInvitations([]);
@@ -699,7 +954,86 @@ export default function ContactClientPage() {
     };
 
     void loadReferral();
-  }, [router, loading, bookingContactId]);
+  }, [loading, bookingContactId]);
+
+  const loadContactPurchases = useCallback(async () => {
+    if (!bookingContactId || !Number.isFinite(pageClientId) || pageClientId <= 0) {
+      setPurchasesLoading(false);
+      setPurchases([]);
+      setPurchasesError(null);
+      return;
+    }
+
+    setPurchasesLoading(true);
+    setPurchasesError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/public/client-page/${pageClientId}/purchases/`, {
+        method: 'GET',
+        credentials: 'include',
+      });
+      if (response.status === 401) {
+        setPurchases([]);
+        setPurchasesError('Войдите как контакт через Telegram или VK, чтобы видеть список покупок.');
+        return;
+      }
+      if (!response.ok) {
+        throw new Error('failed to load purchases');
+      }
+      const payload = (await response.json()) as ContactPurchasesResponse;
+      setPurchases(Array.isArray(payload?.items) ? payload.items : []);
+    } catch {
+      setPurchases([]);
+      setPurchasesError('Не удалось загрузить список покупок.');
+    } finally {
+      setPurchasesLoading(false);
+    }
+  }, [bookingContactId, pageClientId]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+    if (!bookingContactId) {
+      setPurchasesLoading(false);
+      setPurchases([]);
+      setPurchasesError(null);
+      return;
+    }
+    void loadContactPurchases();
+  }, [loading, bookingContactId, loadContactPurchases]);
+
+  useEffect(() => {
+    if (loading || !Number.isFinite(pageClientId) || pageClientId <= 0) {
+      return;
+    }
+
+    const queryPaymentId = (searchParams.get('payment_id') || '').trim();
+    let pendingPaymentId = queryPaymentId;
+
+    if (!pendingPaymentId && typeof window !== 'undefined') {
+      try {
+        const raw = window.localStorage.getItem(getPendingProductPurchaseStorageKey(pageClientId));
+        if (raw) {
+          const parsed = JSON.parse(raw) as { paymentId?: unknown; createdAt?: unknown };
+          const localPaymentId = typeof parsed?.paymentId === 'string' ? parsed.paymentId.trim() : '';
+          const createdAt = typeof parsed?.createdAt === 'number' ? parsed.createdAt : 0;
+          const isFresh = createdAt > 0 && Date.now() - createdAt < 1000 * 60 * 60 * 24;
+          if (localPaymentId && isFresh) {
+            pendingPaymentId = localPaymentId;
+          }
+        }
+      } catch {
+        // ignore invalid localStorage payload
+      }
+    }
+
+    if (!pendingPaymentId || checkedPurchasePaymentId === pendingPaymentId) {
+      return;
+    }
+
+    setCheckedPurchasePaymentId(pendingPaymentId);
+    void checkProductPurchaseStatus(pendingPaymentId);
+  }, [loading, pageClientId, searchParams, checkedPurchasePaymentId]);
 
   const handleBook = async (slot: Slot) => {
     if (!Number.isFinite(pageClientId) || pageClientId <= 0 || bookingSlotId) {
@@ -707,7 +1041,7 @@ export default function ContactClientPage() {
     }
 
     if (!bookingContactId) {
-      setBookingError('Не найден контакт для записи. Добавьте контакт в CRM.');
+      setBookingError('Для записи войдите как контакт через Telegram или VK.');
       return;
     }
 
@@ -782,7 +1116,7 @@ export default function ContactClientPage() {
       }
     } catch (bookError) {
       if (bookError instanceof ApiError && bookError.status === 401) {
-        router.push('/login');
+        setBookingError('Для записи войдите как контакт через Telegram или VK.');
         return;
       }
       setBookingError(
@@ -838,10 +1172,13 @@ export default function ContactClientPage() {
     setInviterCodeMessage(null);
 
     try {
-      const params = new URLSearchParams();
-      if (bookingContactId) {
-        params.set('contact_id', String(bookingContactId));
+      if (!bookingContactId) {
+        setInviterCodeError('Для применения кода войдите как контакт через Telegram или VK.');
+        setInviterCodeMessage(null);
+        return;
       }
+      const params = new URLSearchParams();
+      params.set('contact_id', String(bookingContactId));
       const query = params.toString();
       const endpoint = `${BACKEND_BASE_URL}/core/api/referral/apply_code/${query ? `?${query}` : ''}`;
 
@@ -854,7 +1191,7 @@ export default function ContactClientPage() {
       setInviterCodeInput('');
     } catch (applyError) {
       if (applyError instanceof ApiError && applyError.status === 401) {
-        router.push('/login');
+        setInviterCodeError('Для применения кода войдите как контакт через Telegram или VK.');
         return;
       }
       if (applyError instanceof ApiError) {
@@ -870,6 +1207,100 @@ export default function ContactClientPage() {
       setInviterCodeError('Не удалось применить код.');
     } finally {
       setInviterCodeLoading(false);
+    }
+  };
+
+  const checkProductPurchaseStatus = async (paymentId: string) => {
+    if (!paymentId || !Number.isFinite(pageClientId) || pageClientId <= 0) {
+      return;
+    }
+
+    setPurchaseStatusLoading(true);
+    setPurchaseStatusError(null);
+    try {
+      const statusResponse = await apiFetch<PublicProductPaymentStatusResponse>(
+        `/public/client-page/${pageClientId}/payment-status/?payment_id=${encodeURIComponent(paymentId)}`
+      );
+      const paymentStatus = (statusResponse?.status || '').trim();
+      const delivery = statusResponse?.delivery || null;
+
+      if (paymentStatus === 'succeeded' && statusResponse?.paid) {
+        if (delivery?.ready && delivery.url) {
+          setPurchaseDeliveryLink(delivery.url);
+          setPurchaseDeliveryTitle((delivery.document_title || '').trim() || 'Открыть продукт');
+          setPurchaseStatusMessage('Оплата прошла успешно. Ссылка на продукт доступна ниже.');
+        } else {
+          setPurchaseDeliveryLink(null);
+          setPurchaseDeliveryTitle(null);
+          setPurchaseStatusMessage(delivery?.message || 'Оплата прошла успешно.');
+        }
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(getPendingProductPurchaseStorageKey(pageClientId));
+        }
+        void loadContactPurchases();
+      } else if (paymentStatus) {
+        setPurchaseStatusMessage(`Статус оплаты: ${paymentStatus}. Если вы уже оплатили, обновите страницу через несколько секунд.`);
+      } else {
+        setPurchaseStatusMessage('Статус оплаты пока не получен.');
+      }
+    } catch {
+      setPurchaseStatusError('Не удалось проверить статус оплаты.');
+    } finally {
+      setPurchaseStatusLoading(false);
+    }
+  };
+
+  const handleBuySelectedProduct = async () => {
+    if (!selectedTemplateProduct || buyingProductId !== null || !Number.isFinite(pageClientId) || pageClientId <= 0) {
+      return;
+    }
+    if (!bookingContactId) {
+      setPurchaseStatusError('Для покупки войдите как контакт через Telegram или VK.');
+      setPurchaseStatusMessage(null);
+      setPurchaseDeliveryLink(null);
+      setPurchaseDeliveryTitle(null);
+      return;
+    }
+
+    setBuyingProductId(selectedTemplateProduct.id);
+    setPurchaseStatusError(null);
+    setPurchaseStatusMessage(null);
+    setPurchaseDeliveryLink(null);
+    setPurchaseDeliveryTitle(null);
+
+    try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      const returnUrl = origin ? `${origin}/c/${pageClientId}` : `/c/${pageClientId}`;
+      const response = await apiFetch<PublicBuyProductResponse>(`/public/client-page/${pageClientId}/buy/`, {
+        method: 'POST',
+        body: {
+          product_id: selectedTemplateProduct.id,
+          return_url: returnUrl,
+        },
+      });
+
+      const paymentId = (response?.id || '').trim();
+      const paymentUrl = (response?.payment_url || response?.confirmation_url || '').trim();
+      if (!paymentId || !paymentUrl) {
+        throw new Error('missing payment data');
+      }
+
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(
+          getPendingProductPurchaseStorageKey(pageClientId),
+          JSON.stringify({
+            paymentId,
+            productId: selectedTemplateProduct.id,
+            createdAt: Date.now(),
+          })
+        );
+        window.location.href = paymentUrl;
+        return;
+      }
+    } catch {
+      setPurchaseStatusError('Не удалось создать оплату. Обратитесь к владельцу портала.');
+    } finally {
+      setBuyingProductId(null);
     }
   };
 
@@ -899,6 +1330,35 @@ export default function ContactClientPage() {
     });
   };
 
+  const formatPurchaseTimestamp = (value?: string | null) => {
+    if (!value) {
+      return 'Дата оплаты не указана';
+    }
+    return formatInTenantTimezone(value, timezone, {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const formatPurchaseAmount = (item: ContactPurchaseListItem) => {
+    const rawAmount = typeof item.amount === 'string' ? Number(item.amount) : NaN;
+    const currency = (item.currency || 'RUB').trim().toUpperCase() || 'RUB';
+    if (!Number.isFinite(rawAmount) || rawAmount <= 0) {
+      return '';
+    }
+    try {
+      return new Intl.NumberFormat('ru-RU', {
+        style: 'currency',
+        currency,
+        maximumFractionDigits: 2,
+      }).format(rawAmount);
+    } catch {
+      return `${rawAmount} ${currency}`;
+    }
+  };
+
   if (loading) {
     return (
       <div className="mx-auto max-w-3xl p-6">
@@ -918,43 +1378,226 @@ export default function ContactClientPage() {
   const displayName = (settings?.brand_name || activeClientName || '').trim() || 'Клиент';
   const niche = (settings?.niche || '').trim() || 'Ниша не указана';
   const isRescheduleMode = selectedMeetingForReschedule !== null;
+  const pageTemplateConfig = normalizeClientPageTemplateConfig(settings?.client_page_config);
+  const selectedTemplateProduct = (() => {
+    const selectedProductId = pageTemplateConfig.selected_product_id;
+    if (selectedProductId) {
+      return activeProducts.find((product) => product.id === selectedProductId) || null;
+    }
+    return activeProducts[0] || null;
+  })();
+  const selectedTemplateProductPrice = selectedTemplateProduct ? resolveProductPrice(selectedTemplateProduct) : null;
+  const selectedTemplateProductPriceLabel = selectedTemplateProductPrice === null || !Number.isFinite(selectedTemplateProductPrice)
+    ? 'Цена не указана'
+    : rubFormatter.format(selectedTemplateProductPrice);
+  const customContentHtml = (() => {
+    const source = normalizeTiptapJson(settings?.client_page_content);
+    if (!source) {
+      return '';
+    }
+    const templateValues: Record<string, string> = {
+      brand_name: displayName,
+      niche,
+      product_name: (selectedTemplateProduct?.name || '').trim(),
+      product_price: selectedTemplateProductPriceLabel,
+      product_service: (settings?.product_service || '').trim(),
+    };
+    try {
+      const replacedJson = replaceTemplateTokensInTiptapNode(source, templateValues) as Record<string, unknown>;
+      return generateHTML(replacedJson, createKbExtensions());
+    } catch {
+      return '';
+    }
+  })();
+  const canUseContactFeatures = bookingContactId !== null;
+  const isClientPreviewMode = hasTenantSession && !canUseContactFeatures;
+  const isPublicPreviewMode = !hasTenantSession && !canUseContactFeatures;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6">
-      <div className="rounded-2xl border p-6 shadow-sm space-y-2">
-        <div className="text-2xl font-semibold">{displayName}</div>
-        <div className="text-muted-foreground">{niche}</div>
-        <div className="text-xs text-muted-foreground">ID клиента: #{activeClientId ?? pageClientId}</div>
-        <div className="text-xs text-muted-foreground">
-          Контакт для записи: {bookingContactId ? (bookingContactName || `#${bookingContactId}`) : 'не найден'}
+      {pageTemplateConfig.blocks.header && (
+        <div className="rounded-2xl border p-6 shadow-sm space-y-2">
+          <div className="text-2xl font-semibold">{displayName}</div>
+          <div className="text-muted-foreground">{niche}</div>
+          <div className="text-xs text-muted-foreground">ID клиента: #{activeClientId ?? pageClientId}</div>
+          <div className="text-xs text-muted-foreground">
+            Контакт Telegram/VK: {bookingContactId ? (bookingContactName || `#${bookingContactId}`) : 'не авторизован'}
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="rounded-2xl border p-6 shadow-sm space-y-3">
-        <div className="text-sm text-muted-foreground">Активные продукты</div>
-        {activeProducts.length === 0 ? (
-          <div className="text-muted-foreground">Активных продуктов пока нет.</div>
-        ) : (
-          <ul className="space-y-2">
-            {activeProducts.map((product) => {
-              const price = resolveProductPrice(product);
-              const priceLabel = price === null || !Number.isFinite(price)
-                ? 'Цена не указана'
-                : rubFormatter.format(price);
-              return (
-                <li
-                  key={product.id}
-                  className="flex items-baseline justify-between gap-4 rounded-lg border px-3 py-2"
+      {(isPublicPreviewMode || isClientPreviewMode) && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-sm text-amber-900 space-y-2">
+          <div className="font-medium">
+            {isClientPreviewMode
+              ? 'Режим предпросмотра (вход как клиент)'
+              : 'Публичный просмотр страницы'}
+          </div>
+          <div>
+            Запись на слот и партнёрская программа доступны после входа как контакт через Telegram или VK.
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={() => router.push(`/login?next=${encodeURIComponent(`/c/${pageClientId}`)}&tenant_id=${pageClientId}`)}
+              className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm hover:bg-amber-100"
+            >
+              Войти
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pageTemplateConfig.blocks.product && (
+        <div className="rounded-2xl border p-6 shadow-sm space-y-3">
+          <div className="text-sm text-muted-foreground">Продукт</div>
+          {!selectedTemplateProduct ? (
+            <div className="text-muted-foreground">Активный продукт не выбран.</div>
+          ) : (
+            <div className="rounded-lg border px-4 py-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <div className="text-lg font-medium">
+                  {(selectedTemplateProduct.name || '').trim() || 'Продукт без названия'}
+                </div>
+                <div className="text-lg font-semibold whitespace-nowrap">
+                  {selectedTemplateProductPriceLabel}
+                </div>
+              </div>
+              {selectedTemplateProduct.short_description?.trim() && (
+                <div className="mt-2 text-sm text-muted-foreground">
+                  {selectedTemplateProduct.short_description.trim()}
+                </div>
+              )}
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleBuySelectedProduct()}
+                  disabled={
+                    buyingProductId !== null
+                    || !canUseContactFeatures
+                    || selectedTemplateProductPrice === null
+                    || !Number.isFinite(selectedTemplateProductPrice)
+                  }
+                  className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
                 >
-                  <span className="font-medium">{(product.name || '').trim() || 'Продукт без названия'}</span>
-                  <span className="font-semibold whitespace-nowrap">{priceLabel}</span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
+                  {buyingProductId === selectedTemplateProduct.id ? 'Переход к оплате…' : 'Купить'}
+                </button>
+                {(selectedTemplateProductPrice === null || !Number.isFinite(selectedTemplateProductPrice)) && (
+                  <span className="text-xs text-muted-foreground">Цена не указана</span>
+                )}
+                {!canUseContactFeatures && (
+                  <span className="text-xs text-muted-foreground">
+                    Покупка доступна только после входа как контакт через Telegram или VK
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
 
+          {(purchaseStatusLoading || purchaseStatusMessage || purchaseStatusError || purchaseDeliveryLink) && (
+            <div className="rounded-xl border p-3 space-y-2">
+              {purchaseStatusLoading && (
+                <div className="text-sm text-muted-foreground">Проверяем оплату…</div>
+              )}
+              {purchaseStatusError && (
+                <div className="text-sm text-red-600">{purchaseStatusError}</div>
+              )}
+              {purchaseStatusMessage && (
+                <div className="text-sm text-green-700">{purchaseStatusMessage}</div>
+              )}
+              {purchaseDeliveryLink && (
+                <a
+                  href={purchaseDeliveryLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent"
+                >
+                  {purchaseDeliveryTitle || 'Открыть цифровой продукт'}
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {pageTemplateConfig.blocks.purchases && (
+        <div className="rounded-2xl border p-6 shadow-sm space-y-3">
+          <div className="text-xl font-semibold">Список покупок</div>
+
+          {!canUseContactFeatures && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-sm text-slate-700">
+              Список покупок доступен после входа как контакт через Telegram или VK.
+            </div>
+          )}
+
+          {canUseContactFeatures && purchasesLoading && (
+            <div className="text-sm text-muted-foreground">Загружаем покупки...</div>
+          )}
+
+          {canUseContactFeatures && !purchasesLoading && purchases.length === 0 && !purchasesError && (
+            <div className="text-sm text-muted-foreground">Пока покупок нет.</div>
+          )}
+
+          {canUseContactFeatures && purchases.length > 0 && (
+            <ul className="space-y-2">
+              {purchases.map((item) => {
+                const itemKey = String(item.id ?? `${item.product_id ?? 'product'}:${item.payment_id ?? ''}`);
+                const title = (item.product_name || '').trim() || `Продукт #${item.product_id ?? '—'}`;
+                const amountLabel = formatPurchaseAmount(item);
+                const delivery = item.delivery || null;
+                const deliveryReady = Boolean(delivery?.ready && delivery?.url);
+
+                return (
+                  <li
+                    key={itemKey}
+                    className="rounded-xl border p-3 space-y-2"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-foreground">{title}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatPurchaseTimestamp(item.paid_at)}
+                          {amountLabel ? ` · ${amountLabel}` : ''}
+                        </div>
+                      </div>
+                      {deliveryReady && (
+                        <a
+                          href={delivery?.url || '#'}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="shrink-0 rounded-lg border px-3 py-1.5 text-sm hover:bg-accent"
+                        >
+                          {(delivery?.document_title || '').trim() || 'Открыть продукт'}
+                        </a>
+                      )}
+                    </div>
+
+                    {!deliveryReady && (
+                      <div className="text-sm text-muted-foreground">
+                        {(delivery?.message || '').trim() || 'Покажите информацию об оплате владельцу портала'}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {purchasesError && <div className="text-sm text-red-600">{purchasesError}</div>}
+        </div>
+      )}
+
+      {pageTemplateConfig.blocks.custom_content && customContentHtml && (
+        <div className="rounded-2xl border p-6 shadow-sm">
+          <div
+            className="tiptap prose prose-slate max-w-none"
+            dangerouslySetInnerHTML={{ __html: customContentHtml }}
+          />
+        </div>
+      )}
+
+      {pageTemplateConfig.blocks.booking && (
       <div className="rounded-2xl border p-6 shadow-sm space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-xl font-semibold">
@@ -980,6 +1623,12 @@ export default function ContactClientPage() {
             </button>
           </div>
         </div>
+
+        {!canUseContactFeatures && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-sm text-slate-700">
+            Чтобы записаться на слот, войдите как контакт через Telegram или VK. До входа доступен только просмотр расписания.
+          </div>
+        )}
 
         {isRescheduleMode && selectedMeetingForReschedule && (
           <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3 text-sm text-slate-700">
@@ -1065,13 +1714,20 @@ export default function ContactClientPage() {
 
         {bookingError && <div className="text-sm text-red-600">{bookingError}</div>}
         {success && <div className="text-sm text-green-700">{success}</div>}
-        {plannedMeetings.length > 0 && (
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
-            <div className="text-sm font-medium">Запланированы встречи:</div>
-            <ul className="mt-2 space-y-2">
-              {plannedMeetings.map((meeting) => (
-                <li key={meeting.id} className="flex items-center justify-between gap-3 rounded-lg border border-emerald-100 bg-white/70 px-3 py-2 text-sm text-slate-700">
-                  <span>{formatMeetingRange(meeting.startAt, meeting.endAt, timezone)}</span>
+      </div>
+      )}
+
+      {pageTemplateConfig.blocks.planned_meetings && plannedMeetings.length > 0 && (
+        <div className="rounded-2xl border p-6 shadow-sm space-y-3">
+          <div className="text-xl font-semibold">Запланированы встречи:</div>
+          <ul className="space-y-2">
+            {plannedMeetings.map((meeting) => (
+              <li
+                key={meeting.id}
+                className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm text-slate-700"
+              >
+                <span>{formatMeetingRange(meeting.startAt, meeting.endAt, timezone)}</span>
+                {pageTemplateConfig.blocks.booking && (
                   <button
                     type="button"
                     onClick={() => handleStartReschedule(meeting.id)}
@@ -1080,17 +1736,24 @@ export default function ContactClientPage() {
                   >
                     {meeting.id === rescheduleMeetingId ? 'Выбрана' : 'Перенести'}
                   </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
+      {pageTemplateConfig.blocks.referrals && (
       <div className="rounded-2xl border p-6 shadow-sm space-y-2">
         <div className="text-xl font-semibold">Рефералы</div>
         <div className="text-muted-foreground">Приглашено: <b>{referralCount}</b></div>
         <div className="text-sm text-muted-foreground">Введите полученный код от пригласившего</div>
+
+        {!canUseContactFeatures && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-sm text-slate-700">
+            Партнёрская программа доступна после входа как контакт через Telegram или VK.
+          </div>
+        )}
 
         <div className="flex gap-2">
           <input
@@ -1098,10 +1761,11 @@ export default function ContactClientPage() {
             value={inviterCodeInput}
             onChange={(event) => setInviterCodeInput(event.target.value)}
             placeholder="ref_... или ссылка"
+            disabled={!canUseContactFeatures}
           />
           <button
             onClick={() => void handleApplyInviterCode()}
-            disabled={inviterCodeLoading}
+            disabled={!canUseContactFeatures || inviterCodeLoading}
             className="rounded-xl border px-4 py-2 text-sm hover:bg-accent disabled:opacity-60"
           >
             Применить
@@ -1122,7 +1786,7 @@ export default function ContactClientPage() {
           />
           <button
             onClick={() => void handleCopyReferral()}
-            disabled={referralLoading || !referralLink}
+            disabled={!canUseContactFeatures || referralLoading || !referralLink}
             className="rounded-xl border px-4 py-2 text-sm hover:bg-accent disabled:opacity-60"
           >
             Копировать
@@ -1161,6 +1825,7 @@ export default function ContactClientPage() {
 
         {referralError && <div className="text-sm text-red-600">{referralError}</div>}
       </div>
+      )}
     </div>
   );
 }

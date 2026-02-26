@@ -1,18 +1,31 @@
 'use client';
 
 import { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { TelegramAuth } from '@/components/auth/TelegramAuth';
 import { VKAuth } from '@/components/auth/VKAuth';
 
 export default function LoginPage() {
+  const searchParams = useSearchParams();
   const [telegramOpen, setTelegramOpen] = useState(false);
   const [vkOpen, setVkOpen] = useState(false);
+  const nextParam = (searchParams.get('next') || '').trim();
+  const redirectTo = nextParam.startsWith('/') ? nextParam : '/welcome';
+  const tenantIdParam = Number(searchParams.get('tenant_id') || 0);
+  const contactTenantId = Number.isFinite(tenantIdParam) && tenantIdParam > 0 ? tenantIdParam : null;
+  const isContactLoginMode = contactTenantId !== null;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/40 px-4">
       <div className="w-full max-w-lg space-y-4 rounded-2xl border bg-background p-8 text-center shadow">
-        <h1 className="text-2xl font-semibold">Войти в личный кабинет</h1>
-        <p className="text-sm text-muted-foreground">Выберите удобный способ авторизации</p>
+        <h1 className="text-2xl font-semibold">
+          {isContactLoginMode ? 'Войти как контакт' : 'Войти в личный кабинет'}
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          {isContactLoginMode
+            ? 'Авторизация привяжет Telegram к странице клиента для записи и рефералов'
+            : 'Выберите удобный способ авторизации'}
+        </p>
 
         <div className="space-y-3 pt-2">
           <button
@@ -63,8 +76,18 @@ export default function LoginPage() {
         </p>
       </div>
 
-      <TelegramAuth open={telegramOpen} onClose={() => setTelegramOpen(false)} />
-      <VKAuth open={vkOpen} onClose={() => setVkOpen(false)} />
+      <TelegramAuth
+        open={telegramOpen}
+        onClose={() => setTelegramOpen(false)}
+        redirectTo={redirectTo}
+        tenantId={contactTenantId}
+      />
+      <VKAuth
+        open={vkOpen}
+        onClose={() => setVkOpen(false)}
+        redirectTo={redirectTo}
+        tenantId={contactTenantId}
+      />
     </div>
   );
 }

@@ -38,6 +38,18 @@ class Client(models.Model):
         verbose_name="Продукт/услуга",
         help_text='Например "доставка пиццы" или "онлайн-курс по йоге"',
     )
+    client_page_config = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="Настройки публичной страницы клиента",
+        help_text="Конфигурация блоков, выбранного продукта и шаблона страницы /c/[client_id]",
+    )
+    client_page_content = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="Контент публичной страницы клиента",
+        help_text="Rich-text контент (TipTap JSON) для страницы /c/[client_id]",
+    )
     slug = models.SlugField(unique=True)
     timezone = models.CharField(max_length=64, default="Europe/Moscow")
     preferred_channel = models.CharField(

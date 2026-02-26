@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Calendar } from 'lucide-react';
 import { crmContactsApi, crmEventsApi } from '@/lib/api/crm';
@@ -31,6 +32,27 @@ const emptyStats: ClientsStats = {
   nextEvents: [],
 };
 
+const CLIENTS_TABS = [
+  'clients',
+  'schedule',
+  'service-level',
+  'categories',
+  'payments',
+  'welcome-chain',
+] as const;
+type ClientsTabValue = (typeof CLIENTS_TABS)[number];
+
+const CLIENTS_SCHEDULE_TABS = ['calendar', 'tasks'] as const;
+type ClientsScheduleTabValue = (typeof CLIENTS_SCHEDULE_TABS)[number];
+
+function isClientsTabValue(value: string | null): value is ClientsTabValue {
+  return !!value && CLIENTS_TABS.includes(value as ClientsTabValue);
+}
+
+function isClientsScheduleTabValue(value: string | null): value is ClientsScheduleTabValue {
+  return !!value && CLIENTS_SCHEDULE_TABS.includes(value as ClientsScheduleTabValue);
+}
+
 function formatEventTime(value: string, timeZone: string) {
   return formatInTenantTimezone(value, timeZone, {
     day: '2-digit',
@@ -41,6 +63,9 @@ function formatEventTime(value: string, timeZone: string) {
 }
 
 export default function ClientsPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [stats, setStats] = useState<ClientsStats>(emptyStats);
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState<string | null>(null);
@@ -48,6 +73,29 @@ export default function ClientsPage() {
   const [chatbotChains, setChatbotChains] = useState<ChainCatalogItem[]>([]);
   const [chatbotChainsLoading, setChatbotChainsLoading] = useState(true);
   const [chatbotChainsError, setChatbotChainsError] = useState<string | null>(null);
+
+  const activeClientsTab = useMemo<ClientsTabValue>(() => {
+    const tab = searchParams.get('tab');
+    return isClientsTabValue(tab) ? tab : 'clients';
+  }, [searchParams]);
+
+  const activeScheduleTab = useMemo<ClientsScheduleTabValue>(() => {
+    const tab = searchParams.get('scheduleTab');
+    return isClientsScheduleTabValue(tab) ? tab : 'calendar';
+  }, [searchParams]);
+
+  const updateQuery = (patch: Record<string, string | null>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value == null || value === '') {
+        params.delete(key);
+      } else {
+        params.set(key, value);
+      }
+    });
+    const next = params.toString();
+    router.replace(next ? `${pathname}?${next}` : pathname);
+  };
 
   useEffect(() => {
     let isActive = true;
@@ -189,7 +237,17 @@ export default function ClientsPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="clients" className="space-y-3">
+      <Tabs
+        value={activeClientsTab}
+        onValueChange={(value) => {
+          const nextTab = value as ClientsTabValue;
+          updateQuery({
+            tab: nextTab,
+            scheduleTab: nextTab === 'schedule' ? activeScheduleTab : null,
+          });
+        }}
+        className="space-y-3"
+      >
         <TabsList className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
           <TabsTrigger value="clients">Клиенты</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
@@ -207,7 +265,16 @@ export default function ClientsPage() {
 
         <TabsContent value="schedule" className="space-y-6">
           <div className="bg-white rounded-lg p-6">
-            <Tabs defaultValue="calendar" className="space-y-4">
+            <Tabs
+              value={activeScheduleTab}
+              onValueChange={(value) => {
+                updateQuery({
+                  tab: 'schedule',
+                  scheduleTab: value,
+                });
+              }}
+              className="space-y-4"
+            >
               <TabsList>
                 <TabsTrigger value="calendar">Календарь</TabsTrigger>
                 <TabsTrigger value="tasks">Задачи</TabsTrigger>

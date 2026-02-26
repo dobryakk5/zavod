@@ -29,11 +29,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const isClientPageEditorRoute = /^\/c\/[^/]+\/edit(?:\/.*)?$/.test(pathname);
   const isPublicRoute =
     pathname === '/'
     || pathname.startsWith('/login')
     || pathname.startsWith('/kb/share')
-    || pathname.startsWith('/c/');
+    || (pathname.startsWith('/c/') && !isClientPageEditorRoute);
 
   const onLogout = async () => {
     try {

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -295,6 +295,7 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [creatingRelated, setCreatingRelated] = useState(false);
   const [creatingRelatedTaskId, setCreatingRelatedTaskId] = useState<string | null>(null);
   const [creatingRelatedMap, setCreatingRelatedMap] = useState(false);
+  const [creatingDigitalProductPage, setCreatingDigitalProductPage] = useState(false);
 
   const coreTypeId = useMemo(() => {
     const core = types.find((t) => t.name.trim().toLowerCase() === 'core');
@@ -464,6 +465,24 @@ export default function ProductPage({ params }: ProductPageProps) {
       if (!keepLoading) {
         setCreatingRelated(false);
       }
+    }
+  };
+
+  const handleCreateDigitalProductPage = async () => {
+    if (!canEdit || saving || creatingDigitalProductPage || productId == null) return;
+    setCreatingDigitalProductPage(true);
+    try {
+      const response = await clientProductsApi.createDigitalProductPage(productId);
+      setProduct(response.product);
+      toast.success(response.created ? 'Страница цифрового продукта создана в Базе знаний' : 'Страница цифрового продукта уже привязана');
+      if (response.kb_url) {
+        router.push(response.kb_url);
+      }
+    } catch (err) {
+      console.error('Failed to create digital product page', err);
+      toast.error('Не удалось создать страницу цифрового продукта');
+    } finally {
+      setCreatingDigitalProductPage(false);
     }
   };
 
@@ -829,6 +848,38 @@ export default function ProductPage({ params }: ProductPageProps) {
             className="min-h-[110px]"
             disabled={!canEdit || saving}
           />
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Цифровой продукт (База знаний)</div>
+          {product?.digital_product_document_id ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2">
+              <div className="text-sm">
+                {product.digital_product_document_title?.trim() || `Документ #${product.digital_product_document_id}`}
+              </div>
+              <Link href={`/kb/${product.digital_product_document_id}`} className="inline-flex">
+                <Button type="button" variant="outline" size="sm">
+                  Открыть страницу
+                  <ExternalLink className="ml-2 h-4 w-4" />
+                </Button>
+              </Link>
+            </div>
+          ) : (
+            <div className="text-xs text-muted-foreground">
+              Страница цифрового продукта не создана. После покупки без этой страницы клиент увидит сообщение для связи с владельцем.
+            </div>
+          )}
+
+          {canEdit && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void handleCreateDigitalProductPage()}
+              disabled={saving || creatingDigitalProductPage}
+            >
+              {creatingDigitalProductPage ? 'Создание…' : 'Добавить цифровой продукт'}
+            </Button>
+          )}
         </div>
       </div>
 

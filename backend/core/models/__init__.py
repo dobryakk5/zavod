@@ -14,7 +14,7 @@
 from ._mixins import TaskStatusMixin
 
 # --- Core entities ---
-from .payments import PaymentPlan, YooKassaPayment
+from .payments import ContactProductPurchase, PaymentPlan, YooKassaPayment
 from .client import Client, UserTenantRole
 
 # --- CRM ---
@@ -117,6 +117,7 @@ __all__ = [
     # Payments
     "PaymentPlan",
     "YooKassaPayment",
+    "ContactProductPurchase",
     # CRM
     "ClientCategory",
     "CRMClient",

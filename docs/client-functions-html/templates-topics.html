@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Шаблоны и темы контента — Каталог функций Zavod</title>
+  <meta name="description" content='Подготовка шаблонов генерации и тематических направлений для поиска трендов и выпуска контента.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link active" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">Шаблоны и темы контента</div>
+        <h1>Шаблоны и темы контента</h1>
+        <p>Подготовка шаблонов генерации и тематических направлений для поиска трендов и выпуска контента.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">21</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">5</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>Шаблоны: `/templates`</li>
+<li>Новый шаблон: `/templates/new`</li>
+<li>Редактирование шаблона: `/templates/[id]`</li>
+<li>Темы: `/topics`</li>
+<li>Карточка темы: `/topics/[id]`</li>
+</ul>
+<div class="route-badges">
+<code>/templates</code>
+<code>/templates/new</code>
+<code>/templates/[id]</code>
+<code>/topics</code>
+<code>/topics/[id]</code>
+</div>
+</section>
+      <div class="toc-box">
+<div class="toc-title">Быстрый переход по странице</div>
+<div class="toc-links">
+<a href="#sec-1">1. Шаблоны контента (`/templates`)</a>
+<a href="#sec-2">2. Поля и логика формы шаблона</a>
+<a href="#sec-3">3. Темы (`/topics`)</a>
+<a href="#sec-4">4. Карточка темы и тренды</a>
+</div></div>
+<section id="sec-1" class="content-section">
+  <h2>1. Шаблоны контента (`/templates`)</h2>
+  <p class="section-intro">Шаблоны задают параметры генерации постов и промпты для AI.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Список шаблонов</h4>
+  <p><span class="label">Простыми словами:</span> Таблица шаблонов показывает тип, тон, длину, язык и сокращённые промпты.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно держать библиотеку шаблонов для разных задач.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>Создание шаблона</h4>
+  <p><span class="label">Простыми словами:</span> Страница `/templates/new` открывает форму создания нового шаблона.</p>
+  <p><span class="label">Зачем это нужно:</span> Команда может быстро запускать новые форматы контента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Редактирование шаблона</h4>
+  <p><span class="label">Простыми словами:</span> Страница `/templates/[id]` помогает изменять параметры шаблона и промпты.</p>
+  <p><span class="label">Зачем это нужно:</span> Шаблон можно дорабатывать по результатам публикаций.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление шаблона</h4>
+  <p><span class="label">Простыми словами:</span> Шаблон удаляется с подтверждением.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает порядок в библиотеке шаблонов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+  </div>
+</section>
+<section id="sec-2" class="content-section">
+  <h2>2. Поля и логика формы шаблона</h2>
+  <p class="section-intro">Форма шаблона включает параметры контента и промпты для разных сценариев генерации.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Название шаблона</h4>
+  <p><span class="label">Простыми словами:</span> Человекочитаемое название для поиска и выбора в планировании постов.</p>
+  <p><span class="label">Зачем это нужно:</span> Упрощает работу контент-менеджера.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Тип контента</h4>
+  <p><span class="label">Простыми словами:</span> Выбор типа (продающий, экспертный и др.) с возможностью добавить свой тип.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает стандартизировать форматы под бизнес-задачи.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Тон</h4>
+  <p><span class="label">Простыми словами:</span> Выбор тона (профессиональный, дружелюбный и др.) с возможностью добавить свой.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает держать единый стиль бренда.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>Длина текста</h4>
+  <p><span class="label">Простыми словами:</span> Задаётся желаемый объём текста в символах.</p>
+  <p><span class="label">Зачем это нужно:</span> Управляет плотностью и форматом поста.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Язык</h4>
+  <p><span class="label">Простыми словами:</span> Язык шаблона задаётся при создании; при редактировании показывается как фиксированный.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает вести шаблоны для разных языков.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>SEO-подсказка (SEO prompt)</h4>
+  <p><span class="label">Простыми словами:</span> Промпт для генерации по SEO-ключам с поддержкой переменных.</p>
+  <p><span class="label">Зачем это нужно:</span> Нужно для при генерации SEO-ориентированного контента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Trend-подсказка (Trend prompt)</h4>
+  <p><span class="label">Простыми словами:</span> Промпт для генерации по трендам/темам.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет выпуск реактивного контента на тренды.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Дополнительные инструкции</h4>
+  <p><span class="label">Простыми словами:</span> Поле для уточнения правил и ограничений генерации.</p>
+  <p><span class="label">Зачем это нужно:</span> Повышает повторяемость качества контента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+  </div>
+</section>
+<section id="sec-3" class="content-section">
+  <h2>3. Темы (`/topics`)</h2>
+  <p class="section-intro">Темы используются для сбора трендов и подготовки контентных направлений.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Список тем</h4>
+  <p><span class="label">Простыми словами:</span> Таблица тем показывает название, описание, ключевые слова и выбранные источники данных.</p>
+  <p><span class="label">Зачем это нужно:</span> Даёт обзор тематического портфеля проекта.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>Создание темы</h4>
+  <p><span class="label">Простыми словами:</span> Можно создать новую тему для последующего поиска трендов и контента.</p>
+  <p><span class="label">Зачем это нужно:</span> Добавляет новое направление в систему мониторинга.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Переход в карточку темы</h4>
+  <p><span class="label">Простыми словами:</span> Клик по теме открывает детальную страницу `/topics/[id]`.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает работать с трендами и действиями по теме.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>Действия по теме</h4>
+  <p><span class="label">Простыми словами:</span> Через `TopicActions` доступны действия для запуска поиска/обновления данных по теме.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет работу с трендовыми материалами.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление темы</h4>
+  <p><span class="label">Простыми словами:</span> Тема удаляется из списка с подтверждением.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает убирать неактуальные направления.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+  </div>
+</section>
+<section id="sec-4" class="content-section">
+  <h2>4. Карточка темы и тренды</h2>
+  <p class="section-intro">На странице темы показывается контекст темы и найденные тренды.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Просмотр ключевых слов темы</h4>
+  <p><span class="label">Простыми словами:</span> Ключевые слова показываются в виде бейджей.</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь быстро видит семантическое ядро темы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Источники темы</h4>
+  <p><span class="label">Простыми словами:</span> Отмечаются подключённые источники: Google Trends, News API, YouTube.</p>
+  <p><span class="label">Зачем это нужно:</span> Понятно, откуда приходят трендовые материалы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>Список трендов по теме</h4>
+  <p><span class="label">Простыми словами:</span> Отдельный блок показывает найденные тренды (карточки).</p>
+  <p><span class="label">Зачем это нужно:</span> Материал можно использовать для идей постов/статей.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Обновление трендов через действия</h4>
+  <p><span class="label">Простыми словами:</span> После запуска поиска через `TopicActions` список трендов пополняется/обновляется.</p>
+  <p><span class="label">Зачем это нужно:</span> Сервис становится источником актуальных инфоповодов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+  </div>
+</section>
+      
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="posts-schedule.html"><span class="related-title">Посты, контент-стратегия и расписание публикаций</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="articles.html"><span class="related-title">Статьи: создание и SEO-оценка</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="seo.html"><span class="related-title">SEO: смыслы, кластеры, Wordstat и конкуренты</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="articles.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">Статьи: создание и SEO-оценка</span></a><a class="pager-card" href="products-mindmap.html"><span class="pager-label">Следующая →</span><span class="pager-title">Продукты, продажи и mind map</span></a></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>templates-topics.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

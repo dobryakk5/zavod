@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Карта маршрутов и покрытие документацией — Каталог функций Zavod</title>
+  <meta name="description" content='Сводная таблица клиентских маршрутов интерфейса (`frontend/app`) и страницы каталога, где эти маршруты описаны.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link active" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">Карта маршрутов и покрытие документацией</div>
+        <h1>Карта маршрутов и покрытие документацией</h1>
+        <p>Сводная таблица клиентских маршрутов интерфейса (`frontend/app`) и страницы каталога, где эти маршруты описаны.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">3</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">0</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>Источник карты: `frontend/app/**/page.tsx`</li>
+</ul>
+</section>
+      <section id="sec-1" class="content-section">
+  <h2>1. Как использовать карту</h2>
+  <p class="section-intro">Эта страница нужна для проверки полноты и для быстрых ссылок на нужный раздел каталога.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Проверка покрытия</h4>
+  <p><span class="label">Простыми словами:</span> Сверьте маршрут интерфейса с колонкой «Страница каталога».</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает убедиться, что клиентская функция описана.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы отправляете коллеге ссылку сразу на нужную вкладку, а не объясняете по шагам, куда нажимать.</p>
+</article>
+<article class="function-card">
+  <h4>Поиск служебных маршрутов</h4>
+  <p><span class="label">Простыми словами:</span> В таблице отмечаются редиректы и callback-страницы (например, `/pay`, `/auth/vk/callback`).</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно объяснять клиенту переходы между страницами.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы отправляете коллеге ссылку сразу на нужную вкладку, а не объясняете по шагам, куда нажимать.</p>
+</article>
+<article class="function-card">
+  <h4>Работа с динамическими маршрутами</h4>
+  <p><span class="label">Простыми словами:</span> Сегменты вида `[id]`, `[client_id]`, `[mapId]` и др. сохранены в том же виде, что и в проекте.</p>
+  <p><span class="label">Зачем это нужно:</span> Техническая и пользовательская документация остаются согласованными.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы отправляете коллеге ссылку сразу на нужную вкладку, а не объясняете по шагам, куда нажимать.</p>
+</article>
+  </div>
+</section>
+      <section class='content-section'><h2>Таблица маршрутов</h2><p class='section-intro'>Маршруты собраны автоматически из файлов `frontend/app/**/page.tsx`.</p><div class='route-summary'>Найдено маршрутов: <b>41</b>. Маршрутов без отдельного тематического описания (отнесены к карте маршрутов): <b>0</b>.</div><div class='table-wrap'><table class='route-table'><thead><tr><th>Маршрут</th><th>Файл</th><th>Страница каталога</th></tr></thead><tbody><tr><td><code>/analytics/[analysisId]</code></td><td><code>frontend/app/analytics/[analysisId]/page.tsx</code></td><td><a href='analytics.html'>Аналитика: каналы, сайт, подборки и TGStat</a></td></tr>
+<tr><td><code>/analytics</code></td><td><code>frontend/app/analytics/page.tsx</code></td><td><a href='analytics.html'>Аналитика: каналы, сайт, подборки и TGStat</a></td></tr>
+<tr><td><code>/analytics/rep/[id]</code></td><td><code>frontend/app/analytics/rep/[id]/page.tsx</code></td><td><a href='analytics.html'>Аналитика: каналы, сайт, подборки и TGStat</a></td></tr>
+<tr><td><code>/analytics/tgstat</code></td><td><code>frontend/app/analytics/tgstat/page.tsx</code></td><td><a href='analytics.html'>Аналитика: каналы, сайт, подборки и TGStat</a></td></tr>
+<tr><td><code>/analytics/website/[scanId]/list</code></td><td><code>frontend/app/analytics/website/[scanId]/list/page.tsx</code></td><td><a href='analytics.html'>Аналитика: каналы, сайт, подборки и TGStat</a></td></tr>
+<tr><td><code>/articles/[id]</code></td><td><code>frontend/app/articles/[id]/page.tsx</code></td><td><a href='articles.html'>Статьи: создание и SEO-оценка</a></td></tr>
+<tr><td><code>/articles/new/[id]</code></td><td><code>frontend/app/articles/new/[id]/page.tsx</code></td><td><a href='articles.html'>Статьи: создание и SEO-оценка</a></td></tr>
+<tr><td><code>/articles</code></td><td><code>frontend/app/articles/page.tsx</code></td><td><a href='articles.html'>Статьи: создание и SEO-оценка</a></td></tr>
+<tr><td><code>/auth/vk/callback</code></td><td><code>frontend/app/auth/vk/callback/page.tsx</code></td><td><a href='welcome-access.html'>Вход, старт и навигация</a></td></tr>
+<tr><td><code>/c/[client_id]/edit</code></td><td><code>frontend/app/c/[client_id]/edit/page.tsx</code></td><td><a href='public-client-page-payments.html'>Публичная страница клиента, записи, покупки и рефералы</a></td></tr>
+<tr><td><code>/c/[client_id]</code></td><td><code>frontend/app/c/[client_id]/page.tsx</code></td><td><a href='public-client-page-payments.html'>Публичная страница клиента, записи, покупки и рефералы</a></td></tr>
+<tr><td><code>/clients/chatbot/[chainId]</code></td><td><code>frontend/app/clients/chatbot/[chainId]/page.tsx</code></td><td><a href='clients-crm.html'>CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a></td></tr>
+<tr><td><code>/clients</code></td><td><code>frontend/app/clients/page.tsx</code></td><td><a href='clients-crm.html'>CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a></td></tr>
+<tr><td><code>/contact/[id]</code></td><td><code>frontend/app/contact/[id]/page.tsx</code></td><td><a href='contact-meetings.html'>Карточка контакта и управление встречами</a></td></tr>
+<tr><td><code>/kb/[documentId]</code></td><td><code>frontend/app/kb/[documentId]/page.tsx</code></td><td><a href='knowledge-base.html'>База знаний (KB), общий доступ и работа с документами</a></td></tr>
+<tr><td><code>/kb/share/[token]</code></td><td><code>frontend/app/kb/share/[token]/page.tsx</code></td><td><a href='knowledge-base.html'>База знаний (KB), общий доступ и работа с документами</a></td></tr>
+<tr><td><code>/login</code></td><td><code>frontend/app/login/page.tsx</code></td><td><a href='welcome-access.html'>Вход, старт и навигация</a></td></tr>
+<tr><td><code>/map/[mapId]/node/[nodeId]</code></td><td><code>frontend/app/map/[mapId]/node/[nodeId]/page.tsx</code></td><td><a href='products-mindmap.html'>Продукты, продажи и mind map</a></td></tr>
+<tr><td><code>/map/[mapId]</code></td><td><code>frontend/app/map/[mapId]/page.tsx</code></td><td><a href='products-mindmap.html'>Продукты, продажи и mind map</a></td></tr>
+<tr><td><code>/meet/[id]</code></td><td><code>frontend/app/meet/[id]/page.tsx</code></td><td><a href='contact-meetings.html'>Карточка контакта и управление встречами</a></td></tr>
+<tr><td><code>/</code></td><td><code>frontend/app/page.tsx</code></td><td><a href='welcome-access.html'>Вход, старт и навигация</a></td></tr>
+<tr><td><code>/pay</code></td><td><code>frontend/app/pay/page.tsx</code></td><td><a href='public-client-page-payments.html'>Публичная страница клиента, записи, покупки и рефералы</a></td></tr>
+<tr><td><code>/pay/success</code></td><td><code>frontend/app/pay/success/page.tsx</code></td><td><a href='public-client-page-payments.html'>Публичная страница клиента, записи, покупки и рефералы</a></td></tr>
+<tr><td><code>/posts/[id]</code></td><td><code>frontend/app/posts/[id]/page.tsx</code></td><td><a href='posts-schedule.html'>Посты, контент-стратегия и расписание публикаций</a></td></tr>
+<tr><td><code>/posts/new</code></td><td><code>frontend/app/posts/new/page.tsx</code></td><td><a href='posts-schedule.html'>Посты, контент-стратегия и расписание публикаций</a></td></tr>
+<tr><td><code>/posts</code></td><td><code>frontend/app/posts/page.tsx</code></td><td><a href='posts-schedule.html'>Посты, контент-стратегия и расписание публикаций</a></td></tr>
+<tr><td><code>/product/[id]</code></td><td><code>frontend/app/product/[id]/page.tsx</code></td><td><a href='products-mindmap.html'>Продукты, продажи и mind map</a></td></tr>
+<tr><td><code>/products</code></td><td><code>frontend/app/products/page.tsx</code></td><td><a href='products-mindmap.html'>Продукты, продажи и mind map</a></td></tr>
+<tr><td><code>/schedule</code></td><td><code>frontend/app/schedule/page.tsx</code></td><td><a href='posts-schedule.html'>Посты, контент-стратегия и расписание публикаций</a></td></tr>
+<tr><td><code>/seo/[id]</code></td><td><code>frontend/app/seo/[id]/page.tsx</code></td><td><a href='seo.html'>SEO: смыслы, кластеры, Wordstat и конкуренты</a></td></tr>
+<tr><td><code>/seo/cluster/[id]</code></td><td><code>frontend/app/seo/cluster/[id]/page.tsx</code></td><td><a href='seo.html'>SEO: смыслы, кластеры, Wordstat и конкуренты</a></td></tr>
+<tr><td><code>/seo/favorites</code></td><td><code>frontend/app/seo/favorites/page.tsx</code></td><td><a href='seo.html'>SEO: смыслы, кластеры, Wordstat и конкуренты</a></td></tr>
+<tr><td><code>/seo/group/[id]</code></td><td><code>frontend/app/seo/group/[id]/page.tsx</code></td><td><a href='seo.html'>SEO: смыслы, кластеры, Wordstat и конкуренты</a></td></tr>
+<tr><td><code>/seo</code></td><td><code>frontend/app/seo/page.tsx</code></td><td><a href='seo.html'>SEO: смыслы, кластеры, Wordstat и конкуренты</a></td></tr>
+<tr><td><code>/settings</code></td><td><code>frontend/app/settings/page.tsx</code></td><td><a href='settings-integrations.html'>Настройки клиента, интеграции и оплата</a></td></tr>
+<tr><td><code>/templates/[id]</code></td><td><code>frontend/app/templates/[id]/page.tsx</code></td><td><a href='templates-topics.html'>Шаблоны и темы контента</a></td></tr>
+<tr><td><code>/templates/new</code></td><td><code>frontend/app/templates/new/page.tsx</code></td><td><a href='templates-topics.html'>Шаблоны и темы контента</a></td></tr>
+<tr><td><code>/templates</code></td><td><code>frontend/app/templates/page.tsx</code></td><td><a href='templates-topics.html'>Шаблоны и темы контента</a></td></tr>
+<tr><td><code>/topics/[id]</code></td><td><code>frontend/app/topics/[id]/page.tsx</code></td><td><a href='templates-topics.html'>Шаблоны и темы контента</a></td></tr>
+<tr><td><code>/topics</code></td><td><code>frontend/app/topics/page.tsx</code></td><td><a href='templates-topics.html'>Шаблоны и темы контента</a></td></tr>
+<tr><td><code>/welcome</code></td><td><code>frontend/app/welcome/page.tsx</code></td><td><a href='welcome-access.html'>Вход, старт и навигация</a></td></tr></tbody></table></div></section>
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="index.html"><span class="related-title">Каталог функций системы Zavod</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="welcome-access.html"><span class="related-title">Вход, старт и навигация</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="analytics.html"><span class="related-title">Аналитика: каналы, сайт, подборки и TGStat</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="seo.html"><span class="related-title">SEO: смыслы, кластеры, Wordstat и конкуренты</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="posts-schedule.html"><span class="related-title">Посты, контент-стратегия и расписание публикаций</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="clients-crm.html"><span class="related-title">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="settings-integrations.html"><span class="related-title">Настройки клиента, интеграции и оплата</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="knowledge-base.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">База знаний (KB), общий доступ и работа с документами</span></a><div class="pager-card empty"><span class="pager-label">Конец каталога</span><span class="pager-title">Эта страница — последняя</span></div></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>route-reference.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

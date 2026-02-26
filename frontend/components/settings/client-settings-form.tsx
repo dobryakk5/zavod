@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -233,6 +234,8 @@ export function ClientSettingsForm() {
     }
   }, [publicPageShareUrl]);
 
+  const publicPageEditorPath = publicPagePath ? `${publicPagePath}/edit` : '';
+
   if (!settings) {
     return <div className="text-center py-8">Загрузка...</div>;
   }
@@ -250,9 +253,16 @@ export function ClientSettingsForm() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <FormLabel>Название бренда</FormLabel>
                 <div className="flex items-center gap-1.5 text-xs">
-                  <span className="text-muted-foreground">Моя страница</span>
+                  {publicPageEditorPath ? (
+                    <Link href={publicPageEditorPath} className="text-blue-600 hover:underline">
+                      Моя страница
+                    </Link>
+                  ) : (
+                    <span className="text-muted-foreground">Моя страница</span>
+                  )}
                   {publicPagePath ? (
                     <>
+                      <span className="text-muted-foreground">·</span>
                       <a
                         href={publicPagePath}
                         target="_blank"

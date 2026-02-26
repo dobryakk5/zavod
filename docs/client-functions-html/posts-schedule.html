@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Посты, контент-стратегия и расписание публикаций — Каталог функций Zavod</title>
+  <meta name="description" content='Производство постов, недельное планирование, календарь публикаций и управление медиа на карточке поста.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link active" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">Посты, контент-стратегия и расписание публикаций</div>
+        <h1>Посты, контент-стратегия и расписание публикаций</h1>
+        <p>Производство постов, недельное планирование, календарь публикаций и управление медиа на карточке поста.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">34</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">4</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>Посты: `/posts`</li>
+<li>Новый пост: `/posts/new`</li>
+<li>Карточка поста: `/posts/[id]`</li>
+<li>Модуль расписания: `/schedule`</li>
+</ul>
+<div class="route-badges">
+<code>/posts</code>
+<code>/posts/new</code>
+<code>/posts/[id]</code>
+<code>/schedule</code>
+</div>
+</section>
+      <div class="toc-box">
+<div class="toc-title">Быстрый переход по странице</div>
+<div class="toc-links">
+<a href="#sec-1">1. Раздел «Посты»: общая структура</a>
+<a href="#sec-2">2. Недельное планирование и автогенерация постов</a>
+<a href="#sec-3">3. Список постов</a>
+<a href="#sec-4">4. Контент-стратегия по неделям</a>
+<a href="#sec-5">5. Расписание публикаций (`/schedule` и вкладка в `/posts`)</a>
+<a href="#sec-6">6. Карточка поста (`/posts/[id]`) и форма поста</a>
+<a href="#sec-7">7. Медиа и публикация в карточке поста</a>
+</div></div>
+<section id="sec-1" class="content-section">
+  <h2>1. Раздел «Посты»: общая структура</h2>
+  <p class="section-intro">Раздел `/posts` объединяет три вкладки: посты, контент-стратегия и расписание.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Вкладка «Посты»</h4>
+  <p><span class="label">Простыми словами:</span> Содержит недельное планирование генерации и список созданных постов.</p>
+  <p><span class="label">Зачем это нужно:</span> Основной рабочий стол контент-менеджера.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Вкладка «Контент стратегия»</h4>
+  <p><span class="label">Простыми словами:</span> Помогает вести недельный план тем/кластеров и комментариев.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает согласовать выпуск контента с целями SEO и продаж.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Вкладка «Расписание»</h4>
+  <p><span class="label">Простыми словами:</span> Встраивает календарь и список запланированных публикаций.</p>
+  <p><span class="label">Зачем это нужно:</span> Даёт единый контроль над выходом контента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+  </div>
+</section>
+<section id="sec-2" class="content-section">
+  <h2>2. Недельное планирование и автогенерация постов</h2>
+  <p class="section-intro">Блок «Планирование недели» использует шаблоны контента и запускает пакетную генерацию.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Выбор шаблона для недели</h4>
+  <p><span class="label">Простыми словами:</span> Показывается список шаблонов контента, доступных для генерации.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно планировать выпуск по разным форматам/тональностям.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Указание количества постов</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь задаёт число постов на неделю по шаблону.</p>
+  <p><span class="label">Зачем это нужно:</span> Контролируется объём генерации.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Запуск генерации недельного пакета</h4>
+  <p><span class="label">Простыми словами:</span> Сервис запускает фоновую генерацию постов через задачу.</p>
+  <p><span class="label">Зачем это нужно:</span> Экономит время на создании типовых постов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Отслеживание статуса генерации</h4>
+  <p><span class="label">Простыми словами:</span> Показывается статус фоновой задачи и итоговое количество созданных постов.</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь понимает, когда пакет готов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Синхронизация со списком постов</h4>
+  <p><span class="label">Простыми словами:</span> Во время генерации отображаются временные плейсхолдеры, затем они заменяются реальными постами.</p>
+  <p><span class="label">Зачем это нужно:</span> Интерфейс остаётся понятным даже при фоновых задачах.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+  </div>
+</section>
+<section id="sec-3" class="content-section">
+  <h2>3. Список постов</h2>
+  <p class="section-intro">Список постов поддерживает фильтрацию и переход в карточку поста.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Фильтр по статусу</h4>
+  <p><span class="label">Простыми словами:</span> Можно отбирать посты по статусам: черновик, одобрено, запланировано, опубликовано.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет операционную работу с очередью постов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Фильтр по платформе</h4>
+  <p><span class="label">Простыми словами:</span> Отдельный фильтр по платформам (Instagram, Telegram, YouTube, VK и др.).</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно управлять мультиплатформенной публикацией.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Пагинация списка</h4>
+  <p><span class="label">Простыми словами:</span> Список загружается страницами и поддерживает переход по страницам.</p>
+  <p><span class="label">Зачем это нужно:</span> Комфортная работа при большом объёме постов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Переход в карточку поста</h4>
+  <p><span class="label">Простыми словами:</span> Клик по строке открывает детальную страницу поста `/posts/[id]`.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает редактировать, планировать и публиковать пост.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+  </div>
+</section>
+<section id="sec-4" class="content-section">
+  <h2>4. Контент-стратегия по неделям</h2>
+  <p class="section-intro">Планирование контента по неделям с привязкой к Wordstat-кластерам.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Добавление недели</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь добавляет новую неделю по дате начала.</p>
+  <p><span class="label">Зачем это нужно:</span> Получается календарная сетка контент-плана.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Комментарий к неделе</h4>
+  <p><span class="label">Простыми словами:</span> Для каждой недели можно оставить комментарий/заметки по фокусу контента.</p>
+  <p><span class="label">Зачем это нужно:</span> Упрощает согласование с клиентом и командой.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Привязка Wordstat-кластеров</h4>
+  <p><span class="label">Простыми словами:</span> К каждой неделе можно выбрать связанные кластеры.</p>
+  <p><span class="label">Зачем это нужно:</span> Связывает контент-план с SEO-работой.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы продаёте кухни и хотите понять, что люди ищут чаще: «кухня на заказ» или «кухня под ключ».</p>
+</article>
+<article class="function-card">
+  <h4>Группировка по месяцам</h4>
+  <p><span class="label">Простыми словами:</span> Стратегия автоматически группируется по месяцам для удобства просмотра.</p>
+  <p><span class="label">Зачем это нужно:</span> План становится наглядным на горизонте квартала.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Сохранение и удаление строк</h4>
+  <p><span class="label">Простыми словами:</span> Изменения сохраняются, строки можно удалять, контролируется уникальность недели.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает чистую структуру плана.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы планируете контент на неделю в понедельник, а дальше только корректируете календарь.</p>
+</article>
+  </div>
+</section>
+<section id="sec-5" class="content-section">
+  <h2>5. Расписание публикаций (`/schedule` и вкладка в `/posts`)</h2>
+  <p class="section-intro">Модуль расписания показывает публикации в календаре и списке.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Контент-календарь</h4>
+  <p><span class="label">Простыми словами:</span> Просмотр публикаций в календарном формате.</p>
+  <p><span class="label">Зачем это нужно:</span> Даёт визуальную картину загрузки по датам.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Список запланированных публикаций</h4>
+  <p><span class="label">Простыми словами:</span> Табличный режим показывает пост, платформу, время и статус публикации.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобен для проверки очереди перед запуском.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Перемещение публикации в календаре</h4>
+  <p><span class="label">Простыми словами:</span> Календарь поддерживает перенос даты публикации (drag-and-drop/изменение даты).</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрое перепланирование без ручного редактирования каждой записи.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Навигация по периодам</h4>
+  <p><span class="label">Простыми словами:</span> Можно переключаться по датам/периодам календаря.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно управлять недельным и месячным планом.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+  </div>
+</section>
+<section id="sec-6" class="content-section">
+  <h2>6. Карточка поста (`/posts/[id]`) и форма поста</h2>
+  <p class="section-intro">Детальная работа с конкретным постом: просмотр, редактирование, публикация и медиа.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Создание нового поста</h4>
+  <p><span class="label">Простыми словами:</span> Страница `/posts/new` открывает форму для создания поста вручную.</p>
+  <p><span class="label">Зачем это нужно:</span> Подходит для неавтоматических публикаций и ручных материалов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Редактирование поста</h4>
+  <p><span class="label">Простыми словами:</span> На карточке поста можно перейти в режим редактирования через `PostForm`.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает менять заголовок, текст, статус, платформы и параметры.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление поста</h4>
+  <p><span class="label">Простыми словами:</span> Пост можно удалить с подтверждением.</p>
+  <p><span class="label">Зачем это нужно:</span> Убирает неактуальные публикации из очереди.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Статус поста</h4>
+  <p><span class="label">Простыми словами:</span> Поддерживаются статусы от черновика до публикации (включая approved/scheduled/published).</p>
+  <p><span class="label">Зачем это нужно:</span> Можно выстроить управляемый цикл согласования.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Промпт для изображения</h4>
+  <p><span class="label">Простыми словами:</span> Для поста можно задать отдельный image prompt.</p>
+  <p><span class="label">Зачем это нужно:</span> Повышает качество генерации визуала.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+  </div>
+</section>
+<section id="sec-7" class="content-section">
+  <h2>7. Медиа и публикация в карточке поста</h2>
+  <p class="section-intro">Карточка поста содержит инструменты генерации и публикации медиа-контента.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Генерация изображения</h4>
+  <p><span class="label">Простыми словами:</span> Для поста можно сгенерировать изображения и получить список готовых вариантов.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет подготовку визуала к публикации.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление изображения</h4>
+  <p><span class="label">Простыми словами:</span> Ненужные изображения удаляются прямо из карточки поста.</p>
+  <p><span class="label">Зачем это нужно:</span> Оставляет только финальные варианты.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Генерация видео по фото</h4>
+  <p><span class="label">Простыми словами:</span> Можно запустить генерацию видео на основе изображения.</p>
+  <p><span class="label">Зачем это нужно:</span> Добавляет быстрый сценарий создания короткого видео-контента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Генерация видео по тексту</h4>
+  <p><span class="label">Простыми словами:</span> Есть генерация видео по текстовому сценарию/описанию.</p>
+  <p><span class="label">Зачем это нужно:</span> Расширяет форматы контента без внешних инструментов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление видео</h4>
+  <p><span class="label">Простыми словами:</span> Ненужные видео можно удалить из поста.</p>
+  <p><span class="label">Зачем это нужно:</span> Очищает карточку от промежуточных материалов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Планирование публикаций по аккаунтам</h4>
+  <p><span class="label">Простыми словами:</span> Для поста можно создать записи расписания на разные аккаунты/платформы.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает мультиканальную публикацию из одного поста.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Список запланированных публикаций поста</h4>
+  <p><span class="label">Простыми словами:</span> В карточке виден список schedule-записей с платформой, аккаунтом и статусом.</p>
+  <p><span class="label">Зачем это нужно:</span> Прозрачный контроль состояния публикации по каждому каналу.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Публикация «сейчас»</h4>
+  <p><span class="label">Простыми словами:</span> Для pending schedule можно запустить публикацию немедленно.</p>
+  <p><span class="label">Зачем это нужно:</span> Полезно при срочных изменениях плана.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+  </div>
+</section>
+      
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="templates-topics.html"><span class="related-title">Шаблоны и темы контента</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="seo.html"><span class="related-title">SEO: смыслы, кластеры, Wordstat и конкуренты</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="analytics.html"><span class="related-title">Аналитика: каналы, сайт, подборки и TGStat</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="articles.html"><span class="related-title">Статьи: создание и SEO-оценка</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="settings-integrations.html"><span class="related-title">Настройки клиента, интеграции и оплата</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="seo.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">SEO: смыслы, кластеры, Wordstat и конкуренты</span></a><a class="pager-card" href="articles.html"><span class="pager-label">Следующая →</span><span class="pager-title">Статьи: создание и SEO-оценка</span></a></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>posts-schedule.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

@@ -91,3 +91,59 @@ class YooKassaPayment(models.Model):
 
     def __str__(self):
         return f"{self.payment_id} — {self.client} — {self.status}"
+
+
+class ContactProductPurchase(models.Model):
+    """
+    Право доступа контакта к цифровому продукту (список покупок на /c/[client_id]).
+
+    Храним entitlement по связке client + contact + product, а не историю всех платежей.
+    При повторной покупке обновляем запись.
+    """
+
+    client = models.ForeignKey(
+        "Client",
+        on_delete=models.CASCADE,
+        related_name="contact_product_purchases",
+        verbose_name="Клиент",
+    )
+    contact_id = models.BigIntegerField(db_index=True, verbose_name="ID контакта (map.contact)")
+    product_id = models.BigIntegerField(db_index=True, verbose_name="ID продукта (map.products)")
+    product_name = models.CharField(max_length=255, blank=True, default="", verbose_name="Название продукта")
+    last_payment = models.ForeignKey(
+        "YooKassaPayment",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="contact_product_purchases",
+        verbose_name="Последний платеж YooKassa",
+    )
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Сумма покупки",
+    )
+    currency = models.CharField(max_length=3, default="RUB", verbose_name="Валюта")
+    paid_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата оплаты")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Покупка цифрового продукта контактом"
+        verbose_name_plural = "Покупки цифровых продуктов контактами"
+        ordering = ("-paid_at", "-updated_at", "-id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("client", "contact_id", "product_id"),
+                name="uniq_contact_product_purchase",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("client", "contact_id"), name="idx_cpp_client_contact"),
+            models.Index(fields=("client", "product_id"), name="idx_cpp_client_product"),
+        ]
+
+    def __str__(self):
+        return f"client={self.client_id} contact={self.contact_id} product={self.product_id}"

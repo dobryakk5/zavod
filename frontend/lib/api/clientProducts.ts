@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { ClientProduct, MindMap, ProductGenerationResponse, ProductStatus } from '../types';
+import type { ClientProduct, KbDocumentDetail, MindMap, ProductGenerationResponse, ProductStatus } from '../types';
 
 export const clientProductsApi = {
   list: async (): Promise<ClientProduct[]> => {
@@ -55,6 +55,17 @@ export const clientProductsApi = {
   createRelatedMap: async (coreProductId: string | number): Promise<MindMap> => {
     return apiFetch<MindMap>(`/products/list/${coreProductId}/create-related-map/`, {
       method: 'POST'
+    });
+  },
+
+  createDigitalProductPage: async (id: string | number): Promise<{
+    product: ClientProduct;
+    document: KbDocumentDetail;
+    kb_url: string;
+    created: boolean;
+  }> => {
+    return apiFetch(`/products/list/${id}/create-digital-product-page/`, {
+      method: 'POST',
     });
   },
 

@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Публичная страница клиента, записи, покупки и рефералы — Каталог функций Zavod</title>
+  <meta name="description" content='Клиентский портал `/c/[client_id]` и его редактор: запись на слот, покупка продукта, доступ к цифровым материалам и партнёрская программа.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link active" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">Публичная страница клиента, записи, покупки и рефералы</div>
+        <h1>Публичная страница клиента, записи, покупки и рефералы</h1>
+        <p>Клиентский портал `/c/[client_id]` и его редактор: запись на слот, покупка продукта, доступ к цифровым материалам и партнёрская программа.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">35</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">4</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>Публичная страница клиента: `/c/[client_id]`</li>
+<li>Редактор публичной страницы клиента: `/c/[client_id]/edit`</li>
+<li>Маршрут оплаты: `/pay`</li>
+<li>Возврат после оплаты: `/pay/success`</li>
+</ul>
+<div class="route-badges">
+<code>/c/[client_id]</code>
+<code>/c/[client_id]/edit</code>
+<code>/pay</code>
+<code>/pay/success</code>
+</div>
+</section>
+      <div class="toc-box">
+<div class="toc-title">Быстрый переход по странице</div>
+<div class="toc-links">
+<a href="#sec-1">1. Публичная страница клиента (`/c/[client_id]`)</a>
+<a href="#sec-2">2. Авторизация контакта на публичной странице</a>
+<a href="#sec-3">3. Запись на встречу и перенос</a>
+<a href="#sec-4">4. Покупка продукта и выдача цифрового материала</a>
+<a href="#sec-5">5. Список покупок клиента</a>
+<a href="#sec-6">6. Реферальная программа</a>
+<a href="#sec-7">7. Редактор страницы клиента (`/c/[client_id]/edit`)</a>
+<a href="#sec-8">8. Маршруты оплаты и возврата</a>
+</div></div>
+<section id="sec-1" class="content-section">
+  <h2>1. Публичная страница клиента (`/c/[client_id]`)</h2>
+  <p class="section-intro">Публичная страница собирается из включаемых блоков и может использоваться как мини-кабинет клиента.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Шапка клиента</h4>
+  <p><span class="label">Простыми словами:</span> Отображает имя/бренд и общий контекст страницы клиента.</p>
+  <p><span class="label">Зачем это нужно:</span> Создаёт персонализированную точку входа для клиента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Блок продукта</h4>
+  <p><span class="label">Простыми словами:</span> Показывает выбранный продукт, описание и кнопку покупки (если включено в шаблоне страницы).</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент видит актуальное коммерческое предложение.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>Текстовый блок (custom content)</h4>
+  <p><span class="label">Простыми словами:</span> Владелец страницы может вставлять произвольный rich-text контент.</p>
+  <p><span class="label">Зачем это нужно:</span> Подходит для инструкций, приветствия, условий и офферов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Блок записи на встречу</h4>
+  <p><span class="label">Простыми словами:</span> Показывает доступные слоты и помогает записаться/перенести встречу.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент может сам выбрать удобное время.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Блок запланированных встреч</h4>
+  <p><span class="label">Простыми словами:</span> Отображает список уже назначенных встреч клиента.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент видит свои будущие встречи в одном месте.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Блок списка покупок</h4>
+  <p><span class="label">Простыми словами:</span> Показывает оплаченные продукты и статус выдачи цифровых материалов.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиенту не нужно писать менеджеру, чтобы найти доступы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Блок рефералов</h4>
+  <p><span class="label">Простыми словами:</span> Показывает реферальную ссылку, количество приглашённых и статус приглашений.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает партнёрскую механику для клиента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент поделился своей ссылкой с другом и потом видит в кабинете, что приглашение зарегистрировалось.</p>
+</article>
+  </div>
+</section>
+<section id="sec-2" class="content-section">
+  <h2>2. Авторизация контакта на публичной странице</h2>
+  <p class="section-intro">Часть функций на публичной странице доступна только после входа как контакт через Telegram/VK.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Вход как контакт</h4>
+  <p><span class="label">Простыми словами:</span> На странице можно войти как контакт через Telegram или VK.</p>
+  <p><span class="label">Зачем это нужно:</span> Открывает функции записи, покупок и рефералов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент поделился своей ссылкой с другом и потом видит в кабинете, что приглашение зарегистрировалось.</p>
+</article>
+<article class="function-card">
+  <h4>Режим просмотра без входа</h4>
+  <p><span class="label">Простыми словами:</span> Без авторизации клиент видит только доступные для просмотра блоки и слоты без действия записи/покупки.</p>
+  <p><span class="label">Зачем это нужно:</span> Безопасный публичный просмотр страницы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Определение привязанного контакта</h4>
+  <p><span class="label">Простыми словами:</span> После входа страница связывается с CRM-контактом и показывает персональные данные (покупки/встречи).</p>
+  <p><span class="label">Зачем это нужно:</span> Получается персональный клиентский портал без отдельного личного кабинета.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+  </div>
+</section>
+<section id="sec-3" class="content-section">
+  <h2>3. Запись на встречу и перенос</h2>
+  <p class="section-intro">Сценарий self-service записи клиента на доступные слоты.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Просмотр свободных слотов</h4>
+  <p><span class="label">Простыми словами:</span> Показываются доступные окна времени, подготовленные владельцем страницы/CRM.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент сам выбирает удобное время.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Запись на слот</h4>
+  <p><span class="label">Простыми словами:</span> После входа как контакт клиент может выбрать слот и создать запись на встречу.</p>
+  <p><span class="label">Зачем это нужно:</span> Снижает нагрузку на менеджера при согласовании времени.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Перенос встречи</h4>
+  <p><span class="label">Простыми словами:</span> Если встреча уже назначена, клиент может перейти в режим переноса и выбрать новый слот.</p>
+  <p><span class="label">Зачем это нужно:</span> Самообслуживание при изменении расписания.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Проверка занятости слота</h4>
+  <p><span class="label">Простыми словами:</span> Сервис проверяет, занят ли слот, и показывает понятную ошибку при конфликте.</p>
+  <p><span class="label">Зачем это нужно:</span> Снижает риск двойного бронирования.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+  </div>
+</section>
+<section id="sec-4" class="content-section">
+  <h2>4. Покупка продукта и выдача цифрового материала</h2>
+  <p class="section-intro">Публичная страница поддерживает покупку продукта и выдачу цифрового контента после оплаты.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Инициация покупки</h4>
+  <p><span class="label">Простыми словами:</span> Кнопка «Купить» запускает создание оплаты для выбранного продукта.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент может купить продукт напрямую со своей страницы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Проверка статуса оплаты</h4>
+  <p><span class="label">Простыми словами:</span> Страница отслеживает статус платежа и показывает сообщение о результате.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент понимает, прошла ли оплата и что делать дальше.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Переход к оплате</h4>
+  <p><span class="label">Простыми словами:</span> Сервис направляет клиента на платёжную ссылку/страницу подтверждения оплаты.</p>
+  <p><span class="label">Зачем это нужно:</span> Фактическая оплата происходит в платёжном провайдере.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Выдача цифрового продукта</h4>
+  <p><span class="label">Простыми словами:</span> После успешной оплаты показывается ссылка на цифровой материал (если готова выдача).</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент получает доступ сразу после оплаты.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Сообщение о задержке выдачи</h4>
+  <p><span class="label">Простыми словами:</span> Если выдача ещё не готова, сервис показывает понятное сообщение вместо «пустого» состояния.</p>
+  <p><span class="label">Зачем это нужно:</span> Снижает количество вопросов в поддержку.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент заходит по ссылке, оплачивает продукт и сразу получает доступ к материалу.</p>
+</article>
+  </div>
+</section>
+<section id="sec-5" class="content-section">
+  <h2>5. Список покупок клиента</h2>
+  <p class="section-intro">История покупок доступна авторизованному контакту прямо на публичной странице.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Загрузка списка покупок</h4>
+  <p><span class="label">Простыми словами:</span> Сервис подтягивает покупки контакта из CRM/публичного API.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент видит историю оплат без обращения к менеджеру.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Статус и дата оплаты</h4>
+  <p><span class="label">Простыми словами:</span> Для каждой покупки показываются статус и дата оплаты.</p>
+  <p><span class="label">Зачем это нужно:</span> Прозрачность для клиента и менеджера.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Ссылка на выданный материал</h4>
+  <p><span class="label">Простыми словами:</span> Если по покупке есть цифровая выдача, ссылка показывается в списке.</p>
+  <p><span class="label">Зачем это нужно:</span> Повторный доступ к материалам в любой момент.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент заходит по ссылке, оплачивает продукт и сразу получает доступ к материалу.</p>
+</article>
+  </div>
+</section>
+<section id="sec-6" class="content-section">
+  <h2>6. Реферальная программа</h2>
+  <p class="section-intro">На публичной странице реализована партнёрская механика для контактов клиента.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Получение реферальной ссылки</h4>
+  <p><span class="label">Простыми словами:</span> Сервис создаёт/показывает персональную ссылку для приглашений.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент может приглашать своих знакомых/коллег.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент поделился своей ссылкой с другом и потом видит в кабинете, что приглашение зарегистрировалось.</p>
+</article>
+<article class="function-card">
+  <h4>Копирование реферальной ссылки</h4>
+  <p><span class="label">Простыми словами:</span> Ссылка копируется в буфер обмена в один клик.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно делиться через мессенджеры.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент поделился своей ссылкой с другом и потом видит в кабинете, что приглашение зарегистрировалось.</p>
+</article>
+<article class="function-card">
+  <h4>Счётчик приглашённых</h4>
+  <p><span class="label">Простыми словами:</span> Показывается количество приглашённых контактов.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент видит прогресс партнёрской активности.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент поделился своей ссылкой с другом и потом видит в кабинете, что приглашение зарегистрировалось.</p>
+</article>
+<article class="function-card">
+  <h4>Список приглашений</h4>
+  <p><span class="label">Простыми словами:</span> Показывается история приглашений и их статусы (ожидает/зарегистрирован/засчитан и т.п.).</p>
+  <p><span class="label">Зачем это нужно:</span> Прозрачность реферальной программы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент поделился своей ссылкой с другом и потом видит в кабинете, что приглашение зарегистрировалось.</p>
+</article>
+<article class="function-card">
+  <h4>Применение кода пригласителя</h4>
+  <p><span class="label">Простыми словами:</span> Контакт может ввести реферальный код пригласителя, если это предусмотрено сценарием.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает механики учёта рекомендаций.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент поделился своей ссылкой с другом и потом видит в кабинете, что приглашение зарегистрировалось.</p>
+</article>
+  </div>
+</section>
+<section id="sec-7" class="content-section">
+  <h2>7. Редактор страницы клиента (`/c/[client_id]/edit`)</h2>
+  <p class="section-intro">Владелец страницы настраивает состав блоков и контент публичного портала.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Включение/выключение блоков страницы</h4>
+  <p><span class="label">Простыми словами:</span> Можно управлять видимостью блоков: шапка, продукт, покупки, custom content, запись, встречи, рефералы.</p>
+  <p><span class="label">Зачем это нужно:</span> Собирается нужный формат клиентского портала под задачу.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Выбор продукта для страницы</h4>
+  <p><span class="label">Простыми словами:</span> Можно выбрать конкретный продукт, который показывается в коммерческом блоке.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает делать целевые страницы под отдельные предложения.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Редактор rich-text блока</h4>
+  <p><span class="label">Простыми словами:</span> Контент страницы редактируется через Tiptap (форматированный текст).</p>
+  <p><span class="label">Зачем это нужно:</span> Легко добавлять инструкции, оффер, ответы на вопросы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Шаблонные токены в контенте</h4>
+  <p><span class="label">Простыми словами:</span> В контенте используются подстановки вроде `{{brand_name}}`, `{{product_name}}`, `{{product_price}}`.</p>
+  <p><span class="label">Зачем это нужно:</span> Страница автоматически персонализируется по настройкам клиента/продукта.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Сохранение шаблона страницы</h4>
+  <p><span class="label">Простыми словами:</span> Настройки блоков и контент сохраняются в настройках клиента.</p>
+  <p><span class="label">Зачем это нужно:</span> Изменения сразу отражаются на публичной странице.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Копирование публичной ссылки</h4>
+  <p><span class="label">Простыми словами:</span> Из редактора можно открыть/скопировать ссылку на публичную страницу клиента.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно отправлять готовую страницу клиенту.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+  </div>
+</section>
+<section id="sec-8" class="content-section">
+  <h2>8. Маршруты оплаты и возврата</h2>
+  <p class="section-intro">Служебные клиентские маршруты помогают корректно возвращать пользователя в экран оплаты.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>`/pay`</h4>
+  <p><span class="label">Простыми словами:</span> Маршрут-переход, который отправляет пользователя в раздел оплаты настроек (`/settings?tab=payment`).</p>
+  <p><span class="label">Зачем это нужно:</span> Единая точка входа в оплату из внешних ссылок.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы отправляете коллеге ссылку сразу на нужную вкладку, а не объясняете по шагам, куда нажимать.</p>
+</article>
+<article class="function-card">
+  <h4>`/pay/success`</h4>
+  <p><span class="label">Простыми словами:</span> После успешной оплаты маршрут возвращает в настройки оплаты и передаёт `payment_id`, если он есть.</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь видит статус платежа в интерфейсе системы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы отправляете коллеге ссылку сразу на нужную вкладку, а не объясняете по шагам, куда нажимать.</p>
+</article>
+  </div>
+</section>
+      
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="clients-crm.html"><span class="related-title">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="contact-meetings.html"><span class="related-title">Карточка контакта и управление встречами</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="settings-integrations.html"><span class="related-title">Настройки клиента, интеграции и оплата</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="contact-meetings.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">Карточка контакта и управление встречами</span></a><a class="pager-card" href="settings-integrations.html"><span class="pager-label">Следующая →</span><span class="pager-title">Настройки клиента, интеграции и оплата</span></a></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>public-client-page-payments.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

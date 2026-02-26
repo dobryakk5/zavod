@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Настройки клиента, интеграции и оплата — Каталог функций Zavod</title>
+  <meta name="description" content='Настройка проекта, соцаккаунтов, платёжной инфраструктуры, часового пояса и сервисных интеграций.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link active" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">Настройки клиента, интеграции и оплата</div>
+        <h1>Настройки клиента, интеграции и оплата</h1>
+        <p>Настройка проекта, соцаккаунтов, платёжной инфраструктуры, часового пояса и сервисных интеграций.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">29</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">2</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>Настройки: `/settings`</li>
+<li>VK callback после авторизации: `/auth/vk/callback`</li>
+</ul>
+<div class="route-badges">
+<code>/settings</code>
+<code>/auth/vk/callback</code>
+</div>
+</section>
+      <div class="toc-box">
+<div class="toc-title">Быстрый переход по странице</div>
+<div class="toc-links">
+<a href="#sec-1">1. Страница «Настройки» (`/settings`) — вкладки</a>
+<a href="#sec-2">2. Вкладка «Настройки клиента»</a>
+<a href="#sec-3">3. Вкладка «Социальные аккаунты»</a>
+<a href="#sec-4">4. Вкладка «Оплата» (подписка и YooKassa)</a>
+<a href="#sec-5">5. RAG-чат по базе знаний</a>
+</div></div>
+<section id="sec-1" class="content-section">
+  <h2>1. Страница «Настройки» (`/settings`) — вкладки</h2>
+  <p class="section-intro">Раздел включает вкладки: настройки клиента, социальные аккаунты, оплата и база знаний.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Настройки клиента</h4>
+  <p><span class="label">Простыми словами:</span> Профиль бренда/ниши/продукта и описание целевой аудитории.</p>
+  <p><span class="label">Зачем это нужно:</span> Основа для AI-аналитики, SEO и контент-генерации.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Социальные аккаунты</h4>
+  <p><span class="label">Простыми словами:</span> Подключение и управление каналами/аккаунтами публикаций и входа.</p>
+  <p><span class="label">Зачем это нужно:</span> Нужны для публикаций и коммуникации с клиентами.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Оплата</h4>
+  <p><span class="label">Простыми словами:</span> Тарифы, подписка, YooKassa и статусы платежей.</p>
+  <p><span class="label">Зачем это нужно:</span> Финансовая настройка использования платформы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>База знаний</h4>
+  <p><span class="label">Простыми словами:</span> Управление документами проекта (отдельно подробно описано на странице KB).</p>
+  <p><span class="label">Зачем это нужно:</span> Командное хранение знаний и материалов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+  </div>
+</section>
+<section id="sec-2" class="content-section">
+  <h2>2. Вкладка «Настройки клиента»</h2>
+  <p class="section-intro">Форма задаёт маркетинговый контекст проекта для AI и SEO-модулей.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Название бренда</h4>
+  <p><span class="label">Простыми словами:</span> Сохраняется бренд/проект для персонализации материалов.</p>
+  <p><span class="label">Зачем это нужно:</span> Нужно для в текстах, AI-подсказках и публичной странице.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы настраиваете проект один раз, и дальше аналитика/SEO/контент используют эти данные автоматически.</p>
+</article>
+<article class="function-card">
+  <h4>Ниша и продукт/услуга</h4>
+  <p><span class="label">Простыми словами:</span> Ключевые поля для позиционирования проекта.</p>
+  <p><span class="label">Зачем это нужно:</span> Определяют качество аналитики, рекомендаций и SEO-выгрузок.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Портрет ЦА (avatar)</h4>
+  <p><span class="label">Простыми словами:</span> Описание целевой аудитории в свободной форме.</p>
+  <p><span class="label">Зачем это нужно:</span> Основа для персонализированных текстов и SEO-групп.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Боли / желания / возражения</h4>
+  <p><span class="label">Простыми словами:</span> Текстовые блоки по психологии и мотивам клиента.</p>
+  <p><span class="label">Зачем это нужно:</span> Используются в контенте, аналитике и генерации запросов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Список рекомендованных книг</h4>
+  <p><span class="label">Простыми словами:</span> Поле с книгами экспертов/литературой для дальнейшей смысловой работы.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает методологическую проработку ниши.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы настраиваете проект один раз, и дальше аналитика/SEO/контент используют эти данные автоматически.</p>
+</article>
+<article class="function-card">
+  <h4>Генерация SEO (из настроек)</h4>
+  <p><span class="label">Простыми словами:</span> Можно запустить SEO-анализ/генерацию прямо из формы настроек клиента.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрый старт без перехода в SEO-раздел.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Подборка книг экспертности (AI)</h4>
+  <p><span class="label">Простыми словами:</span> Сервис генерирует список книг на основе болей/желаний/аватара.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет формирование смысловой базы проекта.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Генерация семантики по книгам</h4>
+  <p><span class="label">Простыми словами:</span> По списку книг можно создать смысловые группы и заготовку семантики.</p>
+  <p><span class="label">Зачем это нужно:</span> Связывает методологию с SEO-подготовкой.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Ссылка на публичную страницу клиента</h4>
+  <p><span class="label">Простыми словами:</span> Из настроек можно открыть/скопировать ссылку на `/c/[client_id]` и перейти в редактор страницы.</p>
+  <p><span class="label">Зачем это нужно:</span> Упрощает настройку и распространение клиентского портала.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+  </div>
+</section>
+<section id="sec-3" class="content-section">
+  <h2>3. Вкладка «Социальные аккаунты»</h2>
+  <p class="section-intro">Настройки входа, публикационных аккаунтов и интеграций с соцсетями.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Часовой пояс клиента</h4>
+  <p><span class="label">Простыми словами:</span> Отдельная карточка помогает выбрать и сохранить часовой пояс проекта.</p>
+  <p><span class="label">Зачем это нужно:</span> Все даты/время в CRM и публикациях становятся корректными для клиента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Связанные аккаунты входа</h4>
+  <p><span class="label">Простыми словами:</span> Привязка Telegram и/или VK к системному аккаунту пользователя.</p>
+  <p><span class="label">Зачем это нужно:</span> Гибкая авторизация и связь с мессенджерами/соцсетями.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, сотрудник заходит через Telegram за 1 минуту и сразу попадает на главный экран с нужными разделами.</p>
+</article>
+<article class="function-card">
+  <h4>Канал связи по умолчанию</h4>
+  <p><span class="label">Простыми словами:</span> Выбор основного канала коммуникации с клиентом.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает системе и команде использовать правильный канал в первую очередь.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Менеджер соцаккаунтов публикации</h4>
+  <p><span class="label">Простыми словами:</span> Список подключённых соцаккаунтов (Telegram, Instagram, YouTube, VK и др.) с добавлением/редактированием/удалением.</p>
+  <p><span class="label">Зачем это нужно:</span> База аккаунтов для расписания и публикации контента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент сам выбрал слот на пятницу 15:00, а менеджеру не пришлось согласовывать время вручную в переписке.</p>
+</article>
+<article class="function-card">
+  <h4>Ручное подключение Telegram-канала</h4>
+  <p><span class="label">Простыми словами:</span> Для Telegram предусмотрен ручной ввод @username или ссылки.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрый старт публикаций в Telegram без сложной интеграции.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>VK интеграция групп</h4>
+  <p><span class="label">Простыми словами:</span> Отдельная панель для подключения группы VK через авторизацию, проверки и отключения.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает безопасную настройку публикации во ВКонтакте.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+  </div>
+</section>
+<section id="sec-4" class="content-section">
+  <h2>4. Вкладка «Оплата» (подписка и YooKassa)</h2>
+  <p class="section-intro">Раздел для оплаты тарифа платформы и отслеживания статуса платежей.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Просмотр текущей подписки</h4>
+  <p><span class="label">Простыми словами:</span> Сервис показывает текущий тариф, срок действия и активность подписки.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент понимает статус доступа к платформе.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Список тарифов</h4>
+  <p><span class="label">Простыми словами:</span> Загружается список тарифных планов с суммой, периодом и описанием.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно выбрать подходящий план без обращения в поддержку.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Выбор тарифа</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь переключает тариф и видит параметры оплаты.</p>
+  <p><span class="label">Зачем это нужно:</span> Гибкость в переходе между пакетами.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Промокод</h4>
+  <p><span class="label">Простыми словами:</span> Можно применить промокод при оплате (если доступно).</p>
+  <p><span class="label">Зачем это нужно:</span> Поддержка акций и персональных предложений.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Подключение YooKassa</h4>
+  <p><span class="label">Простыми словами:</span> Настройка/подключение YooKassa через OAuth-сценарий с возвратом в `/settings?tab=social|payment`.</p>
+  <p><span class="label">Зачем это нужно:</span> Подготовка платёжной инфраструктуры в интерфейсе.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Создание оплаты тарифа</h4>
+  <p><span class="label">Простыми словами:</span> Форма запускает оплату выбранного плана с указанием имени/email/суммы (для dev-режима и сценариев теста).</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь может оплатить сервис прямо из системы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Проверка статуса платежа</h4>
+  <p><span class="label">Простыми словами:</span> Сервис отслеживает статус платежа и показывает результат (ожидает/оплачен/отменён).</p>
+  <p><span class="label">Зачем это нужно:</span> Понятный контроль состояния оплаты без сторонних кабинетов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Ссылка реферальной программы для подписки</h4>
+  <p><span class="label">Простыми словами:</span> В разделе оплаты есть блок реферальной статистики/ссылки (если включено в аккаунте).</p>
+  <p><span class="label">Зачем это нужно:</span> Поддержка партнёрской модели привлечения.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+  </div>
+</section>
+<section id="sec-5" class="content-section">
+  <h2>5. RAG-чат по базе знаний</h2>
+  <p class="section-intro">Внизу страницы настроек доступен чат-виджет с ответами по базе знаний проекта.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Диалог с базой знаний</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь задаёт вопрос, а сервис отвечает на основе KB-документов.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрый доступ к накопленным знаниям команды.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Показ источников ответа</h4>
+  <p><span class="label">Простыми словами:</span> В ответе отображаются использованные документы/фрагменты.</p>
+  <p><span class="label">Зачем это нужно:</span> Повышает доверие и помогает проверить источник.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+  </div>
+</section>
+      
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="knowledge-base.html"><span class="related-title">База знаний (KB), общий доступ и работа с документами</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="seo.html"><span class="related-title">SEO: смыслы, кластеры, Wordstat и конкуренты</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="analytics.html"><span class="related-title">Аналитика: каналы, сайт, подборки и TGStat</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="public-client-page-payments.html"><span class="related-title">Публичная страница клиента, записи, покупки и рефералы</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="public-client-page-payments.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">Публичная страница клиента, записи, покупки и рефералы</span></a><a class="pager-card" href="knowledge-base.html"><span class="pager-label">Следующая →</span><span class="pager-title">База знаний (KB), общий доступ и работа с документами</span></a></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>settings-integrations.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

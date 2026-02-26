@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>База знаний (KB), общий доступ и работа с документами — Каталог функций Zavod</title>
+  <meta name="description" content='Документы проекта, вложенные страницы, комментарии, экспорт и публичные ссылки для команды и клиентов.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link active" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">База знаний (KB), общий доступ и работа с документами</div>
+        <h1>База знаний (KB), общий доступ и работа с документами</h1>
+        <p>Документы проекта, вложенные страницы, комментарии, экспорт и публичные ссылки для команды и клиентов.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">22</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">2</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>Список KB в настройках: `/settings?tab=kb`</li>
+<li>Редактор документа: `/kb/[documentId]`</li>
+<li>Публичная ссылка на документ: `/kb/share/[token]`</li>
+</ul>
+<div class="route-badges">
+<code>/kb/[documentId]</code>
+<code>/kb/share/[token]</code>
+</div>
+</section>
+      <div class="toc-box">
+<div class="toc-title">Быстрый переход по странице</div>
+<div class="toc-links">
+<a href="#sec-1">1. База знаний во вкладке настроек</a>
+<a href="#sec-2">2. Страница документа (`/kb/[documentId]`)</a>
+<a href="#sec-3">3. Публичный доступ к документу (`/kb/share/[token]`)</a>
+<a href="#sec-4">4. Связь KB с другими модулями</a>
+</div></div>
+<section id="sec-1" class="content-section">
+  <h2>1. База знаний во вкладке настроек</h2>
+  <p class="section-intro">KB открывается из `/settings?tab=kb` и показывает дерево документов проекта.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Дерево документов</h4>
+  <p><span class="label">Простыми словами:</span> Документы отображаются в древовидной структуре с вложенными страницами.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно строить структуру базы знаний как в wiki.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Новый документ</h4>
+  <p><span class="label">Простыми словами:</span> Создание корневого документа из списка KB.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрый старт новой инструкции/регламента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Новая вложенная страница</h4>
+  <p><span class="label">Простыми словами:</span> Можно создать дочернюю страницу прямо из строки документа.</p>
+  <p><span class="label">Зачем это нужно:</span> Легко строить многоуровневые материалы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Архив/восстановление</h4>
+  <p><span class="label">Простыми словами:</span> Документы можно архивировать и возвращать из архива.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает порядок без безвозвратного удаления.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Режим просмотра архива</h4>
+  <p><span class="label">Простыми словами:</span> Переключатель «Архив» показывает архивированные документы.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает безопасно управлять жизненным циклом материалов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Переход в документ</h4>
+  <p><span class="label">Простыми словами:</span> Кнопка «Открыть» ведёт в редактор конкретного документа `/kb/[documentId]`.</p>
+  <p><span class="label">Зачем это нужно:</span> Основной путь к редактированию содержимого.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+  </div>
+</section>
+<section id="sec-2" class="content-section">
+  <h2>2. Страница документа (`/kb/[documentId]`)</h2>
+  <p class="section-intro">Основной редактор документа с верхней панелью действий и Tiptap-редактором.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Редактирование заголовка и иконки</h4>
+  <p><span class="label">Простыми словами:</span> Название и иконка документа редактируются прямо в шапке.</p>
+  <p><span class="label">Зачем это нужно:</span> Упрощает организацию и визуальную навигацию по KB.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Tiptap-редактор документа</h4>
+  <p><span class="label">Простыми словами:</span> Основной контент документа редактируется в rich-text-редакторе.</p>
+  <p><span class="label">Зачем это нужно:</span> Подходит для инструкций, регламентов, шаблонов и заметок.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Автосохранение контента</h4>
+  <p><span class="label">Простыми словами:</span> Редактор сохраняет изменения автоматически с заданным интервалом.</p>
+  <p><span class="label">Зачем это нужно:</span> Снижает риск потери текста.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Создание вложенных страниц из редактора</h4>
+  <p><span class="label">Простыми словами:</span> Из редактора можно создавать дочерние страницы и сразу видеть их в списке.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет структурирование материалов во время написания.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, новый сотрудник открывает одну страницу и за 10 минут понимает, как вести клиента.</p>
+</article>
+<article class="function-card">
+  <h4>Комментарии (панель справа)</h4>
+  <p><span class="label">Простыми словами:</span> Можно включить/выключить панель комментариев к документу.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно для ревью и совместной работы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Экспорт документа</h4>
+  <p><span class="label">Простыми словами:</span> Отдельная кнопка `ExportButton` помогает выгружать документ.</p>
+  <p><span class="label">Зачем это нужно:</span> Полезно для передачи материалов вне системы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Создание публичной ссылки</h4>
+  <p><span class="label">Простыми словами:</span> `ShareButton` создаёт ссылку на публичный просмотр документа.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно безопасно делиться материалом с клиентом или подрядчиком.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Дублирование документа</h4>
+  <p><span class="label">Простыми словами:</span> Документ можно копировать (включая/без вложенных страниц по сценарию кнопки).</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрое создание шаблонов на основе готового материала.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>Архивирование документа</h4>
+  <p><span class="label">Простыми словами:</span> Документ можно архивировать прямо из меню действий.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает порядок в KB.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+<article class="function-card">
+  <h4>Вложенные страницы внизу документа</h4>
+  <p><span class="label">Простыми словами:</span> Ниже редактора показывается список дочерних страниц с переходами.</p>
+  <p><span class="label">Зачем это нужно:</span> Прозрачная навигация по разделу знаний.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+  </div>
+</section>
+<section id="sec-3" class="content-section">
+  <h2>3. Публичный доступ к документу (`/kb/share/[token]`)</h2>
+  <p class="section-intro">Публичная read-only страница, открываемая по share-токену.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Публичный просмотр документа</h4>
+  <p><span class="label">Простыми словами:</span> Документ открывается по токену без входа в систему.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно отправлять инструкции клиенту и подрядчикам.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Проверка доступности ссылки</h4>
+  <p><span class="label">Простыми словами:</span> Если ссылка недоступна/истекла, показывается понятное сообщение.</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь понимает причину, а не видит пустую ошибку.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, новый сотрудник открывает одну страницу и за 10 минут понимает, как вести клиента.</p>
+</article>
+<article class="function-card">
+  <h4>Отдельные метаданные для шаринга</h4>
+  <p><span class="label">Простыми словами:</span> Страница формирует заголовок документа в метаданных по содержимому share.</p>
+  <p><span class="label">Зачем это нужно:</span> Улучшает пользовательский опыт при открытии ссылки.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы пишете инструкцию в базе знаний и отправляете клиенту публичную ссылку без входа в систему.</p>
+</article>
+  </div>
+</section>
+<section id="sec-4" class="content-section">
+  <h2>4. Связь KB с другими модулями</h2>
+  <p class="section-intro">KB используется не только как хранилище документов, но и как база для клиентских и AI-сценариев.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Тип документа «product»</h4>
+  <p><span class="label">Простыми словами:</span> Документ может быть отмечен как продуктовый (показывается бейдж типа).</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает использовать KB как часть продуктовой выдачи.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Выдача цифровых продуктов через публичную страницу клиента</h4>
+  <p><span class="label">Простыми словами:</span> Ссылки на документы KB могут использоваться как цифровая выдача после оплаты на `/c/[client_id]`.</p>
+  <p><span class="label">Зачем это нужно:</span> KB становится хранилищем выдаваемых материалов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>RAG-чат в настройках</h4>
+  <p><span class="label">Простыми словами:</span> Документы KB используются как источник ответов в RAG-чат-виджете на странице настроек.</p>
+  <p><span class="label">Зачем это нужно:</span> Команда получает быстрый поиск по знаниям.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы один раз настраиваете часовой пояс и соцаккаунты, чтобы публикации и встречи шли в правильное время.</p>
+</article>
+  </div>
+</section>
+      
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="settings-integrations.html"><span class="related-title">Настройки клиента, интеграции и оплата</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="public-client-page-payments.html"><span class="related-title">Публичная страница клиента, записи, покупки и рефералы</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="settings-integrations.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">Настройки клиента, интеграции и оплата</span></a><a class="pager-card" href="route-reference.html"><span class="pager-label">Следующая →</span><span class="pager-title">Карта маршрутов и покрытие документацией</span></a></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>knowledge-base.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

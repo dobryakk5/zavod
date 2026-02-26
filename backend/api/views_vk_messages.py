@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from django.conf import settings
+from django.core.cache import cache
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework.permissions import AllowAny
@@ -13,10 +14,19 @@ from rest_framework.views import APIView
 
 from core.models import UserTenantBinding, VkIntegration
 from core.services.chain_executor import ChainExecutor
-from core.tasks.chains import dispatch_chain_actions
+from core.tasks.chains import _send_vk_message, dispatch_chain_actions
 
 
 logger = logging.getLogger(__name__)
+VK_CALLBACK_DEDUP_TTL_SECONDS = 120
+VK_START_TRIGGERS = {
+    "welcome",
+    "start",
+    "/start",
+    "старт",
+    "начать",
+    "привет",
+}
 
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
@@ -59,6 +69,43 @@ def _parse_vk_button_payload(raw_payload: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _build_vk_callback_dedupe_key(payload: dict[str, Any]) -> str | None:
+    event_id = payload.get("event_id")
+    if event_id:
+        return f"vk_callback:event:{event_id}"
+
+    obj = payload.get("object") if isinstance(payload.get("object"), dict) else {}
+    message = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+
+    group_id = payload.get("group_id") or obj.get("group_id")
+    peer_id = message.get("peer_id")
+    from_id = message.get("from_id")
+    conversation_message_id = message.get("conversation_message_id")
+    if group_id is not None and peer_id is not None and conversation_message_id is not None:
+        return (
+            "vk_callback:message_new:"
+            f"{group_id}:{peer_id}:{conversation_message_id}:{from_id or ''}"
+        )
+
+    message_id = message.get("id")
+    message_date = message.get("date")
+    if group_id is not None and from_id is not None and message_id is not None:
+        return f"vk_callback:message_new:{group_id}:{from_id}:{message_id}:{message_date or ''}"
+
+    return None
+
+
+def _is_duplicate_vk_callback(payload: dict[str, Any]) -> bool:
+    key = _build_vk_callback_dedupe_key(payload)
+    if not key:
+        return False
+    try:
+        return not cache.add(key, "1", timeout=VK_CALLBACK_DEDUP_TTL_SECONDS)
+    except Exception:  # noqa: BLE001
+        logger.exception("VK callback dedupe cache error")
+        return False
 
 
 def _build_user_message(message: dict[str, Any]) -> dict[str, Any]:
@@ -117,6 +164,9 @@ class VkMessageCallbackView(APIView):
             return HttpResponse("forbidden", status=403, content_type="text/plain; charset=utf-8")
 
         if event_type != "message_new":
+            return HttpResponse("ok", content_type="text/plain; charset=utf-8")
+
+        if _is_duplicate_vk_callback(payload):
             return HttpResponse("ok", content_type="text/plain; charset=utf-8")
 
         try:
@@ -180,7 +230,7 @@ class VkMessageCallbackView(APIView):
         executor = ChainExecutor()
         channel_meta = {"vk_group_id": group_id}
 
-        if text_value in {"welcome", "старт", "начать"}:
+        if text_value in VK_START_TRIGGERS:
             result = executor.start_chain(
                 user_id=from_id,
                 tenant_id=integration.client_id,
@@ -207,6 +257,12 @@ class VkMessageCallbackView(APIView):
             channel_meta=channel_meta,
         )
         if result.get("session_status") == "none":
+            _send_vk_message(
+                tenant_id=integration.client_id,
+                vk_user_id=from_id,
+                text='Напишите "старт" / "начать", чтобы начать диалог.',
+                group_id=group_id,
+            )
             return
 
         dispatch_chain_actions(
@@ -224,4 +280,3 @@ class VkMessageCallbackView(APIView):
                     }
                 ],
             )
-

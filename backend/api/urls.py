@@ -124,6 +124,12 @@ from .views_chains import (
     ChainEdgeConditionsView,
     ChainEdgeConditionDetailView,
 )
+from .views_public_client_page import (
+    PublicClientPageBuyProductView,
+    PublicClientPagePurchasesView,
+    PublicClientPagePaymentStatusView,
+    PublicClientPageView,
+)
 
 app_name = 'api'
 
@@ -201,6 +207,10 @@ urlpatterns = [
     path('auth/logout/', LogoutView.as_view(), name='logout'),
 
     # Client endpoints
+    path('public/client-page/<int:client_id>/', PublicClientPageView.as_view(), name='public-client-page'),
+    path('public/client-page/<int:client_id>/buy/', PublicClientPageBuyProductView.as_view(), name='public-client-page-buy'),
+    path('public/client-page/<int:client_id>/payment-status/', PublicClientPagePaymentStatusView.as_view(), name='public-client-page-payment-status'),
+    path('public/client-page/<int:client_id>/purchases/', PublicClientPagePurchasesView.as_view(), name='public-client-page-purchases'),
     path('client/info/', ClientInfoView.as_view(), name='client-info'),
     path('client/summary/', ClientSummaryView.as_view(), name='client-summary'),
     path('client/generation-events/', GenerationEventSummaryView.as_view(), name='client-generation-events'),

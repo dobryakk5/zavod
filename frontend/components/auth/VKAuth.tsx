@@ -12,11 +12,15 @@ interface VkUser {
   username?: string;
   photoUrl?: string;
   authDate: string;
+  contactId?: number | null;
+  tenantId?: number | null;
 }
 
 interface VKAuthProps {
   open: boolean;
   onClose: () => void;
+  redirectTo?: string;
+  tenantId?: number | null;
 }
 
 type VkAuthPayload = {
@@ -52,7 +56,7 @@ const parseVkResponse = async (response: Response) => {
 const resolveErrorMessage = (payload: VkAuthPayload | null, rawText: string, fallback: string) =>
   payload?.error?.trim() || rawText.trim() || fallback;
 
-export function VKAuth({ open, onClose }: VKAuthProps) {
+export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
   const router = useRouter();
   const [user, setUser] = useState<VkUser | null>(null);
   const [loading, setLoading] = useState(false);
@@ -78,6 +82,7 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
     }
     return true;
   }, []);
+  const resolvedRedirectTo = redirectTo && redirectTo.startsWith('/') ? redirectTo : '/welcome';
 
   const exchangeCode = useCallback(
     async (code: string, state: string, deviceId: string) => {
@@ -106,7 +111,8 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
             code,
             state,
             device_id: deviceId,
-            redirect_uri: VK_REDIRECT_URI
+            redirect_uri: VK_REDIRECT_URI,
+            ...(tenantId !== null && tenantId !== undefined ? { tenant_id: tenantId } : {}),
           })
         });
         const { payload, text } = await parseVkResponse(response);
@@ -116,7 +122,7 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
           sessionStorage.removeItem('vk_auth_state');
           sessionStorage.removeItem('vk_auth_mode');
           onClose();
-          router.push('/welcome');
+          router.push(resolvedRedirectTo);
         } else {
           setStatus({ type: 'error', text: resolveErrorMessage(payload, text, 'Ошибка авторизации VK') });
         }
@@ -126,7 +132,7 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
         setLoading(false);
       }
     },
-    [ensureApiConfigured, onClose, router]
+    [ensureApiConfigured, onClose, resolvedRedirectTo, router, tenantId]
   );
 
   const checkAuth = useCallback(async () => {
@@ -140,14 +146,30 @@ export function VKAuth({ open, onClose }: VKAuthProps) {
       }
       const { payload } = await parseVkResponse(response);
       if (payload?.user) {
+        if (tenantId !== null && tenantId !== undefined) {
+          const currentTenantId = Number(payload.user.tenantId || 0);
+          const currentContactId = Number(payload.user.contactId || 0);
+          const isBoundToRequestedTenant = (
+            Number.isFinite(currentTenantId)
+            && Number.isFinite(currentContactId)
+            && currentTenantId === tenantId
+            && currentContactId > 0
+          );
+          if (isBoundToRequestedTenant) {
+            setUser(payload.user);
+            onClose();
+            router.push(resolvedRedirectTo);
+          }
+          return;
+        }
         setUser(payload.user);
         onClose();
-        router.push('/welcome');
+        router.push(resolvedRedirectTo);
       }
     } catch {
       // no-op
     }
-  }, [ensureApiConfigured, onClose, router]);
+  }, [ensureApiConfigured, onClose, resolvedRedirectTo, router, tenantId]);
 
   useEffect(() => {
     if (open) {

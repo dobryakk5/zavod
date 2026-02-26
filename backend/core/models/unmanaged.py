@@ -57,6 +57,14 @@ class ClientProduct(models.Model):
     )
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     short_description = models.TextField(blank=True, null=True)
+    digital_product_document = models.ForeignKey(
+        "KbDocument",
+        on_delete=models.SET_NULL,
+        db_column="digital_product_document_id",
+        related_name="digital_product_links",
+        blank=True,
+        null=True,
+    )
     packages = models.JSONField(default=list, blank=True)
     structure = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -194,6 +202,13 @@ class KbFolder(models.Model):
 
 
 class KbDocument(models.Model):
+    DOCUMENT_TYPE_PAGE = "page"
+    DOCUMENT_TYPE_PRODUCT = "product"
+    DOCUMENT_TYPE_CHOICES = (
+        (DOCUMENT_TYPE_PAGE, "Страница"),
+        (DOCUMENT_TYPE_PRODUCT, "Продукт"),
+    )
+
     workspace = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="workspace_id", related_name="kb_documents")
     folder = models.ForeignKey(
         KbFolder, on_delete=models.SET_NULL, db_column="folder_id", related_name="documents", null=True, blank=True
@@ -205,6 +220,7 @@ class KbDocument(models.Model):
     title = models.TextField()
     icon = models.TextField(blank=True, null=True)
     cover_image = models.TextField(blank=True, null=True)
+    document_type = models.TextField(default=DOCUMENT_TYPE_PAGE)
     content = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, db_column="created_by_id",

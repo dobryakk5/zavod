@@ -14,11 +14,15 @@ interface TelegramUser {
   photoUrl?: string;
   authDate: string;
   isDev?: boolean;
+  contactId?: number | null;
+  tenantId?: number | null;
 }
 
 interface TelegramAuthProps {
   open: boolean;
   onClose: () => void;
+  redirectTo?: string;
+  tenantId?: number | null;
 }
 
 type TelegramAuthPayload = {
@@ -53,7 +57,7 @@ const parseTelegramResponse = async (response: Response) => {
 const resolveErrorMessage = (payload: TelegramAuthPayload | null, rawText: string, fallback: string) =>
   payload?.error?.trim() || rawText.trim() || fallback;
 
-export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
+export function TelegramAuth({ open, onClose, redirectTo, tenantId }: TelegramAuthProps) {
   const router = useRouter();
   const [user, setUser] = useState<TelegramUser | null>(null);
   const [loading, setLoading] = useState(false);
@@ -66,6 +70,8 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
     return true;
   }, []);
 
+  const resolvedRedirectTo = redirectTo && redirectTo.startsWith('/') ? redirectTo : '/welcome';
+
   const checkAuth = useCallback(async () => {
     if (!ensureApiConfigured()) {
       return;
@@ -77,15 +83,31 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
       if (response.ok) {
         const { payload } = await parseTelegramResponse(response);
         if (payload?.user) {
+          if (tenantId !== null && tenantId !== undefined) {
+            const currentTenantId = Number(payload.user.tenantId || 0);
+            const currentContactId = Number(payload.user.contactId || 0);
+            const isBoundToRequestedTenant = (
+              Number.isFinite(currentTenantId)
+              && Number.isFinite(currentContactId)
+              && currentTenantId === tenantId
+              && currentContactId > 0
+            );
+            if (isBoundToRequestedTenant) {
+              setUser(payload.user);
+              onClose();
+              router.push(resolvedRedirectTo);
+            }
+            return;
+          }
           setUser(payload.user);
           onClose();
-          router.push('/welcome');
+          router.push(resolvedRedirectTo);
         }
       }
     } catch (error) {
       console.error('Error checking auth:', error);
     }
-  }, [ensureApiConfigured, onClose, router]);
+  }, [ensureApiConfigured, onClose, resolvedRedirectTo, router, tenantId]);
 
   useEffect(() => {
     if (open) {
@@ -112,7 +134,10 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(response)
+        body: JSON.stringify({
+          ...response,
+          ...(tenantId !== null && tenantId !== undefined ? { tenant_id: tenantId } : {}),
+        })
       });
 
       const { payload, text } = await parseTelegramResponse(authResponse);
@@ -121,7 +146,7 @@ export function TelegramAuth({ open, onClose }: TelegramAuthProps) {
         setUser(payload.user);
         setStatus({ type: 'success', text: 'Успешная авторизация!' });
         onClose();
-        router.push('/welcome');
+        router.push(resolvedRedirectTo);
       } else {
         setStatus({ type: 'error', text: resolveErrorMessage(payload, text, 'Ошибка авторизации') });
       }

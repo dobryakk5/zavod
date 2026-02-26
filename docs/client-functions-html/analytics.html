@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Аналитика: каналы, сайт, подборки и TGStat — Каталог функций Zavod</title>
+  <meta name="description" content='Раздел для анализа каналов, проекта, конкурентов и сайта с сохранением истории и отчётов.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link active" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">Аналитика: каналы, сайт, подборки и TGStat</div>
+        <h1>Аналитика: каналы, сайт, подборки и TGStat</h1>
+        <p>Раздел для анализа каналов, проекта, конкурентов и сайта с сохранением истории и отчётов.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">31</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">5</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>Главный раздел аналитики: `/analytics`</li>
+<li>TGStat-подбор каналов: `/analytics/tgstat`</li>
+<li>Детальный отчёт канала: `/analytics/[analysisId]`</li>
+<li>Отчёт подборки за неделю: `/analytics/rep/[id]`</li>
+<li>Список страниц скана сайта: `/analytics/website/[scanId]/list`</li>
+</ul>
+<div class="route-badges">
+<code>/analytics</code>
+<code>/analytics/tgstat</code>
+<code>/analytics/[analysisId]</code>
+<code>/analytics/rep/[id]</code>
+<code>/analytics/website/[scanId]/list</code>
+</div>
+</section>
+      <div class="toc-box">
+<div class="toc-title">Быстрый переход по странице</div>
+<div class="toc-links">
+<a href="#sec-1">1. Вкладка «Один канал»</a>
+<a href="#sec-2">2. Вкладка «Мой проект»</a>
+<a href="#sec-3">3. Вкладка «Подборка за неделю»</a>
+<a href="#sec-4">4. Вкладка «Website» (анализ сайта)</a>
+<a href="#sec-5">5. TGStat: подбор Telegram-каналов</a>
+<a href="#sec-6">6. Дополнительные аналитические страницы</a>
+</div></div>
+<section id="sec-1" class="content-section">
+  <h2>1. Вкладка «Один канал»</h2>
+  <p class="section-intro">Используется для анализа отдельных каналов (в том числе конкурентов).</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Выбор типа канала</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь выбирает платформу анализа: Telegram, Instagram или YouTube.</p>
+  <p><span class="label">Зачем это нужно:</span> Сервис подстраивает формат ссылки и подсказки ввода.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Проверка формата ссылки/username</h4>
+  <p><span class="label">Простыми словами:</span> Для выбранной платформы отображаются примеры допустимых ссылок и идентификаторов.</p>
+  <p><span class="label">Зачем это нужно:</span> Снижает ошибки запуска анализа.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском рекламы вы быстро проверяете конкурентов и смотрите, какие темы у них реально работают.</p>
+</article>
+<article class="function-card">
+  <h4>Запуск анализа канала</h4>
+  <p><span class="label">Простыми словами:</span> По введённой ссылке запускается AI-анализ канала.</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь получает отчёт по метрикам, темам и аудитории.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>История аналитики</h4>
+  <p><span class="label">Простыми словами:</span> Список предыдущих запусков с датой, статусом и переходом в детальный отчёт.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно возвращаться к прошлым результатам и сравнивать выводы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Детальный отчёт канала</h4>
+  <p><span class="label">Простыми словами:</span> Страница `/analytics/[analysisId]` показывает метрики, темы, формат публикаций, профиль аудитории и др.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент получает структурированный разбор канала.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Публичная ссылка на отчёт</h4>
+  <p><span class="label">Простыми словами:</span> Из детального отчёта можно сгенерировать share-ссылку для просмотра без основного входа.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно для отправки клиенту/команде.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Перенос профиля ЦА в настройки клиента</h4>
+  <p><span class="label">Простыми словами:</span> Из отчёта можно обновить описание аудитории клиента (avatar/pains/desires/objections).</p>
+  <p><span class="label">Зачем это нужно:</span> Экономит время на перенос аналитики в рабочие настройки проекта.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+  </div>
+</section>
+<section id="sec-2" class="content-section">
+  <h2>2. Вкладка «Мой проект»</h2>
+  <p class="section-intro">Раздел для анализа собственных каналов проекта и динамики по ним.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Сохранение каналов проекта</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь задаёт каналы проекта (Telegram/Instagram/YouTube) в одном месте.</p>
+  <p><span class="label">Зачем это нужно:</span> Эти данные используются для регулярного анализа проекта.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Запуск анализа проекта</h4>
+  <p><span class="label">Простыми словами:</span> После сохранения каналов можно запустить анализ проекта одной кнопкой.</p>
+  <p><span class="label">Зачем это нужно:</span> Получается сводный снимок по собственным каналам.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Снимок метрик и дельты</h4>
+  <p><span class="label">Простыми словами:</span> Показываются текущие значения и изменения к прошлому запуску (подписчики, просмотры, реакции, комментарии).</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает быстро оценить рост/просадку.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском рекламы вы быстро проверяете конкурентов и смотрите, какие темы у них реально работают.</p>
+</article>
+<article class="function-card">
+  <h4>График временных рядов</h4>
+  <p><span class="label">Простыми словами:</span> Можно выбрать каналы и метрики для отображения на одном графике.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно для динамического сравнения каналов и показателей.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Автообновление активного анализа</h4>
+  <p><span class="label">Простыми словами:</span> Если анализ ещё выполняется, сервис периодически обновляет статус и прогресс.</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь видит реальное состояние процесса без ручного обновления.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском рекламы вы быстро проверяете конкурентов и смотрите, какие темы у них реально работают.</p>
+</article>
+  </div>
+</section>
+<section id="sec-3" class="content-section">
+  <h2>3. Вкладка «Подборка за неделю»</h2>
+  <p class="section-intro">Сбор контента из источников за неделю для анализа и идей публикаций.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Настройка источников контента</h4>
+  <p><span class="label">Простыми словами:</span> Поддерживаются списки Telegram-каналов, RSS/Atom, YouTube-каналов, Instagram-аккаунтов и VK-сообществ.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно собрать единый пул источников для мониторинга ниши.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Сохранение источников</h4>
+  <p><span class="label">Простыми словами:</span> Списки источников сохраняются в настройках клиента/проекта.</p>
+  <p><span class="label">Зачем это нужно:</span> Не нужно заполнять заново перед каждым запуском.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Запуск недельной подборки</h4>
+  <p><span class="label">Простыми словами:</span> Сервис запускает сбор и обработку публикаций по источникам за неделю.</p>
+  <p><span class="label">Зачем это нужно:</span> Получается пакет отчётов и идей по контенту.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Статусы пакетной обработки</h4>
+  <p><span class="label">Простыми словами:</span> Показываются статусы пакета и отдельных источников: в очереди, в работе, готово, ошибка.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно контролировать процесс без технической панели.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском рекламы вы быстро проверяете конкурентов и смотрите, какие темы у них реально работают.</p>
+</article>
+<article class="function-card">
+  <h4>Страница отчёта подборки</h4>
+  <p><span class="label">Простыми словами:</span> `/analytics/rep/[id]` показывает собранные посты, идеи, длину текста, рекомендации к использованию.</p>
+  <p><span class="label">Зачем это нужно:</span> Клиент получает понятный материал для контент-планирования.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+  </div>
+</section>
+<section id="sec-4" class="content-section">
+  <h2>4. Вкладка «Website» (анализ сайта)</h2>
+  <p class="section-intro">Анализирует сайт и помогает связать страницы с семантикой/структурой.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Запуск скана сайта</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь вводит URL сайта и запускает сканирование.</p>
+  <p><span class="label">Зачем это нужно:</span> Сервис собирает страницы и базовые данные для анализа.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>История сканов</h4>
+  <p><span class="label">Простыми словами:</span> Список запусков сканирования с датой, статусом и прогрессом.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно отслеживать новые и прошлые сканы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском рекламы вы быстро проверяете конкурентов и смотрите, какие темы у них реально работают.</p>
+</article>
+<article class="function-card">
+  <h4>Список страниц сайта</h4>
+  <p><span class="label">Простыми словами:</span> `/analytics/website/[scanId]/list` показывает таблицу страниц с URL, заголовком и top-словами/wordstat-данными.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно для аудита структуры сайта и контента.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы продаёте кухни и хотите понять, что люди ищут чаще: «кухня на заказ» или «кухня под ключ».</p>
+</article>
+<article class="function-card">
+  <h4>Связка с mind map сайта</h4>
+  <p><span class="label">Простыми словами:</span> Если у скана есть карта, сервис использует данные узлов и слов для расширенного отображения.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает видеть структуру сайта и семантику в одной модели.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Переход к карте сайта</h4>
+  <p><span class="label">Простыми словами:</span> Из аналитики можно открыть mind map (если построена).</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет работу с архитектурой страниц.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+  </div>
+</section>
+<section id="sec-5" class="content-section">
+  <h2>5. TGStat: подбор Telegram-каналов</h2>
+  <p class="section-intro">Отдельная страница аналитики для поиска и отбора релевантных Telegram-каналов.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Категории и подкатегории TGStat</h4>
+  <p><span class="label">Простыми словами:</span> Пользователь проходит путь Категория → Подкатегория → Каналы.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстро находит релевантные ниши Telegram.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Просмотр каналов по категории/тегу</h4>
+  <p><span class="label">Простыми словами:</span> Сервис показывает список каналов, их метрики и служебные данные из TGStat.</p>
+  <p><span class="label">Зачем это нужно:</span> Упрощает выбор каналов для анализа/мониторинга.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Избранные каналы</h4>
+  <p><span class="label">Простыми словами:</span> Каналы можно добавить в избранное и поддерживать собственный список наблюдения.</p>
+  <p><span class="label">Зачем это нужно:</span> Формирует персональный пул конкурентов и ориентиров.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление из избранного</h4>
+  <p><span class="label">Простыми словами:</span> Ненужные каналы удаляются из списка избранных без удаления из TGStat.</p>
+  <p><span class="label">Зачем это нужно:</span> Список остаётся актуальным.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Рекомендации по нише и продукту</h4>
+  <p><span class="label">Простыми словами:</span> Сервис может запросить рекомендации TGStat на основе настроек проекта (ниша/продукт).</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает быстрее найти релевантные каналы без ручного перебора.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+<article class="function-card">
+  <h4>Запуск аналитики канала из избранного</h4>
+  <p><span class="label">Простыми словами:</span> Из карточки избранного канала можно сразу запустить аналитический отчёт в основном модуле аналитики.</p>
+  <p><span class="label">Зачем это нужно:</span> Сокращает путь «нашёл канал → проанализировал».</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы анализируете канал конкурента и получаете список тем, которые можно адаптировать под свой проект.</p>
+</article>
+  </div>
+</section>
+<section id="sec-6" class="content-section">
+  <h2>6. Дополнительные аналитические страницы</h2>
+  <p class="section-intro">Это подстраницы, которые используются как продолжение сценариев из главной аналитики.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Деталь анализа канала (`/analytics/[analysisId]`)</h4>
+  <p><span class="label">Простыми словами:</span> Полный отчёт по метрикам, темам, аудитории, влиянию автора, форматам и ритму публикаций.</p>
+  <p><span class="label">Зачем это нужно:</span> Основная страница для обсуждения результатов с клиентом.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Отчёт подборки (`/analytics/rep/[id]`)</h4>
+  <p><span class="label">Простыми словами:</span> Просмотр недельной подборки по источникам с разбором ссылок и идей контента.</p>
+  <p><span class="label">Зачем это нужно:</span> Нужно для в контент-планировании.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы заранее планируете посты на неделю и видите в календаре, что выйдет в Telegram и VK.</p>
+</article>
+<article class="function-card">
+  <h4>Список страниц сайта (`/analytics/website/[scanId]/list`)</h4>
+  <p><span class="label">Простыми словами:</span> Таблица страниц скана сайта с ключевыми словами и ссылками.</p>
+  <p><span class="label">Зачем это нужно:</span> Полезна для SEO-аудита и проектирования структуры.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+  </div>
+</section>
+      
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="seo.html"><span class="related-title">SEO: смыслы, кластеры, Wordstat и конкуренты</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="posts-schedule.html"><span class="related-title">Посты, контент-стратегия и расписание публикаций</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="settings-integrations.html"><span class="related-title">Настройки клиента, интеграции и оплата</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="products-mindmap.html"><span class="related-title">Продукты, продажи и mind map</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="welcome-access.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">Вход, старт и навигация</span></a><a class="pager-card" href="seo.html"><span class="pager-label">Следующая →</span><span class="pager-title">SEO: смыслы, кластеры, Wordstat и конкуренты</span></a></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>analytics.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

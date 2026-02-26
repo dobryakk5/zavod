@@ -1,6 +1,6 @@
 'use client';
 
-import { BubbleMenu, useEditor, EditorContent } from '@tiptap/react';
+import { BubbleMenu, useEditor, EditorContent, type Editor } from '@tiptap/react';
 import { Bold, ChevronDown, FilePlus, ImagePlus, Italic, Link2, List, ListOrdered, ListTodo, Quote, Table as TableIcon, Underline as UnderlineIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
@@ -30,6 +30,7 @@ interface TipTapEditorProps {
   onSave?: (content: Record<string, unknown>) => Promise<void>;
   showToolbar?: boolean;
   onPageCreated?: (document: KbDocumentDetail) => void;
+  onEditorReady?: (editor: Editor | null) => void;
 }
 
 const normalizeUrl = (value: string): string => {
@@ -53,6 +54,7 @@ export default function TipTapEditor({
   onSave,
   showToolbar = true,
   onPageCreated,
+  onEditorReady,
 }: TipTapEditorProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
@@ -83,6 +85,13 @@ export default function TipTapEditor({
       },
     },
   });
+
+  useEffect(() => {
+    onEditorReady?.(editor ?? null);
+    return () => {
+      onEditorReady?.(null);
+    };
+  }, [editor, onEditorReady]);
 
   useEffect(() => {
     if (!autoSave || !editor || !documentId) return;

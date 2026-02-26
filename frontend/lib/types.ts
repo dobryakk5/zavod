@@ -375,6 +375,8 @@ export interface ClientProduct {
   product_type_name?: string | null;
   product_type?: ProductType | null;
   short_description?: string | null;
+  digital_product_document_id?: number | null;
+  digital_product_document_title?: string | null;
   packages?: Array<{ name: string; description?: string | null; price?: number | null }> | null;
   structure?: ProductStructure | null;
   owner_id?: number;
@@ -421,6 +423,7 @@ export interface KbDocumentList {
   title: string;
   icon?: string | null;
   cover_image?: string | null;
+  document_type?: 'page' | 'product' | string;
   workspace: number;
   folder?: number | null;
   parent_document?: number | null;
@@ -592,6 +595,8 @@ export interface ClientSettings {
   brand_name?: string;
   niche?: string;
   product_service?: string;
+  client_page_config?: Record<string, unknown>;
+  client_page_content?: Record<string, unknown>;
   timezone?: string;
   avatar?: string;
   pains?: string;

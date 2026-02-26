@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import html
 import json
 import logging
@@ -10,6 +11,7 @@ from typing import Any
 import requests
 from celery import shared_task
 from django.conf import settings
+from django.utils import timezone
 from core.models import ChainNode, ChainSession, UserTenantBinding, VkIntegration
 from core.services.chain_executor import ChainExecutor
 
@@ -17,6 +19,8 @@ from core.services.chain_executor import ChainExecutor
 logger = logging.getLogger(__name__)
 
 CHAIN_BUTTON_PREFIX = "chain_btn:"
+VK_ID_TOKEN_URL = "https://id.vk.ru/oauth2/auth"
+VK_TOKEN_REFRESH_LEEWAY_SECONDS = 60
 
 
 def _normalize_buttons(buttons: list) -> list[str]:
@@ -81,6 +85,116 @@ def _resolve_vk_integration(tenant_id: int, group_id: int | None) -> VkIntegrati
     return queryset.order_by("-updated_at", "-id").first()
 
 
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+    if timezone.is_naive(dt):
+        try:
+            dt = timezone.make_aware(dt)
+        except Exception:  # noqa: BLE001
+            return None
+    return dt
+
+
+def _refresh_vk_access_token_if_needed(integration: VkIntegration, *, force: bool = False) -> bool:
+    extra = integration.extra if isinstance(integration.extra, dict) else {}
+    refresh_token = extra.get("refresh_token")
+    device_id = extra.get("device_id")
+    if not refresh_token or not device_id:
+        return False
+
+    client_id = getattr(settings, "VK_CLIENT_ID", "") or ""
+    if not client_id:
+        logger.warning("VK token refresh skipped: VK_CLIENT_ID is missing")
+        return False
+
+    expires_at = _parse_datetime(extra.get("access_token_expires_at"))
+    if not force:
+        if expires_at is None:
+            return False
+        if (expires_at - timezone.now()) > timedelta(seconds=VK_TOKEN_REFRESH_LEEWAY_SECONDS):
+            return False
+
+    payload = {
+        "client_id": client_id,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "device_id": device_id,
+        "state": secrets.token_urlsafe(16),
+    }
+
+    try:
+        response = requests.post(VK_ID_TOKEN_URL, data=payload, timeout=10)
+        data = response.json()
+    except (requests.RequestException, ValueError):
+        logger.exception("Failed to refresh VK access token for integration=%s", integration.id)
+        return False
+
+    if data.get("error"):
+        logger.warning("VK token refresh failed for integration=%s: %s", integration.id, data.get("error"))
+        return False
+
+    new_access_token = data.get("access_token")
+    if not new_access_token:
+        logger.warning("VK token refresh returned no access_token for integration=%s", integration.id)
+        return False
+
+    new_extra = dict(extra)
+    new_extra["refresh_token"] = data.get("refresh_token") or refresh_token
+    new_extra["device_id"] = device_id
+    if data.get("scope"):
+        new_extra["scope"] = data.get("scope")
+    if data.get("id_token"):
+        new_extra["id_token"] = data.get("id_token")
+
+    expires_in = data.get("expires_in")
+    if expires_in:
+        try:
+            expires_seconds = int(expires_in)
+            if expires_seconds > 0:
+                new_extra["access_token_expires_at"] = (
+                    timezone.now() + timedelta(seconds=expires_seconds)
+                ).isoformat()
+        except (TypeError, ValueError):
+            pass
+
+    integration.access_token = new_access_token
+    integration.extra = new_extra
+    integration.save(update_fields=["access_token", "extra", "updated_at"])
+    return True
+
+
+def _is_vk_token_error(error: Any) -> bool:
+    if not isinstance(error, dict):
+        return False
+    try:
+        error_code = int(error.get("error_code"))
+    except (TypeError, ValueError):
+        error_code = None
+    error_msg = str(error.get("error_msg") or "").lower()
+    return bool(
+        error_code in {5, 27, 28}
+        or "access_token" in error_msg
+        or "authorization failed" in error_msg
+    )
+
+
+def _vk_messages_send(payload: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        response = requests.post("https://api.vk.com/method/messages.send", data=payload, timeout=10)
+        return response.json()
+    except (requests.RequestException, ValueError):
+        logger.exception("Error while sending VK chain message")
+        return None
+
+
 def _send_telegram_message(
     chat_id: int,
     *,
@@ -134,6 +248,7 @@ def _send_vk_message(
     if not integration or not integration.access_token:
         logger.warning("VK chain message skipped: no active VK integration for tenant=%s", tenant_id)
         return False
+    _refresh_vk_access_token_if_needed(integration)
 
     composed_text = _strip_html(text)
     if photo_url:
@@ -157,12 +272,16 @@ def _send_vk_message(
     if buttons:
         payload["keyboard"] = _build_vk_keyboard(buttons)
 
-    try:
-        response = requests.post("https://api.vk.com/method/messages.send", data=payload, timeout=10)
-        data = response.json()
-    except (requests.RequestException, ValueError):
-        logger.exception("Error while sending VK chain message")
+    data = _vk_messages_send(payload)
+    if data is None:
         return False
+
+    if data.get("error") and _is_vk_token_error(data.get("error")):
+        if _refresh_vk_access_token_if_needed(integration, force=True):
+            payload["access_token"] = integration.access_token
+            data = _vk_messages_send(payload)
+            if data is None:
+                return False
 
     if data.get("error"):
         logger.error("Failed to send VK chain message: %s", data.get("error"))

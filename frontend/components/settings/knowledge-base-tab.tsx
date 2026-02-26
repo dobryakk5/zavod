@@ -82,6 +82,12 @@ function TreeNodeRow({ node, depth, onCreateChild, onArchive, onOpen }: TreeNode
               {node.title}
             </button>
 
+            {String(node.document_type || 'page') === 'product' && (
+              <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700">
+                Тип: Продукт
+              </span>
+            )}
+
             <button
               type="button"
               onClick={() => onCreateChild(node.id)}

@@ -126,7 +126,8 @@ class TelegramAuthView(APIView):
 
     def post(self, request):
         """Authenticate user via Telegram"""
-        from core.models import Client, UserSocialAccount, UserTenantRole
+        from core.models import Client, MapContact, UserSocialAccount, UserTenantBinding, UserTenantRole
+        from core.services.telegram_user_service import TelegramUserService
 
         # TODO: Verify Telegram data hash for security
         # For now, accepting Telegram auth data as-is
@@ -145,6 +146,21 @@ class TelegramAuthView(APIView):
             )
 
         telegram_id_str = str(telegram_id)
+        tenant_id_raw = request.data.get("tenant_id")
+        tenant_id_hint = None
+        if tenant_id_raw not in (None, ""):
+            try:
+                tenant_id_hint = int(tenant_id_raw)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "Некорректный tenant_id"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if tenant_id_hint <= 0:
+                return Response(
+                    {"error": "Некорректный tenant_id"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         linked_social = (
             UserSocialAccount.objects.select_related("user")
@@ -204,8 +220,46 @@ class TelegramAuthView(APIView):
                 },
             )
 
-        # For first-time users, create client tenant as before.
-        if user_created:
+        # If the login came from /c/<client_id>, create/bind a CRM contact for that tenant.
+        if tenant_id_hint is not None:
+            existing_tenant_binding = (
+                UserTenantBinding.objects.filter(
+                    provider=UserTenantBinding.PROVIDER_TELEGRAM,
+                    provider_user_id=telegram_id_str,
+                    tenant_id=tenant_id_hint,
+                )
+                .order_by("-bound_at", "-id")
+                .first()
+            )
+
+            contact_id = int(existing_tenant_binding.contact_id) if (
+                existing_tenant_binding and existing_tenant_binding.contact_id is not None
+            ) else None
+
+            if contact_id is None:
+                contact_name = (
+                    f"{first_name} {last_name}".strip()
+                    or username
+                    or f"Telegram {telegram_id_str}"
+                )
+                contact = MapContact.objects.create(name=contact_name)
+                contact_id = int(contact.id)
+
+            try:
+                TelegramUserService().bind_user_to_tenant(
+                    telegram_chat_id=int(telegram_id_str),
+                    tenant_id=tenant_id_hint,
+                    contact_id=contact_id,
+                    telegram_username=(str(username or "").strip() or None),
+                )
+            except ValueError as exc:
+                return Response(
+                    {"error": str(exc)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # For first-time users in regular login flow, create client tenant as before.
+        if user_created and tenant_id_hint is None:
             client_slug = telegram_id_str
             client, _ = Client.objects.get_or_create(
                 slug=client_slug,

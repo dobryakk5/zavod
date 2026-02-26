@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Продукты, продажи и mind map — Каталог функций Zavod</title>
+  <meta name="description" content='Упаковка продуктовой линейки, типы продуктов, недельный план/факт продаж и визуальная продуктовая карта.' />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="index.html">Zavod • Каталог функций</a>
+        <div class="topbar-meta">Клиентская документация (HTML)</div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-title">Страницы каталога</div>
+      <nav class="nav-list">
+        <a class="nav-link" href="index.html">Каталог функций системы Zavod</a>
+<a class="nav-link" href="welcome-access.html">Вход, старт и навигация</a>
+<a class="nav-link" href="analytics.html">Аналитика: каналы, сайт, подборки и TGStat</a>
+<a class="nav-link" href="seo.html">SEO: смыслы, кластеры, Wordstat и конкуренты</a>
+<a class="nav-link" href="posts-schedule.html">Посты, контент-стратегия и расписание публикаций</a>
+<a class="nav-link" href="articles.html">Статьи: создание и SEO-оценка</a>
+<a class="nav-link" href="templates-topics.html">Шаблоны и темы контента</a>
+<a class="nav-link active" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link" href="clients-crm.html">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</a>
+<a class="nav-link" href="contact-meetings.html">Карточка контакта и управление встречами</a>
+<a class="nav-link" href="public-client-page-payments.html">Публичная страница клиента, записи, покупки и рефералы</a>
+<a class="nav-link" href="settings-integrations.html">Настройки клиента, интеграции и оплата</a>
+<a class="nav-link" href="knowledge-base.html">База знаний (KB), общий доступ и работа с документами</a>
+<a class="nav-link" href="route-reference.html">Карта маршрутов и покрытие документацией</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badge">Продукты, продажи и mind map</div>
+        <h1>Продукты, продажи и mind map</h1>
+        <p>Упаковка продуктовой линейки, типы продуктов, недельный план/факт продаж и визуальная продуктовая карта.</p>
+        <p class="hero-note">Описание ниже написано простым языком. В каждой карточке есть короткий пример из обычной работы.</p>
+      </section>
+
+      <section class="stats-strip"><div class="stat-card"><span class="stat-value">14</span><span class="stat-label">Страниц в каталоге</span></div><div class="stat-card"><span class="stat-value">39</span><span class="stat-label">Функций на странице</span></div><div class="stat-card"><span class="stat-value">4</span><span class="stat-label">Маршрутов на странице</span></div><div class="stat-card"><span class="stat-value">363 функций</span><span class="stat-label">Оценка общего покрытия</span></div></section>
+      
+      <section class="meta-section">
+<h2>Где находится</h2>
+<ul class="plain-list">
+<li>Продукты: `/products`</li>
+<li>Карточка продукта: `/product/[id]`</li>
+<li>Карта: `/map/[mapId]`</li>
+<li>Редактор узла карты: `/map/[mapId]/node/[nodeId]`</li>
+</ul>
+<div class="route-badges">
+<code>/products</code>
+<code>/product/[id]</code>
+<code>/map/[mapId]</code>
+<code>/map/[mapId]/node/[nodeId]</code>
+</div>
+</section>
+      <div class="toc-box">
+<div class="toc-title">Быстрый переход по странице</div>
+<div class="toc-links">
+<a href="#sec-1">1. Раздел «Продукты» (`/products`)</a>
+<a href="#sec-2">2. Карточка продукта (`/product/[id]`)</a>
+<a href="#sec-3">3. Вкладка «Типы продуктов»</a>
+<a href="#sec-4">4. Вкладка «Продажи» (weekly plan/fact)</a>
+<a href="#sec-5">5. Продуктовые карты и mind map</a>
+</div></div>
+<section id="sec-1" class="content-section">
+  <h2>1. Раздел «Продукты» (`/products`)</h2>
+  <p class="section-intro">Раздел объединяет список продуктов, типы продуктов, продажи и продуктовые карты.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Список продуктов клиента</h4>
+  <p><span class="label">Простыми словами:</span> Просмотр и управление продуктами в одной таблице с датами и статусами.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно для операционной работы по линейке продуктов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Фильтр по типу продукта</h4>
+  <p><span class="label">Простыми словами:</span> Можно отбирать продукты по типу.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет работу с большими линейками.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Создание Core-продукта вручную</h4>
+  <p><span class="label">Простыми словами:</span> Создание ключевого продукта по названию и краткому описанию.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрый запуск новой продуктовой гипотезы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Создание Core-продукта через AI</h4>
+  <p><span class="label">Простыми словами:</span> Автогенерация core-продукта с асинхронным статусом и последующим открытием карточки.</p>
+  <p><span class="label">Зачем это нужно:</span> Сокращает время первичной упаковки.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Дублирование Core-продукта</h4>
+  <p><span class="label">Простыми словами:</span> Копия core-продукта создаётся для быстрого варианта/ветки предложения.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет тестирование новых офферов.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление продукта</h4>
+  <p><span class="label">Простыми словами:</span> Удаление продукта с подтверждением.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает актуальность продуктового списка.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Создание общей карты продуктов</h4>
+  <p><span class="label">Простыми словами:</span> Одна кнопка создаёт mind map по всем продуктам (`products map`).</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает видеть линейку и связи визуально.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+  </div>
+</section>
+<section id="sec-2" class="content-section">
+  <h2>2. Карточка продукта (`/product/[id]`)</h2>
+  <p class="section-intro">Подробный экран редактирования продукта и его структуры.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Базовые поля продукта</h4>
+  <p><span class="label">Простыми словами:</span> Название, тип продукта, статус (черновик/активный), краткое описание.</p>
+  <p><span class="label">Зачем это нужно:</span> База для показа продукта в других разделах.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Сопутствующие продукты</h4>
+  <p><span class="label">Простыми словами:</span> Для Core-продукта можно добавлять и связывать сопутствующие продукты.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает строить продуктовую линейку и апселлы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Структура «1. ЦА (кому)»</h4>
+  <p><span class="label">Простыми словами:</span> Таблица параметров аудитории с добавлением/удалением строк.</p>
+  <p><span class="label">Зачем это нужно:</span> Фиксирует портрет клиента прямо в карточке продукта.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Структура «2. Трансформация (из → в)»</h4>
+  <p><span class="label">Простыми словами:</span> Пары «было/стало» для результата клиента.</p>
+  <p><span class="label">Зачем это нужно:</span> Уточняет ценность продукта для маркетинга и продаж.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Структура «3. Результат в цифрах»</h4>
+  <p><span class="label">Простыми словами:</span> Метрики и обещаемые результаты.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает формировать измеримую офферную часть.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Структура «4. Метод»</h4>
+  <p><span class="label">Простыми словами:</span> Компоненты метода и универсальные шаблоны работы.</p>
+  <p><span class="label">Зачем это нужно:</span> Нужна для упаковки методологии продукта.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы сделали отдельный шаблон для продающих постов и потом запускаете генерацию по нему каждую неделю.</p>
+</article>
+<article class="function-card">
+  <h4>Структура «5. Формат взаимодействия»</h4>
+  <p><span class="label">Простыми словами:</span> Этапы и доли времени (онбординг, сопровождение и т.п.).</p>
+  <p><span class="label">Зачем это нужно:</span> Делает модель сервиса прозрачной.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Структура «6. Программа (модули)»</h4>
+  <p><span class="label">Простыми словами:</span> Модули и результаты по каждому модулю.</p>
+  <p><span class="label">Зачем это нужно:</span> Подходит для курсов, сопровождения и программ.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Структура «7. Упаковка»</h4>
+  <p><span class="label">Простыми словами:</span> Название, слоган и обещание продукта.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно быстро тестировать офферы.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Пакеты продукта</h4>
+  <p><span class="label">Простыми словами:</span> Добавление/редактирование пакетов (название, описание, цена).</p>
+  <p><span class="label">Зачем это нужно:</span> Основа для продаж и оплат.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
+</article>
+<article class="function-card">
+  <h4>Сохранение изменений</h4>
+  <p><span class="label">Простыми словами:</span> Явная кнопка сохранения фиксирует все изменения карточки.</p>
+  <p><span class="label">Зачем это нужно:</span> Контроль над обновлением структуры продукта.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+  </div>
+</section>
+<section id="sec-3" class="content-section">
+  <h2>3. Вкладка «Типы продуктов»</h2>
+  <p class="section-intro">Справочник типов продуктов с быстрым редактированием и генерацией продукта по типу.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Создание типа продукта</h4>
+  <p><span class="label">Простыми словами:</span> Новый тип с названием, ценностью и целью.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает заранее стандартизировать линейку.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Автосохранение правок</h4>
+  <p><span class="label">Простыми словами:</span> Изменения по типам сохраняются автоматически (с промежуточным статусом).</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет массовое редактирование без отдельной кнопки на каждую строку.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Дублирование типа продукта</h4>
+  <p><span class="label">Простыми словами:</span> Создание копии типа для быстрых вариаций.</p>
+  <p><span class="label">Зачем это нужно:</span> Полезно при тестировании похожих предложений.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление типа продукта</h4>
+  <p><span class="label">Простыми словами:</span> Удаляются только разрешённые (не системные) типы.</p>
+  <p><span class="label">Зачем это нужно:</span> Справочник остаётся чистым.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Генерация продукта по типу</h4>
+  <p><span class="label">Простыми словами:</span> Из типа можно сразу сгенерировать продукт и открыть его карточку.</p>
+  <p><span class="label">Зачем это нужно:</span> Связывает стратегию (тип) с реальным продуктом.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+  </div>
+</section>
+<section id="sec-4" class="content-section">
+  <h2>4. Вкладка «Продажи» (weekly plan/fact)</h2>
+  <p class="section-intro">Таблица недельного план/факта для воронки продаж.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Добавление недели в план продаж</h4>
+  <p><span class="label">Простыми словами:</span> По дате начала недели добавляется новая строка.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно вести регулярный недельный ритм планирования.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>План/факт по холодным лидам</h4>
+  <p><span class="label">Простыми словами:</span> Отдельные поля plan/fact по cold leads.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно контролировать верх воронки.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>План/факт по горячим лидам</h4>
+  <p><span class="label">Простыми словами:</span> Поля plan/fact по hot leads.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает видеть переходы по воронке.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>План/факт по продажам</h4>
+  <p><span class="label">Простыми словами:</span> Фиксация плановых и фактических продаж за неделю.</p>
+  <p><span class="label">Зачем это нужно:</span> Сервис даёт базовую управленческую картину продаж.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Группировка по месяцам</h4>
+  <p><span class="label">Простыми словами:</span> Недельные строки группируются по месяцам автоматически.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно для месячных ревью.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Сохранение и удаление строк</h4>
+  <p><span class="label">Простыми словами:</span> Изменения сохраняются, строки можно удалять, недели валидируются на уникальность.</p>
+  <p><span class="label">Зачем это нужно:</span> План/факт остаётся консистентным.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+  </div>
+</section>
+<section id="sec-5" class="content-section">
+  <h2>5. Продуктовые карты и mind map</h2>
+  <p class="section-intro">Mind map используется для визуального представления структуры продуктов и связей.</p>
+  <div class="function-grid">
+<article class="function-card">
+  <h4>Список mind map</h4>
+  <p><span class="label">Простыми словами:</span> Вкладка «Продуктовая карта» показывает список карт с описанием и датами.</p>
+  <p><span class="label">Зачем это нужно:</span> Можно вести несколько карт под разные задачи.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Создание новой карты</h4>
+  <p><span class="label">Простыми словами:</span> Создаётся новая карта с названием и описанием, затем открывается редактор карты.</p>
+  <p><span class="label">Зачем это нужно:</span> Быстрый старт новой визуальной структуры.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Автосохранение названия и описания карты</h4>
+  <p><span class="label">Простыми словами:</span> Изменения списка карт сохраняются автоматически.</p>
+  <p><span class="label">Зачем это нужно:</span> Удобно при массовой ревизии карт.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Дублирование карты</h4>
+  <p><span class="label">Простыми словами:</span> Можно создать копию карты вместе с узлами, связями, свойствами и позициями.</p>
+  <p><span class="label">Зачем это нужно:</span> Ускоряет создание альтернативных сценариев упаковки.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Удаление карты</h4>
+  <p><span class="label">Простыми словами:</span> Карта удаляется с подтверждением.</p>
+  <p><span class="label">Зачем это нужно:</span> Поддерживает порядок в рабочем пространстве.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Просмотр карты (`/map/[mapId]`)</h4>
+  <p><span class="label">Простыми словами:</span> Графовое отображение узлов и связей, обновление карты, переход к узлу и продукту.</p>
+  <p><span class="label">Зачем это нужно:</span> Визуальный инструмент для стратегической работы с линейкой.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
+</article>
+<article class="function-card">
+  <h4>Переход к продукту из узла</h4>
+  <p><span class="label">Простыми словами:</span> Из mind map можно открыть карточку продукта, если узел связан с продуктом.</p>
+  <p><span class="label">Зачем это нужно:</span> Связывает визуальную структуру с операционным редактированием.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы визуально раскладываете core-продукт, допродажи и модули, чтобы собрать понятную линейку.</p>
+</article>
+<article class="function-card">
+  <h4>Редактирование узла (`/map/[mapId]/node/[nodeId]`)</h4>
+  <p><span class="label">Простыми словами:</span> Диалог/страница редактирования узла с автосохранением названия/типа и блоком свойств.</p>
+  <p><span class="label">Зачем это нужно:</span> Помогает точно настраивать семантику узлов карты.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, перед запуском новой услуги вы собираете запросы и смотрите, какие сайты уже занимают выдачу.</p>
+</article>
+<article class="function-card">
+  <h4>Свойства узла: add/edit/delete/reorder</h4>
+  <p><span class="label">Простыми словами:</span> Можно добавлять, редактировать, удалять и менять порядок свойств узла.</p>
+  <p><span class="label">Зачем это нужно:</span> Подходит для хранения метрик, тезисов, слов и др. данных.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+<article class="function-card">
+  <h4>Сохранить все в узле</h4>
+  <p><span class="label">Простыми словами:</span> Отдельная кнопка сохраняет изменения по свойствам узла.</p>
+  <p><span class="label">Зачем это нужно:</span> Пользователь контролирует фиксацию важных правок.</p>
+  <p class="example-line"><span class="label">Пример из жизни:</span> Например, вы делаете это один раз в интерфейсе, и дальше команда тратит меньше времени на ручную работу.</p>
+</article>
+  </div>
+</section>
+      
+      <section class="meta-section"><h2>Связанные страницы</h2><div class="related-grid"><a class="related-card" href="seo.html"><span class="related-title">SEO: смыслы, кластеры, Wordstat и конкуренты</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="posts-schedule.html"><span class="related-title">Посты, контент-стратегия и расписание публикаций</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="analytics.html"><span class="related-title">Аналитика: каналы, сайт, подборки и TGStat</span><span class="related-sub">Перейти к описанию раздела</span></a>
+<a class="related-card" href="settings-integrations.html"><span class="related-title">Настройки клиента, интеграции и оплата</span><span class="related-sub">Перейти к описанию раздела</span></a></div></section>
+      <section class="pager"><a class="pager-card" href="templates-topics.html"><span class="pager-label">← Предыдущая</span><span class="pager-title">Шаблоны и темы контента</span></a><a class="pager-card" href="clients-crm.html"><span class="pager-label">Следующая →</span><span class="pager-title">CRM: клиенты, расписание, обратная связь, оплаты и ChatBot</span></a></section>
+
+      <footer class="footer">
+        <div>Собрано по интерфейсу проекта (маршруты `frontend/app` и ключевые UI-компоненты).</div>
+        <div>Файл страницы: <code>products-mindmap.html</code></div>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

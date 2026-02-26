@@ -168,6 +168,12 @@ export default function DocumentPage() {
                 className="text-xl font-semibold bg-transparent border-none focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1"
                 placeholder="Название документа"
               />
+
+              {String(document.document_type || 'page') === 'product' && (
+                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                  Тип: Продукт
+                </span>
+              )}
             </div>
           </div>
 
@@ -258,7 +264,14 @@ export default function DocumentPage() {
               >
                 <div className="text-lg">{child.icon || '📄'}</div>
                 <div>
-                  <div className="font-medium text-gray-900">{child.title}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="font-medium text-gray-900">{child.title}</div>
+                    {String(child.document_type || 'page') === 'product' && (
+                      <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700">
+                        Тип: Продукт
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-gray-500">
                     Обновлен: {new Date(child.updated_at).toLocaleDateString('ru-RU')}
                   </div>
