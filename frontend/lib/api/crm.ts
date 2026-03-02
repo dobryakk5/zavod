@@ -3,6 +3,16 @@ import { apiFetch } from '../api';
 
 // Types for the map CRM system
 export type TagType = 'goal' | 'pain' | 'experience';
+export type DealStage = '' | 'new_lead' | 'interest' | 'call' | 'payment_expected' | 'paid' | 'lost';
+export type DealLossReasonCode =
+  | ''
+  | 'price'
+  | 'timing'
+  | 'no_response'
+  | 'not_fit'
+  | 'competitor'
+  | 'priority_changed'
+  | 'other';
 
 export type Contact = {
   id: number;
@@ -10,6 +20,11 @@ export type Contact = {
   email: string;
   phone: string;
   source?: string;
+  deal_stage?: DealStage;
+  deal_amount?: number | string | null;
+  deal_loss_reason_code?: DealLossReasonCode;
+  deal_loss_reason_text?: string;
+  deal_lost_at?: string | null;
   category_id: number | null;
   status: 'active' | 'inactive' | 'archived';
   photo_url: string;

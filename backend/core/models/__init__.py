@@ -20,6 +20,7 @@ from .client import Client, UserTenantRole
 # --- CRM ---
 from .crm import ClientCategory, CRMClient, Event, EventType, Payment, Note
 from .amocrm import AmoCRMAccount, AmoCRMContactMapping, AmoCRMLogEntry
+from .bitrix24 import Bitrix24Account, Bitrix24ContactMapping, Bitrix24LogEntry, Bitrix24WebhookEvent
 
 # --- Integrations ---
 from .integrations import VkIntegration, SocialAccount, Connection, UserSocialAccount
@@ -133,6 +134,10 @@ __all__ = [
     "AmoCRMAccount",
     "AmoCRMContactMapping",
     "AmoCRMLogEntry",
+    "Bitrix24Account",
+    "Bitrix24ContactMapping",
+    "Bitrix24LogEntry",
+    "Bitrix24WebhookEvent",
     # Integrations
     "VkIntegration",
     "SocialAccount",

@@ -106,7 +106,7 @@ class MapContactViewSet(viewsets.ModelViewSet):
     serializer_class = MapContactSerializer
     permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["status", "category_id", "parent_id"]
+    filterset_fields = ["status", "category_id", "parent_id", "deal_stage", "deal_loss_reason_code"]
     search_fields = ["name", "email", "phone"]
     ordering_fields = ["name", "created_at", "email"]
     ordering = ["name"]

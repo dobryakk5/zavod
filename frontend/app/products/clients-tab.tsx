@@ -3,9 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { ApiError } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import {
   crmContactTagsApi,
   crmContactsApi,
@@ -17,6 +22,8 @@ import {
 import { Trash2, X } from 'lucide-react';
 
 type MapClient = Contact;
+type DealStage = Exclude<Contact['deal_stage'], undefined | ''>;
+type DealLossReasonCode = Exclude<Contact['deal_loss_reason_code'], undefined | ''>;
 
 type ClientDraft = {
   name: string;
@@ -47,6 +54,83 @@ const emptyTags = () => ({
   pain: [] as number[],
   experience: [] as number[]
 });
+
+const DEAL_STAGE_ORDER: DealStage[] = ['new_lead', 'interest', 'call', 'payment_expected', 'paid', 'lost'];
+
+const DEAL_STAGE_LABELS: Record<DealStage, string> = {
+  new_lead: 'Новый лид',
+  interest: 'Интерес',
+  call: 'Созвон',
+  payment_expected: 'Оплата ожидается',
+  paid: 'Оплачено',
+  lost: 'Потеряно',
+};
+
+const DEAL_STAGE_BADGE_VARIANTS: Record<DealStage, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+  new_lead: 'outline',
+  interest: 'secondary',
+  call: 'default',
+  payment_expected: 'secondary',
+  paid: 'default',
+  lost: 'destructive',
+};
+
+const DEAL_LOSS_REASON_OPTIONS: Array<{ value: DealLossReasonCode; label: string }> = [
+  { value: 'price', label: 'Дорого' },
+  { value: 'timing', label: 'Не вовремя' },
+  { value: 'no_response', label: 'Не отвечает' },
+  { value: 'not_fit', label: 'Не подходит' },
+  { value: 'competitor', label: 'Ушёл к конкуренту' },
+  { value: 'priority_changed', label: 'Изменился приоритет' },
+  { value: 'other', label: 'Другое' },
+];
+
+const DEAL_LOSS_REASON_LABELS: Record<DealLossReasonCode, string> = DEAL_LOSS_REASON_OPTIONS.reduce(
+  (acc, item) => {
+    acc[item.value] = item.label;
+    return acc;
+  },
+  {} as Record<DealLossReasonCode, string>
+);
+
+const LOSS_COMMENT_TEMPLATES: Record<DealLossReasonCode, string[]> = {
+  price: ['Дорого на текущий момент', 'Сравнивает с более дешёвым вариантом', 'Нужен более простой пакет'],
+  timing: ['Вернётся позже', 'Сейчас не в приоритете', 'Перенёс решение на следующий месяц'],
+  no_response: ['Перестал отвечать после созвона', 'Нет ответа после отправки предложения', 'Не выходит на связь'],
+  not_fit: ['Запрос вне нашей специализации', 'Формат работы не подошёл', 'Нужна другая услуга'],
+  competitor: ['Выбрали другого подрядчика', 'Остались у текущего специалиста', 'Ушли в другой сервис'],
+  priority_changed: ['Сменился приоритет в бизнесе', 'Заморозили проект', 'Отложили направление'],
+  other: ['Решили не продолжать', 'Пока без комментариев', 'Нужно уточнение позже'],
+};
+
+const GENERIC_LOSS_COMMENT_TEMPLATES = ['Вернуться через 2 недели', 'Сделать follow-up позже', 'Уточнить причину подробнее'];
+
+function normalizeExplicitDealStage(raw: unknown): DealStage | null {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (DEAL_STAGE_ORDER.includes(value as DealStage)) {
+    return value as DealStage;
+  }
+  return null;
+}
+
+function normalizeDealStage(client: MapClient): DealStage {
+  return normalizeExplicitDealStage(client.deal_stage) ?? 'new_lead';
+}
+
+function normalizeDealSource(client: MapClient): string {
+  const raw = String(client.source ?? '').trim();
+  return raw || 'Без источника';
+}
+
+function resolveDealManagerLabel(client: MapClient): string {
+  const dynamic = client as MapClient & {
+    manager_name?: string | null;
+    responsible_name?: string | null;
+    assignee_name?: string | null;
+  };
+  const raw = dynamic.manager_name ?? dynamic.responsible_name ?? dynamic.assignee_name ?? '';
+  return String(raw || '').trim() || 'Не назначен';
+}
 
 const normalizeClient = (client: MapClient): MapClient => ({
   ...client,
@@ -79,7 +163,19 @@ export function ClientsTab() {
     pain: [],
     experience: []
   });
+  const [workspaceMode] = useState<'clients' | 'deals'>('clients');
   const [nameFilter, setNameFilter] = useState('');
+  const [dealNameFilter, setDealNameFilter] = useState('');
+  const [dealSourceFilter, setDealSourceFilter] = useState<string>('all');
+  const [clientsView, setClientsView] = useState<'list' | 'kanban'>('list');
+  const [draggingClientId, setDraggingClientId] = useState<number | null>(null);
+  const [kanbanDropStage, setKanbanDropStage] = useState<DealStage | null>(null);
+  const [movingDealClientId, setMovingDealClientId] = useState<number | null>(null);
+  const [lossDialogOpen, setLossDialogOpen] = useState(false);
+  const [pendingLostClientId, setPendingLostClientId] = useState<number | null>(null);
+  const [pendingLostFromStage, setPendingLostFromStage] = useState<DealStage | null>(null);
+  const [lossReasonCode, setLossReasonCode] = useState<string>('none');
+  const [lossReasonText, setLossReasonText] = useState('');
   const clientDraftsRef = useRef(clientDrafts);
   const tagDraftsRef = useRef(tagDrafts);
 
@@ -162,7 +258,7 @@ export function ClientsTab() {
     try {
       const [clientsData, tagsData] = await Promise.all([
         crmContactsApi.list(),
-        crmTagsApi.list()
+        crmTagsApi.list(),
       ]);
 
       const normalizedClients = clientsData.map(normalizeClient);
@@ -247,6 +343,234 @@ export function ClientsTab() {
       });
     });
   }, [clients, filters, nameFilter]);
+
+  const dealSourceOptions = useMemo(() => {
+    const values = new Set<string>();
+    clients.forEach((client) => values.add(normalizeDealSource(client)));
+    return [...values].sort((a, b) => a.localeCompare(b));
+  }, [clients]);
+
+  const dealFilteredClients = useMemo(() => {
+    const search = dealNameFilter.trim().toLowerCase();
+    return clients.filter((client) => {
+      if (search && !(client.name ?? '').toLowerCase().includes(search)) return false;
+      if (dealSourceFilter !== 'all' && normalizeDealSource(client) !== dealSourceFilter) return false;
+      return true;
+    });
+  }, [clients, dealNameFilter, dealSourceFilter]);
+
+  const kanbanColumns = useMemo(() => {
+    const columns = DEAL_STAGE_ORDER.reduce<Record<DealStage, MapClient[]>>((acc, stage) => {
+      acc[stage] = [];
+      return acc;
+    }, {} as Record<DealStage, MapClient[]>);
+    dealFilteredClients.forEach((client) => {
+      columns[normalizeDealStage(client)].push(client);
+    });
+    DEAL_STAGE_ORDER.forEach((stage) => {
+      columns[stage].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    });
+    return columns;
+  }, [dealFilteredClients]);
+
+  const dealReportBySource = useMemo(() => {
+    type Row = {
+      key: string;
+      label: string;
+      total: number;
+      paid: number;
+      lost: number;
+      stages: Record<DealStage, number>;
+      lossReasons: Record<string, number>;
+    };
+    const map = new Map<string, Row>();
+    for (const client of dealFilteredClients) {
+      const key = normalizeDealSource(client);
+      const stage = normalizeDealStage(client);
+      const row = map.get(key) ?? {
+        key,
+        label: key,
+        total: 0,
+        paid: 0,
+        lost: 0,
+        stages: DEAL_STAGE_ORDER.reduce((acc, item) => ({ ...acc, [item]: 0 }), {} as Record<DealStage, number>),
+        lossReasons: {},
+      };
+      row.total += 1;
+      row.stages[stage] += 1;
+      if (stage === 'paid') row.paid += 1;
+      if (stage === 'lost') {
+        row.lost += 1;
+        const reasonCode = String(client.deal_loss_reason_code || 'other').trim() || 'other';
+        row.lossReasons[reasonCode] = (row.lossReasons[reasonCode] ?? 0) + 1;
+      }
+      map.set(key, row);
+    }
+    return [...map.values()]
+      .map((row) => {
+        const topLoss = Object.entries(row.lossReasons).sort((a, b) => b[1] - a[1])[0];
+        const lossReasonsSummary = Object.entries(row.lossReasons)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([code, count]) => `${DEAL_LOSS_REASON_LABELS[code as DealLossReasonCode] ?? code}: ${count}`)
+          .join(' · ');
+        return {
+          ...row,
+          paidConversionPct: row.total > 0 ? Math.round((row.paid / row.total) * 100) : 0,
+          topLossLabel: topLoss
+            ? `${DEAL_LOSS_REASON_LABELS[topLoss[0] as DealLossReasonCode] ?? topLoss[0]} (${topLoss[1]})`
+            : '—',
+          lossReasonsSummary: lossReasonsSummary || '—',
+        };
+      })
+      .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+  }, [dealFilteredClients]);
+
+  const dealReportByManager = useMemo(() => {
+    type Row = {
+      key: string;
+      label: string;
+      total: number;
+      paid: number;
+      lost: number;
+      stages: Record<DealStage, number>;
+      lossReasons: Record<string, number>;
+    };
+    const map = new Map<string, Row>();
+    for (const client of dealFilteredClients) {
+      const key = resolveDealManagerLabel(client);
+      const stage = normalizeDealStage(client);
+      const row = map.get(key) ?? {
+        key,
+        label: key,
+        total: 0,
+        paid: 0,
+        lost: 0,
+        stages: DEAL_STAGE_ORDER.reduce((acc, item) => ({ ...acc, [item]: 0 }), {} as Record<DealStage, number>),
+        lossReasons: {},
+      };
+      row.total += 1;
+      row.stages[stage] += 1;
+      if (stage === 'paid') row.paid += 1;
+      if (stage === 'lost') {
+        row.lost += 1;
+        const reasonCode = String(client.deal_loss_reason_code || 'other').trim() || 'other';
+        row.lossReasons[reasonCode] = (row.lossReasons[reasonCode] ?? 0) + 1;
+      }
+      map.set(key, row);
+    }
+    return [...map.values()]
+      .map((row) => {
+        const topLoss = Object.entries(row.lossReasons).sort((a, b) => b[1] - a[1])[0];
+        const lossReasonsSummary = Object.entries(row.lossReasons)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([code, count]) => `${DEAL_LOSS_REASON_LABELS[code as DealLossReasonCode] ?? code}: ${count}`)
+          .join(' · ');
+        return {
+          ...row,
+          paidConversionPct: row.total > 0 ? Math.round((row.paid / row.total) * 100) : 0,
+          topLossLabel: topLoss
+            ? `${DEAL_LOSS_REASON_LABELS[topLoss[0] as DealLossReasonCode] ?? topLoss[0]} (${topLoss[1]})`
+            : '—',
+          lossReasonsSummary: lossReasonsSummary || '—',
+        };
+      })
+      .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+  }, [dealFilteredClients]);
+
+  const resetLossDialog = useCallback(() => {
+    setLossDialogOpen(false);
+    setPendingLostClientId(null);
+    setPendingLostFromStage(null);
+    setLossReasonCode('none');
+    setLossReasonText('');
+  }, []);
+
+  const applyDealMove = useCallback(
+    async (
+      client: MapClient,
+      targetStage: DealStage,
+      extra?: Partial<Pick<MapClient, 'deal_loss_reason_code' | 'deal_loss_reason_text'>>
+    ) => {
+      const sourceStage = normalizeDealStage(client);
+      if (sourceStage === targetStage && !extra) return;
+
+      const optimisticPatch: Partial<MapClient> = {
+        deal_stage: targetStage,
+        deal_loss_reason_code: targetStage === 'lost' ? (extra?.deal_loss_reason_code ?? client.deal_loss_reason_code ?? '') : '',
+        deal_loss_reason_text: targetStage === 'lost' ? (extra?.deal_loss_reason_text ?? client.deal_loss_reason_text ?? '') : '',
+      };
+
+      let snapshot: MapClient[] | null = null;
+      setMovingDealClientId(client.id);
+      setClients((prev) => {
+        snapshot = prev;
+        return prev.map((item) => (item.id === client.id ? normalizeClient({ ...item, ...optimisticPatch }) : item));
+      });
+
+      try {
+        const updated = await crmContactsApi.update(client.id, {
+          deal_stage: targetStage,
+          deal_loss_reason_code: (optimisticPatch.deal_loss_reason_code || '') as Contact['deal_loss_reason_code'],
+          deal_loss_reason_text: optimisticPatch.deal_loss_reason_text || '',
+        });
+        setClients((prev) =>
+          prev.map((item) => (item.id === client.id ? normalizeClient({ ...item, ...updated }) : item))
+        );
+      } catch (err) {
+        console.error('Failed to move deal stage', err);
+        toast.error('Не удалось изменить стадию сделки');
+        if (snapshot) {
+          setClients(snapshot);
+        }
+      } finally {
+        setMovingDealClientId(null);
+      }
+    },
+    []
+  );
+
+  const requestMoveToStage = useCallback(
+    async (client: MapClient, targetStage: DealStage) => {
+      if (targetStage === 'lost') {
+        setPendingLostClientId(client.id);
+        setPendingLostFromStage(normalizeDealStage(client));
+        setLossReasonCode(client.deal_loss_reason_code ? String(client.deal_loss_reason_code) : 'none');
+        setLossReasonText(client.deal_loss_reason_text ?? '');
+        setLossDialogOpen(true);
+        return;
+      }
+      await applyDealMove(client, targetStage);
+    },
+    [applyDealMove]
+  );
+
+  const confirmLostMove = useCallback(async () => {
+    if (!pendingLostClientId) return;
+    const client = clients.find((item) => item.id === pendingLostClientId);
+    if (!client) {
+      resetLossDialog();
+      return;
+    }
+    const reasonCode = lossReasonCode === 'none' ? '' : lossReasonCode;
+    const comment = lossReasonText.trim();
+    if (!reasonCode) {
+      toast.error('Выберите причину потери');
+      return;
+    }
+    await applyDealMove(client, 'lost', {
+      deal_loss_reason_code: reasonCode as Contact['deal_loss_reason_code'],
+      deal_loss_reason_text: comment,
+    });
+    resetLossDialog();
+  }, [applyDealMove, clients, lossReasonCode, lossReasonText, pendingLostClientId, resetLossDialog]);
+
+  const lossCommentTemplates = useMemo(() => {
+    const code = lossReasonCode === 'none' ? null : (lossReasonCode as DealLossReasonCode);
+    const fromReason = code ? LOSS_COMMENT_TEMPLATES[code] ?? [] : [];
+    return [...fromReason, ...GENERIC_LOSS_COMMENT_TEMPLATES];
+  }, [lossReasonCode]);
 
   const saveClientDraft = useCallback(async (clientId: number, override?: Partial<ClientDraft>) => {
     const current = clientDraftsRef.current[clientId];
@@ -684,154 +1008,386 @@ export function ClientsTab() {
             <p className="text-sm text-muted-foreground">Клиенты пока не добавлены.</p>
           ) : (
             <div className="space-y-4">
-              <div className="rounded-xl border bg-card/70 p-4 shadow-sm">
-                <div className="grid gap-3 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
-                  <div className="space-y-2">
-                    <div className="text-xs font-semibold text-muted-foreground">Имя клиента</div>
-                    <Input
-                      value={nameFilter}
-                      onChange={(e) => setNameFilter(e.target.value)}
-                      placeholder="Поиск по имени"
-                      className="h-8 text-xs"
+              {workspaceMode === 'clients' && (
+                <div className="rounded-xl border bg-card/70 p-4 shadow-sm">
+                  <div className="grid gap-3 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
+                    <div className="space-y-2">
+                      <div className="text-xs font-semibold text-muted-foreground">Имя клиента</div>
+                      <Input
+                        value={nameFilter}
+                        onChange={(e) => setNameFilter(e.target.value)}
+                        placeholder="Поиск по имени"
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                    {TAG_TYPES.map((type) => (
+                      <div key={`filter-${type}`} className="space-y-2">
+                        <div className="text-xs font-semibold text-muted-foreground">{TAG_LABELS[type]}</div>
+                        {tagsByType[type].length === 0 ? (
+                          <p className="text-sm text-muted-foreground">Нет тегов</p>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setFilters((prev) => ({ ...prev, [type]: [] }))}
+                              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                                filters[type].length === 0
+                                  ? 'bg-primary text-primary-foreground shadow-sm'
+                                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                              }`}
+                            >
+                              Все
+                            </button>
+                            {tagsByType[type].map((tag) => {
+                              const selected = filters[type].includes(tag.id);
+                              return (
+                                <button
+                                  key={tag.id}
+                                  type="button"
+                                  onClick={() =>
+                                    setFilters((prev) => {
+                                      const existing = prev[type] ?? [];
+                                      const next = selected
+                                        ? existing.filter((id) => id !== tag.id)
+                                        : [...existing, tag.id];
+                                      return { ...prev, [type]: next };
+                                    })
+                                  }
+                                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                                    selected
+                                      ? 'bg-primary text-primary-foreground shadow-sm'
+                                      : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                  }`}
+                                >
+                                  {tag.value}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {workspaceMode === 'deals' && (
+                <>
+                  <div className="rounded-xl border bg-card/70 p-4 shadow-sm">
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <div className="space-y-2">
+                        <div className="text-xs font-semibold text-muted-foreground">Поиск по клиенту</div>
+                        <Input
+                          value={dealNameFilter}
+                          onChange={(e) => setDealNameFilter(e.target.value)}
+                          placeholder="Имя клиента"
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-xs font-semibold text-muted-foreground">Источник</div>
+                        <Select value={dealSourceFilter} onValueChange={setDealSourceFilter}>
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="Все источники" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">Все источники</SelectItem>
+                            {dealSourceOptions.map((source) => (
+                              <SelectItem key={source} value={source}>
+                                {source}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="rounded-lg border bg-background p-3">
+                        <div className="text-xs text-muted-foreground">Сделок в фильтре</div>
+                        <div className="mt-1 text-xl font-semibold">{dealFilteredClients.length}</div>
+                      </div>
+                      <div className="rounded-lg border bg-background p-3">
+                        <div className="text-xs text-muted-foreground">Оплачено</div>
+                        <div className="mt-1 text-xl font-semibold">
+                          {dealFilteredClients.filter((client) => normalizeDealStage(client) === 'paid').length}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <DealBreakdownCard
+                      title="Конверсия и потери по источнику"
+                      subtitle="Источник берётся из поля `source` контакта"
+                      rows={dealReportBySource}
+                    />
+                    <DealBreakdownCard
+                      title="Конверсия и потери по менеджеру"
+                      subtitle="Если поле ответственного не хранится, всё попадает в «Не назначен»"
+                      rows={dealReportByManager}
                     />
                   </div>
-                  {TAG_TYPES.map((type) => (
-                    <div key={`filter-${type}`} className="space-y-2">
-                      <div className="text-xs font-semibold text-muted-foreground">{TAG_LABELS[type]}</div>
-                      {tagsByType[type].length === 0 ? (
-                        <p className="text-sm text-muted-foreground">Нет тегов</p>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setFilters((prev) => ({ ...prev, [type]: [] }))}
-                            className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                              filters[type].length === 0
-                                ? 'bg-primary text-primary-foreground shadow-sm'
-                                : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                            }`}
-                          >
-                            Все
-                          </button>
-                          {tagsByType[type].map((tag) => {
-                            const selected = filters[type].includes(tag.id);
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card/70 p-3 shadow-sm">
+                    <div>
+                      <div className="text-sm font-medium">Режим отображения сделок</div>
+                      <div className="text-xs text-muted-foreground">
+                        `Kanban` использует стадию сделки и позволяет переносить клиентов между этапами воронки
+                      </div>
+                    </div>
+                    <div className="inline-flex rounded-lg border bg-background p-1">
+                      <Button
+                        type="button"
+                        variant={clientsView === 'list' ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => setClientsView('list')}
+                      >
+                        Список
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={clientsView === 'kanban' ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => setClientsView('kanban')}
+                      >
+                        Kanban
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {(workspaceMode === 'clients' ? filteredClients.length === 0 : dealFilteredClients.length === 0) ? (
+                <p className="text-sm text-muted-foreground">
+                  {workspaceMode === 'clients'
+                    ? 'Клиенты по выбранным тегам не найдены.'
+                    : 'Сделки по выбранным фильтрам не найдены.'}
+                </p>
+              ) : workspaceMode === 'deals' && clientsView === 'kanban' ? (
+                <div className="grid gap-4 xl:grid-cols-6">
+                  {DEAL_STAGE_ORDER.map((stage) => (
+                    <div
+                      key={stage}
+                      className={cn(
+                        'rounded-xl border bg-card/70 p-3 shadow-sm transition-colors',
+                        kanbanDropStage === stage && draggingClientId !== null && 'border-primary bg-primary/5'
+                      )}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setKanbanDropStage(stage);
+                      }}
+                      onDragLeave={(event) => {
+                        const related = event.relatedTarget as Node | null;
+                        if (related && event.currentTarget.contains(related)) return;
+                        setKanbanDropStage((prev) => (prev === stage ? null : prev));
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const raw = event.dataTransfer.getData('text/plain');
+                        const parsed = Number(raw);
+                        const clientId = Number.isFinite(parsed) && parsed > 0 ? parsed : draggingClientId;
+                        const client = clientId ? clients.find((item) => item.id === clientId) : null;
+                        setKanbanDropStage(null);
+                        setDraggingClientId(null);
+                        if (!client) return;
+                        void requestMoveToStage(client, stage);
+                      }}
+                    >
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div className="text-sm font-semibold">{DEAL_STAGE_LABELS[stage]}</div>
+                        <Badge variant={DEAL_STAGE_BADGE_VARIANTS[stage]}>{kanbanColumns[stage].length}</Badge>
+                      </div>
+                      <div className="space-y-2 min-h-[120px]">
+                        {kanbanColumns[stage].length === 0 ? (
+                          <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+                            Перетащите сюда клиента
+                          </div>
+                        ) : (
+                          kanbanColumns[stage].map((client) => {
+                            const isDragging = draggingClientId === client.id;
+                            const isSaving = movingDealClientId === client.id;
+                            const currentStage = normalizeDealStage(client);
                             return (
                               <button
-                                key={tag.id}
+                                key={client.id}
                                 type="button"
-                                onClick={() =>
-                                  setFilters((prev) => {
-                                    const existing = prev[type] ?? [];
-                                    const next = selected
-                                      ? existing.filter((id) => id !== tag.id)
-                                      : [...existing, tag.id];
-                                    return { ...prev, [type]: next };
-                                  })
-                                }
-                                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                                  selected
-                                    ? 'bg-primary text-primary-foreground shadow-sm'
-                                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                                }`}
+                                draggable={!isSaving}
+                                onDragStart={(event) => {
+                                  setDraggingClientId(client.id);
+                                  event.dataTransfer.effectAllowed = 'move';
+                                  event.dataTransfer.setData('text/plain', String(client.id));
+                                }}
+                                onDragEnd={() => {
+                                  setDraggingClientId(null);
+                                  setKanbanDropStage(null);
+                                }}
+                                onClick={() => openClientWindow(client.id)}
+                                className={cn(
+                                  'w-full rounded-lg border bg-background p-3 text-left shadow-sm transition hover:border-primary',
+                                  isDragging && 'opacity-50',
+                                  isSaving && 'opacity-70 cursor-wait'
+                                )}
                               >
-                                {tag.value}
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium">{client.name}</div>
+                                    <div className="mt-1 text-xs text-muted-foreground">
+                                      #{client.id}
+                                      {client.source ? ` · ${client.source}` : ''}
+                                    </div>
+                                  </div>
+                                  <Badge variant={DEAL_STAGE_BADGE_VARIANTS[currentStage]} className="shrink-0">
+                                    {DEAL_STAGE_LABELS[currentStage]}
+                                  </Badge>
+                                </div>
+                                {(client.deal_amount ?? '') !== '' && client.deal_amount !== null && (
+                                  <div className="mt-2 text-xs text-muted-foreground">
+                                    План сделки: <span className="font-medium text-foreground">{client.deal_amount} ₽</span>
+                                  </div>
+                                )}
+                                {currentStage === 'lost' && (client.deal_loss_reason_code || client.deal_loss_reason_text) && (
+                                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                                    {client.deal_loss_reason_code
+                                      ? DEAL_LOSS_REASON_LABELS[
+                                          client.deal_loss_reason_code as DealLossReasonCode
+                                        ] ?? client.deal_loss_reason_code
+                                      : 'Причина не выбрана'}
+                                    {client.deal_loss_reason_text ? ` · ${client.deal_loss_reason_text}` : ''}
+                                  </div>
+                                )}
+                                {isSaving && (
+                                  <div className="mt-2 text-xs text-muted-foreground">Сохраняем стадию…</div>
+                                )}
                               </button>
                             );
-                          })}
-                        </div>
-                      )}
+                          })
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
-              </div>
-
-              {filteredClients.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Клиенты по выбранным тегам не найдены.</p>
               ) : (
-                filteredClients.map((client) => {
-                const row = clientRows.find((item) => item.client.id === client.id);
-                return (
-                  <Card
-                    key={client.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={(event) => {
-                      const target = event.target as HTMLElement | null;
-                      if (target?.closest('input,textarea,button,a,select')) return;
-                      openClientWindow(client.id);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
+                (workspaceMode === 'clients' ? filteredClients : dealFilteredClients).map((client) => {
+                  const row = clientRows.find((item) => item.client.id === client.id);
+                  const dealStage = normalizeDealStage(client);
+                  return (
+                    <Card
+                      key={client.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={(event) => {
+                        const target = event.target as HTMLElement | null;
+                        if (target?.closest('input,textarea,button,a,select')) return;
                         openClientWindow(client.id);
-                      }
-                    }}
-                    className="cursor-pointer transition hover:shadow-sm"
-                  >
-                    <CardContent className="p-4">
-                      <div className="grid gap-4 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
-                        <div className="space-y-2">
-                          <Input
-                            value={row?.name ?? client.name}
-                            onChange={(e) => {
-                              const nextName = e.target.value;
-                              setClientDrafts((prev) => {
-                                const existing = prev[client.id] ?? {
-                                  name: client.name ?? '',
-                                  dirty: false,
-                                  saving: false,
-                                  error: null,
-                                  revision: 0
-                                };
-                                return {
-                                  ...prev,
-                                  [client.id]: {
-                                    ...existing,
-                                    name: nextName,
-                                    dirty: true,
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          openClientWindow(client.id);
+                        }
+                      }}
+                      className="cursor-pointer transition hover:shadow-sm"
+                    >
+                      <CardContent className="p-4">
+                        {workspaceMode === 'clients' ? (
+                          <div className="grid gap-4 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
+                          <div className="space-y-2">
+                            <Input
+                              value={row?.name ?? client.name}
+                              onChange={(e) => {
+                                const nextName = e.target.value;
+                                setClientDrafts((prev) => {
+                                  const existing = prev[client.id] ?? {
+                                    name: client.name ?? '',
+                                    dirty: false,
+                                    saving: false,
                                     error: null,
-                                    revision: existing.revision + 1
-                                  }
-                                };
-                              });
-                            }}
-                            onBlur={() => void saveClientDraft(client.id)}
-                            className="h-9"
-                          />
-                          {row?.error ? <div className="text-xs text-destructive">{row.error}</div> : null}
-                          {row?.saving ? <div className="text-xs text-muted-foreground">Сохранение…</div> : null}
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => void handleDeleteClient(client)}
-                            aria-label="Удалить клиента"
-                            title="Удалить клиента"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                                    revision: 0
+                                  };
+                                  return {
+                                    ...prev,
+                                    [client.id]: {
+                                      ...existing,
+                                      name: nextName,
+                                      dirty: true,
+                                      error: null,
+                                      revision: existing.revision + 1
+                                    }
+                                  };
+                                });
+                              }}
+                              onBlur={() => void saveClientDraft(client.id)}
+                              className="h-9"
+                            />
+                            {row?.error ? <div className="text-xs text-destructive">{row.error}</div> : null}
+                            {row?.saving ? <div className="text-xs text-muted-foreground">Сохранение…</div> : null}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => void handleDeleteClient(client)}
+                              aria-label="Удалить клиента"
+                              title="Удалить клиента"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          {TAG_TYPES.map((type) => (
+                            <TagColumn
+                              key={`${client.id}-${type}`}
+                              title={TAG_LABELS[type]}
+                              type={type}
+                              client={client}
+                              tags={tagsByType[type]}
+                              onToggle={toggleTag}
+                              pending={pending}
+                            />
+                          ))}
                         </div>
-                        {TAG_TYPES.map((type) => (
-                          <TagColumn
-                            key={`${client.id}-${type}`}
-                            title={TAG_LABELS[type]}
-                            type={type}
-                            client={client}
-                            tags={tagsByType[type]}
-                            onToggle={toggleTag}
-                            pending={pending}
-                          />
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })
+                      ) : (
+                        <div className="grid gap-3 md:grid-cols-[minmax(220px,1.5fr)_repeat(3,minmax(0,1fr))]">
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <div className="font-medium">{client.name}</div>
+                              <Badge variant={DEAL_STAGE_BADGE_VARIANTS[dealStage]}>
+                                {DEAL_STAGE_LABELS[dealStage]}
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              #{client.id} · {normalizeDealSource(client)}
+                            </div>
+                            {client.deal_loss_reason_code && dealStage === 'lost' && (
+                              <div className="text-xs text-amber-700">
+                                {DEAL_LOSS_REASON_LABELS[client.deal_loss_reason_code as DealLossReasonCode] ?? client.deal_loss_reason_code}
+                                {client.deal_loss_reason_text ? ` · ${client.deal_loss_reason_text}` : ''}
+                              </div>
+                            )}
+                          </div>
+                          <div className="rounded-md border px-3 py-2">
+                            <div className="text-xs text-muted-foreground">Сумма сделки</div>
+                            <div className="mt-1 font-semibold">
+                              {(client.deal_amount ?? '') !== '' && client.deal_amount !== null ? `${client.deal_amount} ₽` : '—'}
+                            </div>
+                          </div>
+                          <div className="rounded-md border px-3 py-2">
+                            <div className="text-xs text-muted-foreground">Быстрый переход</div>
+                            <div className="mt-1 text-sm">Откройте карточку контакта для суммы/причины/деталей</div>
+                          </div>
+                          <div className="flex items-center justify-end">
+                            <Button type="button" variant="outline" onClick={() => openClientWindow(client.id)}>
+                              Открыть сделку
+                            </Button>
+                          </div>
+                        </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })
               )}
             </div>
           )}
 
+          {workspaceMode === 'clients' && (
           <div className="space-y-3 pt-2">
             <p className="text-sm text-muted-foreground">
               Сводка по целям, болям и опыту клиентов. Данные синхронизируются с таблицами clients, tags и client_tags.
@@ -860,8 +1416,77 @@ export function ClientsTab() {
               </Card>
             </div>
           </div>
+          )}
         </div>
       </div>
+
+      <Dialog
+        open={lossDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            resetLossDialog();
+          } else {
+            setLossDialogOpen(true);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Причина потери сделки</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="text-sm text-muted-foreground">
+              Клиент будет перемещён в этап <span className="font-medium text-foreground">Потеряно</span>
+              {pendingLostFromStage ? ` из этапа «${DEAL_STAGE_LABELS[pendingLostFromStage]}»` : ''}.
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Причина (обязательно)</label>
+              <Select value={lossReasonCode} onValueChange={setLossReasonCode}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Выберите причину" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Не выбрано</SelectItem>
+                  {DEAL_LOSS_REASON_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Комментарий (необязательно)</label>
+              <Textarea
+                value={lossReasonText}
+                onChange={(event) => setLossReasonText(event.target.value)}
+                rows={3}
+                placeholder="Например: отложили покупку до следующего месяца"
+              />
+              <div className="flex flex-wrap gap-2">
+                {lossCommentTemplates.map((template) => (
+                  <button
+                    key={template}
+                    type="button"
+                    className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted"
+                    onClick={() => setLossReasonText(template)}
+                  >
+                    {template}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={resetLossDialog}>
+              Отмена
+            </Button>
+            <Button type="button" onClick={() => void confirmLostMove()} disabled={movingDealClientId !== null}>
+              {movingDealClientId !== null ? 'Сохраняем…' : 'Переместить в Потеряно'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -910,5 +1535,76 @@ function TagColumn({
         </div>
       )}
     </div>
+  );
+}
+
+function DealBreakdownCard({
+  title,
+  subtitle,
+  rows,
+}: {
+  title: string;
+  subtitle: string;
+  rows: Array<{
+    key: string;
+    label: string;
+    total: number;
+    paid: number;
+    lost: number;
+    stages: Record<DealStage, number>;
+    paidConversionPct: number;
+    topLossLabel: string;
+    lossReasonsSummary: string;
+  }>;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+        <CardDescription>{subtitle}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <div className="text-sm text-muted-foreground">Нет данных по текущему фильтру.</div>
+        ) : (
+          <div className="space-y-2">
+            {rows.slice(0, 8).map((row) => (
+              <div key={row.key} className="rounded-lg border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium">{row.label}</div>
+                  <div className="text-xs text-muted-foreground">
+                    Лидов: <span className="font-medium text-foreground">{row.total}</span>
+                  </div>
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                  <div className="rounded-md bg-muted/40 px-2 py-1.5 text-xs">
+                    Оплачено: <span className="font-medium text-foreground">{row.paid}</span>
+                  </div>
+                  <div className="rounded-md bg-muted/40 px-2 py-1.5 text-xs">
+                    Потеряно: <span className="font-medium text-foreground">{row.lost}</span>
+                  </div>
+                  <div className="rounded-md bg-muted/40 px-2 py-1.5 text-xs">
+                    Конверсия в оплату: <span className="font-medium text-foreground">{row.paidConversionPct}%</span>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {DEAL_STAGE_ORDER.map((stage) => (
+                    <span key={`${row.key}-${stage}`} className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
+                      {DEAL_STAGE_LABELS[stage]}: <span className="font-medium text-foreground">{row.stages[stage] ?? 0}</span>
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Топ причина потери: <span className="font-medium text-foreground">{row.topLossLabel}</span>
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Причины потерь: <span className="font-medium text-foreground">{row.lossReasonsSummary}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

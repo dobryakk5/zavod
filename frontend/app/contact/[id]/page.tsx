@@ -55,6 +55,19 @@ type Contact = {
   email: string;
   phone: string;
   source?: string;
+  deal_stage?: '' | 'new_lead' | 'interest' | 'call' | 'payment_expected' | 'paid' | 'lost';
+  deal_amount?: number | string | null;
+  deal_loss_reason_code?:
+    | ''
+    | 'price'
+    | 'timing'
+    | 'no_response'
+    | 'not_fit'
+    | 'competitor'
+    | 'priority_changed'
+    | 'other';
+  deal_loss_reason_text?: string;
+  deal_lost_at?: string | null;
   category_id: number | null;
   status: 'active' | 'inactive' | 'archived';
   photo_url: string;
@@ -137,6 +150,61 @@ type ContactTag = {
   value: string;
   description: string;
 };
+
+type DealStageValue = Exclude<NonNullable<Contact['deal_stage']>, ''>;
+
+const DEAL_STAGE_OPTIONS: Array<{ value: NonNullable<Contact['deal_stage']>; label: string }> = [
+  { value: 'new_lead', label: 'Новый лид' },
+  { value: 'interest', label: 'Интерес' },
+  { value: 'call', label: 'Созвон' },
+  { value: 'payment_expected', label: 'Оплата ожидается' },
+  { value: 'paid', label: 'Оплачено' },
+  { value: 'lost', label: 'Потеряно' },
+];
+
+const DEAL_STAGE_LABELS: Record<string, string> = DEAL_STAGE_OPTIONS.reduce<Record<string, string>>(
+  (acc, item) => {
+    acc[item.value] = item.label;
+    return acc;
+  },
+  {}
+);
+
+function normalizeDealStage(raw: unknown): DealStageValue {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (
+    value === 'new_lead' ||
+    value === 'interest' ||
+    value === 'call' ||
+    value === 'payment_expected' ||
+    value === 'paid' ||
+    value === 'lost'
+  ) {
+    return value as DealStageValue;
+  }
+  return 'new_lead';
+}
+
+const DEAL_LOSS_REASON_OPTIONS: Array<{
+  value: Exclude<NonNullable<Contact['deal_loss_reason_code']>, ''>;
+  label: string;
+}> = [
+  { value: 'price', label: 'Дорого' },
+  { value: 'timing', label: 'Не вовремя' },
+  { value: 'no_response', label: 'Не отвечает' },
+  { value: 'not_fit', label: 'Не наш формат / не подходит' },
+  { value: 'competitor', label: 'Ушёл к конкуренту' },
+  { value: 'priority_changed', label: 'Изменился приоритет' },
+  { value: 'other', label: 'Другое' },
+];
+
+const DEAL_LOSS_REASON_LABELS: Record<string, string> = DEAL_LOSS_REASON_OPTIONS.reduce<Record<string, string>>(
+  (acc, item) => {
+    acc[item.value] = item.label;
+    return acc;
+  },
+  {}
+);
 
 const buildGoogleCalendarLink = ({
   title,
@@ -294,6 +362,11 @@ export default function ContactDetailPage() {
   const [savingCategoryAssignment, setSavingCategoryAssignment] = useState(false);
   const [sourceValue, setSourceValue] = useState('');
   const [savingSource, setSavingSource] = useState(false);
+  const [dealStageValue, setDealStageValue] = useState<DealStageValue>('new_lead');
+  const [dealAmountValue, setDealAmountValue] = useState('');
+  const [dealLossReasonCodeValue, setDealLossReasonCodeValue] = useState<string>('none');
+  const [dealLossReasonTextValue, setDealLossReasonTextValue] = useState('');
+  const [savingDealFields, setSavingDealFields] = useState(false);
   const [newPaymentAmount, setNewPaymentAmount] = useState('');
   const [newPaymentCurrency, setNewPaymentCurrency] = useState('RUB');
   const [newPaymentPlannedAt, setNewPaymentPlannedAt] = useState(defaultPaymentStartRef.current);
@@ -466,6 +539,28 @@ export default function ContactDetailPage() {
   useEffect(() => {
     setSourceValue(contact?.source ?? '');
   }, [contact?.source]);
+
+  useEffect(() => {
+    setDealStageValue(normalizeDealStage(contact?.deal_stage));
+  }, [contact?.deal_stage]);
+
+  useEffect(() => {
+    const raw = contact?.deal_amount;
+    if (raw === null || raw === undefined || raw === '') {
+      setDealAmountValue('');
+      return;
+    }
+    setDealAmountValue(String(raw));
+  }, [contact?.deal_amount]);
+
+  useEffect(() => {
+    const code = (contact?.deal_loss_reason_code ?? '').trim();
+    setDealLossReasonCodeValue(code ? code : 'none');
+  }, [contact?.deal_loss_reason_code]);
+
+  useEffect(() => {
+    setDealLossReasonTextValue(contact?.deal_loss_reason_text ?? '');
+  }, [contact?.deal_loss_reason_text]);
 
   const handleFieldEdit = (field: string, currentValue?: string | null) => {
     setEditingField(field);
@@ -1030,6 +1125,49 @@ export default function ContactDetailPage() {
     [contact]
   );
 
+  const handleSaveDealFields = useCallback(async () => {
+    if (!contact) return;
+
+    const nextStage = dealStageValue;
+    const nextLossReasonCode = dealLossReasonCodeValue === 'none' ? '' : dealLossReasonCodeValue;
+    const lossReasonText = dealLossReasonTextValue.trim();
+    const amountRaw = dealAmountValue.trim();
+
+    let parsedAmount: number | null = null;
+    if (amountRaw) {
+      const normalized = amountRaw.replace(',', '.');
+      const amount = Number(normalized);
+      if (!Number.isFinite(amount) || amount < 0) {
+        toast.error('Сумма сделки должна быть числом 0 или больше');
+        return;
+      }
+      parsedAmount = amount;
+    }
+
+    if (nextStage === 'lost' && !nextLossReasonCode) {
+      toast.error('Выберите причину потери');
+      return;
+    }
+
+    setSavingDealFields(true);
+    try {
+      const updated = await crmContactsApi.update(contact.id, {
+        deal_stage: nextStage as Contact['deal_stage'],
+        deal_amount: parsedAmount,
+        deal_loss_reason_code:
+          (nextStage === 'lost' ? nextLossReasonCode : '') as Contact['deal_loss_reason_code'],
+        deal_loss_reason_text: nextStage === 'lost' ? lossReasonText : '',
+      });
+      setContact(updated as Contact);
+      toast.success('Сделка обновлена');
+    } catch (err) {
+      console.error('Error updating contact deal fields:', err);
+      toast.error('Не удалось обновить стадию/причину сделки');
+    } finally {
+      setSavingDealFields(false);
+    }
+  }, [contact, dealAmountValue, dealLossReasonCodeValue, dealLossReasonTextValue, dealStageValue]);
+
   useEffect(() => {
     if (!contact || savingSource) return;
     if (sourceValue === (contact.source ?? '')) return;
@@ -1046,6 +1184,7 @@ export default function ContactDetailPage() {
     eventTypes.forEach((item) => map.set(item.id, item));
     return map;
   }, [eventTypes]);
+  const currentDealStage = useMemo(() => normalizeDealStage(contact?.deal_stage), [contact?.deal_stage]);
 
   const categoriesById = useMemo(() => {
     const map = new Map<number, Category>();
@@ -1445,6 +1584,110 @@ export default function ContactDetailPage() {
                     placeholder="сарафан или сайт или"
                     className="w-48"
                   />
+                </div>
+                <div className="rounded-lg border p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">Сделка и этап воронки</div>
+                      <div className="text-xs text-muted-foreground">
+                        Ручная фиксация стадии и причины потери для CRM-воронки
+                      </div>
+                    </div>
+                    <Badge variant={currentDealStage === 'lost' ? 'destructive' : 'secondary'}>
+                      {DEAL_STAGE_LABELS[currentDealStage] || currentDealStage}
+                    </Badge>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label>Стадия сделки</Label>
+                      <Select value={dealStageValue} onValueChange={(value) => setDealStageValue(normalizeDealStage(value))}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Выберите стадию" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {DEAL_STAGE_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="deal-amount">Сумма сделки (план), ₽</Label>
+                      <Input
+                        id="deal-amount"
+                        value={dealAmountValue}
+                        onChange={(e) => setDealAmountValue(e.target.value)}
+                        placeholder="Например, 15000"
+                        inputMode="decimal"
+                      />
+                    </div>
+                  </div>
+
+                  {dealStageValue === 'lost' && (
+                    <div className="grid gap-3">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label>Причина потери (обязательно)</Label>
+                          <Select value={dealLossReasonCodeValue} onValueChange={setDealLossReasonCodeValue}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Выберите причину" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Не выбрано</SelectItem>
+                              {DEAL_LOSS_REASON_OPTIONS.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label>Дата потери</Label>
+                          <div className="rounded-md border px-3 py-2 text-sm">
+                            {contact.deal_lost_at
+                              ? formatInTenantTimezone(contact.deal_lost_at, tenantTimezone, {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  year: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })
+                              : 'Будет проставлена автоматически при сохранении'}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="deal-loss-comment">Комментарий</Label>
+                        <Textarea
+                          id="deal-loss-comment"
+                          value={dealLossReasonTextValue}
+                          onChange={(e) => setDealLossReasonTextValue(e.target.value)}
+                          placeholder="Например: взяли паузу до следующего месяца или выбрали более бюджетное решение"
+                          rows={3}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {contact.deal_stage === 'lost' && (contact.deal_loss_reason_code || contact.deal_loss_reason_text) && (
+                    <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-900">
+                      Последняя причина потери:{' '}
+                      <span className="font-medium">
+                        {DEAL_LOSS_REASON_LABELS[contact.deal_loss_reason_code || ''] || contact.deal_loss_reason_code || 'Комментарий'}
+                      </span>
+                      {contact.deal_loss_reason_text ? ` · ${contact.deal_loss_reason_text}` : ''}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button type="button" size="sm" onClick={handleSaveDealFields} disabled={savingDealFields}>
+                      {savingDealFields ? 'Сохраняем...' : 'Сохранить сделку'}
+                    </Button>
+                  </div>
                 </div>
                 {editingField === 'notes' ? (
                   <div className="space-y-2">

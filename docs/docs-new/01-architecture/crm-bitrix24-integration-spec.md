@@ -90,7 +90,7 @@
 - `last_webhook_at`
 - `sync_hash` (hash нормализованных синкаемых полей)
 - `remote_updated_at` (если удается стабильно читать из Bitrix)
-- `metadata` (JSON)
+- `metadata` (JSON, в т.ч. snapshot unmanaged полей Bitrix24 `UF_CRM_*`)
 - `created_at`, `updated_at`
 
 Ключевые ограничения/индексы:
@@ -162,6 +162,32 @@
 
 Примечание:
 - В MVP не полагаемся на `UF_CRM_*` для корректности синка; основным источником связки остается локальная таблица `Bitrix24ContactMapping`.
+
+## Неподдерживаемые поля Bitrix24 (быстрый вариант MVP)
+
+Если в Bitrix24 есть кастомные поля, которых нет в локальной модели `CRMClient`, используем быстрый вариант:
+
+- не маппим их в локальные колонки;
+- не отправляем их обратно в Bitrix24 автоматически;
+- сохраняем их snapshot в `Bitrix24ContactMapping.metadata`.
+
+Важно:
+- В Bitrix24 кастомные поля контакта обычно приходят как ключи верхнего уровня `UF_CRM_*` (это не amoCRM `custom_fields_values`).
+- Этот snapshot считается `cache/shadow`, а не source of truth.
+
+Рекомендуемый ключ в `metadata`:
+- `metadata.bitrix_custom_fields`
+
+Пример:
+```json
+{
+  "bitrix_custom_fields": {
+    "UF_CRM_123ABC": "value",
+    "UF_CRM_456DEF": ["a", "b"]
+  },
+  "bitrix_custom_fields_updated_at": "2026-02-26T12:34:56Z"
+}
+```
 
 ## Внешние методы Bitrix24 (MVP)
 
@@ -287,6 +313,10 @@
 5. Обновить `sync_hash`, `last_synced_at`
 6. Записать лог (`contact.push.create` / `contact.push.update`)
 
+Правило для unmanaged полей:
+- `crm.contact.update` выполняем как partial update только по whitelist полям.
+- Snapshot `metadata.bitrix_custom_fields` в outbound sync не отправляем (пока нет явного field map).
+
 Fallback дедуп при отсутствии mapping (опционально phase 2):
 - поиск через `crm.contact.list` по точному `PHONE`/`EMAIL`
 - если найден 1 контакт -> привязать mapping вместо создания дубля
@@ -306,6 +336,7 @@ Fallback дедуп при отсутствии mapping (опционально 
    - найти mapping по `(account, bitrix_contact_id)`
    - если mapping нет: логировать `unmapped_remote_contact` (MVP можно не создавать локальный `CRMClient` автоматически)
    - если mapping есть: обновить локальный `CRMClient` по разрешенным полям
+   - извлечь все ключи `UF_CRM_*` из remote payload и сохранить в `mapping.metadata.bitrix_custom_fields`
 7. Для `DELETE`:
    - в MVP не удалять локальный `CRMClient`; пометить в `mapping.metadata.remote_deleted=true`
 8. Обновить `last_webhook_at`, `sync_hash`, статус события `done`
@@ -397,6 +428,10 @@ Bitrix24 (cloud) docs указывает:
 `sync_hash` считать от нормализованного payload, например:
 - `first_name`, `last_name`, `phone`, `email`, `notes`
 
+Не включать в `sync_hash`:
+- `UF_CRM_*` snapshot из `metadata.bitrix_custom_fields`
+- прочие unmanaged поля Bitrix24
+
 ## Набор сервисов/модулей (рекомендуемая структура)
 
 Примерно:
@@ -420,6 +455,7 @@ Bitrix24 (cloud) docs указывает:
 - `ContactMapper`: локальные поля -> payload Bitrix24
 - нормализация `phone/email`
 - `sync_hash` стабильный для эквивалентных значений
+- `UF_CRM_*` snapshot extraction в `metadata.bitrix_custom_fields`
 - idempotency key generation
 
 ### Integration (backend)
@@ -429,6 +465,7 @@ Bitrix24 (cloud) docs указывает:
 - `crm.contact.update` не вызывается при одинаковом `sync_hash`
 - webhook duplicate event не обрабатывается дважды
 - webhook `ONCRMCONTACTUPDATE` обновляет локальный `CRMClient` для existing mapping
+- webhook `ONCRMCONTACTUPDATE` сохраняет `UF_CRM_*` snapshot в `mapping.metadata`
 - webhook unmapped contact -> лог `warning`, без падения
 
 ## Rollout план

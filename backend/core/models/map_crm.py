@@ -19,6 +19,18 @@ class MapContact(models.Model):
     email = models.EmailField(blank=True, verbose_name="Email")
     phone = models.CharField(max_length=50, blank=True, verbose_name="Телефон")
     source = models.CharField(max_length=255, blank=True, verbose_name="Источник")
+    deal_stage = models.CharField(max_length=32, blank=True, default="", verbose_name="Стадия сделки")
+    deal_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.00"))],
+        verbose_name="Сумма сделки",
+    )
+    deal_loss_reason_code = models.CharField(max_length=64, blank=True, default="", verbose_name="Код причины потери")
+    deal_loss_reason_text = models.TextField(blank=True, verbose_name="Комментарий причины потери")
+    deal_lost_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата потери сделки")
     category_id = models.IntegerField(null=True, blank=True, verbose_name="ID категории")
     status = models.CharField(
         max_length=20,
@@ -54,6 +66,8 @@ class MapContact(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["email"]),
             models.Index(fields=["parent_id"]),
+            models.Index(fields=["deal_stage"]),
+            models.Index(fields=["deal_loss_reason_code"]),
         ]
 
     def __str__(self):

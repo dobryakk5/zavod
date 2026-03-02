@@ -2,6 +2,7 @@
 Сериализаторы для CRM API (map schema, Django ORM)
 Замена для ручной сериализации из views_map_crm.py
 """
+from django.utils import timezone
 from rest_framework import serializers
 
 from core.models import (
@@ -68,6 +69,25 @@ class MapContactSerializer(serializers.ModelSerializer):
     """Совместим с frontend (tags в формате goal/pain/experience)."""
 
     tags = serializers.SerializerMethodField()
+    DEAL_STAGE_CHOICES = {
+        "",
+        "new_lead",
+        "interest",
+        "call",
+        "payment_expected",
+        "paid",
+        "lost",
+    }
+    DEAL_LOSS_REASON_CHOICES = {
+        "",
+        "price",
+        "timing",
+        "no_response",
+        "not_fit",
+        "competitor",
+        "priority_changed",
+        "other",
+    }
 
     class Meta:
         model = MapContact
@@ -77,6 +97,11 @@ class MapContactSerializer(serializers.ModelSerializer):
             "email",
             "phone",
             "source",
+            "deal_stage",
+            "deal_amount",
+            "deal_loss_reason_code",
+            "deal_loss_reason_text",
+            "deal_lost_at",
             "category_id",
             "status",
             "photo_url",
@@ -95,6 +120,77 @@ class MapContactSerializer(serializers.ModelSerializer):
             if ct.tag.type in result:
                 result[ct.tag.type].append(ct.tag.id)
         return result
+
+    def validate_deal_stage(self, value):
+        normalized = str(value or "").strip().lower()
+        if normalized not in self.DEAL_STAGE_CHOICES:
+            raise serializers.ValidationError("Некорректная стадия сделки.")
+        return normalized
+
+    def validate_deal_loss_reason_code(self, value):
+        normalized = str(value or "").strip().lower()
+        if normalized not in self.DEAL_LOSS_REASON_CHOICES:
+            raise serializers.ValidationError("Некорректная причина потери.")
+        return normalized
+
+    def validate_deal_amount(self, value):
+        if value is None:
+            return None
+        if value < 0:
+            raise serializers.ValidationError("Сумма сделки не может быть отрицательной.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        instance = getattr(self, "instance", None)
+
+        next_stage = str(
+            attrs.get(
+                "deal_stage",
+                getattr(instance, "deal_stage", "") if instance is not None else "",
+            )
+            or ""
+        ).strip().lower()
+        next_reason_code = str(
+            attrs.get(
+                "deal_loss_reason_code",
+                getattr(instance, "deal_loss_reason_code", "") if instance is not None else "",
+            )
+            or ""
+        ).strip().lower()
+        next_reason_text = str(
+            attrs.get(
+                "deal_loss_reason_text",
+                getattr(instance, "deal_loss_reason_text", "") if instance is not None else "",
+            )
+            or ""
+        ).strip()
+
+        if next_stage == "lost" and not next_reason_code:
+            raise serializers.ValidationError(
+                {
+                    "deal_loss_reason_code": "Укажите причину потери.",
+                }
+            )
+        return attrs
+
+    def create(self, validated_data):
+        if str(validated_data.get("deal_stage", "") or "").strip().lower() == "lost":
+            validated_data.setdefault("deal_lost_at", timezone.now())
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        if "deal_stage" in validated_data:
+            next_stage = str(validated_data.get("deal_stage", "") or "").strip().lower()
+            if next_stage == "lost":
+                if not validated_data.get("deal_lost_at") and getattr(instance, "deal_lost_at", None) is None:
+                    validated_data["deal_lost_at"] = timezone.now()
+            else:
+                # If a deal returns from "lost", clear loss metadata to avoid stale reasons.
+                validated_data.setdefault("deal_loss_reason_code", "")
+                validated_data.setdefault("deal_loss_reason_text", "")
+                validated_data.setdefault("deal_lost_at", None)
+        return super().update(instance, validated_data)
 
 
 class MapCRMPaymentSerializer(serializers.ModelSerializer):
@@ -159,6 +255,7 @@ class MapCRMPaymentListSerializer(serializers.ModelSerializer):
             "contact_id",
             "contact_name",
             "event_id",
+            "product_id",
             "amount",
             "currency",
             "status",

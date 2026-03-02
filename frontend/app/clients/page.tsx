@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -8,10 +8,8 @@ import { Calendar } from 'lucide-react';
 import {
   crmContactsApi,
   crmEventsApi,
-  crmPaymentsApi,
   type Contact,
   type Event,
-  type Payment,
 } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
 import { chainsApi, type ChainCatalogItem } from '@/lib/api/chains';
@@ -19,9 +17,9 @@ import { DEFAULT_TENANT_TIMEZONE, formatInTenantTimezone, normalizeTenantTimezon
 import { OperatorTasksTab } from './operator-tasks-tab';
 import { ClientsTab } from '../products/clients-tab';
 import { CategoriesTab } from '../products/categories-tab';
-import NewClientsEditor from './new/new-clients-editor';
 import ClientsSchedule from './clients-schedule';
 import UnifiedInboxTab from './unified-inbox-tab';
+import { DealsTab } from './deals-tab';
 
 type ClientsStats = {
   upcomingEvents: number;
@@ -52,10 +50,27 @@ type SalesFunnelStageStat = {
   overallConversionPct: number | null;
 };
 
+type LostReasonCode =
+  | 'price'
+  | 'timing'
+  | 'no_response'
+  | 'not_fit'
+  | 'competitor'
+  | 'priority_changed'
+  | 'other';
+
+type SalesFunnelLostReasonStat = {
+  code: LostReasonCode;
+  label: string;
+  count: number;
+};
+
 type SalesFunnelStats = {
   totalLeads: number;
   archivedExcluded: number;
   dealsInWork: number;
+  lostDeals: number;
+  lostReasons: SalesFunnelLostReasonStat[];
   stages: SalesFunnelStageStat[];
 };
 
@@ -87,6 +102,16 @@ const SALES_FUNNEL_STAGE_DEFS: Array<Pick<SalesFunnelStageStat, 'key' | 'label' 
   },
 ];
 
+const LOST_REASON_LABELS: Record<LostReasonCode, string> = {
+  price: 'Дорого',
+  timing: 'Не вовремя',
+  no_response: 'Не отвечает',
+  not_fit: 'Не подходит',
+  competitor: 'Ушёл к конкуренту',
+  priority_changed: 'Изменился приоритет',
+  other: 'Другое',
+};
+
 function createEmptyFunnelCounts(): Record<SalesFunnelStageKey, number> {
   return {
     new_lead: 0,
@@ -102,6 +127,8 @@ function createEmptySalesFunnelStats(): SalesFunnelStats {
     totalLeads: 0,
     archivedExcluded: 0,
     dealsInWork: 0,
+    lostDeals: 0,
+    lostReasons: [],
     stages: SALES_FUNNEL_STAGE_DEFS.map((stage) => ({
       ...stage,
       currentCount: 0,
@@ -112,9 +139,34 @@ function createEmptySalesFunnelStats(): SalesFunnelStats {
   };
 }
 
-function hasContactInterestSignal(contact: Contact): boolean {
-  const hasTags = Object.values(contact.tags ?? {}).some((ids) => Array.isArray(ids) && ids.length > 0);
-  return Boolean(contact.category_id || contact.source?.trim() || contact.notes?.trim() || hasTags);
+function normalizeExplicitDealStage(raw: unknown): SalesFunnelStageKey | 'lost' | null {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (
+    value === 'new_lead' ||
+    value === 'interest' ||
+    value === 'call' ||
+    value === 'payment_expected' ||
+    value === 'paid' ||
+    value === 'lost'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeLostReasonCode(raw: unknown): LostReasonCode {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (
+    value === 'price' ||
+    value === 'timing' ||
+    value === 'no_response' ||
+    value === 'not_fit' ||
+    value === 'competitor' ||
+    value === 'priority_changed'
+  ) {
+    return value;
+  }
+  return 'other';
 }
 
 function toPercent(numerator: number, denominator: number): number | null {
@@ -128,54 +180,34 @@ function formatPercent(value: number | null): string {
   return `${value.toFixed(1)}%`;
 }
 
-function buildSalesFunnelStats(contacts: Contact[], events: Event[], payments: Payment[]): SalesFunnelStats {
-  const contactsInFunnel = contacts.filter((contact) => contact.status !== 'archived');
-  const archivedExcluded = contacts.length - contactsInFunnel.length;
-
-  const eventsByContact = new Map<number, number>();
-  events.forEach((event) => {
-    eventsByContact.set(event.contact_id, (eventsByContact.get(event.contact_id) ?? 0) + 1);
-  });
-
-  const paymentFlagsByContact = new Map<number, { hasPending: boolean; hasPaid: boolean }>();
-  payments.forEach((payment) => {
-    const current = paymentFlagsByContact.get(payment.contact_id) ?? { hasPending: false, hasPaid: false };
-    if (payment.status === 'pending') current.hasPending = true;
-    if (payment.status === 'paid') current.hasPaid = true;
-    paymentFlagsByContact.set(payment.contact_id, current);
-  });
-
+function buildSalesFunnelStats(contacts: Contact[]): SalesFunnelStats {
+  const archivedExcluded = 0;
   const currentCounts = createEmptyFunnelCounts();
-  const reachedCounts = createEmptyFunnelCounts();
+  const lostReasonCounts = new Map<LostReasonCode, number>();
+  let lostDeals = 0;
 
-  contactsInFunnel.forEach((contact) => {
-    const paymentFlags = paymentFlagsByContact.get(contact.id);
-    const hasPendingPayment = paymentFlags?.hasPending ?? false;
-    const hasPaidPayment = paymentFlags?.hasPaid ?? false;
-    const hasCall = (eventsByContact.get(contact.id) ?? 0) > 0;
-    const hasInterest = hasContactInterestSignal(contact) || hasCall || hasPendingPayment || hasPaidPayment;
-
-    let currentStage: SalesFunnelStageKey = 'new_lead';
-    if (hasPaidPayment) {
-      currentStage = 'paid';
-    } else if (hasPendingPayment) {
-      currentStage = 'payment_expected';
-    } else if (hasCall) {
-      currentStage = 'call';
-    } else if (hasInterest) {
-      currentStage = 'interest';
+  contacts.forEach((contact) => {
+    const explicitDealStage = normalizeExplicitDealStage(contact.deal_stage);
+    if (explicitDealStage && explicitDealStage !== 'lost') {
+      currentCounts[explicitDealStage] += 1;
+    } else if (!explicitDealStage) {
+      currentCounts.new_lead += 1;
     }
 
-    currentCounts[currentStage] += 1;
-
-    reachedCounts.new_lead += 1;
-    if (hasInterest) reachedCounts.interest += 1;
-    if (hasCall || hasPendingPayment || hasPaidPayment) reachedCounts.call += 1;
-    if (hasPendingPayment || hasPaidPayment) reachedCounts.payment_expected += 1;
-    if (hasPaidPayment) reachedCounts.paid += 1;
+    if (explicitDealStage === 'lost') {
+      lostDeals += 1;
+      const reasonCode = normalizeLostReasonCode(contact.deal_loss_reason_code);
+      lostReasonCounts.set(reasonCode, (lostReasonCounts.get(reasonCode) ?? 0) + 1);
+    }
   });
 
-  const totalLeads = contactsInFunnel.length;
+  const totalLeads = contacts.length;
+  const reachedCounts = createEmptyFunnelCounts();
+  SALES_FUNNEL_STAGE_DEFS.forEach((stage, index) => {
+    const reached = SALES_FUNNEL_STAGE_DEFS.slice(index).reduce((sum, item) => sum + currentCounts[item.key], 0);
+    reachedCounts[stage.key] = reached;
+  });
+
   const stages = SALES_FUNNEL_STAGE_DEFS.map((stage, index) => {
     const prevStage = index > 0 ? SALES_FUNNEL_STAGE_DEFS[index - 1] : null;
     const reachedCount = reachedCounts[stage.key];
@@ -190,6 +222,14 @@ function buildSalesFunnelStats(contacts: Contact[], events: Event[], payments: P
     };
   });
 
+  const lostReasons = [...lostReasonCounts.entries()]
+    .map(([code, count]) => ({
+      code,
+      count,
+      label: LOST_REASON_LABELS[code],
+    }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+
   return {
     totalLeads,
     archivedExcluded,
@@ -198,6 +238,8 @@ function buildSalesFunnelStats(contacts: Contact[], events: Event[], payments: P
       currentCounts.interest +
       currentCounts.call +
       currentCounts.payment_expected,
+    lostDeals,
+    lostReasons,
     stages,
   };
 }
@@ -210,10 +252,10 @@ const emptyStats: ClientsStats = {
 
 const CLIENTS_TABS = [
   'clients',
+  'deals',
   'schedule',
   'service-level',
   'categories',
-  'payments',
   'welcome-chain',
 ] as const;
 type ClientsTabValue = (typeof CLIENTS_TABS)[number];
@@ -239,6 +281,24 @@ function formatEventTime(value: string, timeZone: string) {
 }
 
 export default function ClientsPage() {
+  return (
+    <Suspense fallback={<ClientsPageFallback />}>
+      <ClientsPageContent />
+    </Suspense>
+  );
+}
+
+function ClientsPageFallback() {
+  return (
+    <div className="container mx-auto py-6">
+      <div className="rounded-xl border bg-white p-6 text-sm text-muted-foreground">
+        Загрузка CRM...
+      </div>
+    </div>
+  );
+}
+
+function ClientsPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -252,6 +312,7 @@ export default function ClientsPage() {
 
   const activeClientsTab = useMemo<ClientsTabValue>(() => {
     const tab = searchParams.get('tab');
+    if (tab === 'payments') return 'deals';
     return isClientsTabValue(tab) ? tab : 'clients';
   }, [searchParams]);
 
@@ -281,10 +342,9 @@ export default function ClientsPage() {
       setStatsError(null);
 
       try {
-        const [contacts, events, payments, settings] = await Promise.all([
+        const [contacts, events, settings] = await Promise.all([
           crmContactsApi.list(),
           crmEventsApi.list(),
-          crmPaymentsApi.list(),
           clientApi.getSettings(),
         ]);
 
@@ -316,7 +376,7 @@ export default function ClientsPage() {
         setStats({
           upcomingEvents: upcomingEventsSorted.length,
           nextEvents,
-          salesFunnel: buildSalesFunnelStats(contacts, events, payments),
+          salesFunnel: buildSalesFunnelStats(contacts),
         });
       } catch (err) {
         if (!isActive) return;
@@ -423,7 +483,7 @@ export default function ClientsPage() {
             <div>
               <h2 className="text-lg font-semibold">Воронка продаж</h2>
               <p className="text-sm text-muted-foreground">
-                Лиды/сделки по стадиям и конверсия по этапам (по контактам, встречам и платежам)
+                Лиды/сделки по стадиям и конверсия по этапам (как в Kanban, по полю стадии сделки)
               </p>
             </div>
             {!statsLoading && !statsError && (
@@ -443,6 +503,10 @@ export default function ClientsPage() {
                         ?.overallConversionPct ?? null
                     )}
                   </span>
+                </div>
+                <div className="rounded-md border px-3 py-1.5">
+                  Потеряно сделок:{' '}
+                  <span className="font-semibold">{displayStats.salesFunnel.lostDeals}</span>
                 </div>
               </div>
             )}
@@ -510,13 +574,36 @@ export default function ClientsPage() {
                 ))}
               </div>
 
+              <div className="rounded-lg border p-4">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-medium">Причины потерь</div>
+                    <div className="text-xs text-muted-foreground">
+                      Учитываются контакты со стадией сделки «Потеряно» и указанной причиной
+                    </div>
+                  </div>
+                  <div className="text-sm">
+                    Всего потеряно: <span className="font-semibold">{displayStats.salesFunnel.lostDeals}</span>
+                  </div>
+                </div>
+                {displayStats.salesFunnel.lostReasons.length === 0 ? (
+                  <div className="mt-3 text-sm text-muted-foreground">
+                    Пока нет данных. Причина появится после отметки сделки как «Потеряно» в карточке контакта.
+                  </div>
+                ) : (
+                  <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                    {displayStats.salesFunnel.lostReasons.map((reason) => (
+                      <div key={reason.code} className="rounded-md border bg-slate-50 px-3 py-2">
+                        <div className="text-xs text-muted-foreground">{reason.label}</div>
+                        <div className="mt-1 text-xl font-semibold">{reason.count}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="text-xs text-muted-foreground">
-                Воронка рассчитана автоматически из текущих данных CRM: контакты + встречи + статусы
-                платежей. Архивные контакты исключены
-                {displayStats.salesFunnel.archivedExcluded > 0
-                  ? ` (${displayStats.salesFunnel.archivedExcluded})`
-                  : ''}
-                .
+                Воронка использует ту же стадию сделки, что и Kanban (поле `deal_stage` у контакта).
               </div>
             </>
           )}
@@ -536,16 +623,22 @@ export default function ClientsPage() {
       >
         <TabsList className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
           <TabsTrigger value="clients">Клиенты</TabsTrigger>
+          <TabsTrigger value="deals">Сделки</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
           <TabsTrigger value="service-level">Входящие</TabsTrigger>
           <TabsTrigger value="categories">Теги</TabsTrigger>
-          <TabsTrigger value="payments">Платежи</TabsTrigger>
           <TabsTrigger value="welcome-chain">ChatBot</TabsTrigger>
         </TabsList>
 
         <TabsContent value="clients" className="space-y-6">
           <div className="bg-white rounded-lg p-6">
             <ClientsTab />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="deals" className="space-y-6">
+          <div className="bg-white rounded-lg p-6">
+            <DealsTab />
           </div>
         </TabsContent>
 
@@ -586,12 +679,6 @@ export default function ClientsPage() {
         <TabsContent value="categories" className="space-y-6">
           <div className="bg-white rounded-lg p-6">
             <CategoriesTab />
-          </div>
-        </TabsContent>
-
-        <TabsContent value="payments" className="space-y-6">
-          <div className="bg-white rounded-lg p-6">
-            <NewClientsEditor activeTab="payments" />
           </div>
         </TabsContent>
 

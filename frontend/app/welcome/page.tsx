@@ -132,7 +132,7 @@ const CLIENT_MANAGEMENT_BLOCKS = [
     icon: CreditCard,
     color: "teal",
     bg: "bg-teal-50",
-    href: "/clients?tab=payments",
+    href: "/clients?tab=deals",
     text: "Настройка и контроль платежей, чтобы быстрее запускать оплату в работу.",
   },
   {
@@ -212,7 +212,7 @@ export default function LoggedInLanding() {
         <div>
           <div className="mb-4 flex items-center gap-2">
             <GitBranch className="h-4 w-4 text-slate-500" />
-            <h2 className="text-lg font-semibold text-slate-900">Управление клиентами</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Управление клиентами (CRM)</h2>
           </div>
           <div className="space-y-4">
             {CLIENT_MANAGEMENT_BLOCKS.map((block, i) => {

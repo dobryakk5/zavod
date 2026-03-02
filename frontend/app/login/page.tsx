@@ -1,11 +1,29 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { TelegramAuth } from '@/components/auth/TelegramAuth';
 import { VKAuth } from '@/components/auth/VKAuth';
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginPageFallback />}>
+      <LoginPageContent />
+    </Suspense>
+  );
+}
+
+function LoginPageFallback() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-muted/40 px-4">
+      <div className="w-full max-w-lg rounded-2xl border bg-background p-8 text-center shadow">
+        <p className="text-sm text-muted-foreground">Загрузка страницы входа...</p>
+      </div>
+    </div>
+  );
+}
+
+function LoginPageContent() {
   const searchParams = useSearchParams();
   const [telegramOpen, setTelegramOpen] = useState(false);
   const [vkOpen, setVkOpen] = useState(false);
