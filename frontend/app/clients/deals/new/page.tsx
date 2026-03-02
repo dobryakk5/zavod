@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -52,7 +52,7 @@ function getContactLabel(contactId: number, contactsById: Map<number, Contact>):
   return `${parent.name} → ${contact.name}`;
 }
 
-export default function DealCreatePage() {
+function DealCreatePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const preselectedContactName = (searchParams.get('contactName') || '').trim();
@@ -333,5 +333,13 @@ export default function DealCreatePage() {
         </form>
       )}
     </div>
+  );
+}
+
+export default function DealCreatePage() {
+  return (
+    <Suspense fallback={<div className="container mx-auto max-w-4xl py-6 text-sm text-muted-foreground">Загружаем форму...</div>}>
+      <DealCreatePageContent />
+    </Suspense>
   );
 }

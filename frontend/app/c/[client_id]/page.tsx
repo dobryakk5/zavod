@@ -1001,6 +1001,46 @@ export default function ContactClientPage() {
     }
   }, [bookingContactId, pageClientId]);
 
+  const checkProductPurchaseStatus = useCallback(async (paymentId: string) => {
+    if (!paymentId || !Number.isFinite(pageClientId) || pageClientId <= 0) {
+      return;
+    }
+
+    setPurchaseStatusLoading(true);
+    setPurchaseStatusError(null);
+    try {
+      const statusResponse = await apiFetch<PublicProductPaymentStatusResponse>(
+        `/public/client-page/${pageClientId}/payment-status/?payment_id=${encodeURIComponent(paymentId)}`
+      );
+      const paymentStatus = (statusResponse?.status || '').trim();
+      const delivery = statusResponse?.delivery || null;
+
+      if (paymentStatus === 'succeeded' && statusResponse?.paid) {
+        if (delivery?.ready && delivery.url) {
+          setPurchaseDeliveryLink(delivery.url);
+          setPurchaseDeliveryTitle((delivery.document_title || '').trim() || 'Открыть продукт');
+          setPurchaseStatusMessage('Оплата прошла успешно. Ссылка на продукт доступна ниже.');
+        } else {
+          setPurchaseDeliveryLink(null);
+          setPurchaseDeliveryTitle(null);
+          setPurchaseStatusMessage(delivery?.message || 'Оплата прошла успешно.');
+        }
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(getPendingProductPurchaseStorageKey(pageClientId));
+        }
+        void loadContactPurchases();
+      } else if (paymentStatus) {
+        setPurchaseStatusMessage(`Статус оплаты: ${paymentStatus}. Если вы уже оплатили, обновите страницу через несколько секунд.`);
+      } else {
+        setPurchaseStatusMessage('Статус оплаты пока не получен.');
+      }
+    } catch {
+      setPurchaseStatusError('Не удалось проверить статус оплаты.');
+    } finally {
+      setPurchaseStatusLoading(false);
+    }
+  }, [pageClientId, loadContactPurchases]);
+
   useEffect(() => {
     if (loading) {
       return;
@@ -1045,7 +1085,7 @@ export default function ContactClientPage() {
 
     setCheckedPurchasePaymentId(pendingPaymentId);
     void checkProductPurchaseStatus(pendingPaymentId);
-  }, [loading, pageClientId, searchParams, checkedPurchasePaymentId]);
+  }, [loading, pageClientId, searchParams, checkedPurchasePaymentId, checkProductPurchaseStatus]);
 
   const handleBook = async (slot: Slot) => {
     if (!Number.isFinite(pageClientId) || pageClientId <= 0 || bookingSlotId) {
@@ -1219,46 +1259,6 @@ export default function ContactClientPage() {
       setInviterCodeError('Не удалось применить код.');
     } finally {
       setInviterCodeLoading(false);
-    }
-  };
-
-  const checkProductPurchaseStatus = async (paymentId: string) => {
-    if (!paymentId || !Number.isFinite(pageClientId) || pageClientId <= 0) {
-      return;
-    }
-
-    setPurchaseStatusLoading(true);
-    setPurchaseStatusError(null);
-    try {
-      const statusResponse = await apiFetch<PublicProductPaymentStatusResponse>(
-        `/public/client-page/${pageClientId}/payment-status/?payment_id=${encodeURIComponent(paymentId)}`
-      );
-      const paymentStatus = (statusResponse?.status || '').trim();
-      const delivery = statusResponse?.delivery || null;
-
-      if (paymentStatus === 'succeeded' && statusResponse?.paid) {
-        if (delivery?.ready && delivery.url) {
-          setPurchaseDeliveryLink(delivery.url);
-          setPurchaseDeliveryTitle((delivery.document_title || '').trim() || 'Открыть продукт');
-          setPurchaseStatusMessage('Оплата прошла успешно. Ссылка на продукт доступна ниже.');
-        } else {
-          setPurchaseDeliveryLink(null);
-          setPurchaseDeliveryTitle(null);
-          setPurchaseStatusMessage(delivery?.message || 'Оплата прошла успешно.');
-        }
-        if (typeof window !== 'undefined') {
-          window.localStorage.removeItem(getPendingProductPurchaseStorageKey(pageClientId));
-        }
-        void loadContactPurchases();
-      } else if (paymentStatus) {
-        setPurchaseStatusMessage(`Статус оплаты: ${paymentStatus}. Если вы уже оплатили, обновите страницу через несколько секунд.`);
-      } else {
-        setPurchaseStatusMessage('Статус оплаты пока не получен.');
-      }
-    } catch {
-      setPurchaseStatusError('Не удалось проверить статус оплаты.');
-    } finally {
-      setPurchaseStatusLoading(false);
     }
   };
 
