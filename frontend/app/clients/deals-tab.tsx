@@ -1,52 +1,66 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { crmContactsApi, crmPaymentsApi, type Contact, type Payment } from '@/lib/api/crm';
+import { Button } from '@/components/ui/button';
+import { crmContactsApi, crmDealsApi, type Contact, type Deal } from '@/lib/api/crm';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import type { ClientProduct } from '@/lib/types';
 
 type DealsView = 'list' | 'kanban';
-type DealStatus = Payment['status'];
+type DealStageKey = Deal['stage'];
 
-const DEAL_STATUS_ORDER: DealStatus[] = ['pending', 'paid', 'failed', 'refunded'];
+const DEAL_STAGE_ORDER: DealStageKey[] = ['new_lead', 'interest', 'call', 'payment_expected', 'paid', 'lost'];
 
-const DEAL_STATUS_LABELS: Record<DealStatus, string> = {
-  pending: 'В ожидании',
+const DEAL_STAGE_LABELS: Record<DealStageKey, string> = {
+  new_lead: 'Новый лид',
+  interest: 'Интерес',
+  call: 'Созвон',
+  payment_expected: 'Оплата ожидается',
   paid: 'Оплачено',
-  failed: 'Ошибка',
-  refunded: 'Возврат',
+  lost: 'Срыв',
 };
 
-function formatDealAmount(value: Payment['amount'], currency: Payment['currency']): string {
+function formatDealAmount(value: Deal['amount'], currency: Deal['currency']): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
-  return `${value} ${currency || 'RUB'}`;
+  const normalized = new Intl.NumberFormat('ru-RU', {
+    maximumFractionDigits: 0,
+  }).format(Math.round(Number(value)));
+  return `${normalized} ${currency || 'RUB'}`;
 }
 
-function normalizeDealStatus(raw: unknown): DealStatus {
+function normalizeDealStage(raw: unknown): DealStageKey {
   const value = String(raw ?? '').trim().toLowerCase();
-  if (value === 'pending' || value === 'paid' || value === 'failed' || value === 'refunded') return value;
-  return 'pending';
+  if (value === 'new_lead' || value === 'interest' || value === 'call' || value === 'payment_expected' || value === 'paid' || value === 'lost') {
+    return value;
+  }
+  return 'new_lead';
 }
 
-function normalizePayment(raw: Payment): Payment {
+function parseDealStage(raw: unknown): DealStageKey | null {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (value === 'new_lead' || value === 'interest' || value === 'call' || value === 'payment_expected' || value === 'paid' || value === 'lost') {
+    return value;
+  }
+  return null;
+}
+
+function normalizeDeal(raw: Deal): Deal {
   return {
     ...raw,
-    event_id: raw.event_id ?? null,
-    product_id: raw.product_id ?? null,
-    currency: raw.currency || 'RUB',
-    status: normalizeDealStatus(raw.status),
+    stage: normalizeDealStage(raw.stage),
+    currency: (raw.currency || 'RUB').toUpperCase(),
   };
 }
 
-function getContactLabel(contactId: number, contactsById: Map<number, Contact>): string {
-  const contact = contactsById.get(contactId);
-  if (!contact) return `Клиент #${contactId}`;
-  if (!contact.parent_id) return contact.name || `Клиент #${contactId}`;
+function getContactLabel(deal: Deal, contactsById: Map<number, Contact>): string {
+  const contact = contactsById.get(deal.contact_id);
+  if (!contact) return deal.contact_name || `Клиент #${deal.contact_id}`;
+  if (!contact.parent_id) return contact.name || deal.contact_name || `Клиент #${deal.contact_id}`;
   const parent = contactsById.get(contact.parent_id);
-  if (!parent) return contact.name || `Клиент #${contactId}`;
+  if (!parent) return contact.name || deal.contact_name || `Клиент #${deal.contact_id}`;
   return `${parent.name} → ${contact.name}`;
 }
 
@@ -57,12 +71,17 @@ function getProductLabel(productId: number | null | undefined, productsById: Map
 }
 
 export function DealsTab() {
+  const searchParams = useSearchParams();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [products, setProducts] = useState<ClientProduct[]>([]);
-  const [deals, setDeals] = useState<Payment[]>([]);
+  const [deals, setDeals] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const [view, setView] = useState<DealsView>('list');
+  const [draggingDealId, setDraggingDealId] = useState<number | null>(null);
+  const [kanbanDropStage, setKanbanDropStage] = useState<DealStageKey | null>(null);
+  const [movingDealId, setMovingDealId] = useState<number | null>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -71,13 +90,13 @@ export function DealsTab() {
       setLoading(true);
       setError(null);
       try {
-        const [paymentsData, contactsData, productsData] = await Promise.all([
-          crmPaymentsApi.list(),
+        const [dealsData, contactsData, productsData] = await Promise.all([
+          crmDealsApi.list(),
           crmContactsApi.list(),
           clientProductsApi.list(),
         ]);
         if (!isActive) return;
-        setDeals(paymentsData.map(normalizePayment));
+        setDeals(dealsData.map(normalizeDeal));
         setContacts(contactsData);
         setProducts(productsData);
       } catch (err) {
@@ -100,26 +119,86 @@ export function DealsTab() {
 
   const contactsById = useMemo(() => new Map<number, Contact>(contacts.map((contact) => [contact.id, contact])), [contacts]);
   const productsById = useMemo(() => new Map<number, ClientProduct>(products.map((product) => [product.id, product])), [products]);
+  const funnelStageFilter = useMemo(() => {
+    const value = searchParams.get('funnelStage');
+    return value ? parseDealStage(value) : null;
+  }, [searchParams]);
+  const viewFromQuery = useMemo(() => {
+    const value = searchParams.get('dealsView');
+    return value === 'kanban' ? 'kanban' : value === 'list' ? 'list' : null;
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (viewFromQuery) setView(viewFromQuery);
+  }, [viewFromQuery]);
 
   const rows = useMemo(() => {
     return [...deals].sort((a, b) => {
-      const aTime = new Date(a.created_at || '').getTime();
-      const bTime = new Date(b.created_at || '').getTime();
+      const aTime = new Date(a.updated_at || a.created_at || '').getTime();
+      const bTime = new Date(b.updated_at || b.created_at || '').getTime();
       if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) return bTime - aTime;
       return b.id - a.id;
     });
   }, [deals]);
 
+  const filteredRows = useMemo(() => {
+    if (!funnelStageFilter) return rows;
+    return rows.filter((deal) => deal.stage === funnelStageFilter);
+  }, [funnelStageFilter, rows]);
+
   const kanbanColumns = useMemo(() => {
-    const columns = DEAL_STATUS_ORDER.reduce<Record<DealStatus, Payment[]>>((acc, status) => {
-      acc[status] = [];
+    const columns = DEAL_STAGE_ORDER.reduce<Record<DealStageKey, Deal[]>>((acc, stage) => {
+      acc[stage] = [];
       return acc;
-    }, {} as Record<DealStatus, Payment[]>);
-    rows.forEach((deal) => {
-      columns[normalizeDealStatus(deal.status)].push(deal);
+    }, {} as Record<DealStageKey, Deal[]>);
+    filteredRows.forEach((deal) => {
+      columns[deal.stage].push(deal);
     });
     return columns;
-  }, [rows]);
+  }, [filteredRows]);
+
+  const moveDealToStage = async (dealId: number, targetStage: DealStageKey) => {
+    const currentDeal = deals.find((item) => item.id === dealId);
+    if (!currentDeal) return;
+    if (currentDeal.stage === targetStage) return;
+
+    setMoveError(null);
+    setMovingDealId(dealId);
+
+    const prevDeals = deals;
+    const optimistic = deals.map((item) =>
+      item.id === dealId
+        ? {
+            ...item,
+            stage: targetStage,
+            lost_reason_code:
+              targetStage === 'lost'
+                ? (((item.lost_reason_code || '').trim() || 'other') as Deal['lost_reason_code'])
+                : '',
+            lost_reason_text: targetStage === 'lost' ? (item.lost_reason_text || '') : '',
+          }
+        : item
+    );
+    setDeals(optimistic);
+
+    try {
+      const updated = await crmDealsApi.update(dealId, {
+        stage: targetStage,
+        lost_reason_code:
+          targetStage === 'lost'
+            ? (((currentDeal.lost_reason_code || '').trim() || 'other') as Deal['lost_reason_code'])
+            : '',
+        lost_reason_text: targetStage === 'lost' ? (currentDeal.lost_reason_text || '') : '',
+      });
+      setDeals((items) => items.map((item) => (item.id === dealId ? normalizeDeal(updated) : item)));
+    } catch (err) {
+      console.error('Failed to move deal stage', err);
+      setDeals(prevDeals);
+      setMoveError('Не удалось изменить этап сделки.');
+    } finally {
+      setMovingDealId(null);
+    }
+  };
 
   if (loading) {
     return <p className="text-sm text-muted-foreground">Загружаем сделки...</p>;
@@ -131,6 +210,17 @@ export function DealsTab() {
 
   return (
     <div className="space-y-4">
+      {funnelStageFilter ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-slate-50 px-3 py-2 text-sm">
+          <div>
+            Фильтр по этапу воронки: <span className="font-medium">{DEAL_STAGE_LABELS[funnelStageFilter]}</span>
+          </div>
+          <Link href="/clients?tab=deals" className="text-primary hover:underline">
+            Сбросить фильтр
+          </Link>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-lg border bg-background p-1">
           <Button type="button" size="sm" variant={view === 'list' ? 'default' : 'ghost'} onClick={() => setView('list')}>
@@ -146,9 +236,12 @@ export function DealsTab() {
           </Link>
         </Button>
       </div>
+      {moveError ? <p className="text-sm text-red-500">{moveError}</p> : null}
 
-      {rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Сделки не найдены.</p>
+      {filteredRows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {funnelStageFilter ? 'Сделки по выбранному этапу не найдены.' : 'Сделки не найдены.'}
+        </p>
       ) : view === 'list' ? (
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full text-sm">
@@ -161,42 +254,79 @@ export function DealsTab() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((deal) => {
-                const status = normalizeDealStatus(deal.status);
-                return (
-                  <tr key={deal.id} className="border-t">
-                    <td className="px-4 py-2">
-                      <Link href={`/clients/deals/${deal.id}`} className="font-medium hover:underline">
-                        {getProductLabel(deal.product_id, productsById)}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-2">{getContactLabel(deal.contact_id, contactsById)}</td>
-                    <td className="px-4 py-2">{DEAL_STATUS_LABELS[status]}</td>
-                    <td className="px-4 py-2">{formatDealAmount(deal.amount, deal.currency)}</td>
-                  </tr>
-                );
-              })}
+              {filteredRows.map((deal) => (
+                <tr key={deal.id} className="border-t">
+                  <td className="px-4 py-2">
+                    <Link href={`/clients/deals/${deal.id}`} className="font-medium hover:underline">
+                      {getProductLabel(deal.product_id, productsById)}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-2">{getContactLabel(deal, contactsById)}</td>
+                  <td className="px-4 py-2">{DEAL_STAGE_LABELS[deal.stage]}</td>
+                  <td className="px-4 py-2">{formatDealAmount(deal.amount, deal.currency)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-4">
-          {DEAL_STATUS_ORDER.map((status) => (
-            <div key={status} className="rounded-xl border bg-card/70 p-3 shadow-sm">
+        <div className="grid gap-4 xl:grid-cols-6">
+          {DEAL_STAGE_ORDER.map((stage) => (
+            <div
+              key={stage}
+              className={`rounded-xl border bg-card/70 p-3 shadow-sm transition-colors ${
+                kanbanDropStage === stage && draggingDealId !== null ? 'border-primary bg-primary/5' : ''
+              }`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setKanbanDropStage(stage);
+              }}
+              onDragLeave={(event) => {
+                const related = event.relatedTarget as Node | null;
+                if (related && event.currentTarget.contains(related)) return;
+                setKanbanDropStage((prev) => (prev === stage ? null : prev));
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const draggedIdRaw = event.dataTransfer.getData('text/plain');
+                const draggedId = Number.parseInt(draggedIdRaw, 10);
+                const resolvedId =
+                  Number.isFinite(draggedId) && draggedId > 0 ? draggedId : draggingDealId;
+                setKanbanDropStage(null);
+                setDraggingDealId(null);
+                if (!resolvedId) return;
+                void moveDealToStage(resolvedId, stage);
+              }}
+            >
               <div className="mb-3 flex items-center justify-between gap-2">
-                <div className="text-sm font-semibold">{DEAL_STATUS_LABELS[status]}</div>
-                <Badge variant="secondary">{kanbanColumns[status].length}</Badge>
+                <div className="text-sm font-semibold">{DEAL_STAGE_LABELS[stage]}</div>
+                <Badge variant="secondary">{kanbanColumns[stage].length}</Badge>
               </div>
               <div className="space-y-2 min-h-[120px]">
-                {kanbanColumns[status].length === 0 ? (
+                {kanbanColumns[stage].length === 0 ? (
                   <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">Пусто</div>
                 ) : (
-                  kanbanColumns[status].map((deal) => (
-                    <div key={deal.id} className="rounded-lg border bg-background p-3 text-left shadow-sm">
+                  kanbanColumns[stage].map((deal) => (
+                    <div
+                      key={deal.id}
+                      draggable
+                      onDragStart={(event) => {
+                        setDraggingDealId(deal.id);
+                        event.dataTransfer.setData('text/plain', String(deal.id));
+                        event.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragEnd={() => {
+                        setDraggingDealId(null);
+                        setKanbanDropStage(null);
+                      }}
+                      className={`rounded-lg border bg-background p-3 text-left shadow-sm cursor-grab active:cursor-grabbing ${
+                        movingDealId === deal.id ? 'opacity-60' : ''
+                      }`}
+                    >
                       <Link href={`/clients/deals/${deal.id}`} className="block truncate text-sm font-medium hover:underline">
                         {getProductLabel(deal.product_id, productsById)}
                       </Link>
-                      <div className="mt-1 text-xs text-muted-foreground">{getContactLabel(deal.contact_id, contactsById)}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{getContactLabel(deal, contactsById)}</div>
                       <div className="mt-1 text-xs text-muted-foreground">{formatDealAmount(deal.amount, deal.currency)}</div>
                     </div>
                   ))

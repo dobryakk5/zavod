@@ -31,9 +31,11 @@ import {
   crmCategoriesApi,
   crmEventTypesApi,
   crmEventsApi,
+  crmDealsApi,
   crmPaymentsApi,
   crmNotesApi,
   crmContactTagsApi,
+  type Deal,
   type ContactServicePackageItem,
   type ContactTelegramInfo,
 } from '@/lib/api/crm';
@@ -151,60 +153,22 @@ type ContactTag = {
   description: string;
 };
 
-type DealStageValue = Exclude<NonNullable<Contact['deal_stage']>, ''>;
+const DEAL_STAGE_LABELS: Record<Deal['stage'], string> = {
+  new_lead: 'Новый лид',
+  interest: 'Интерес',
+  call: 'Созвон',
+  payment_expected: 'Оплата ожидается',
+  paid: 'Оплачено',
+  lost: 'Срыв',
+};
 
-const DEAL_STAGE_OPTIONS: Array<{ value: NonNullable<Contact['deal_stage']>; label: string }> = [
-  { value: 'new_lead', label: 'Новый лид' },
-  { value: 'interest', label: 'Интерес' },
-  { value: 'call', label: 'Созвон' },
-  { value: 'payment_expected', label: 'Оплата ожидается' },
-  { value: 'paid', label: 'Оплачено' },
-  { value: 'lost', label: 'Потеряно' },
-];
-
-const DEAL_STAGE_LABELS: Record<string, string> = DEAL_STAGE_OPTIONS.reduce<Record<string, string>>(
-  (acc, item) => {
-    acc[item.value] = item.label;
-    return acc;
-  },
-  {}
-);
-
-function normalizeDealStage(raw: unknown): DealStageValue {
-  const value = String(raw ?? '').trim().toLowerCase();
-  if (
-    value === 'new_lead' ||
-    value === 'interest' ||
-    value === 'call' ||
-    value === 'payment_expected' ||
-    value === 'paid' ||
-    value === 'lost'
-  ) {
-    return value as DealStageValue;
-  }
-  return 'new_lead';
+function formatDealAmount(value: Deal['amount'], currency: Deal['currency']): string {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+  const normalized = new Intl.NumberFormat('ru-RU', {
+    maximumFractionDigits: 0,
+  }).format(Math.round(Number(value)));
+  return `${normalized} ${currency || 'RUB'}`;
 }
-
-const DEAL_LOSS_REASON_OPTIONS: Array<{
-  value: Exclude<NonNullable<Contact['deal_loss_reason_code']>, ''>;
-  label: string;
-}> = [
-  { value: 'price', label: 'Дорого' },
-  { value: 'timing', label: 'Не вовремя' },
-  { value: 'no_response', label: 'Не отвечает' },
-  { value: 'not_fit', label: 'Не наш формат / не подходит' },
-  { value: 'competitor', label: 'Ушёл к конкуренту' },
-  { value: 'priority_changed', label: 'Изменился приоритет' },
-  { value: 'other', label: 'Другое' },
-];
-
-const DEAL_LOSS_REASON_LABELS: Record<string, string> = DEAL_LOSS_REASON_OPTIONS.reduce<Record<string, string>>(
-  (acc, item) => {
-    acc[item.value] = item.label;
-    return acc;
-  },
-  {}
-);
 
 const buildGoogleCalendarLink = ({
   title,
@@ -296,6 +260,7 @@ export default function ContactDetailPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [deals, setDeals] = useState<Deal[]>([]);
   const [servicePackages, setServicePackages] = useState<ContactServicePackageItem[]>([]);
   const [servicePackagesError, setServicePackagesError] = useState<string | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -362,11 +327,6 @@ export default function ContactDetailPage() {
   const [savingCategoryAssignment, setSavingCategoryAssignment] = useState(false);
   const [sourceValue, setSourceValue] = useState('');
   const [savingSource, setSavingSource] = useState(false);
-  const [dealStageValue, setDealStageValue] = useState<DealStageValue>('new_lead');
-  const [dealAmountValue, setDealAmountValue] = useState('');
-  const [dealLossReasonCodeValue, setDealLossReasonCodeValue] = useState<string>('none');
-  const [dealLossReasonTextValue, setDealLossReasonTextValue] = useState('');
-  const [savingDealFields, setSavingDealFields] = useState(false);
   const [newPaymentAmount, setNewPaymentAmount] = useState('');
   const [newPaymentCurrency, setNewPaymentCurrency] = useState('RUB');
   const [newPaymentPlannedAt, setNewPaymentPlannedAt] = useState(defaultPaymentStartRef.current);
@@ -392,7 +352,7 @@ export default function ContactDetailPage() {
       setServicePackagesError('Не удалось загрузить остатки пакетов услуг.');
     }
   }, [contactId]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'payments' | 'notes'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'deals' | 'schedule' | 'notes'>('overview');
   const [telegramInfo, setTelegramInfo] = useState<ContactTelegramInfo | null>(null);
   const [telegramInfoError, setTelegramInfoError] = useState<string | null>(null);
   const [telegramDialogOpen, setTelegramDialogOpen] = useState(false);
@@ -405,7 +365,7 @@ export default function ContactDetailPage() {
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'overview' || tab === 'schedule' || tab === 'payments' || tab === 'notes') {
+    if (tab === 'overview' || tab === 'deals' || tab === 'schedule' || tab === 'notes') {
       setActiveTab(tab);
     }
   }, [searchParams]);
@@ -480,6 +440,7 @@ export default function ContactDetailPage() {
           categoriesData,
           eventTypesData,
           productsData,
+          dealsData,
           eventsData,
           paymentsData,
           notesData,
@@ -491,6 +452,7 @@ export default function ContactDetailPage() {
           crmCategoriesApi.list(),
           crmEventTypesApi.list(),
           clientProductsApi.list(),
+          crmDealsApi.list(),
           crmEventsApi.list(),
           crmPaymentsApi.list(),
           crmNotesApi.list(),
@@ -504,8 +466,9 @@ export default function ContactDetailPage() {
         setEventTypes(eventTypesData);
         setProducts(productsData);
         
-        // Filter events, payments, and notes for this contact
+        // Filter events, deals, payments, and notes for this contact
         setEvents(eventsData.filter(event => event.contact_id === contactId));
+        setDeals(dealsData.filter((deal) => deal.contact_id === contactId));
         setPayments(paymentsData.filter(payment => payment.contact_id === contactId));
         setServicePackages(Array.isArray(servicePackagesData.data.items) ? servicePackagesData.data.items : []);
         setServicePackagesError(servicePackagesData.error);
@@ -521,7 +484,7 @@ export default function ContactDetailPage() {
         );
       } catch (err) {
         console.error('Error loading contact data:', err);
-        setError('Не удалось загрузить данные контакта. Проверьте API /crm/contacts/, /crm/categories/, /crm/event-types/, /crm/events/, /crm/payments/, /crm/notes/ и /crm/contact-tags/.');
+        setError('Не удалось загрузить данные контакта. Проверьте API /crm/contacts/, /crm/categories/, /crm/event-types/, /crm/deals/, /crm/events/, /crm/payments/, /crm/notes/ и /crm/contact-tags/.');
       } finally {
         setLoading(false);
       }
@@ -539,28 +502,6 @@ export default function ContactDetailPage() {
   useEffect(() => {
     setSourceValue(contact?.source ?? '');
   }, [contact?.source]);
-
-  useEffect(() => {
-    setDealStageValue(normalizeDealStage(contact?.deal_stage));
-  }, [contact?.deal_stage]);
-
-  useEffect(() => {
-    const raw = contact?.deal_amount;
-    if (raw === null || raw === undefined || raw === '') {
-      setDealAmountValue('');
-      return;
-    }
-    setDealAmountValue(String(raw));
-  }, [contact?.deal_amount]);
-
-  useEffect(() => {
-    const code = (contact?.deal_loss_reason_code ?? '').trim();
-    setDealLossReasonCodeValue(code ? code : 'none');
-  }, [contact?.deal_loss_reason_code]);
-
-  useEffect(() => {
-    setDealLossReasonTextValue(contact?.deal_loss_reason_text ?? '');
-  }, [contact?.deal_loss_reason_text]);
 
   const handleFieldEdit = (field: string, currentValue?: string | null) => {
     setEditingField(field);
@@ -621,6 +562,15 @@ export default function ContactDetailPage() {
     setEditingField(null);
     setEditValue('');
   };
+
+  const handleCreateDeal = useCallback(() => {
+    if (!contact) return;
+    const params = new URLSearchParams({
+      contactId: String(contact.id),
+      contactName: contact.name || '',
+    });
+    router.push(`/clients/deals/new?${params.toString()}`);
+  }, [contact, router]);
 
   const handleCreateNote = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -825,7 +775,9 @@ export default function ContactDetailPage() {
   };
 
   const handleDeletePayment = async (payment: Payment) => {
-    const confirmed = window.confirm(`Удалить платеж на сумму ${payment.amount} ${payment.currency}?`);
+    const confirmed = window.confirm(
+      `Удалить платеж на сумму ${formatDealAmount(payment.amount, payment.currency)}?`
+    );
     if (!confirmed) return;
 
     setPaymentDeletingId(payment.id);
@@ -1125,49 +1077,6 @@ export default function ContactDetailPage() {
     [contact]
   );
 
-  const handleSaveDealFields = useCallback(async () => {
-    if (!contact) return;
-
-    const nextStage = dealStageValue;
-    const nextLossReasonCode = dealLossReasonCodeValue === 'none' ? '' : dealLossReasonCodeValue;
-    const lossReasonText = dealLossReasonTextValue.trim();
-    const amountRaw = dealAmountValue.trim();
-
-    let parsedAmount: number | null = null;
-    if (amountRaw) {
-      const normalized = amountRaw.replace(',', '.');
-      const amount = Number(normalized);
-      if (!Number.isFinite(amount) || amount < 0) {
-        toast.error('Сумма сделки должна быть числом 0 или больше');
-        return;
-      }
-      parsedAmount = amount;
-    }
-
-    if (nextStage === 'lost' && !nextLossReasonCode) {
-      toast.error('Выберите причину потери');
-      return;
-    }
-
-    setSavingDealFields(true);
-    try {
-      const updated = await crmContactsApi.update(contact.id, {
-        deal_stage: nextStage as Contact['deal_stage'],
-        deal_amount: parsedAmount,
-        deal_loss_reason_code:
-          (nextStage === 'lost' ? nextLossReasonCode : '') as Contact['deal_loss_reason_code'],
-        deal_loss_reason_text: nextStage === 'lost' ? lossReasonText : '',
-      });
-      setContact(updated as Contact);
-      toast.success('Сделка обновлена');
-    } catch (err) {
-      console.error('Error updating contact deal fields:', err);
-      toast.error('Не удалось обновить стадию/причину сделки');
-    } finally {
-      setSavingDealFields(false);
-    }
-  }, [contact, dealAmountValue, dealLossReasonCodeValue, dealLossReasonTextValue, dealStageValue]);
-
   useEffect(() => {
     if (!contact || savingSource) return;
     if (sourceValue === (contact.source ?? '')) return;
@@ -1184,13 +1093,24 @@ export default function ContactDetailPage() {
     eventTypes.forEach((item) => map.set(item.id, item));
     return map;
   }, [eventTypes]);
-  const currentDealStage = useMemo(() => normalizeDealStage(contact?.deal_stage), [contact?.deal_stage]);
-
   const categoriesById = useMemo(() => {
     const map = new Map<number, Category>();
     categories.forEach((item) => map.set(item.id, item));
     return map;
   }, [categories]);
+  const productsById = useMemo(() => {
+    const map = new Map<number, Product>();
+    products.forEach((item) => map.set(item.id, item));
+    return map;
+  }, [products]);
+  const sortedDeals = useMemo(() => {
+    return [...deals].sort((a, b) => {
+      const aTime = new Date(a.updated_at || a.created_at || '').getTime();
+      const bTime = new Date(b.updated_at || b.created_at || '').getTime();
+      if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) return bTime - aTime;
+      return b.id - a.id;
+    });
+  }, [deals]);
 
   const paymentEventDateById = useMemo(() => {
     const map = new Map<number, string>();
@@ -1308,8 +1228,8 @@ export default function ContactDetailPage() {
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-6">
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="overview">Обзор</TabsTrigger>
+          <TabsTrigger value="deals">Сделки</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
-          <TabsTrigger value="payments">Платежи</TabsTrigger>
           <TabsTrigger value="notes">Заметки</TabsTrigger>
         </TabsList>
 
@@ -1585,110 +1505,6 @@ export default function ContactDetailPage() {
                     className="w-48"
                   />
                 </div>
-                <div className="rounded-lg border p-4 space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium">Сделка и этап воронки</div>
-                      <div className="text-xs text-muted-foreground">
-                        Ручная фиксация стадии и причины потери для CRM-воронки
-                      </div>
-                    </div>
-                    <Badge variant={currentDealStage === 'lost' ? 'destructive' : 'secondary'}>
-                      {DEAL_STAGE_LABELS[currentDealStage] || currentDealStage}
-                    </Badge>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="space-y-1.5">
-                      <Label>Стадия сделки</Label>
-                      <Select value={dealStageValue} onValueChange={(value) => setDealStageValue(normalizeDealStage(value))}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Выберите стадию" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {DEAL_STAGE_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="deal-amount">Сумма сделки (план), ₽</Label>
-                      <Input
-                        id="deal-amount"
-                        value={dealAmountValue}
-                        onChange={(e) => setDealAmountValue(e.target.value)}
-                        placeholder="Например, 15000"
-                        inputMode="decimal"
-                      />
-                    </div>
-                  </div>
-
-                  {dealStageValue === 'lost' && (
-                    <div className="grid gap-3">
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="space-y-1.5">
-                          <Label>Причина потери (обязательно)</Label>
-                          <Select value={dealLossReasonCodeValue} onValueChange={setDealLossReasonCodeValue}>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Выберите причину" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="none">Не выбрано</SelectItem>
-                              {DEAL_LOSS_REASON_OPTIONS.map((option) => (
-                                <SelectItem key={option.value} value={option.value}>
-                                  {option.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label>Дата потери</Label>
-                          <div className="rounded-md border px-3 py-2 text-sm">
-                            {contact.deal_lost_at
-                              ? formatInTenantTimezone(contact.deal_lost_at, tenantTimezone, {
-                                  day: '2-digit',
-                                  month: '2-digit',
-                                  year: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                })
-                              : 'Будет проставлена автоматически при сохранении'}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="deal-loss-comment">Комментарий</Label>
-                        <Textarea
-                          id="deal-loss-comment"
-                          value={dealLossReasonTextValue}
-                          onChange={(e) => setDealLossReasonTextValue(e.target.value)}
-                          placeholder="Например: взяли паузу до следующего месяца или выбрали более бюджетное решение"
-                          rows={3}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {contact.deal_stage === 'lost' && (contact.deal_loss_reason_code || contact.deal_loss_reason_text) && (
-                    <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-900">
-                      Последняя причина потери:{' '}
-                      <span className="font-medium">
-                        {DEAL_LOSS_REASON_LABELS[contact.deal_loss_reason_code || ''] || contact.deal_loss_reason_code || 'Комментарий'}
-                      </span>
-                      {contact.deal_loss_reason_text ? ` · ${contact.deal_loss_reason_text}` : ''}
-                    </div>
-                  )}
-
-                  <div className="flex justify-end">
-                    <Button type="button" size="sm" onClick={handleSaveDealFields} disabled={savingDealFields}>
-                      {savingDealFields ? 'Сохраняем...' : 'Сохранить сделку'}
-                    </Button>
-                  </div>
-                </div>
                 {editingField === 'notes' ? (
                   <div className="space-y-2">
                     <Input
@@ -1793,6 +1609,52 @@ export default function ContactDetailPage() {
                 </div>
               ) : (
                 <p className="text-center text-muted-foreground py-6">У контакта пока нет тегов</p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="deals" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Сделки клиента</CardTitle>
+              <CardDescription>Список сделок, привязанных к текущему контакту</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex justify-end">
+                <Button type="button" onClick={handleCreateDeal}>
+                  Создать сделку
+                </Button>
+              </div>
+              {sortedDeals.length === 0 ? (
+                <p className="text-sm text-muted-foreground">У клиента пока нет сделок.</p>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/40">
+                      <tr>
+                        <th className="px-4 py-2 text-left font-medium">Продукт</th>
+                        <th className="px-4 py-2 text-left font-medium">Этап</th>
+                        <th className="px-4 py-2 text-left font-medium">Сумма</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedDeals.map((deal) => (
+                        <tr
+                          key={deal.id}
+                          className="cursor-pointer border-t transition-colors hover:bg-muted/40"
+                          onClick={() => router.push(`/clients/deals/${deal.id}`)}
+                        >
+                          <td className="px-4 py-2">
+                            {productsById.get(deal.product_id)?.name || `Продукт #${deal.product_id}`}
+                          </td>
+                          <td className="px-4 py-2">{DEAL_STAGE_LABELS[deal.stage]}</td>
+                          <td className="px-4 py-2">{formatDealAmount(deal.amount, deal.currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -2171,176 +2033,6 @@ export default function ContactDetailPage() {
               ) : (
                 <p className="text-center text-muted-foreground py-8">Нет запланированных событий</p>
               )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="payments" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Пакеты услуг</CardTitle>
-              <CardDescription>Остаток оплаченных пакетов по этому контакту</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {servicePackagesError && (
-                <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                  {servicePackagesError}
-                </div>
-              )}
-              {servicePackages.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Оплаченных пакетов услуг пока нет.
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  {servicePackages.map((item) => {
-                    const servicePackage = item.service_package;
-                    const remainingLabel = (servicePackage?.remaining_label || '').trim() || '—';
-                    const usedLabel = (servicePackage?.used_label || '').trim() || '—';
-                    const totalLabel = (servicePackage?.total_label || '').trim() || '—';
-                    const modeLabel =
-                      servicePackage?.mode === 'minutes' ? 'Пакет по времени' : 'Пакет по количеству';
-                    const isExhausted = Boolean(servicePackage?.is_exhausted);
-                    const paidAtLabel = item.paid_at
-                      ? formatInTenantTimezone(item.paid_at, tenantTimezone, {
-                          year: 'numeric',
-                          month: '2-digit',
-                          day: '2-digit',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })
-                      : '—';
-
-                    return (
-                      <div key={item.purchase_id} className="rounded-lg border p-4 space-y-2">
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div>
-                            <div className="font-medium">{item.product_name || `Продукт #${item.product_id}`}</div>
-                            <div className="text-xs text-muted-foreground">{modeLabel}</div>
-                          </div>
-                          <Badge variant={isExhausted ? 'destructive' : 'secondary'}>
-                            {isExhausted ? 'Закончился' : 'Активен'}
-                          </Badge>
-                        </div>
-                        <div className="grid gap-2 text-sm sm:grid-cols-3">
-                          <div>
-                            <div className="text-xs text-muted-foreground">Осталось</div>
-                            <div className="font-medium">{remainingLabel}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-muted-foreground">Израсходовано</div>
-                            <div>{usedLabel}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-muted-foreground">Всего</div>
-                            <div>{totalLabel}</div>
-                          </div>
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Оплата: {paidAtLabel}
-                          {item.amount ? ` · ${item.amount} ${item.currency || 'RUB'}` : ''}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Новый платёж</CardTitle>
-              <CardDescription>Добавьте плановый или оплаченный платёж</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleCreatePayment} className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-[3fr_3fr_1fr]">
-                  <div className="space-y-2">
-                    <Label htmlFor="payment-amount">Сумма</Label>
-                    <Input
-                      id="payment-amount"
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={newPaymentAmount}
-                      onChange={(e) => setNewPaymentAmount(e.target.value)}
-                      placeholder="0.00"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="payment-planned-at">Плановая дата оплаты</Label>
-                    <Input
-                      id="payment-planned-at"
-                      type="datetime-local"
-                      value={newPaymentPlannedAt}
-                      onChange={(e) => setNewPaymentPlannedAt(e.target.value)}
-                      placeholder="Завтра в 12:00"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="payment-currency">Валюта</Label>
-                    <Input
-                      id="payment-currency"
-                      value={newPaymentCurrency}
-                      onChange={(e) => setNewPaymentCurrency(e.target.value)}
-                      placeholder="RUB"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Продукт</Label>
-                  <Select value={newPaymentProductId} onValueChange={setNewPaymentProductId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Без продукта" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Без продукта</SelectItem>
-                      {products.map((product) => (
-                        <SelectItem key={product.id} value={String(product.id)}>
-                          {product.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4"
-                    checked={newPaymentPaid}
-                    onChange={(e) => setNewPaymentPaid(e.target.checked)}
-                  />
-                  Оплачено
-                </label>
-                <Button type="submit" disabled={savingPayment}>
-                  {savingPayment ? 'Сохраняем...' : 'Добавить платёж'}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <DollarSignIcon className="h-5 w-5" />
-                Платежи
-              </CardTitle>
-              <CardDescription>Финансовые транзакции по контакту</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <PaymentsTable
-                payments={payments}
-                contacts={[contact]}
-                tenantTimezone={tenantTimezone}
-                eventDateById={paymentEventDateById}
-                paymentLinkLoadingId={paymentLinkLoadingId}
-                paymentDeletingId={paymentDeletingId}
-                onCopyPaymentLink={(payment) => void handleCopyPaymentLink(payment)}
-                onEditPayment={(payment) => handleStartEditPayment(payment)}
-                onDeletePayment={(payment) => void handleDeletePayment(payment)}
-                emptyText="Нет платежей"
-              />
             </CardContent>
           </Card>
         </TabsContent>

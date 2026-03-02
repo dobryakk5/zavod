@@ -10,6 +10,7 @@ from core.models import (
     MapContact,
     MapContactTag,
     MapCRMCategory,
+    MapCRMDeal,
     MapCRMEvent,
     MapCRMEventType,
     MapCRMNote,
@@ -194,7 +195,8 @@ class MapContactSerializer(serializers.ModelSerializer):
 
 
 class MapCRMPaymentSerializer(serializers.ModelSerializer):
-    contact_id = serializers.IntegerField(write_only=True)
+    contact_id = serializers.IntegerField()
+    deal_id = serializers.IntegerField(required=False, allow_null=True)
     contact_name = serializers.CharField(source="contact.name", read_only=True)
     contact_email = serializers.CharField(source="contact.email", read_only=True)
 
@@ -203,6 +205,7 @@ class MapCRMPaymentSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "contact_id",
+            "deal_id",
             "contact_name",
             "contact_email",
             "event_id",
@@ -230,15 +233,50 @@ class MapCRMPaymentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Контакт не найден.")
         return value
 
+    def validate_deal_id(self, value):
+        if value is None:
+            return None
+        if not MapCRMDeal.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Сделка не найдена.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        instance = getattr(self, "instance", None)
+        next_contact_id = attrs.get("contact_id")
+        if next_contact_id is None and instance is not None:
+            next_contact_id = getattr(instance, "contact_id", None)
+
+        next_deal_id = attrs.get("deal_id")
+        if next_deal_id is None and instance is not None:
+            next_deal_id = getattr(instance, "deal_id", None)
+
+        if next_deal_id:
+            deal = MapCRMDeal.objects.filter(id=next_deal_id).only("id", "contact_id").first()
+            if deal is None:
+                raise serializers.ValidationError({"deal_id": "Сделка не найдена."})
+            if next_contact_id is None:
+                attrs["contact_id"] = int(deal.contact_id)
+            elif int(next_contact_id) != int(deal.contact_id):
+                raise serializers.ValidationError(
+                    {"deal_id": "Сделка принадлежит другому клиенту."}
+                )
+        return attrs
+
     def create(self, validated_data):
         contact_id = validated_data.pop("contact_id")
+        deal_id = validated_data.pop("deal_id", None)
         contact = MapContact.objects.get(id=contact_id)
-        return MapCRMPayment.objects.create(contact=contact, **validated_data)
+        deal = MapCRMDeal.objects.get(id=deal_id) if deal_id else None
+        return MapCRMPayment.objects.create(contact=contact, deal=deal, **validated_data)
 
     def update(self, instance, validated_data):
         if "contact_id" in validated_data:
             contact_id = validated_data.pop("contact_id")
             instance.contact = MapContact.objects.get(id=contact_id)
+        if "deal_id" in validated_data:
+            deal_id = validated_data.pop("deal_id")
+            instance.deal = MapCRMDeal.objects.get(id=deal_id) if deal_id else None
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
@@ -253,6 +291,7 @@ class MapCRMPaymentListSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "contact_id",
+            "deal_id",
             "contact_name",
             "event_id",
             "product_id",
@@ -260,6 +299,136 @@ class MapCRMPaymentListSerializer(serializers.ModelSerializer):
             "currency",
             "status",
             "paid_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class MapCRMDealSerializer(serializers.ModelSerializer):
+    contact_id = serializers.IntegerField()
+    contact_name = serializers.CharField(source="contact.name", read_only=True)
+
+    STAGE_CHOICES = {
+        "new_lead",
+        "interest",
+        "call",
+        "payment_expected",
+        "paid",
+        "lost",
+    }
+    LOST_REASON_CHOICES = {
+        "",
+        "price",
+        "timing",
+        "no_response",
+        "not_fit",
+        "competitor",
+        "priority_changed",
+        "other",
+    }
+
+    class Meta:
+        model = MapCRMDeal
+        fields = [
+            "id",
+            "contact_id",
+            "contact_name",
+            "product_id",
+            "stage",
+            "amount",
+            "currency",
+            "description",
+            "lost_reason_code",
+            "lost_reason_text",
+            "lost_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at", "contact_name"]
+
+    def validate_contact_id(self, value):
+        if not MapContact.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Контакт не найден.")
+        return value
+
+    def validate_product_id(self, value):
+        if value is None or int(value) <= 0:
+            raise serializers.ValidationError("Продукт обязателен.")
+        return int(value)
+
+    def validate_stage(self, value):
+        normalized = str(value or "").strip().lower()
+        if normalized not in self.STAGE_CHOICES:
+            raise serializers.ValidationError("Некорректная стадия сделки.")
+        return normalized
+
+    def validate_lost_reason_code(self, value):
+        normalized = str(value or "").strip().lower()
+        if normalized not in self.LOST_REASON_CHOICES:
+            raise serializers.ValidationError("Некорректная причина срыва.")
+        return normalized
+
+    def validate_amount(self, value):
+        if value is None:
+            return None
+        if value < 0:
+            raise serializers.ValidationError("Сумма сделки не может быть отрицательной.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        instance = getattr(self, "instance", None)
+        stage = str(attrs.get("stage", getattr(instance, "stage", "new_lead")) or "").strip().lower()
+        lost_reason = str(
+            attrs.get("lost_reason_code", getattr(instance, "lost_reason_code", "")) or ""
+        ).strip().lower()
+        if stage == "lost" and not lost_reason:
+            raise serializers.ValidationError({"lost_reason_code": "Укажите причину срыва."})
+        return attrs
+
+    def create(self, validated_data):
+        contact_id = validated_data.pop("contact_id")
+        contact = MapContact.objects.get(id=contact_id)
+        if str(validated_data.get("stage", "") or "").strip().lower() == "lost":
+            validated_data.setdefault("lost_at", timezone.now())
+        return MapCRMDeal.objects.create(contact=contact, **validated_data)
+
+    def update(self, instance, validated_data):
+        if "contact_id" in validated_data:
+            contact_id = validated_data.pop("contact_id")
+            instance.contact = MapContact.objects.get(id=contact_id)
+        if "stage" in validated_data:
+            next_stage = str(validated_data.get("stage", "") or "").strip().lower()
+            if next_stage == "lost":
+                if not validated_data.get("lost_at") and getattr(instance, "lost_at", None) is None:
+                    validated_data["lost_at"] = timezone.now()
+            else:
+                validated_data.setdefault("lost_reason_code", "")
+                validated_data.setdefault("lost_reason_text", "")
+                validated_data.setdefault("lost_at", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+class MapCRMDealListSerializer(serializers.ModelSerializer):
+    contact_name = serializers.CharField(source="contact.name", read_only=True)
+    payments_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = MapCRMDeal
+        fields = [
+            "id",
+            "contact_id",
+            "contact_name",
+            "product_id",
+            "stage",
+            "amount",
+            "currency",
+            "lost_reason_code",
+            "payments_count",
+            "updated_at",
             "created_at",
         ]
         read_only_fields = fields

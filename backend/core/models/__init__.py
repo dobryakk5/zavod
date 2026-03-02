@@ -72,6 +72,7 @@ from .system import SystemSetting, GeneratorPrompt, GenerationEvent
 # --- Map CRM (map.* schema, managed=False) ---
 from .map_crm import (
     MapContact,
+    MapCRMDeal,
     MapCRMPayment,
     MapCRMTag,
     MapContactTag,
@@ -198,6 +199,7 @@ __all__ = [
     "GenerationEvent",
     # Map CRM
     "MapContact",
+    "MapCRMDeal",
     "MapCRMPayment",
     "MapCRMTag",
     "MapContactTag",

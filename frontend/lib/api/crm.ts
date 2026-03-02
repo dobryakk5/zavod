@@ -111,6 +111,7 @@ export type AvailabilityEvent = {
 export type Payment = {
   id: number;
   contact_id: number;
+  deal_id?: number | null;
   event_id?: number | null;
   product_id: number | null;
   amount: number;
@@ -121,6 +122,23 @@ export type Payment = {
   description: string;
   planned_at: string | null;
   paid_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Deal = {
+  id: number;
+  contact_id: number;
+  contact_name?: string;
+  product_id: number;
+  stage: Exclude<DealStage, ''>;
+  amount: number | null;
+  currency: string;
+  description: string;
+  lost_reason_code?: DealLossReasonCode;
+  lost_reason_text?: string;
+  lost_at?: string | null;
+  payments_count?: number;
   created_at: string;
   updated_at: string;
 };
@@ -453,6 +471,40 @@ export const crmPaymentsApi = {
     return apiFetch<YooKassaPaymentLinkResponse>('/payments/link/', {
       method: 'POST',
       body: data,
+    });
+  },
+};
+
+// API functions for deals
+export const crmDealsApi = {
+  list: async (): Promise<Deal[]> => {
+    return apiFetch<Deal[]>('/crm/deals/');
+  },
+
+  detail: async (id: number | string): Promise<Deal> => {
+    return apiFetch<Deal>(`/crm/deals/${id}/`);
+  },
+
+  create: async (data: Omit<Deal, 'id' | 'created_at' | 'updated_at' | 'contact_name' | 'payments_count'>): Promise<Deal> => {
+    return apiFetch<Deal>('/crm/deals/', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  update: async (
+    id: number | string,
+    data: Partial<Omit<Deal, 'id' | 'created_at' | 'updated_at' | 'contact_name' | 'payments_count'>>
+  ): Promise<Deal> => {
+    return apiFetch<Deal>(`/crm/deals/${id}/`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  delete: async (id: number | string): Promise<void> => {
+    return apiFetch<void>(`/crm/deals/${id}/`, {
+      method: 'DELETE',
     });
   },
 };

@@ -74,6 +74,83 @@ class MapContact(models.Model):
         return self.name
 
 
+class MapCRMDeal(models.Model):
+    """
+    Сделка клиента (map.crm_deals)
+    Может иметь несколько платежей.
+    """
+    STAGE_NEW_LEAD = "new_lead"
+    STAGE_INTEREST = "interest"
+    STAGE_CALL = "call"
+    STAGE_PAYMENT_EXPECTED = "payment_expected"
+    STAGE_PAID = "paid"
+    STAGE_LOST = "lost"
+
+    contact = models.ForeignKey(
+        MapContact,
+        on_delete=models.CASCADE,
+        related_name="deals",
+        db_column="contact_id",
+        verbose_name="Клиент",
+    )
+    product_id = models.IntegerField(
+        verbose_name="ID продукта",
+    )
+    stage = models.CharField(
+        max_length=32,
+        default=STAGE_NEW_LEAD,
+        choices=[
+            (STAGE_NEW_LEAD, "Новый лид"),
+            (STAGE_INTEREST, "Интерес"),
+            (STAGE_CALL, "Созвон"),
+            (STAGE_PAYMENT_EXPECTED, "Оплата ожидается"),
+            (STAGE_PAID, "Оплачено"),
+            (STAGE_LOST, "Срыв"),
+        ],
+        verbose_name="Стадия сделки",
+    )
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.00"))],
+        verbose_name="Сумма сделки",
+    )
+    currency = models.CharField(
+        max_length=3,
+        default="RUB",
+        choices=[
+            ("RUB", "Рубль"),
+            ("USD", "Доллар"),
+            ("EUR", "Евро"),
+        ],
+        verbose_name="Валюта",
+    )
+    description = models.TextField(blank=True, verbose_name="Описание")
+    lost_reason_code = models.CharField(max_length=64, blank=True, default="", verbose_name="Код причины срыва")
+    lost_reason_text = models.TextField(blank=True, verbose_name="Комментарий причины срыва")
+    lost_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата срыва")
+
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата обновления")
+
+    class Meta:
+        db_table = '"map"."crm_deals"'
+        managed = False
+        ordering = ["-created_at"]
+        verbose_name = "Сделка (map)"
+        verbose_name_plural = "Сделки (map)"
+        indexes = [
+            models.Index(fields=["contact", "stage"]),
+            models.Index(fields=["stage", "created_at"]),
+            models.Index(fields=["product_id"]),
+        ]
+
+    def __str__(self):
+        return f"Сделка #{self.id} - {self.contact.name}"
+
+
 class MapCRMPayment(models.Model):
     """
     Платёж от клиента (map.crm_payments)
@@ -84,6 +161,15 @@ class MapCRMPayment(models.Model):
         related_name="payments",
         db_column="contact_id",
         verbose_name="Клиент",
+    )
+    deal = models.ForeignKey(
+        MapCRMDeal,
+        on_delete=models.SET_NULL,
+        related_name="payments",
+        db_column="deal_id",
+        null=True,
+        blank=True,
+        verbose_name="Сделка",
     )
     product_id = models.IntegerField(
         null=True,
@@ -152,6 +238,7 @@ class MapCRMPayment(models.Model):
             models.Index(fields=["contact", "status"]),
             models.Index(fields=["status", "created_at"]),
             models.Index(fields=["contact", "paid_at"]),
+            models.Index(fields=["deal"]),
             models.Index(fields=["transaction_id"]),
             models.Index(fields=["event_id"]),
         ]

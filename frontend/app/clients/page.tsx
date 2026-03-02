@@ -7,8 +7,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Calendar } from 'lucide-react';
 import {
   crmContactsApi,
+  crmDealsApi,
   crmEventsApi,
   type Contact,
+  type Deal,
   type Event,
 } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
@@ -38,7 +40,8 @@ type SalesFunnelStageKey =
   | 'interest'
   | 'call'
   | 'payment_expected'
-  | 'paid';
+  | 'paid'
+  | 'lost';
 
 type SalesFunnelStageStat = {
   key: SalesFunnelStageKey;
@@ -100,6 +103,11 @@ const SALES_FUNNEL_STAGE_DEFS: Array<Pick<SalesFunnelStageStat, 'key' | 'label' 
     label: 'Оплачено',
     description: 'Есть paid-платёж',
   },
+  {
+    key: 'lost',
+    label: 'Срыв',
+    description: 'Возврат/потерянная сделка',
+  },
 ];
 
 const LOST_REASON_LABELS: Record<LostReasonCode, string> = {
@@ -119,6 +127,7 @@ function createEmptyFunnelCounts(): Record<SalesFunnelStageKey, number> {
     call: 0,
     payment_expected: 0,
     paid: 0,
+    lost: 0,
   };
 }
 
@@ -154,6 +163,11 @@ function normalizeExplicitDealStage(raw: unknown): SalesFunnelStageKey | 'lost' 
   return null;
 }
 
+function resolveDealStage(deal: Deal): SalesFunnelStageKey {
+  const normalized = normalizeExplicitDealStage(deal.stage);
+  return normalized ?? "new_lead";
+}
+
 function normalizeLostReasonCode(raw: unknown): LostReasonCode {
   const value = String(raw ?? '').trim().toLowerCase();
   if (
@@ -180,28 +194,24 @@ function formatPercent(value: number | null): string {
   return `${value.toFixed(1)}%`;
 }
 
-function buildSalesFunnelStats(contacts: Contact[]): SalesFunnelStats {
+function buildSalesFunnelStats(deals: Deal[]): SalesFunnelStats {
   const archivedExcluded = 0;
   const currentCounts = createEmptyFunnelCounts();
   const lostReasonCounts = new Map<LostReasonCode, number>();
   let lostDeals = 0;
 
-  contacts.forEach((contact) => {
-    const explicitDealStage = normalizeExplicitDealStage(contact.deal_stage);
-    if (explicitDealStage && explicitDealStage !== 'lost') {
-      currentCounts[explicitDealStage] += 1;
-    } else if (!explicitDealStage) {
-      currentCounts.new_lead += 1;
-    }
+  deals.forEach((deal) => {
+    const stage = resolveDealStage(deal);
+    currentCounts[stage] += 1;
 
-    if (explicitDealStage === 'lost') {
+    if (stage === 'lost') {
       lostDeals += 1;
-      const reasonCode = normalizeLostReasonCode(contact.deal_loss_reason_code);
+      const reasonCode = normalizeLostReasonCode(deal.lost_reason_code);
       lostReasonCounts.set(reasonCode, (lostReasonCounts.get(reasonCode) ?? 0) + 1);
     }
   });
 
-  const totalLeads = contacts.length;
+  const totalLeads = deals.length;
   const reachedCounts = createEmptyFunnelCounts();
   SALES_FUNNEL_STAGE_DEFS.forEach((stage, index) => {
     const reached = SALES_FUNNEL_STAGE_DEFS.slice(index).reduce((sum, item) => sum + currentCounts[item.key], 0);
@@ -334,6 +344,15 @@ function ClientsPageContent() {
     router.replace(next ? `${pathname}?${next}` : pathname);
   };
 
+  const handleFunnelStageClick = (stageKey: SalesFunnelStageKey) => {
+    updateQuery({
+      tab: 'deals',
+      dealsView: 'list',
+      funnelStage: stageKey,
+      scheduleTab: null,
+    });
+  };
+
   useEffect(() => {
     let isActive = true;
 
@@ -342,9 +361,10 @@ function ClientsPageContent() {
       setStatsError(null);
 
       try {
-        const [contacts, events, settings] = await Promise.all([
+        const [contacts, events, deals, settings] = await Promise.all([
           crmContactsApi.list(),
           crmEventsApi.list(),
+          crmDealsApi.list(),
           clientApi.getSettings(),
         ]);
 
@@ -376,7 +396,7 @@ function ClientsPageContent() {
         setStats({
           upcomingEvents: upcomingEventsSorted.length,
           nextEvents,
-          salesFunnel: buildSalesFunnelStats(contacts),
+          salesFunnel: buildSalesFunnelStats(deals),
         });
       } catch (err) {
         if (!isActive) return;
@@ -513,8 +533,8 @@ function ClientsPageContent() {
           </div>
 
           {statsLoading && (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-              {Array.from({ length: 5 }).map((_, index) => (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
+              {Array.from({ length: 6 }).map((_, index) => (
                 <div
                   key={`funnel-skeleton-${index}`}
                   className="rounded-lg border p-4 animate-pulse"
@@ -531,9 +551,15 @@ function ClientsPageContent() {
 
           {!statsLoading && !statsError && (
             <>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
                 {displayStats.salesFunnel.stages.map((stage, index) => (
-                  <div key={stage.key} className="rounded-lg border p-4">
+                  <button
+                    key={stage.key}
+                    type="button"
+                    onClick={() => handleFunnelStageClick(stage.key)}
+                    className="rounded-lg border p-4 text-left transition-shadow hover:shadow-md cursor-pointer"
+                    title={`Открыть сделки в этапе «${stage.label}»`}
+                  >
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <div className="text-xs text-muted-foreground">
@@ -570,7 +596,7 @@ function ClientsPageContent() {
                         <span className="font-medium">{formatPercent(stage.overallConversionPct)}</span>
                       </div>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
 
@@ -617,6 +643,8 @@ function ClientsPageContent() {
           updateQuery({
             tab: nextTab,
             scheduleTab: nextTab === 'schedule' ? activeScheduleTab : null,
+            funnelStage: nextTab === 'deals' ? searchParams.get('funnelStage') : null,
+            dealsView: nextTab === 'deals' ? searchParams.get('dealsView') : null,
           });
         }}
         className="space-y-3"

@@ -25,16 +25,16 @@ vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
   return {
     ...actual,
-    apiFetch: (...args: any[]) => testState.apiFetch(...args),
+    apiFetch: testState.apiFetch,
   };
 });
 
 vi.mock('@/lib/hooks', () => ({
-  useTenantTimezone: (...args: any[]) => testState.useTenantTimezone(...args),
+  useTenantTimezone: testState.useTenantTimezone,
 }));
 
 vi.mock('@/lib/timezone', () => ({
-  formatInTenantTimezone: (...args: any[]) => testState.formatInTenantTimezone(...args),
+  formatInTenantTimezone: testState.formatInTenantTimezone,
 }));
 
 vi.mock('@/lib/post-generation-events', () => ({

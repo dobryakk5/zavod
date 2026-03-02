@@ -107,6 +107,7 @@ from .views_tgstat import (
 from .views_crm_orm import (
     ContactTelegramLinkView,
     MapContactViewSet,
+    MapCRMDealViewSet,
     MapCRMPaymentViewSet,
     MapCRMTagViewSet,
     MapCRMCategoryViewSet,
@@ -177,6 +178,7 @@ router.register(r'kb/search', KbSearchViewSet, basename='kb-search')
 # CRM router (ORM для CRM сущностей map.*)
 crm_router = DefaultRouter()
 crm_router.register(r'contacts', MapContactViewSet, basename='crm-contact')
+crm_router.register(r'deals', MapCRMDealViewSet, basename='crm-deal')
 crm_router.register(r'payments', MapCRMPaymentViewSet, basename='crm-payment')
 crm_router.register(r'tags', MapCRMTagViewSet, basename='crm-tag')
 crm_router.register(r'categories', MapCRMCategoryViewSet, basename='crm-category')

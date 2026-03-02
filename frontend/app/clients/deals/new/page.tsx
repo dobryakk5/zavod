@@ -2,38 +2,45 @@
 
 import Link from 'next/link';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { crmContactsApi, crmPaymentsApi, type Contact, type Payment } from '@/lib/api/crm';
+import { crmContactsApi, crmDealsApi, type Contact, type Deal, type DealLossReasonCode } from '@/lib/api/crm';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import type { ClientProduct } from '@/lib/types';
 
-type DealStatus = Payment['status'];
+type DealStage = Deal['stage'];
 
-const DEAL_STATUS_OPTIONS: Array<{ value: DealStatus; label: string }> = [
-  { value: 'pending', label: 'В ожидании' },
+const DEAL_STAGE_OPTIONS: Array<{ value: DealStage; label: string }> = [
+  { value: 'new_lead', label: 'Новый лид' },
+  { value: 'interest', label: 'Интерес' },
+  { value: 'call', label: 'Созвон' },
+  { value: 'payment_expected', label: 'Оплата ожидается' },
   { value: 'paid', label: 'Оплачено' },
-  { value: 'failed', label: 'Ошибка' },
-  { value: 'refunded', label: 'Возврат' },
+  { value: 'lost', label: 'Срыв' },
+];
+
+const LOST_REASON_OPTIONS: Array<{ value: Exclude<DealLossReasonCode, ''>; label: string }> = [
+  { value: 'price', label: 'Дорого' },
+  { value: 'timing', label: 'Не вовремя' },
+  { value: 'no_response', label: 'Не отвечает' },
+  { value: 'not_fit', label: 'Не подходит' },
+  { value: 'competitor', label: 'Ушёл к конкуренту' },
+  { value: 'priority_changed', label: 'Изменился приоритет' },
+  { value: 'other', label: 'Другое' },
 ];
 
 const CURRENCY_OPTIONS = ['RUB', 'USD', 'EUR'] as const;
 
-function normalizeDealStatus(raw: unknown): DealStatus {
+function normalizeDealStage(raw: unknown): DealStage {
   const value = String(raw ?? '').trim().toLowerCase();
-  if (value === 'pending' || value === 'paid' || value === 'failed' || value === 'refunded') return value;
-  return 'pending';
-}
-
-function fromDateTimeInputValue(value: string): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
+  if (value === 'new_lead' || value === 'interest' || value === 'call' || value === 'payment_expected' || value === 'paid' || value === 'lost') {
+    return value;
+  }
+  return 'new_lead';
 }
 
 function getContactLabel(contactId: number, contactsById: Map<number, Contact>): string {
@@ -47,6 +54,8 @@ function getContactLabel(contactId: number, contactsById: Map<number, Contact>):
 
 export default function DealCreatePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const preselectedContactName = (searchParams.get('contactName') || '').trim();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [products, setProducts] = useState<ClientProduct[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,13 +65,12 @@ export default function DealCreatePage() {
 
   const [contactId, setContactId] = useState<string>('none');
   const [productId, setProductId] = useState<string>('none');
-  const [status, setStatus] = useState<DealStatus>('pending');
+  const [stage, setStage] = useState<DealStage>('new_lead');
   const [amount, setAmount] = useState<string>('');
   const [currency, setCurrency] = useState<string>('RUB');
-  const [plannedAt, setPlannedAt] = useState<string>('');
-  const [paidAt, setPaidAt] = useState<string>('');
-  const [paymentMethod, setPaymentMethod] = useState<string>('');
   const [description, setDescription] = useState<string>('');
+  const [lostReasonCode, setLostReasonCode] = useState<string>('none');
+  const [lostReasonText, setLostReasonText] = useState<string>('');
 
   useEffect(() => {
     let isActive = true;
@@ -74,7 +82,17 @@ export default function DealCreatePage() {
         if (!isActive) return;
         setContacts(contactsData);
         setProducts(productsData);
-        if (contactsData[0]) setContactId(String(contactsData[0].id));
+        const preselectedContactIdRaw = searchParams.get('contactId');
+        const preselectedContactId = Number(preselectedContactIdRaw);
+        if (
+          Number.isFinite(preselectedContactId) &&
+          preselectedContactId > 0 &&
+          contactsData.some((item) => item.id === preselectedContactId)
+        ) {
+          setContactId(String(preselectedContactId));
+        } else if (contactsData[0]) {
+          setContactId(String(contactsData[0].id));
+        }
         if (productsData[0]) setProductId(String(productsData[0].id));
       } catch (error) {
         console.error('Failed to load create-deal page', error);
@@ -88,7 +106,7 @@ export default function DealCreatePage() {
     return () => {
       isActive = false;
     };
-  }, []);
+  }, [searchParams]);
 
   const contactsById = useMemo(() => new Map<number, Contact>(contacts.map((contact) => [contact.id, contact])), [contacts]);
   const selectedProductId = useMemo(() => {
@@ -100,17 +118,19 @@ export default function DealCreatePage() {
     event.preventDefault();
     setSaveError(null);
 
-    if (contactId === 'none') {
+    const parsedContactId = Number(contactId);
+    const parsedProductId = Number(productId);
+    if (!Number.isFinite(parsedContactId) || parsedContactId <= 0) {
       setSaveError('Выберите клиента.');
       return;
     }
-    if (productId === 'none') {
+    if (!Number.isFinite(parsedProductId) || parsedProductId <= 0) {
       setSaveError('Выберите продукт.');
       return;
     }
 
     const parsedAmount = Number.parseFloat(amount.replace(',', '.'));
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
       setSaveError('Введите корректную сумму.');
       return;
     }
@@ -121,31 +141,22 @@ export default function DealCreatePage() {
       return;
     }
 
-    const plannedAtIso = fromDateTimeInputValue(plannedAt);
-    const paidAtIso = fromDateTimeInputValue(paidAt);
-    if (status === 'paid' && paidAt && !paidAtIso) {
-      setSaveError('Некорректная дата фактической оплаты.');
-      return;
-    }
-    if (plannedAt && !plannedAtIso) {
-      setSaveError('Некорректная плановая дата.');
+    if (stage === 'lost' && lostReasonCode === 'none') {
+      setSaveError('Укажите причину срыва.');
       return;
     }
 
     setSaving(true);
     try {
-      const created = await crmPaymentsApi.create({
-        contact_id: Number(contactId),
-        product_id: Number(productId),
-        event_id: null,
+      const created = await crmDealsApi.create({
+        contact_id: parsedContactId,
+        product_id: parsedProductId,
+        stage,
         amount: parsedAmount,
         currency: normalizedCurrency,
-        status,
-        payment_method: paymentMethod.trim(),
-        transaction_id: `deal_${Date.now()}`,
         description: description.trim(),
-        planned_at: plannedAtIso,
-        paid_at: status === 'paid' ? (paidAtIso || new Date().toISOString()) : null,
+        lost_reason_code: stage === 'lost' ? (lostReasonCode as Exclude<DealLossReasonCode, ''>) : '',
+        lost_reason_text: stage === 'lost' ? lostReasonText.trim() : '',
       });
       router.replace(`/clients/deals/${created.id}`);
     } catch (error) {
@@ -161,7 +172,10 @@ export default function DealCreatePage() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Новая сделка</h1>
-          <p className="text-sm text-muted-foreground">Сделка создаётся как платеж с привязкой к продукту</p>
+          <p className="text-sm text-muted-foreground">
+            Сделка — отдельная сущность, платежи привязываются к ней позже
+            {preselectedContactName ? ` · Клиент: ${preselectedContactName}` : ''}
+          </p>
         </div>
         <Button asChild variant="outline">
           <Link href="/clients?tab=deals">К списку сделок</Link>
@@ -224,12 +238,12 @@ export default function DealCreatePage() {
 
             <div className="space-y-2">
               <Label>Этап</Label>
-              <Select value={status} onValueChange={(value) => setStatus(normalizeDealStatus(value))}>
+              <Select value={stage} onValueChange={(value) => setStage(normalizeDealStage(value))}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {DEAL_STATUS_OPTIONS.map((option) => (
+                  {DEAL_STAGE_OPTIONS.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>
@@ -265,36 +279,24 @@ export default function DealCreatePage() {
               </Select>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="deal-method">Метод оплаты</Label>
-              <Input
-                id="deal-method"
-                value={paymentMethod}
-                onChange={(event) => setPaymentMethod(event.target.value)}
-                placeholder="Например, card"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="deal-planned-at">Плановая дата оплаты</Label>
-              <Input
-                id="deal-planned-at"
-                type="datetime-local"
-                value={plannedAt}
-                onChange={(event) => setPlannedAt(event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="deal-paid-at">Дата оплаты</Label>
-              <Input
-                id="deal-paid-at"
-                type="datetime-local"
-                value={paidAt}
-                onChange={(event) => setPaidAt(event.target.value)}
-                disabled={status !== 'paid'}
-              />
-            </div>
+            {stage === 'lost' ? (
+              <div className="space-y-2">
+                <Label>Причина срыва</Label>
+                <Select value={lostReasonCode} onValueChange={setLostReasonCode}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Выберите причину" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Не выбрано</SelectItem>
+                    {LOST_REASON_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
           </div>
 
           <div className="space-y-2">
@@ -307,6 +309,19 @@ export default function DealCreatePage() {
               rows={4}
             />
           </div>
+
+          {stage === 'lost' ? (
+            <div className="space-y-2">
+              <Label htmlFor="deal-lost-comment">Комментарий причины</Label>
+              <Textarea
+                id="deal-lost-comment"
+                value={lostReasonText}
+                onChange={(event) => setLostReasonText(event.target.value)}
+                placeholder="Почему сделка сорвалась"
+                rows={3}
+              />
+            </div>
+          ) : null}
 
           {saveError ? <p className="text-sm text-red-500">{saveError}</p> : null}
 

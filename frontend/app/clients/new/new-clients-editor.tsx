@@ -60,6 +60,14 @@ type Props = {
   activeTab?: 'clients' | 'categories' | 'payments';
 };
 
+function formatIntegerAmount(value: unknown): string {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '0';
+  return new Intl.NumberFormat('ru-RU', {
+    maximumFractionDigits: 0,
+  }).format(Math.round(parsed));
+}
+
 export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   const [clients, setClients] = useState<Client[]>([]);
   const [events, setEvents] = useState<CrmEvent[]>([]);
@@ -180,7 +188,9 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
   };
 
   const handleDeletePayment = async (payment: Payment) => {
-    const confirmed = window.confirm(`Удалить платеж на сумму ${payment.amount} ${payment.currency}?`);
+    const confirmed = window.confirm(
+      `Удалить платеж на сумму ${formatIntegerAmount(payment.amount)} ${payment.currency}?`
+    );
     if (!confirmed) return;
 
     setPaymentDeletingId(payment.id);

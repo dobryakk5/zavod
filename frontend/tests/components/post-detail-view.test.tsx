@@ -39,33 +39,33 @@ vi.mock('@/lib/api/posts', () => ({
 
 vi.mock('@/lib/api/schedules', () => ({
   schedulesApi: {
-    list: (...args: any[]) => testState.schedulesList(...args),
-    publishNow: (...args: any[]) => testState.schedulesPublishNow(...args),
+    list: testState.schedulesList,
+    publishNow: testState.schedulesPublishNow,
   },
 }));
 
 vi.mock('@/lib/hooks', () => ({
-  useClient: (...args: any[]) => testState.useClient(...args),
-  useTenantTimezone: (...args: any[]) => testState.useTenantTimezone(...args),
+  useClient: testState.useClient,
+  useTenantTimezone: testState.useTenantTimezone,
 }));
 
 vi.mock('@/lib/sanitize-html', () => ({
-  sanitizeRichText: (...args: any[]) => testState.sanitizeRichText(...args),
+  sanitizeRichText: testState.sanitizeRichText,
 }));
 
 vi.mock('@/lib/highlight-html', () => ({
-  highlightPhrasesInHtml: (...args: any[]) => testState.highlightPhrasesInHtml(...args),
+  highlightPhrasesInHtml: testState.highlightPhrasesInHtml,
 }));
 
 vi.mock('@/lib/timezone', () => ({
-  formatInTenantTimezone: (...args: any[]) => testState.formatInTenantTimezone(...args),
+  formatInTenantTimezone: testState.formatInTenantTimezone,
 }));
 
 vi.mock('sonner', () => ({
   toast: {
-    success: (...args: any[]) => testState.toastSuccess(...args),
-    error: (...args: any[]) => testState.toastError(...args),
-    warning: (...args: any[]) => testState.toastWarning(...args),
+    success: testState.toastSuccess,
+    error: testState.toastError,
+    warning: testState.toastWarning,
   },
 }));
 

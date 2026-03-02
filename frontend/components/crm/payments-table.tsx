@@ -21,6 +21,7 @@ export type PaymentsTablePayment = {
   amount: number;
   currency: string;
   status: PaymentStatus;
+  planned_at?: string | null;
   paid_at?: string | null;
 };
 
@@ -98,7 +99,7 @@ export function PaymentsTable<
             <TableHead>Клиент</TableHead>
             <TableHead>Сумма</TableHead>
             <TableHead>Статус</TableHead>
-            <TableHead>Дата</TableHead>
+            <TableHead>Плановая дата</TableHead>
             <TableHead>Дата оплаты</TableHead>
             <TableHead>Действия</TableHead>
           </TableRow>
@@ -109,6 +110,7 @@ export function PaymentsTable<
               const contact = contactsById.get(payment.contact_id);
               const eventDate =
                 payment.event_id != null ? eventDateById?.get(payment.event_id) : undefined;
+              const plannedDate = eventDate || payment.planned_at || null;
               return (
                 <TableRow key={payment.id}>
                   <TableCell className="font-medium">{buildContactLabel(contact, contactsById)}</TableCell>
@@ -119,8 +121,8 @@ export function PaymentsTable<
                     <Badge variant={getStatusVariant(payment.status)}>{getStatusLabel(payment.status)}</Badge>
                   </TableCell>
                   <TableCell>
-                    {eventDate
-                      ? formatInTenantTimezone(eventDate, tenantTimezone, {
+                    {plannedDate
+                      ? formatInTenantTimezone(plannedDate, tenantTimezone, {
                           year: 'numeric',
                           month: '2-digit',
                           day: '2-digit',
@@ -140,6 +142,7 @@ export function PaymentsTable<
                     <div className="flex space-x-2">
                       {onCopyPaymentLink && (
                         <Button
+                          type="button"
                           variant="outline"
                           size="sm"
                           onClick={() => onCopyPaymentLink(payment, contact)}
@@ -151,6 +154,7 @@ export function PaymentsTable<
                       )}
                       {onEditPayment && (
                         <Button
+                          type="button"
                           variant="outline"
                           size="sm"
                           onClick={() => onEditPayment(payment, contact)}
@@ -161,6 +165,7 @@ export function PaymentsTable<
                       )}
                       {onDeletePayment && (
                         <Button
+                          type="button"
                           variant="outline"
                           size="sm"
                           className="text-red-600 hover:text-red-700"

@@ -19,24 +19,24 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/lib/api/telegramTasks', () => ({
   telegramTasksApi: {
-    list: (...args: any[]) => testState.telegramList(...args),
+    list: testState.telegramList,
   },
 }));
 
 vi.mock('@/lib/api/operatorTasks', () => ({
   operatorTasksApi: {
-    list: (...args: any[]) => testState.operatorList(...args),
-    create: (...args: any[]) => testState.operatorCreate(...args),
-    addHistory: (...args: any[]) => testState.operatorAddHistory(...args),
+    list: testState.operatorList,
+    create: testState.operatorCreate,
+    addHistory: testState.operatorAddHistory,
   },
 }));
 
 vi.mock('@/lib/hooks', () => ({
-  useTenantTimezone: (...args: any[]) => testState.useTenantTimezone(...args),
+  useTenantTimezone: testState.useTenantTimezone,
 }));
 
 vi.mock('@/lib/timezone', () => ({
-  formatInTenantTimezone: (...args: any[]) => testState.formatInTenantTimezone(...args),
+  formatInTenantTimezone: testState.formatInTenantTimezone,
 }));
 
 describe('ScheduleTasksView', () => {

@@ -16,16 +16,16 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/lib/api/schedules', () => ({
   schedulesApi: {
-    list: (...args: any[]) => testState.list(...args),
+    list: testState.list,
   },
 }));
 
 vi.mock('@/lib/hooks', () => ({
-  useTenantTimezone: (...args: any[]) => testState.useTenantTimezone(...args),
+  useTenantTimezone: testState.useTenantTimezone,
 }));
 
 vi.mock('@/lib/timezone', () => ({
-  formatInTenantTimezone: (...args: any[]) => testState.formatInTenantTimezone(...args),
+  formatInTenantTimezone: testState.formatInTenantTimezone,
 }));
 
 describe('ScheduleListView', () => {

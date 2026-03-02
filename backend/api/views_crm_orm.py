@@ -17,6 +17,7 @@ from core.models import (
     MapContact,
     MapContactTag,
     MapCRMCategory,
+    MapCRMDeal,
     MapCRMEvent,
     MapCRMEventType,
     MapCRMNote,
@@ -40,6 +41,8 @@ from .serializers_crm_orm import (
     MapAvailabilityEventSerializer,
     MapContactSerializer,
     MapCRMCategorySerializer,
+    MapCRMDealListSerializer,
+    MapCRMDealSerializer,
     MapCRMEventSerializer,
     MapCRMEventTypeSerializer,
     MapCRMNoteSerializer,
@@ -191,7 +194,7 @@ class MapCRMPaymentViewSet(viewsets.ModelViewSet):
     """
     permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ["status", "currency", "contact_id", "product_id", "event_id"]
+    filterset_fields = ["status", "currency", "contact_id", "deal_id", "product_id", "event_id"]
     ordering_fields = ["created_at", "paid_at", "amount", "status"]
     ordering = ["-created_at"]
 
@@ -201,12 +204,13 @@ class MapCRMPaymentViewSet(viewsets.ModelViewSet):
         return MapCRMPaymentSerializer
 
     def get_queryset(self):
-        return MapCRMPayment.objects.select_related("contact")
+        return MapCRMPayment.objects.select_related("contact", "deal")
 
     def _record_paid_product_purchase(self, payment: MapCRMPayment) -> None:
         if str(getattr(payment, "status", "") or "") != "paid":
             return
-        product_id = getattr(payment, "product_id", None)
+        deal = getattr(payment, "deal", None)
+        product_id = getattr(payment, "product_id", None) or getattr(deal, "product_id", None)
         contact_id = getattr(payment, "contact_id", None)
         if not product_id or not contact_id:
             return
@@ -306,6 +310,26 @@ class MapCRMTagViewSet(viewsets.ModelViewSet):
             if tag.type in result:
                 result[tag.type].append(MapCRMTagSerializer(tag).data)
         return Response(result)
+
+
+class MapCRMDealViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet для сделок (map.crm_deals)
+    Эндпоинты: list, create, retrieve, update, partial_update, destroy
+    """
+    permission_classes = [IsTenantMember]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ["stage", "currency", "contact_id", "product_id", "lost_reason_code"]
+    ordering_fields = ["created_at", "updated_at", "amount", "stage"]
+    ordering = ["-updated_at", "-created_at"]
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return MapCRMDealListSerializer
+        return MapCRMDealSerializer
+
+    def get_queryset(self):
+        return MapCRMDeal.objects.select_related("contact").annotate(payments_count=Count("payments"))
 
 
 class MapCRMCategoryViewSet(viewsets.ModelViewSet):
