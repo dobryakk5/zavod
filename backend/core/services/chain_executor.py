@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from django.db import connection
@@ -16,6 +16,10 @@ from core.models import (
     ChainEdge,
     ChainNode,
     ChainSession,
+    ClientProduct,
+    ContactFact,
+    MapAvailabilityEvent,
+    MapCRMEvent,
     MapCRMPayment,
     MapContactTag,
     UserTenantBinding,
@@ -25,6 +29,18 @@ from core.services.chain_service import get_or_create_chain, get_or_create_chain
 
 logger = logging.getLogger(__name__)
 MAX_CHAIN_HISTORY_ITEMS = 200
+MAX_AI_HISTORY_ITEMS = 20
+
+_NODE_TYPE_TO_ACTION: dict[str, str] = {
+    "photo": "send_photo",
+    "buttons": "send_buttons",
+}
+
+
+def _is_chain_active(obj: Any) -> bool:
+    """Return True when the chain attached to *obj* (Chain or ChainSession) has status 'active'."""
+    chain = getattr(obj, "chain", obj)
+    return str(getattr(chain, "status", "") or "").lower() == "active"
 
 
 class ChainExecutor:
@@ -49,7 +65,7 @@ class ChainExecutor:
         chain = get_or_create_chain_for_tenant(tenant_id, chain_id=chain_id, chain_key=chain_key)
         if not chain.start_node_id:
             raise ValueError("Chain has no start node")
-        if str(getattr(chain, "status", "") or "").lower() != "active":
+        if not _is_chain_active(chain):
             return {"session_id": None, "actions": [], "session_status": "chain_not_active"}
 
         session = self._get_active_session(
@@ -58,10 +74,25 @@ class ChainExecutor:
             chain_id=chain.id,
             provider=provider,
         )
+        preserved_ai_summary: dict[str, Any] | None = None
+        if session and isinstance(session.context, dict):
+            ai_summary_value = session.context.get("ai_summary")
+            if isinstance(ai_summary_value, dict) and ai_summary_value:
+                preserved_ai_summary = dict(ai_summary_value)
+        if not preserved_ai_summary:
+            preserved_ai_summary = self._get_latest_ai_summary(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                chain_id=chain.id,
+                provider=provider,
+            )
+
         context = {
             "provider": provider,
             "provider_user_id": resolved_provider_user_id,
         }
+        if preserved_ai_summary:
+            context["ai_summary"] = preserved_ai_summary
         if channel_meta:
             context["channel_meta"] = dict(channel_meta)
         if initial_context:
@@ -110,7 +141,7 @@ class ChainExecutor:
         )
         if not session:
             return {"session_id": None, "actions": [], "session_status": "none"}
-        if str(getattr(getattr(session, "chain", None), "status", "") or "").lower() != "active":
+        if not _is_chain_active(session):
             return {"session_id": session.id, "actions": [], "session_status": "chain_not_active"}
 
         context = dict(session.context or {})
@@ -132,9 +163,7 @@ class ChainExecutor:
             provider=provider,
             provider_user_id=resolved_provider_user_id,
         )
-        session.context = context
-        session.last_activity_at = timezone.now()
-        session.save(update_fields=["context", "last_activity_at", "updated_at"])
+        self._save_session_context(session, context)
 
         if not session.current_node_id:
             logger.warning("Chain session %s has no current node", session.id)
@@ -167,14 +196,33 @@ class ChainExecutor:
             context = dict(session.context or {})
             context.setdefault("answers", {})
             context["answers"][str(session.current_node_id)] = user_message
-            context["last_message_at"] = datetime.utcnow().isoformat()
+            context["last_message_at"] = timezone.now().isoformat()
 
-            session.context = context
-            session.last_activity_at = timezone.now()
-            session.save(update_fields=["context", "last_activity_at", "updated_at"])
+            self._save_session_context(session, context)
 
             actions = self._advance_to_node(session, matching_edge.target_node_id)
             return {"session_id": session.id, "actions": actions, "session_status": "active"}
+
+        if current_node.node_type == "booking":
+            return self._process_booking_message(
+                session=session,
+                current_node=current_node,
+                user_message=user_message,
+                provider=provider,
+                provider_user_id=resolved_provider_user_id,
+            )
+        if current_node.node_type == "product_list":
+            return self._process_product_list_message(
+                session=session,
+                current_node=current_node,
+                user_message=user_message,
+            )
+        if current_node.node_type == "ai_assistant":
+            return self._process_ai_assistant_message(
+                session=session,
+                current_node=current_node,
+                user_message=user_message,
+            )
 
         edges = self._get_edges_with_conditions(session.current_node_id)
 
@@ -201,11 +249,9 @@ class ChainExecutor:
         context = dict(session.context or {})
         context.setdefault("answers", {})
         context["answers"][str(session.current_node_id)] = user_message
-        context["last_message_at"] = datetime.utcnow().isoformat()
+        context["last_message_at"] = timezone.now().isoformat()
 
-        session.context = context
-        session.last_activity_at = timezone.now()
-        session.save(update_fields=["context", "last_activity_at", "updated_at"])
+        self._save_session_context(session, context)
 
         actions = self._advance_to_node(session, matching_edge["target_node_id"])
         return {"session_id": session.id, "actions": actions, "session_status": "active"}
@@ -223,7 +269,7 @@ class ChainExecutor:
 
         if session.status != "active":
             return {"actions": []}
-        if str(getattr(getattr(session, "chain", None), "status", "") or "").lower() != "active":
+        if not _is_chain_active(session):
             return {"actions": []}
 
         if session.current_node_id != edge.source_node_id:
@@ -268,38 +314,26 @@ class ChainExecutor:
             })
             return actions
 
-        if node.node_type == "start":
+        if node.node_type == "booking":
+            actions.extend(self._enter_booking_node(session, node))
+            return actions
+        if node.node_type == "product_list":
+            actions.extend(self._enter_product_list_node(session, node))
+            return actions
+        if node.node_type == "ai_assistant":
+            actions.extend(self._enter_ai_assistant_node(session, node))
+            return actions
+
+        if node.node_type in ("start", "text", "photo", "buttons"):
             payload = dict(node.payload or {})
             payload["node_id"] = node.id
-            buttons = payload.get("buttons") or []
-            has_buttons = len(buttons) > 0
+            # start/text: prefer send_buttons when buttons are present, otherwise send_text
+            if node.node_type in ("start", "text"):
+                action_type = "send_buttons" if payload.get("buttons") else "send_text"
+            else:
+                action_type = _NODE_TYPE_TO_ACTION[node.node_type]
             actions.append({
-                "action_type": "send_buttons" if has_buttons else "send_text",
-                "payload": payload,
-                "delay_seconds": node.delay_seconds,
-            })
-        elif node.node_type == "text":
-            payload = dict(node.payload or {})
-            payload["node_id"] = node.id
-            has_buttons = bool(payload.get("buttons"))
-            actions.append({
-                "action_type": "send_buttons" if has_buttons else "send_text",
-                "payload": payload,
-                "delay_seconds": node.delay_seconds,
-            })
-        elif node.node_type == "photo":
-            payload = dict(node.payload or {})
-            payload["node_id"] = node.id
-            actions.append({
-                "action_type": "send_photo",
-                "payload": payload,
-                "delay_seconds": node.delay_seconds,
-            })
-        elif node.node_type == "buttons":
-            payload = dict(node.payload or {})
-            payload["node_id"] = node.id
-            actions.append({
-                "action_type": "send_buttons",
+                "action_type": action_type,
                 "payload": payload,
                 "delay_seconds": node.delay_seconds,
             })
@@ -335,6 +369,668 @@ class ChainExecutor:
                     })
 
         return actions
+
+    def _enter_product_list_node(self, session: ChainSession, node: ChainNode) -> list[dict[str, Any]]:
+        payload = dict(node.payload or {})
+        context = dict(session.context or {})
+        node_key = str(node.id)
+
+        products = list(
+            ClientProduct.objects
+            .filter(owner_id=session.tenant_id, status=ClientProduct.STATUS_ACTIVE)
+            .order_by("name", "id")[:20]
+        )
+        if not products:
+            no_products_text = str(payload.get("no_products_text") or "Продуктов пока нет.")
+            return [{
+                "action_type": "send_text",
+                "payload": {"text": no_products_text, "node_id": node.id},
+                "delay_seconds": node.delay_seconds,
+            }]
+
+        products_map: dict[str, int] = {}
+        buttons: list[str] = []
+        for item in products:
+            base_label = str(item.name or "").strip() or f"Продукт #{item.id}"
+            label = base_label
+            suffix = 2
+            while label in products_map:
+                label = f"{base_label} ({suffix})"
+                suffix += 1
+            products_map[label] = int(item.id)
+            buttons.append(label)
+
+        context.setdefault("product_list_state", {})
+        context["product_list_state"][node_key] = {"products_map": products_map}
+        self._save_session_context(session, context)
+
+        intro_text = str(payload.get("intro_text") or "Выберите продукт:")
+        return [{
+            "action_type": "send_buttons",
+            "payload": {
+                "text": intro_text,
+                "buttons": buttons,
+                "node_id": node.id,
+            },
+            "delay_seconds": node.delay_seconds,
+        }]
+
+    def _enter_booking_node(self, session: ChainSession, node: ChainNode) -> list[dict[str, Any]]:
+        payload = dict(node.payload or {})
+        mode = str(payload.get("mode") or "create").strip().lower()
+        context = dict(session.context or {})
+        node_key = str(node.id)
+
+        if mode == "reschedule":
+            contact_id = _resolve_contact_id(
+                session_context=context,
+                user_id=session.user_id,
+                tenant_id=session.tenant_id,
+                provider=str(context.get("provider") or ""),
+                provider_user_id=str(context.get("provider_user_id") or ""),
+            )
+            nearest_event = None
+            if contact_id:
+                nearest_event = (
+                    MapCRMEvent.objects
+                    .filter(contact_id=contact_id, status="scheduled", start_time__gt=timezone.now())
+                    .order_by("start_time")
+                    .first()
+                )
+            if nearest_event:
+                slot_label = _format_booking_slot_label(nearest_event.start_time, payload.get("timezone"))
+                context.setdefault("booking_state", {})
+                context["booking_state"][node_key] = {
+                    "step": "confirm_nearest",
+                    "mode": "reschedule",
+                    "event_id": int(nearest_event.id),
+                    "event_label": slot_label,
+                }
+                self._save_session_context(session, context)
+
+                text = str(payload.get("confirm_reschedule_text") or "Переносим встречу {slot}?")
+                return [{
+                    "action_type": "send_buttons",
+                    "payload": {
+                        "text": text.replace("{slot}", slot_label),
+                        "buttons": ["Да", "Выбрать другую"],
+                        "node_id": node.id,
+                    },
+                    "delay_seconds": node.delay_seconds,
+                }]
+
+        # create mode or fallback when nothing to reschedule
+        return self._send_slots(
+            session=session,
+            node=node,
+            context=context,
+            event_id=None,
+            mode="create",
+            delay_seconds=node.delay_seconds,
+        )
+
+    def _send_slots(
+        self,
+        *,
+        session: ChainSession,
+        node: ChainNode,
+        context: dict[str, Any],
+        event_id: int | None,
+        mode: str,
+        delay_seconds: int = 0,
+    ) -> list[dict[str, Any]]:
+        payload = dict(node.payload or {})
+        node_key = str(node.id)
+        slots = self._build_booking_slots(tenant_id=session.tenant_id, exclude_event_id=event_id)
+
+        if not slots:
+            no_slots_text = str(payload.get("no_slots_text") or "Свободных слотов пока нет.")
+            context.setdefault("booking_state", {})
+            context["booking_state"][node_key] = {
+                "step": "no_slots",
+                "mode": mode,
+                "event_id": event_id,
+            }
+            self._save_session_context(session, context)
+            return [{
+                "action_type": "send_text",
+                "payload": {"text": no_slots_text, "node_id": node.id},
+                "delay_seconds": delay_seconds,
+            }]
+
+        slot_map: dict[str, dict[str, Any]] = {}
+        buttons: list[str] = []
+        tz_name = payload.get("timezone")
+        for item in slots:
+            base_label = _format_booking_slot_label(item["start_time"], tz_name)
+            label = base_label
+            suffix = 2
+            while label in slot_map:
+                label = f"{base_label} ({suffix})"
+                suffix += 1
+            slot_map[label] = {
+                "start_time": item["start_time"].isoformat(),
+                "duration_minutes": int(item["duration_minutes"]),
+            }
+            buttons.append(label)
+
+        context.setdefault("booking_state", {})
+        context["booking_state"][node_key] = {
+            "step": "select_slot",
+            "mode": mode,
+            "event_id": event_id,
+            "slots_map": slot_map,
+        }
+        self._save_session_context(session, context)
+
+        slots_intro_text = str(payload.get("slots_intro_text") or "Выберите удобное время:")
+        return [{
+            "action_type": "send_buttons",
+            "payload": {
+                "text": slots_intro_text,
+                "buttons": buttons,
+                "node_id": node.id,
+            },
+            "delay_seconds": delay_seconds,
+        }]
+
+    def _build_booking_slots(self, *, tenant_id: int, exclude_event_id: int | None = None) -> list[dict[str, Any]]:
+        now = timezone.now()
+        availability_items = list(
+            MapAvailabilityEvent.objects
+            .filter(tenant_id=tenant_id, start_time__gt=now)
+            .order_by("start_time")[:30]
+        )
+        if not availability_items:
+            return []
+
+        busy_qs = MapCRMEvent.objects.filter(status="scheduled", start_time__lt=now + timedelta(days=90))
+        if exclude_event_id:
+            busy_qs = busy_qs.exclude(id=exclude_event_id)
+        busy_intervals: list[tuple[datetime, datetime]] = []
+        for event in busy_qs.only("start_time", "end_time"):
+            start_at = _coerce_datetime(event.start_time)
+            if not start_at:
+                continue
+            end_at = _coerce_datetime(event.end_time) or (start_at + timedelta(hours=1))
+            busy_intervals.append((start_at, end_at))
+
+        result: list[dict[str, Any]] = []
+        for availability in availability_items:
+            start_at = _coerce_datetime(availability.start_time)
+            if not start_at:
+                continue
+            duration = int(getattr(availability, "duration_minutes", 0) or 60)
+            if duration <= 0:
+                duration = 60
+            end_at = start_at + timedelta(minutes=duration)
+            if end_at <= now:
+                continue
+            if _interval_overlaps_any(start_at, end_at, busy_intervals):
+                continue
+            result.append({
+                "start_time": start_at,
+                "duration_minutes": duration,
+            })
+
+        return result[:10]
+
+    def _process_booking_message(
+        self,
+        *,
+        session: ChainSession,
+        current_node: ChainNode,
+        user_message: dict[str, Any],
+        provider: str,
+        provider_user_id: str,
+    ) -> dict[str, Any]:
+        payload = dict(current_node.payload or {})
+        context = dict(session.context or {})
+        node_key = str(current_node.id)
+        booking_state_root = context.get("booking_state")
+        booking_state = booking_state_root.get(node_key) if isinstance(booking_state_root, dict) else None
+        state = booking_state if isinstance(booking_state, dict) else {}
+        step = str(state.get("step") or "")
+        pressed_raw = user_message.get("button") or user_message.get("text") or ""
+        pressed = str(pressed_raw).strip()
+
+        if not step:
+            return self._respond(session, self._enter_booking_node(session, current_node))
+
+        if step == "confirm_nearest":
+            if pressed == "Да":
+                return self._respond(
+                    session,
+                    self._send_slots(
+                        session=session,
+                        node=current_node,
+                        context=context,
+                        event_id=_safe_int(state.get("event_id"), None),
+                        mode="reschedule",
+                    ),
+                )
+            if pressed == "Выбрать другую":
+                contact_id = _resolve_contact_id(
+                    session_context=context,
+                    user_id=session.user_id,
+                    tenant_id=session.tenant_id,
+                    provider=provider,
+                    provider_user_id=provider_user_id,
+                )
+                events_qs = MapCRMEvent.objects.none()
+                if contact_id:
+                    events_qs = (
+                        MapCRMEvent.objects
+                        .filter(contact_id=contact_id, status="scheduled", start_time__gt=timezone.now())
+                        .order_by("start_time")[:10]
+                    )
+                events = list(events_qs)
+                if not events:
+                    no_events_text = str(
+                        payload.get("no_events_text")
+                        or payload.get("no_slots_text")
+                        or "Нет встреч для переноса."
+                    )
+                    return self._respond(session, [{
+                        "action_type": "send_text",
+                        "payload": {"text": no_events_text, "node_id": current_node.id},
+                        "delay_seconds": 0,
+                    }])
+
+                events_map: dict[str, int] = {}
+                buttons: list[str] = []
+                tz_name = payload.get("timezone")
+                for event in events:
+                    base_label = _format_booking_slot_label(event.start_time, tz_name)
+                    label = base_label
+                    suffix = 2
+                    while label in events_map:
+                        label = f"{base_label} ({suffix})"
+                        suffix += 1
+                    events_map[label] = int(event.id)
+                    buttons.append(label)
+
+                context.setdefault("booking_state", {})
+                context["booking_state"][node_key] = {
+                    "step": "select_event",
+                    "mode": "reschedule",
+                    "events_map": events_map,
+                }
+                self._save_session_context(session, context)
+
+                return self._respond(session, [{
+                    "action_type": "send_buttons",
+                    "payload": {
+                        "text": str(payload.get("select_event_text") or "Выберите встречу для переноса:"),
+                        "buttons": buttons,
+                        "node_id": current_node.id,
+                    },
+                    "delay_seconds": 0,
+                }])
+            return {"session_id": session.id, "actions": [], "session_status": "active"}
+
+        if step == "select_event":
+            events_map = state.get("events_map") if isinstance(state.get("events_map"), dict) else {}
+            event_id = _safe_int(events_map.get(pressed), None)
+            if not event_id:
+                return {"session_id": session.id, "actions": [], "session_status": "active"}
+            return self._respond(
+                session,
+                self._send_slots(
+                    session=session,
+                    node=current_node,
+                    context=context,
+                    event_id=event_id,
+                    mode="reschedule",
+                ),
+            )
+
+        if step == "select_slot":
+            slots_map = state.get("slots_map") if isinstance(state.get("slots_map"), dict) else {}
+            slot_data = slots_map.get(pressed) if isinstance(slots_map.get(pressed), dict) else None
+            if not slot_data:
+                return {"session_id": session.id, "actions": [], "session_status": "active"}
+
+            start_at = _parse_iso_datetime(slot_data.get("start_time"))
+            if not start_at:
+                logger.warning("Booking slot parse failed for node=%s session=%s", current_node.id, session.id)
+                return {"session_id": session.id, "actions": [], "session_status": "active"}
+
+            duration_minutes = _safe_int(slot_data.get("duration_minutes"), 60) or 60
+            if duration_minutes <= 0:
+                duration_minutes = 60
+            end_at = start_at + timedelta(minutes=duration_minutes)
+
+            mode = str(state.get("mode") or "create")
+            event_id = _safe_int(state.get("event_id"), None)
+            contact_id = _resolve_contact_id(
+                session_context=context,
+                user_id=session.user_id,
+                tenant_id=session.tenant_id,
+                provider=provider,
+                provider_user_id=provider_user_id,
+            )
+            if not contact_id:
+                return self._respond(session, [{
+                    "action_type": "send_text",
+                    "payload": {
+                        "text": "Для записи войдите как контакт через Telegram или VK.",
+                        "node_id": current_node.id,
+                    },
+                    "delay_seconds": 0,
+                }])
+
+            if self._is_booking_interval_busy(
+                start_at=start_at,
+                end_at=end_at,
+                exclude_event_id=event_id if mode == "reschedule" else None,
+            ):
+                busy_text = str(payload.get("slot_busy_text") or "Этот слот уже занят. Выберите другой.")
+                return self._respond(session, [{
+                    "action_type": "send_text",
+                    "payload": {"text": busy_text, "node_id": current_node.id},
+                    "delay_seconds": 0,
+                }])
+
+            booked_event_id: int | None = None
+            if mode == "reschedule" and event_id:
+                update_qs = MapCRMEvent.objects.filter(id=event_id, contact_id=contact_id)
+                if not update_qs.exists():
+                    return self._respond(session, [{
+                        "action_type": "send_text",
+                        "payload": {
+                            "text": "Встреча для переноса больше недоступна.",
+                            "node_id": current_node.id,
+                        },
+                        "delay_seconds": 0,
+                    }])
+                update_qs.update(start_time=start_at, end_time=end_at)
+                booked_event_id = int(event_id)
+            else:
+                created = MapCRMEvent.objects.create(
+                    contact_id=contact_id,
+                    event_type_id=None,
+                    title=str(payload.get("event_title") or "Встреча"),
+                    description="",
+                    start_time=start_at,
+                    end_time=end_at,
+                    location="",
+                    status="scheduled",
+                    notes="",
+                )
+                booked_event_id = int(created.id)
+
+            context["booked_event_id"] = booked_event_id
+            context["booked_slot"] = pressed
+            context.setdefault("booking_state", {})
+            context["booking_state"].pop(node_key, None)
+            self._save_session_context(session, context)
+
+            confirmation_text = str(payload.get("confirmation_text") or "Вы записаны на {slot}!").replace("{slot}", pressed)
+            actions: list[dict[str, Any]] = [{
+                "action_type": "send_text",
+                "payload": {"text": confirmation_text, "node_id": current_node.id},
+                "delay_seconds": 0,
+            }]
+
+            edges = self._get_edges_with_conditions(current_node.id)
+            if edges:
+                actions.extend(self._advance_to_node(session, int(edges[0]["target_node_id"])))
+            return self._respond(session, actions)
+
+        if step == "no_slots":
+            return self._respond(
+                session,
+                self._send_slots(
+                    session=session,
+                    node=current_node,
+                    context=context,
+                    event_id=_safe_int(state.get("event_id"), None),
+                    mode=str(state.get("mode") or "create"),
+                ),
+            )
+
+        return {"session_id": session.id, "actions": [], "session_status": "active"}
+
+    def _process_product_list_message(
+        self,
+        *,
+        session: ChainSession,
+        current_node: ChainNode,
+        user_message: dict[str, Any],
+    ) -> dict[str, Any]:
+        context = dict(session.context or {})
+        node_key = str(current_node.id)
+
+        state_root = context.get("product_list_state")
+        state = state_root.get(node_key) if isinstance(state_root, dict) else None
+        products_map = (
+            state.get("products_map")
+            if isinstance(state, dict) and isinstance(state.get("products_map"), dict)
+            else {}
+        )
+
+        pressed = str(user_message.get("button") or user_message.get("text") or "").strip()
+        product_id = _safe_int(products_map.get(pressed), None)
+        if not product_id:
+            return self._respond(session, self._enter_product_list_node(session, current_node))
+
+        context["selected_product_id"] = product_id
+        context["selected_product_name"] = pressed
+        context.setdefault("product_list_state", {})
+        context["product_list_state"].pop(node_key, None)
+        self._save_session_context(session, context)
+
+        edges = self._get_edges_with_conditions(current_node.id)
+        if not edges:
+            session.status = "completed"
+            session.completed_at = timezone.now()
+            session.save(update_fields=["status", "completed_at", "updated_at"])
+            return {"session_id": session.id, "actions": [], "session_status": "completed"}
+
+        actions = self._advance_to_node(session, int(edges[0]["target_node_id"]))
+        return {"session_id": session.id, "actions": actions, "session_status": "active"}
+
+    def _is_booking_interval_busy(
+        self,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        exclude_event_id: int | None = None,
+    ) -> bool:
+        query = MapCRMEvent.objects.filter(
+            status="scheduled",
+            start_time__lt=end_at,
+            end_time__gt=start_at,
+        )
+        if exclude_event_id:
+            query = query.exclude(id=exclude_event_id)
+        return query.exists()
+
+    def _enter_ai_assistant_node(self, session: ChainSession, node: ChainNode) -> list[dict[str, Any]]:
+        payload = dict(node.payload or {})
+        context = dict(session.context or {})
+        node_key = str(node.id)
+        summary_raw = (context.get("ai_summary") or {}).get(node_key) if isinstance(context.get("ai_summary"), dict) else None
+        summary = str(summary_raw).strip() if summary_raw is not None else None
+        if summary == "":
+            summary = None
+
+        contact_id = _resolve_contact_id(
+            session_context=context,
+            user_id=session.user_id,
+            tenant_id=session.tenant_id,
+            provider=str(context.get("provider") or ""),
+            provider_user_id=str(context.get("provider_user_id") or ""),
+        )
+        contact_facts = _build_contact_facts_context(contact_id, session.tenant_id) if contact_id else None
+
+        context.setdefault("ai_history", {})
+        context["ai_history"][node_key] = []
+        self._save_session_context(session, context)
+
+        ai_response = _call_ai(
+            system_prompt=_build_ai_system_prompt(payload, summary=summary, contact_facts=contact_facts),
+            history=[],
+            user_text=None,
+        )
+        if not ai_response:
+            logger.error("AI assistant node %s: empty response on enter", node.id)
+            return []
+
+        message_text = str(ai_response.get("message") or "").strip()
+        if not message_text:
+            return []
+
+        history = [{"role": "assistant", "content": message_text}]
+        context.setdefault("ai_history", {})
+        context["ai_history"][node_key] = history[-MAX_AI_HISTORY_ITEMS:]
+        self._save_session_context(session, context)
+
+        return [{
+            "action_type": "send_text",
+            "payload": {"text": message_text, "node_id": node.id},
+            "delay_seconds": node.delay_seconds,
+        }]
+
+    def _process_ai_assistant_message(
+        self,
+        *,
+        session: ChainSession,
+        current_node: ChainNode,
+        user_message: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = dict(current_node.payload or {})
+        context = dict(session.context or {})
+        node_key = str(current_node.id)
+        summary_raw = (context.get("ai_summary") or {}).get(node_key) if isinstance(context.get("ai_summary"), dict) else None
+        summary = str(summary_raw).strip() if summary_raw is not None else None
+        if summary == "":
+            summary = None
+
+        ai_history_raw = (context.get("ai_history") or {}).get(node_key)
+        history: list[dict[str, Any]] = ai_history_raw if isinstance(ai_history_raw, list) else []
+
+        user_text = str(user_message.get("text") or user_message.get("button") or "").strip()
+        if not user_text:
+            return {"session_id": session.id, "actions": [], "session_status": "active"}
+
+        contact_id = _resolve_contact_id(
+            session_context=context,
+            user_id=session.user_id,
+            tenant_id=session.tenant_id,
+            provider=str(context.get("provider") or ""),
+            provider_user_id=str(context.get("provider_user_id") or ""),
+        )
+        contact_facts = _build_contact_facts_context(contact_id, session.tenant_id) if contact_id else None
+
+        ai_response = _call_ai(
+            system_prompt=_build_ai_system_prompt(payload, summary=summary, contact_facts=contact_facts),
+            history=history,
+            user_text=user_text,
+        )
+        if not ai_response:
+            logger.error("AI assistant node %s: empty response", current_node.id)
+            return {"session_id": session.id, "actions": [], "session_status": "active"}
+
+        message_text = str(ai_response.get("message") or "").strip()
+        intent_value = ai_response.get("intent")
+        intent = str(intent_value).strip() if intent_value is not None else ""
+        if not intent or intent.lower() == "null":
+            intent = ""
+
+        raw_intents = payload.get("intents") if isinstance(payload.get("intents"), list) else []
+        allowed_intents = {
+            str(item.get("id") or "").strip()
+            for item in raw_intents
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        if intent and allowed_intents and intent not in allowed_intents:
+            logger.warning(
+                "AI assistant node %s returned unknown intent '%s' (allowed=%s)",
+                current_node.id,
+                intent,
+                sorted(allowed_intents),
+            )
+            intent = ""
+
+        updated_history = list(history)
+        updated_history.append({"role": "user", "content": user_text})
+        if message_text:
+            updated_history.append({"role": "assistant", "content": message_text})
+        updated_history = updated_history[-MAX_AI_HISTORY_ITEMS:]
+
+        context.setdefault("ai_history", {})
+        context["ai_history"][node_key] = updated_history
+        if intent:
+            context["ai_intent"] = intent
+        else:
+            context.pop("ai_intent", None)
+
+        edge = None
+        if intent:
+            edge = (
+                ChainEdge.objects
+                .filter(source_node_id=current_node.id, source_port_id=intent)
+                .order_by("priority", "id")
+                .first()
+            )
+
+        if edge:
+            summary_system_prompt = str(payload.get("system_prompt") or "").strip()
+            if summary:
+                summary_system_prompt = (
+                    f"{summary_system_prompt}\n\n"
+                    "Контекст предыдущих диалогов:\n"
+                    f"{summary}"
+                ).strip()
+            summary_text = _summarize_ai_history(
+                system_prompt=summary_system_prompt,
+                history=updated_history,
+            )
+            if summary_text:
+                context.setdefault("ai_summary", {})
+                context["ai_summary"][node_key] = summary_text
+
+            contact_id = _resolve_contact_id(
+                session_context=context,
+                user_id=session.user_id,
+                tenant_id=session.tenant_id,
+                provider=str(context.get("provider") or ""),
+                provider_user_id=str(context.get("provider_user_id") or ""),
+            )
+            if contact_id:
+                _update_contact_facts(
+                    contact_id=contact_id,
+                    tenant_id=session.tenant_id,
+                    session_id=session.id,
+                    history=updated_history,
+                )
+
+        self._save_session_context(session, context)
+
+        actions: list[dict[str, Any]] = []
+        if message_text:
+            actions.append({
+                "action_type": "send_text",
+                "payload": {"text": message_text, "node_id": current_node.id},
+                "delay_seconds": 0,
+            })
+        if edge:
+            actions.extend(self._advance_to_node(session, edge.target_node_id))
+
+        return {"session_id": session.id, "actions": actions, "session_status": "active"}
+
+    @staticmethod
+    def _respond(session: ChainSession, actions: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"session_id": session.id, "actions": actions, "session_status": "active"}
+
+    @staticmethod
+    def _save_session_context(session: ChainSession, context: dict[str, Any]) -> None:
+        """Persist updated context and refresh last_activity_at in a single save call."""
+        session.context = context
+        session.last_activity_at = timezone.now()
+        session.save(update_fields=["context", "last_activity_at", "updated_at"])
 
     def _get_edges_with_conditions(self, source_node_id: int) -> list[dict[str, Any]]:
         edges = list(
@@ -447,6 +1143,30 @@ class ChainExecutor:
             return sessions[0]
         return None
 
+    def _get_latest_ai_summary(
+        self,
+        *,
+        user_id: int,
+        tenant_id: int,
+        chain_id: int,
+        provider: str,
+    ) -> dict[str, Any] | None:
+        sessions = list(
+            ChainSession.objects
+            .filter(user_id=user_id, tenant_id=tenant_id, chain_id=chain_id)
+            .order_by("-last_activity_at", "-id")[:30]
+        )
+        for item in sessions:
+            context = item.context if isinstance(item.context, dict) else {}
+            context_provider_raw = context.get("provider")
+            if context_provider_raw:
+                if _normalize_provider(context_provider_raw) != provider:
+                    continue
+            ai_summary = context.get("ai_summary")
+            if isinstance(ai_summary, dict) and ai_summary:
+                return dict(ai_summary)
+        return None
+
     def _append_incoming_history(
         self,
         *,
@@ -467,11 +1187,11 @@ class ChainExecutor:
                 "node_id": session.current_node_id,
                 "provider": provider,
                 "provider_user_id": provider_user_id,
-                "received_at": datetime.utcnow().isoformat(),
+                "received_at": timezone.now().isoformat(),
             }
         )
         context["history"] = history[-MAX_CHAIN_HISTORY_ITEMS:]
-        context["last_message_at"] = datetime.utcnow().isoformat()
+        context["last_message_at"] = timezone.now().isoformat()
         return context
 
 
@@ -638,25 +1358,7 @@ def _eval_content_type(params: dict, user_message: dict) -> bool:
     if declared_type:
         return declared_type == message_type
 
-    if message_type == "text":
-        return bool(user_message.get("text"))
-    if message_type == "photo":
-        return bool(user_message.get("photo"))
-    if message_type == "video":
-        return bool(user_message.get("video"))
-    if message_type == "audio":
-        return bool(user_message.get("audio"))
-    if message_type == "voice":
-        return bool(user_message.get("voice"))
-    if message_type == "document":
-        return bool(user_message.get("document"))
-    if message_type == "sticker":
-        return bool(user_message.get("sticker"))
-    if message_type == "location":
-        return bool(user_message.get("location"))
-    if message_type == "contact":
-        return bool(user_message.get("contact"))
-    return False
+    return bool(user_message.get(message_type))
 
 
 def _eval_has_media(user_message: dict) -> bool:
@@ -742,6 +1444,269 @@ def _map_schema() -> str:
     if not schema or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema):
         return "map"
     return schema
+
+
+def _safe_int(value: Any, fallback: int | None) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _coerce_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        if timezone.is_aware(value):
+            return value
+        return timezone.make_aware(value, timezone.get_current_timezone())
+    return None
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if timezone.is_aware(parsed):
+        return parsed
+    return timezone.make_aware(parsed, timezone.get_current_timezone())
+
+
+def _interval_overlaps_any(
+    start_at: datetime,
+    end_at: datetime,
+    intervals: list[tuple[datetime, datetime]],
+) -> bool:
+    for interval_start, interval_end in intervals:
+        if interval_start < end_at and interval_end > start_at:
+            return True
+    return False
+
+
+def _get_tz(tz_name: str | None):
+    try:
+        import zoneinfo
+
+        return zoneinfo.ZoneInfo(str(tz_name or "Europe/Moscow"))
+    except Exception:
+        return None
+
+
+def _format_booking_slot_label(value: Any, tz_name: Any) -> str:
+    dt = _coerce_datetime(value)
+    if not dt:
+        return str(value or "")
+    tz = _get_tz(str(tz_name or ""))
+    if tz:
+        dt = dt.astimezone(tz)
+    # %-d для Unix без ведущего нуля; если платформа не поддерживает, fallback на %d.
+    try:
+        return dt.strftime("%-d %b, %H:%M")
+    except ValueError:
+        return dt.strftime("%d %b, %H:%M")
+
+
+def _build_ai_system_prompt(
+    payload: dict[str, Any],
+    summary: str | None = None,
+    contact_facts: str | None = None,
+) -> str:
+    intents_raw = payload.get("intents") if isinstance(payload.get("intents"), list) else []
+    intents: list[dict[str, str]] = []
+    for item in intents_raw:
+        if not isinstance(item, dict):
+            continue
+        intent_id = str(item.get("id") or "").strip()
+        if not intent_id:
+            continue
+        intents.append({
+            "id": intent_id,
+            "label": str(item.get("label") or intent_id).strip(),
+        })
+
+    base_prompt = str(payload.get("system_prompt") or "").strip()
+
+    summary_block = ""
+    if summary:
+        summary_block = (
+            "\n\nКраткое резюме предыдущих диалогов с пользователем:\n"
+            f"{summary.strip()}"
+        )
+
+    facts_block = ""
+    if contact_facts:
+        facts_block = (
+            "\n\nИзвестные факты о клиенте (используй для персонализации, не спрашивай повторно):\n"
+            f"{contact_facts}"
+        )
+
+    intents_block = ""
+    if intents:
+        intents_lines = "\n".join(f'- "{item["id"]}": {item["label"]}' for item in intents)
+        intents_block = (
+            "\n\nДоступные intent (выбирай только при явном намерении пользователя):\n"
+            f"{intents_lines}\n\n"
+            "Если явного намерения нет, возвращай intent = null."
+        )
+
+    output_block = (
+        "\n\nВерни только JSON-объект без markdown и без дополнительного текста:\n"
+        '{"message":"<ответ пользователю>", "intent": null}'
+    )
+
+    return f"{base_prompt}{summary_block}{facts_block}{intents_block}{output_block}".strip()
+
+
+def _format_ai_history_lines(history: list[dict[str, Any]]) -> list[str]:
+    """Convert AI history dicts to human-readable lines for prompt construction."""
+    lines: list[str] = []
+    for item in history[-MAX_AI_HISTORY_ITEMS:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content = str(item.get("content") or "").strip()
+        if not content or role not in {"user", "assistant"}:
+            continue
+        role_label = "Пользователь" if role == "user" else "Ассистент"
+        lines.append(f"{role_label}: {content}")
+    return lines
+
+
+def _call_ai(
+    *,
+    system_prompt: str,
+    history: list[dict[str, Any]],
+    user_text: str | None,
+) -> dict[str, Any] | None:
+    try:
+        from core.ai_generator import AIContentGenerator
+        from core.ai_generator_content import _parse_ai_json_response
+    except Exception:
+        logger.exception("AI assistant: failed to import ai_generator")
+        return None
+
+    history_lines = _format_ai_history_lines(history)
+
+    user_part = (
+        "Это первый вход в диалог. Начни разговор с короткого уместного приветствия."
+        if user_text is None
+        else f"Новое сообщение пользователя: {user_text}"
+    )
+    history_block = "\n".join(history_lines) if history_lines else "История пуста."
+
+    prompt = (
+        f"{system_prompt}\n\n"
+        f"История диалога:\n{history_block}\n\n"
+        f"{user_part}"
+    )
+
+    try:
+        generator = AIContentGenerator()
+    except Exception:
+        logger.exception("AI assistant: failed to initialize AIContentGenerator")
+        return None
+
+    model = str(os.getenv("CHAIN_AI_MODEL") or "").strip() or None
+
+    try:
+        raw = generator.get_ai_response(
+            prompt=prompt,
+            max_tokens=500,
+            temperature=0.2,
+            model=model,
+            allow_fallback=True,
+            response_format={"type": "json_object"},
+            retry_without_format=True,
+        )
+    except Exception:
+        logger.exception("AI assistant: get_ai_response failed")
+        return None
+
+    if not raw:
+        logger.error("AI assistant: empty model response")
+        return None
+
+    parsed, _, _ = _parse_ai_json_response(raw)
+    if not isinstance(parsed, dict):
+        logger.error("AI assistant: response is not a JSON object")
+        return None
+
+    message = str(parsed.get("message") or "").strip()
+    intent_value = parsed.get("intent")
+    intent = str(intent_value).strip() if intent_value is not None else None
+    if intent in {"", "null", "None"}:
+        intent = None
+
+    return {
+        "message": message,
+        "intent": intent,
+    }
+
+
+def _summarize_ai_history(
+    *,
+    system_prompt: str,
+    history: list[dict[str, Any]],
+) -> str | None:
+    if not history:
+        return None
+
+    try:
+        from core.ai_generator import AIContentGenerator
+    except Exception:
+        logger.exception("AI assistant: failed to import ai_generator for summary")
+        return None
+
+    history_lines = _format_ai_history_lines(history)
+
+    if not history_lines:
+        return None
+
+    prompt = (
+        f"{system_prompt}\n\n"
+        "Сделай краткое резюме диалога в 2-3 предложениях:\n"
+        "- главная потребность пользователя,\n"
+        "- договоренности/статус,\n"
+        "- что важно помнить в следующих сообщениях.\n\n"
+        "История:\n"
+        f"{chr(10).join(history_lines)}"
+    )
+
+    try:
+        generator = AIContentGenerator()
+    except Exception:
+        logger.exception("AI assistant: failed to initialize AIContentGenerator for summary")
+        return None
+
+    model = str(os.getenv("CHAIN_AI_SUMMARY_MODEL") or os.getenv("CHAIN_AI_MODEL") or "").strip() or None
+
+    try:
+        raw = generator.get_ai_response(
+            prompt=prompt,
+            max_tokens=220,
+            temperature=0.2,
+            model=model,
+            allow_fallback=True,
+            response_format=None,
+            retry_without_format=False,
+        )
+    except Exception:
+        logger.exception("AI assistant: summary generation failed")
+        return None
+
+    if not raw:
+        return None
+
+    summary = str(raw).strip()
+    if summary.startswith("```"):
+        summary = re.sub(r"^```[a-zA-Z]*\n?", "", summary).strip()
+        summary = re.sub(r"\n?```$", "", summary).strip()
+    if not summary:
+        return None
+    return summary
 
 
 def _eval_client_tag_contains(
@@ -940,3 +1905,236 @@ def _compare_relation(now: datetime, target: datetime, relation: str) -> bool:
     if relation == "after":
         return now > target
     return False
+
+
+def _build_contact_facts_context(contact_id: int, tenant_id: int) -> str:
+    """
+    Собирает активные факты о контакте в читаемый текст для AI-промпта.
+    """
+    facts = list(
+        ContactFact.objects
+        .filter(contact_id=contact_id, tenant_id=tenant_id, is_active=True)
+        .order_by("category", "fact_type", "-created_at")
+        .values("category", "fact_type", "fact_value", "confidence")
+    )
+    if not facts:
+        return ""
+
+    by_category: dict[str, list[str]] = {}
+    for fact in facts:
+        line = str(fact["fact_value"])
+        if fact["confidence"] == 1:
+            line += " (предположение)"
+        by_category.setdefault(str(fact["category"]), []).append(f'{fact["fact_type"]}: {line}')
+
+    blocks: list[str] = []
+    for category, lines in by_category.items():
+        blocks.append(f"[{category}]\n" + "\n".join(f"  - {line}" for line in lines))
+
+    return "\n\n".join(blocks)
+
+
+# Полный справочник допустимых типов фактов по категориям.
+# AI получает его в промпте — это снижает галлюцинации с произвольными ключами.
+_FACT_SCHEMA: dict[str, list[str]] = {
+    "purchase": [
+        "pain",
+        "desire",
+        "objection",
+        "decision_style",
+        "previous_purchase",
+        "churn_reason",
+    ],
+    "context": [
+        "location",
+        "role",
+        "company",
+        "life_moment",
+        "timeline",
+        "budget",
+    ],
+    "environment": [
+        "family",
+        "partner",
+        "team",
+        "influencer",
+    ],
+    "attitude": [
+        "trust_level",
+        "source",
+        "competitor",
+        "communication_style",
+        "trigger",
+    ],
+    "constraints": [
+        "budget_flexibility",
+        "technical",
+        "deadline",
+    ],
+}
+
+
+def _extract_contact_facts(
+    history: list[dict[str, Any]],
+    existing_context: str,
+) -> list[dict[str, Any]] | None:
+    """
+    Возвращает список вида:
+    [{"category": "...", "fact_type": "...", "fact_value": "...", "confidence": 1..3}]
+    либо None, если новых значимых фактов нет.
+    """
+    try:
+        from core.ai_generator import AIContentGenerator
+        from core.ai_generator_content import _parse_ai_json_response
+    except Exception:
+        logger.exception("ContactFacts: failed to import ai_generator")
+        return None
+
+    history_lines = _format_ai_history_lines(history)
+    if not history_lines:
+        return None
+
+    schema_text = "\n".join(
+        f"  {category}: {', '.join(types)}"
+        for category, types in _FACT_SCHEMA.items()
+    )
+    history_text = "\n".join(history_lines)
+
+    prompt = (
+        "Ты — система анализа диалогов. Извлекай только значимые факты о клиенте.\n\n"
+        "ИГНОРИРУЙ полностью:\n"
+        "- приветствия, прощания, благодарности\n"
+        "- общие вопросы без конкретики о клиенте\n"
+        "- технические уточнения по работе сервиса\n\n"
+        "Допустимые категории и типы фактов:\n"
+        f"{schema_text}\n\n"
+        "confidence: 1=AI предположил, 2=клиент явно сказал, 3=подтверждено действием\n\n"
+        "Уже известно о клиенте:\n"
+        f"{existing_context or 'ничего'}\n\n"
+        f"Диалог:\n{history_text}\n\n"
+        "Верни JSON:\n"
+        '{"facts": ['
+        '{"category": "purchase", "fact_type": "pain", "fact_value": "текст", "confidence": 2}'
+        "]}\n"
+        "Включай только факты, которых ЕЩЁ НЕТ в разделе «Уже известно». "
+        'Если новых значимых фактов нет — верни {"facts": []}.'
+    )
+
+    try:
+        generator = AIContentGenerator()
+    except Exception:
+        logger.exception("ContactFacts: failed to initialize AIContentGenerator")
+        return None
+
+    model = str(os.getenv("CHAIN_AI_MODEL") or "").strip() or None
+
+    try:
+        raw = generator.get_ai_response(
+            prompt=prompt,
+            max_tokens=600,
+            temperature=0.1,
+            model=model,
+            allow_fallback=True,
+            response_format={"type": "json_object"},
+            retry_without_format=True,
+        )
+    except Exception:
+        logger.exception("ContactFacts: get_ai_response failed")
+        return None
+
+    if not raw:
+        return None
+
+    try:
+        parsed, _, _ = _parse_ai_json_response(raw)
+    except Exception:
+        logger.exception("ContactFacts: failed to parse AI response")
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    raw_facts = parsed.get("facts")
+    if not isinstance(raw_facts, list) or not raw_facts:
+        return None
+
+    valid: list[dict[str, Any]] = []
+    for item in raw_facts:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "").strip()
+        fact_type = str(item.get("fact_type") or "").strip()
+        fact_value = str(item.get("fact_value") or "").strip()
+        if not category or not fact_type or not fact_value:
+            continue
+        if category not in _FACT_SCHEMA:
+            continue
+        if fact_type not in _FACT_SCHEMA[category]:
+            logger.debug("ContactFacts: unknown fact_type '%s' for category '%s'", fact_type, category)
+            continue
+        try:
+            confidence = max(1, min(3, int(item.get("confidence", 2))))
+        except (TypeError, ValueError):
+            confidence = 2
+        valid.append({
+            "category": category,
+            "fact_type": fact_type,
+            "fact_value": fact_value,
+            "confidence": confidence,
+        })
+
+    return valid if valid else None
+
+
+def _update_contact_facts(
+    *,
+    contact_id: int,
+    tenant_id: int,
+    session_id: int | None = None,
+    history: list[dict[str, Any]],
+) -> None:
+    """
+    Извлекает факты из AI-истории диалога и сохраняет их в contact_facts.
+    Дубли не создаёт: проверка по (contact_id, tenant_id, category, fact_type, fact_value).
+    """
+    existing_context = _build_contact_facts_context(contact_id, tenant_id)
+    new_facts = _extract_contact_facts(
+        history=history,
+        existing_context=existing_context,
+    )
+    if not new_facts:
+        return
+
+    created_count = 0
+    for fact in new_facts:
+        try:
+            _, created = ContactFact.objects.get_or_create(
+                contact_id=contact_id,
+                tenant_id=tenant_id,
+                category=fact["category"],
+                fact_type=fact["fact_type"],
+                fact_value=fact["fact_value"],
+                defaults={
+                    "confidence": fact["confidence"],
+                    "source": "ai_chat",
+                    "session_id": session_id,
+                    "is_active": True,
+                },
+            )
+            if created:
+                created_count += 1
+        except Exception:
+            logger.exception(
+                "ContactFacts: failed to save fact %s/%s for contact %s",
+                fact["category"],
+                fact["fact_type"],
+                contact_id,
+            )
+
+    if created_count:
+        logger.info(
+            "ContactFacts: added %d new facts for contact=%s tenant=%s",
+            created_count,
+            contact_id,
+            tenant_id,
+        )

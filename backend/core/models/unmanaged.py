@@ -460,6 +460,35 @@ class UserTenantBinding(models.Model):
         return f"{self.provider}:{self.provider_user_id} -> {self.tenant_id}"
 
 
+class ContactFact(models.Model):
+    contact_id = models.IntegerField(db_index=True)
+    tenant_id = models.IntegerField(db_index=True)
+    category = models.CharField(max_length=32)
+    fact_type = models.CharField(max_length=64)
+    fact_value = models.TextField()
+    source = models.CharField(max_length=32, default="ai_chat")
+    session = models.ForeignKey(
+        ChainSession,
+        on_delete=models.SET_NULL,
+        db_column="session_id",
+        related_name="contact_facts",
+        blank=True,
+        null=True,
+    )
+    confidence = models.SmallIntegerField(default=2)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."contact_facts'
+        ordering = ("-updated_at", "-id")
+
+    def __str__(self):
+        return f"contact={self.contact_id} [{self.category}/{self.fact_type}]"
+
+
 class TelegramTask(models.Model):
     client = models.ForeignKey(
         Client, on_delete=models.CASCADE, db_column="client_id", related_name="telegram_tasks"

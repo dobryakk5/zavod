@@ -9,6 +9,7 @@ interface TelegramAuthButtonProps {
   cornerRadius?: number;
   showAvatar?: boolean;
   lang?: string;
+  requestAccess?: "read" | "write";
 }
 
 const sanitizeBotUsername = (username: string) => {
@@ -33,10 +34,12 @@ export function TelegramAuthButton({
   cornerRadius = 8,
   showAvatar = true,
   lang = "en",
+  requestAccess = "read",
 }: TelegramAuthButtonProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const normalizedBotUsername = useMemo(() => sanitizeBotUsername(botUsername), [botUsername]);
   const [widgetError, setWidgetError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!containerRef.current || !normalizedBotUsername) return;
@@ -98,7 +101,7 @@ export function TelegramAuthButton({
     script.setAttribute("data-userpic", showAvatar ? "true" : "false");
     script.setAttribute("data-lang", lang);
     script.setAttribute("data-onauth", `${callbackName}(user)`);
-    script.setAttribute("data-request-access", "write");
+    script.setAttribute("data-request-access", requestAccess);
     script.async = true;
     script.onerror = () => {
       if (!cancelled) {
@@ -122,7 +125,7 @@ export function TelegramAuthButton({
       cleanupProbes();
       delete (window as any)[callbackName];
     };
-  }, [normalizedBotUsername, onAuthCallback, buttonSize, cornerRadius, showAvatar, lang]);
+  }, [normalizedBotUsername, onAuthCallback, buttonSize, cornerRadius, showAvatar, lang, requestAccess, reloadKey]);
 
   if (!normalizedBotUsername) {
     return (
@@ -137,15 +140,14 @@ export function TelegramAuthButton({
       <div ref={containerRef} className="flex justify-center" />
       {widgetError && (
         <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
-          {widgetError}{" "}
-          <a
-            href={`https://t.me/${normalizedBotUsername}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2"
+          <div>{widgetError}</div>
+          <button
+            type="button"
+            className="mt-2 underline underline-offset-2"
+            onClick={() => setReloadKey((prev) => prev + 1)}
           >
-            Открыть @{normalizedBotUsername}
-          </a>
+            Попробовать снова
+          </button>
         </div>
       )}
     </div>

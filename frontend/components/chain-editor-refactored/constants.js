@@ -24,6 +24,9 @@ export const NODE_COLORS = {
   buttons: { bg: '#eff6ff', border: '#3b82f6', accent: '#2563eb', label: 'Кнопки', icon: '🔘' },
   router:  { bg: '#faf5ff', border: '#a855f7', accent: '#9333ea', label: 'Условие', icon: '🔀' },
   timer:   { bg: '#fef3c7', border: '#f59e0b', accent: '#d97706', label: 'Задержка', icon: '⏱️' },
+  booking: { bg: '#ecfeff', border: '#06b6d4', accent: '#0891b2', label: 'Бронирование', icon: '📅' },
+  ai_assistant: { bg: '#eef2ff', border: '#6366f1', accent: '#4f46e5', label: 'ИИ чат', icon: '🤖' },
+  product_list: { bg: '#fff7ed', border: '#f97316', accent: '#ea580c', label: 'Продукты', icon: '🛍️' },
 };
 
 export const CONDITION_LABELS = {

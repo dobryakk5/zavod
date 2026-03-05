@@ -161,6 +161,33 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
         countdown_message: null,
       };
       delay_seconds = 0;
+    } else if (kind === 'booking') {
+      node_type = 'booking';
+      payload = {
+        mode: 'create',
+        event_title: 'Консультация',
+        timezone: 'Europe/Moscow',
+        slots_intro_text: 'Выберите удобное время:',
+        no_slots_text: 'Свободных слотов пока нет.',
+        confirmation_text: 'Вы записаны на {slot}!',
+        confirm_reschedule_text: 'Переносим встречу {slot}?',
+      };
+    } else if (kind === 'ai_assistant') {
+      node_type = 'ai_assistant';
+      payload = {
+        system_prompt: 'Ты продающий ассистент эксперта. Кратко веди диалог и предлагай следующий шаг.',
+        intents: [
+          { id: 'book_meeting', label: 'Записаться на встречу' },
+          { id: 'buy_service', label: 'Купить услугу' },
+          { id: 'not_interested', label: 'Не заинтересован' },
+        ],
+      };
+    } else if (kind === 'product_list') {
+      node_type = 'product_list';
+      payload = {
+        intro_text: 'Выберите продукт:',
+        no_products_text: 'Продуктов пока нет.',
+      };
     }
 
     const tempId = makeTempId('node');
@@ -1231,6 +1258,9 @@ export default function ChainEditor({ className = '', chainId = null } = {}) {
             { label: '🔘 Кнопки', action: () => { addNodeFromSide(addMenu.nodeId, addMenu.side, 'buttons'); setAddMenu(null); } },
             { label: '⏱️ Задержка', action: () => { addNodeFromSide(addMenu.nodeId, addMenu.side, 'timer'); setAddMenu(null); } },
             { label: '🔀 Условие', action: () => { addNodeFromSide(addMenu.nodeId, addMenu.side, 'router'); setAddMenu(null); } },
+            { label: '📅 Бронирование', action: () => { addNodeFromSide(addMenu.nodeId, addMenu.side, 'booking'); setAddMenu(null); } },
+            { label: '🤖 ИИ чат', action: () => { addNodeFromSide(addMenu.nodeId, addMenu.side, 'ai_assistant'); setAddMenu(null); } },
+            { label: '🛍️ Продукты', action: () => { addNodeFromSide(addMenu.nodeId, addMenu.side, 'product_list'); setAddMenu(null); } },
           ]}
           onClose={() => setAddMenu(null)}
         />

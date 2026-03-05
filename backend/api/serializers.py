@@ -1836,7 +1836,21 @@ class ChainSerializer(serializers.ModelSerializer):
         return instance
 
 
+CHAIN_NODE_TYPE_CHOICES = [
+    "start",
+    "text",
+    "photo",
+    "buttons",
+    "router",
+    "timer",
+    "booking",
+    "ai_assistant",
+    "product_list",
+]
+
+
 class ChainNodeSerializer(serializers.ModelSerializer):
+    node_type = serializers.ChoiceField(choices=CHAIN_NODE_TYPE_CHOICES)
     chain_id = serializers.IntegerField(read_only=True)
 
     class Meta:

@@ -58,7 +58,13 @@ export function NodeCard({
   onConditionDelete,
   onNodeUpdate,
 }) {
-  const c = NODE_COLORS[node.node_type];
+  const c = NODE_COLORS[node.node_type] || {
+    bg: '#f8fafc',
+    border: '#cbd5e1',
+    accent: '#64748b',
+    label: node.node_type,
+    icon: '•',
+  };
   const isTimer = node.node_type === 'timer' || (node.node_type === 'text' && node.payload?.kind === 'timer');
   const isRouter = node.node_type === 'router';
   const isStartNode = node.node_type === 'start';
@@ -77,6 +83,14 @@ export function NodeCard({
 
   // Блоки всегда выходят вправо
   const conditionSide = 'right';
+
+  const getDefaultPreview = () => {
+    if (node.node_type === 'photo') return '📷 фото';
+    if (node.node_type === 'booking') return toPreviewText(node.payload?.slots_intro_text) || 'Выбор времени для встречи';
+    if (node.node_type === 'ai_assistant') return 'Диалог с ИИ-ассистентом';
+    if (node.node_type === 'product_list') return toPreviewText(node.payload?.intro_text) || 'Выбор продукта';
+    return c.label || 'Узел';
+  };
 
   // Специальная карточка START
   if (isStartNode) {
@@ -413,7 +427,7 @@ export function NodeCard({
         ) : (
           <div className="flex flex-col gap-1">
             <p className="text-sm text-slate-700 line-clamp-2 leading-snug">
-              {toPreviewText(node.payload?.text) || toPreviewText(node.payload?.caption) || '📷 фото'}
+              {toPreviewText(node.payload?.text) || toPreviewText(node.payload?.caption) || getDefaultPreview()}
             </p>
             {!isTimer && node.delay_seconds > 0 && (
               <span className="text-xs text-slate-500">⏱ {node.delay_seconds}с задержка</span>

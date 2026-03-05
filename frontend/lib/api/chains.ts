@@ -1,7 +1,16 @@
 import { apiFetch } from '../api';
 
 export type ChainStatus = 'draft' | 'active' | 'paused' | 'archived';
-export type ChainNodeType = 'start' | 'text' | 'photo' | 'buttons' | 'router' | 'timer';
+export type ChainNodeType =
+  | 'start'
+  | 'text'
+  | 'photo'
+  | 'buttons'
+  | 'router'
+  | 'timer'
+  | 'booking'
+  | 'ai_assistant'
+  | 'product_list';
 export type ChainConditionType =
   | 'button_press'
   | 'text_contains'

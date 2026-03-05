@@ -45,6 +45,7 @@ describe('TelegramAuthButton', () => {
     expect(script?.getAttribute('data-userpic')).toBe('false');
     expect(script?.getAttribute('data-lang')).toBe('ru');
     expect(script?.getAttribute('data-onauth')).toBe('onTelegramAuth_123456(user)');
+    expect(script?.getAttribute('data-request-access')).toBe('read');
 
     const payload = { id: 1, first_name: 'Test' };
     (window as any).onTelegramAuth_123456(payload);
@@ -54,7 +55,7 @@ describe('TelegramAuthButton', () => {
     expect((window as any).onTelegramAuth_123456).toBeUndefined();
   });
 
-  it('shows script loading error and fallback Telegram link', async () => {
+  it('shows script loading error and allows reloading widget', async () => {
     render(<TelegramAuthButton botUsername="solarlab_bot" onAuthCallback={vi.fn()} />);
 
     const script = document.querySelector('script[src*="telegram-widget"]') as HTMLScriptElement | null;
@@ -65,8 +66,8 @@ describe('TelegramAuthButton', () => {
     });
 
     expect(await screen.findByText(/Не удалось загрузить скрипт Telegram/i)).toBeInTheDocument();
-    const link = screen.getByRole('link', { name: /Открыть @solarlab_bot/i });
-    expect(link).toHaveAttribute('href', 'https://t.me/solarlab_bot');
+    const retryButton = screen.getByRole('button', { name: /Попробовать снова/i });
+    expect(retryButton).toBeInTheDocument();
   });
 
   it('shows render probe timeout error when widget does not appear after script load', async () => {
@@ -85,5 +86,19 @@ describe('TelegramAuthButton', () => {
     });
 
     expect(screen.getByText(/Виджет Telegram не загрузился/i)).toBeInTheDocument();
+  });
+
+  it('supports write access mode when explicitly requested', () => {
+    render(
+      <TelegramAuthButton
+        botUsername="solarlab_bot"
+        onAuthCallback={vi.fn()}
+        requestAccess="write"
+      />
+    );
+
+    const script = document.querySelector('script[src*="telegram-widget"]') as HTMLScriptElement | null;
+    expect(script).toBeTruthy();
+    expect(script?.getAttribute('data-request-access')).toBe('write');
   });
 });

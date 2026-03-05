@@ -22,6 +22,12 @@ const hasMeaningfulText = (value = '') => {
   return plain.length > 0;
 };
 
+const DEFAULT_AI_INTENTS = [
+  { id: 'book_meeting', label: 'Записаться на встречу' },
+  { id: 'buy_service', label: 'Купить услугу' },
+  { id: 'not_interested', label: 'Не заинтересован' },
+];
+
 export function NodeEditorModal({ node, onSave, onClose }) {
   const isStartNode = node.node_type === 'start';
   const initialButtons = isStartNode
@@ -36,6 +42,9 @@ export function NodeEditorModal({ node, onSave, onClose }) {
   const isTimer = form.node_type === 'timer' || form.payload?.kind === 'timer';
   const isRouter = form.node_type === 'router';
   const isStart = form.node_type === 'start';
+  const isBooking = form.node_type === 'booking';
+  const isAiAssistant = form.node_type === 'ai_assistant';
+  const isProductList = form.node_type === 'product_list';
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const setP = (k, v) => setForm(f => ({ ...f, payload: { ...f.payload, [k]: v } }));
@@ -111,6 +120,42 @@ export function NodeEditorModal({ node, onSave, onClose }) {
       if (label) payload.label = label;
     }
 
+    if (nodeType === 'booking') {
+      const mode = payload.mode === 'reschedule' ? 'reschedule' : 'create';
+      payload = {
+        mode,
+        event_title: String(payload.event_title || 'Консультация').trim() || 'Консультация',
+        timezone: String(payload.timezone || 'Europe/Moscow').trim() || 'Europe/Moscow',
+        slots_intro_text: String(payload.slots_intro_text || 'Выберите удобное время:').trim() || 'Выберите удобное время:',
+        no_slots_text: String(payload.no_slots_text || 'Свободных слотов пока нет.').trim() || 'Свободных слотов пока нет.',
+        confirmation_text: String(payload.confirmation_text || 'Вы записаны на {slot}!').trim() || 'Вы записаны на {slot}!',
+        confirm_reschedule_text: String(payload.confirm_reschedule_text || 'Переносим встречу {slot}?').trim() || 'Переносим встречу {slot}?',
+      };
+    }
+
+    if (nodeType === 'ai_assistant') {
+      const intentsRaw = Array.isArray(payload.intents) ? payload.intents : [];
+      const intents = intentsRaw
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => ({
+          id: String(item.id || '').trim(),
+          label: String(item.label || item.id || '').trim(),
+        }))
+        .filter((item) => item.id);
+
+      payload = {
+        system_prompt: String(payload.system_prompt || '').trim() || 'Ты продающий ассистент эксперта. Кратко веди диалог и предлагай следующий шаг.',
+        intents: intents.length ? intents : DEFAULT_AI_INTENTS,
+      };
+    }
+
+    if (nodeType === 'product_list') {
+      payload = {
+        intro_text: String(payload.intro_text || 'Выберите продукт:').trim() || 'Выберите продукт:',
+        no_products_text: String(payload.no_products_text || 'Продуктов пока нет.').trim() || 'Продуктов пока нет.',
+      };
+    }
+
     onSave({
       node_type: nodeType,
       payload,
@@ -155,7 +200,10 @@ export function NodeEditorModal({ node, onSave, onClose }) {
                   { value: 'photo', label: 'Фото' },
                   { value: 'buttons', label: 'Кнопки' },
                   { value: 'router', label: 'Условие' },
-                  { value: 'timer', label: 'Задержка' }
+                  { value: 'timer', label: 'Задержка' },
+                  { value: 'booking', label: 'Бронирование' },
+                  { value: 'ai_assistant', label: 'ИИ чат' },
+                  { value: 'product_list', label: 'Продукты' },
                 ]}
               />
             </div>
@@ -278,6 +326,119 @@ export function NodeEditorModal({ node, onSave, onClose }) {
               </div>
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600">
                 💡 Условия настраиваются прямо на узле.
+              </div>
+            </div>
+          )}
+
+          {isBooking && (
+            <div className="space-y-3">
+              <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-3 text-sm text-cyan-900">
+                📅 <strong>Бронирование</strong> — показывает слоты и записывает пользователя на встречу.
+              </div>
+              <div>
+                <Label>Режим</Label>
+                <Select
+                  value={form.payload.mode || 'create'}
+                  onChange={e => setP('mode', e.target.value)}
+                  options={[
+                    { value: 'create', label: 'Новая запись' },
+                    { value: 'reschedule', label: 'Перенос встречи' },
+                  ]}
+                />
+              </div>
+              <div>
+                <Label>Название встречи</Label>
+                <Input
+                  value={form.payload.event_title || ''}
+                  onChange={e => setP('event_title', e.target.value)}
+                  placeholder="Консультация"
+                />
+              </div>
+              <div>
+                <Label>Timezone</Label>
+                <Input
+                  value={form.payload.timezone || ''}
+                  onChange={e => setP('timezone', e.target.value)}
+                  placeholder="Europe/Moscow"
+                />
+              </div>
+              <div>
+                <Label>Текст выбора слота</Label>
+                <Input
+                  value={form.payload.slots_intro_text || ''}
+                  onChange={e => setP('slots_intro_text', e.target.value)}
+                  placeholder="Выберите удобное время:"
+                />
+              </div>
+              <div>
+                <Label>Текст при отсутствии слотов</Label>
+                <Input
+                  value={form.payload.no_slots_text || ''}
+                  onChange={e => setP('no_slots_text', e.target.value)}
+                  placeholder="Свободных слотов пока нет."
+                />
+              </div>
+              <div>
+                <Label>Текст подтверждения</Label>
+                <Input
+                  value={form.payload.confirmation_text || ''}
+                  onChange={e => setP('confirmation_text', e.target.value)}
+                  placeholder="Вы записаны на {slot}!"
+                />
+              </div>
+              <div>
+                <Label>Текст подтверждения переноса</Label>
+                <Input
+                  value={form.payload.confirm_reschedule_text || ''}
+                  onChange={e => setP('confirm_reschedule_text', e.target.value)}
+                  placeholder="Переносим встречу {slot}?"
+                />
+              </div>
+            </div>
+          )}
+
+          {isAiAssistant && (
+            <div className="space-y-3">
+              <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-sm text-indigo-900">
+                🤖 <strong>ИИ чат</strong> — ведёт диалог и возвращает intent для перехода по рёбрам.
+              </div>
+              <div>
+                <Label>System prompt</Label>
+                <textarea
+                  value={form.payload.system_prompt || ''}
+                  onChange={e => setP('system_prompt', e.target.value)}
+                  placeholder="Ты продающий ассистент эксперта..."
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 resize-y"
+                  rows={4}
+                />
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600">
+                Интенты по умолчанию: <code>book_meeting</code>, <code>buy_service</code>, <code>not_interested</code>.
+                Рёбра подключаются через <code>source_port_id</code>.
+              </div>
+            </div>
+          )}
+
+          {isProductList && (
+            <div className="space-y-3">
+              <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-sm text-orange-900">
+                🛍️ <strong>Продукты</strong> — показывает список активных продуктов и сохраняет выбор в контекст.
+              </div>
+              <div>
+                <Label>Текст над списком</Label>
+                <Input
+                  value={form.payload.intro_text || ''}
+                  onChange={e => setP('intro_text', e.target.value)}
+                  placeholder="Выберите продукт:"
+                />
+              </div>
+              <div>
+                <Label>Текст при пустом списке</Label>
+                <Input
+                  value={form.payload.no_products_text || ''}
+                  onChange={e => setP('no_products_text', e.target.value)}
+                  placeholder="Продуктов пока нет."
+                />
               </div>
             </div>
           )}

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Image from 'next/image';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { generateHTML } from '@tiptap/html';
 import {
@@ -28,6 +29,12 @@ import {
   tenantDateToUtcISOString,
   toTenantDate,
 } from '@/lib/timezone';
+import {
+  CLIENT_PAGE_BLOCK_DEFAULT_ORDER,
+  normalizeClientPageTemplateConfig,
+  resolveClientPageVideoSource,
+  type ClientPageBlockKey,
+} from '@/lib/client-page-template';
 
 type ReferralStatsResponse = {
   has_code?: boolean;
@@ -153,22 +160,6 @@ type ContactPurchasesResponse = {
   items?: ContactPurchaseListItem[];
 };
 
-type ClientPageBlockKey =
-  | 'header'
-  | 'product'
-  | 'purchases'
-  | 'custom_content'
-  | 'booking'
-  | 'planned_meetings'
-  | 'referrals';
-
-type ClientPageBlocksConfig = Record<ClientPageBlockKey, boolean>;
-
-type ClientPageTemplateConfig = {
-  blocks: ClientPageBlocksConfig;
-  selected_product_id: number | null;
-};
-
 type Slot = {
   id: string;
   startAt: string;
@@ -196,37 +187,6 @@ const REFERRAL_STATUS_LABELS: Record<string, string> = {
   registered: 'Зарегистрирован',
   rewarded: 'Засчитан',
   expired: 'Истек',
-};
-
-const DEFAULT_CLIENT_PAGE_BLOCKS: ClientPageBlocksConfig = {
-  header: true,
-  product: true,
-  purchases: true,
-  custom_content: true,
-  booking: true,
-  planned_meetings: true,
-  referrals: true,
-};
-
-const normalizeClientPageTemplateConfig = (value: unknown): ClientPageTemplateConfig => {
-  if (!value || typeof value !== 'object') {
-    return { blocks: { ...DEFAULT_CLIENT_PAGE_BLOCKS }, selected_product_id: null };
-  }
-
-  const raw = value as Record<string, unknown>;
-  const rawBlocks = (raw.blocks && typeof raw.blocks === 'object' ? raw.blocks : {}) as Record<string, unknown>;
-  const blocks = { ...DEFAULT_CLIENT_PAGE_BLOCKS };
-  (Object.keys(DEFAULT_CLIENT_PAGE_BLOCKS) as ClientPageBlockKey[]).forEach((key) => {
-    if (typeof rawBlocks[key] === 'boolean') {
-      blocks[key] = rawBlocks[key] as boolean;
-    }
-  });
-
-  const selectedProduct = raw.selected_product_id;
-  return {
-    blocks,
-    selected_product_id: typeof selectedProduct === 'number' && Number.isFinite(selectedProduct) ? selectedProduct : null,
-  };
 };
 
 const normalizeTiptapJson = (value: unknown): Record<string, unknown> | null => {
@@ -1414,18 +1374,18 @@ export default function ContactClientPage() {
   const selectedTemplateProductPriceLabel = selectedTemplateProductPrice === null || !Number.isFinite(selectedTemplateProductPrice)
     ? 'Цена не указана'
     : rubFormatter.format(selectedTemplateProductPrice);
+  const templateValues: Record<string, string> = {
+    brand_name: displayName,
+    niche,
+    product_name: (selectedTemplateProduct?.name || '').trim(),
+    product_price: selectedTemplateProductPriceLabel,
+    product_service: (settings?.product_service || '').trim(),
+  };
   const customContentHtml = (() => {
     const source = normalizeTiptapJson(settings?.client_page_content);
     if (!source) {
       return '';
     }
-    const templateValues: Record<string, string> = {
-      brand_name: displayName,
-      niche,
-      product_name: (selectedTemplateProduct?.name || '').trim(),
-      product_price: selectedTemplateProductPriceLabel,
-      product_service: (settings?.product_service || '').trim(),
-    };
     try {
       const replacedJson = replaceTemplateTokensInTiptapNode(source, templateValues) as Record<string, unknown>;
       return generateHTML(replacedJson, createKbExtensions());
@@ -1433,23 +1393,40 @@ export default function ContactClientPage() {
       return '';
     }
   })();
+  const heroConfig = pageTemplateConfig.hero;
+  const heroTitle = replaceTemplateTokens(heroConfig.title, templateValues);
+  const heroSubtitle = replaceTemplateTokens(heroConfig.subtitle, templateValues);
+  const heroButtonText = replaceTemplateTokens(heroConfig.button_text, templateValues);
+  const heroButtonUrl = replaceTemplateTokens(heroConfig.button_url, templateValues);
+  const imageBlockConfig = pageTemplateConfig.extra_blocks.image;
+  const imageBlockUrl = replaceTemplateTokens(imageBlockConfig.url || '', templateValues).trim();
+  const imageBlockAlt = replaceTemplateTokens(imageBlockConfig.alt || '', templateValues).trim();
+  const imageBlockCaption = replaceTemplateTokens(imageBlockConfig.caption || '', templateValues).trim();
+  const videoBlockConfig = pageTemplateConfig.extra_blocks.video;
+  const videoBlockUrl = replaceTemplateTokens(videoBlockConfig.url || '', templateValues).trim();
+  const videoBlockCaption = replaceTemplateTokens(videoBlockConfig.caption || '', templateValues).trim();
+  const videoBlockSource = resolveClientPageVideoSource(videoBlockUrl);
+  const blockOrderMap = pageTemplateConfig.block_order.reduce<Record<string, number>>((acc, key, index) => {
+    acc[key] = index;
+    return acc;
+  }, {});
+  const isBlockEnabled = (key: ClientPageBlockKey): boolean => {
+    return Boolean(pageTemplateConfig.blocks[key]);
+  };
+  const getBlockOrder = (key: ClientPageBlockKey): number => {
+    const explicitOrder = blockOrderMap[key];
+    if (typeof explicitOrder === 'number') {
+      return explicitOrder;
+    }
+    const fallbackOrder = CLIENT_PAGE_BLOCK_DEFAULT_ORDER.indexOf(key);
+    return fallbackOrder >= 0 ? pageTemplateConfig.block_order.length + fallbackOrder : pageTemplateConfig.block_order.length + 100;
+  };
   const canUseContactFeatures = bookingContactId !== null;
   const isClientPreviewMode = hasTenantSession && !canUseContactFeatures;
   const isPublicPreviewMode = !hasTenantSession && !canUseContactFeatures;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
-      {pageTemplateConfig.blocks.header && (
-        <div className="rounded-2xl border p-6 shadow-sm space-y-2">
-          <div className="text-2xl font-semibold">{displayName}</div>
-          <div className="text-muted-foreground">{niche}</div>
-          <div className="text-xs text-muted-foreground">ID клиента: #{activeClientId ?? pageClientId}</div>
-          <div className="text-xs text-muted-foreground">
-            Контакт Telegram/VK: {bookingContactId ? (bookingContactName || `#${bookingContactId}`) : 'не авторизован'}
-          </div>
-        </div>
-      )}
-
+    <div className="mx-auto max-w-3xl p-6">
       {(isPublicPreviewMode || isClientPreviewMode) && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-sm text-amber-900 space-y-2">
           <div className="font-medium">
@@ -1472,8 +1449,148 @@ export default function ContactClientPage() {
         </div>
       )}
 
-      {pageTemplateConfig.blocks.product && (
-        <div className="rounded-2xl border p-6 shadow-sm space-y-3">
+      <div className={`${(isPublicPreviewMode || isClientPreviewMode) ? 'mt-6 ' : ''}flex flex-col gap-6`}>
+        {isBlockEnabled('hero') && (
+          <div style={{ order: getBlockOrder('hero') }}>
+            <div className="overflow-hidden rounded-2xl border shadow-sm">
+              <section
+                className="relative px-8 py-14 sm:px-10"
+                style={{ background: heroConfig.image_url ? undefined : heroConfig.background }}
+              >
+                {heroConfig.image_url && (
+                  <div
+                    className="absolute inset-0"
+                    style={{
+                      backgroundImage: `url(${heroConfig.image_url})`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                    }}
+                  />
+                )}
+                {heroConfig.image_url && (
+                  <div
+                    className="absolute inset-0"
+                    style={{
+                      background: heroConfig.background,
+                      opacity: heroConfig.overlay_opacity / 100,
+                    }}
+                  />
+                )}
+
+                <div
+                  className={`relative z-10 flex flex-col gap-4 ${
+                    heroConfig.align === 'center'
+                      ? 'items-center text-center'
+                      : heroConfig.align === 'right'
+                        ? 'items-end text-right'
+                        : 'items-start text-left'
+                  }`}
+                >
+                  <h1 className="whitespace-pre-line text-3xl font-semibold sm:text-4xl" style={{ color: heroConfig.text_color }}>
+                    {heroTitle}
+                  </h1>
+                  {heroConfig.show_subtitle && (
+                    <p className="max-w-2xl whitespace-pre-line text-base opacity-90 sm:text-lg" style={{ color: heroConfig.text_color }}>
+                      {heroSubtitle}
+                    </p>
+                  )}
+                  {heroConfig.show_button && (
+                    <a
+                      href={heroButtonUrl || '#'}
+                      className="inline-flex rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-100"
+                    >
+                      {heroButtonText}
+                    </a>
+                  )}
+                </div>
+              </section>
+            </div>
+          </div>
+        )}
+
+        {isBlockEnabled('image') && (
+          <div style={{ order: getBlockOrder('image') }}>
+            <div className="overflow-hidden rounded-2xl border p-4 shadow-sm">
+              {!imageBlockUrl ? (
+                <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                  Изображение не настроено.
+                </div>
+              ) : (
+                <figure className="space-y-3">
+                  <Image
+                    src={imageBlockUrl}
+                    alt={imageBlockAlt || 'Изображение'}
+                    width={1600}
+                    height={900}
+                    unoptimized
+                    loader={({ src }) => src}
+                    className="w-full rounded-xl bg-slate-100"
+                    style={{
+                      maxHeight: imageBlockConfig.max_height,
+                      objectFit: imageBlockConfig.fit,
+                    }}
+                  />
+                  {imageBlockCaption && (
+                    <figcaption className="text-sm text-muted-foreground">{imageBlockCaption}</figcaption>
+                  )}
+                </figure>
+              )}
+            </div>
+          </div>
+        )}
+
+        {isBlockEnabled('video') && (
+          <div style={{ order: getBlockOrder('video') }}>
+            <div className="rounded-2xl border p-4 shadow-sm">
+              {!videoBlockUrl ? (
+                <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                  Видео не настроено.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {videoBlockSource.type === 'youtube' || videoBlockSource.type === 'vimeo' ? (
+                    <div className="aspect-video overflow-hidden rounded-xl border">
+                      <iframe
+                        src={videoBlockSource.embed_url}
+                        title="Видео"
+                        className="h-full w-full"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                    </div>
+                  ) : videoBlockSource.type === 'direct' ? (
+                    <video src={videoBlockSource.embed_url} controls className="aspect-video w-full rounded-xl border bg-black" />
+                  ) : (
+                    <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                      Неподдерживаемый формат видео. Используйте YouTube, Vimeo или прямую ссылку `.mp4/.webm/.ogg`.
+                    </div>
+                  )}
+
+                  {videoBlockCaption && (
+                    <div className="text-sm text-muted-foreground">{videoBlockCaption}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {isBlockEnabled('header') && (
+          <div style={{ order: getBlockOrder('header') }}>
+            <div className="rounded-2xl border p-6 shadow-sm space-y-2">
+              <div className="text-2xl font-semibold">{displayName}</div>
+              <div className="text-muted-foreground">{niche}</div>
+              <div className="text-xs text-muted-foreground">ID клиента: #{activeClientId ?? pageClientId}</div>
+              <div className="text-xs text-muted-foreground">
+                Контакт Telegram/VK: {bookingContactId ? (bookingContactName || `#${bookingContactId}`) : 'не авторизован'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isBlockEnabled('product') && (
+          <div style={{ order: getBlockOrder('product') }}>
+            <div className="rounded-2xl border p-6 shadow-sm space-y-3">
           <div className="text-sm text-muted-foreground">Продукт</div>
           {!selectedTemplateProduct ? (
             <div className="text-muted-foreground">Активный продукт не выбран.</div>
@@ -1542,11 +1659,13 @@ export default function ContactClientPage() {
               )}
             </div>
           )}
-        </div>
-      )}
+            </div>
+          </div>
+        )}
 
-      {pageTemplateConfig.blocks.purchases && (
-        <div className="rounded-2xl border p-6 shadow-sm space-y-3">
+        {isBlockEnabled('purchases') && (
+          <div style={{ order: getBlockOrder('purchases') }}>
+            <div className="rounded-2xl border p-6 shadow-sm space-y-3">
           <div className="text-xl font-semibold">Список покупок</div>
 
           {!canUseContactFeatures && (
@@ -1615,20 +1734,24 @@ export default function ContactClientPage() {
             </ul>
           )}
 
-          {purchasesError && <div className="text-sm text-red-600">{purchasesError}</div>}
-        </div>
-      )}
+              {purchasesError && <div className="text-sm text-red-600">{purchasesError}</div>}
+            </div>
+          </div>
+        )}
 
-      {pageTemplateConfig.blocks.custom_content && customContentHtml && (
-        <div className="rounded-2xl border p-6 shadow-sm">
-          <div
-            className="tiptap prose prose-slate max-w-none"
-            dangerouslySetInnerHTML={{ __html: customContentHtml }}
-          />
-        </div>
-      )}
+        {isBlockEnabled('custom_content') && customContentHtml && (
+          <div style={{ order: getBlockOrder('custom_content') }}>
+            <div className="rounded-2xl border p-6 shadow-sm">
+              <div
+                className="tiptap prose prose-slate max-w-none"
+                dangerouslySetInnerHTML={{ __html: customContentHtml }}
+              />
+            </div>
+          </div>
+        )}
 
-      {pageTemplateConfig.blocks.booking && (
+        {isBlockEnabled('booking') && (
+      <div id="booking" style={{ order: getBlockOrder('booking') }}>
       <div className="rounded-2xl border p-6 shadow-sm space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-xl font-semibold">
@@ -1746,10 +1869,12 @@ export default function ContactClientPage() {
         {bookingError && <div className="text-sm text-red-600">{bookingError}</div>}
         {success && <div className="text-sm text-green-700">{success}</div>}
       </div>
+      </div>
       )}
 
-      {pageTemplateConfig.blocks.planned_meetings && plannedMeetings.length > 0 && (
-        <div className="rounded-2xl border p-6 shadow-sm space-y-3">
+        {isBlockEnabled('planned_meetings') && plannedMeetings.length > 0 && (
+          <div style={{ order: getBlockOrder('planned_meetings') }}>
+            <div className="rounded-2xl border p-6 shadow-sm space-y-3">
           <div className="text-xl font-semibold">Запланированы встречи:</div>
           <ul className="space-y-2">
             {plannedMeetings.map((meeting) => (
@@ -1758,7 +1883,7 @@ export default function ContactClientPage() {
                 className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm text-slate-700"
               >
                 <span>{formatMeetingRange(meeting.startAt, meeting.endAt, timezone)}</span>
-                {pageTemplateConfig.blocks.booking && (
+                {isBlockEnabled('booking') && (
                   <button
                     type="button"
                     onClick={() => handleStartReschedule(meeting.id)}
@@ -1771,10 +1896,12 @@ export default function ContactClientPage() {
               </li>
             ))}
           </ul>
-        </div>
-      )}
+            </div>
+          </div>
+        )}
 
-      {pageTemplateConfig.blocks.referrals && (
+        {isBlockEnabled('referrals') && (
+      <div style={{ order: getBlockOrder('referrals') }}>
       <div className="rounded-2xl border p-6 shadow-sm space-y-2">
         <div className="text-xl font-semibold">Рефералы</div>
         <div className="text-muted-foreground">Приглашено: <b>{referralCount}</b></div>
@@ -1856,7 +1983,9 @@ export default function ContactClientPage() {
 
         {referralError && <div className="text-sm text-red-600">{referralError}</div>}
       </div>
+      </div>
       )}
+    </div>
     </div>
   );
 }

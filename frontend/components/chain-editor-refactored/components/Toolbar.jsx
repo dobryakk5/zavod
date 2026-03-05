@@ -6,6 +6,9 @@ const ADD_NODE_OPTIONS = [
   { type: 'buttons', label: 'Кнопки', icon: '🔘' },
   { type: 'timer', label: 'Задержка', icon: '⏱️' },
   { type: 'router', label: 'Условие', icon: '🔀' },
+  { type: 'booking', label: 'Бронирование', icon: '📅' },
+  { type: 'ai_assistant', label: 'ИИ чат', icon: '🤖' },
+  { type: 'product_list', label: 'Продукты', icon: '🛍️' },
 ];
 
 export function Toolbar({
