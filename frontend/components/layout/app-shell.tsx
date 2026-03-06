@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetClose, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Menu } from 'lucide-react';
 
@@ -32,6 +33,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarAvatarUrl, setSidebarAvatarUrl] = useState<string | null>(null);
   const [sidebarAvatarInitial, setSidebarAvatarInitial] = useState('U');
+  const [userModalOpen, setUserModalOpen] = useState(false);
+  const [userModalLoading, setUserModalLoading] = useState(false);
+  const [loggedUserData, setLoggedUserData] = useState<Record<string, unknown> | null>(null);
   const isClientPageEditorRoute = /^\/c\/[^/]+\/edit(?:\/.*)?$/.test(pathname);
   const isPublicRoute =
     pathname === '/'
@@ -50,6 +54,44 @@ export function AppShell({ children }: { children: ReactNode }) {
       console.error('logout failed', error);
     }
     router.push('/');
+  };
+
+  const openLoggedUserModal = async () => {
+    setUserModalOpen(true);
+    setUserModalLoading(true);
+
+    try {
+      const [accountsResponse, telegramResponse, vkResponse] = await Promise.all([
+        fetch(buildApiUrl('/auth/social/accounts'), { credentials: 'include' }),
+        fetch(buildApiUrl('/auth/telegram'), { credentials: 'include' }),
+        fetch(buildApiUrl('/auth/vk'), { credentials: 'include' })
+      ]);
+
+      const accountsPayload = accountsResponse.ok ? await accountsResponse.json().catch(() => null) : null;
+      const telegramPayload = telegramResponse.ok ? await telegramResponse.json().catch(() => null) : null;
+      const vkPayload = vkResponse.ok ? await vkResponse.json().catch(() => null) : null;
+
+      const accounts = Array.isArray(accountsPayload?.accounts) ? accountsPayload.accounts : [];
+      setLoggedUserData({
+        sources: {
+          social_accounts: accountsPayload,
+          telegram_auth: telegramPayload,
+          vk_auth: vkPayload
+        },
+        user: {
+          primary: telegramPayload?.user ?? vkPayload?.user ?? null,
+          telegram: telegramPayload?.user ?? null,
+          vk: vkPayload?.user ?? null
+        },
+        accounts
+      });
+    } catch {
+      setLoggedUserData({
+        error: 'Не удалось загрузить данные пользователя'
+      });
+    } finally {
+      setUserModalLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -193,26 +235,54 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Button variant="outline" className="flex-1" onClick={onLogout}>
             Выйти
           </Button>
-          {sidebarAvatarUrl ? (
-            <Image
-              src={sidebarAvatarUrl}
-              alt="Аватар пользователя"
-              width={32}
-              height={32}
-              className="h-8 w-8 rounded-full object-cover ring-1 ring-border"
-              unoptimized
-              loading="lazy"
-              onError={() => setSidebarAvatarUrl(null)}
-            />
-          ) : (
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary ring-1 ring-border">
-              {sidebarAvatarInitial}
-            </div>
-          )}
+          <button
+            type="button"
+            aria-label="Открыть данные пользователя"
+            className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full ring-1 ring-border"
+            onClick={() => {
+              void openLoggedUserModal();
+            }}
+          >
+            {sidebarAvatarUrl ? (
+              <Image
+                src={sidebarAvatarUrl}
+                alt="Аватар пользователя"
+                width={32}
+                height={32}
+                className="h-8 w-8 rounded-full object-cover"
+                unoptimized
+                loading="lazy"
+                onError={() => setSidebarAvatarUrl(null)}
+              />
+            ) : (
+              <span className="flex h-8 w-8 items-center justify-center bg-primary/15 text-xs font-semibold text-primary">
+                {sidebarAvatarInitial}
+              </span>
+            )}
+          </button>
         </div>
       </aside>
 
       <main className="flex-1 p-4 md:p-6">{children}</main>
+
+      <Dialog open={userModalOpen} onOpenChange={setUserModalOpen}>
+        <DialogContent className="sm:max-w-2xl bg-white text-gray-900 dark:bg-white dark:text-gray-900 dark:border-gray-200">
+          <DialogHeader>
+            <DialogTitle>Данные авторизованного пользователя</DialogTitle>
+            <DialogDescription className="text-gray-600">
+              Telegram/VK auth profile и связанные социальные аккаунты.
+            </DialogDescription>
+          </DialogHeader>
+
+          {userModalLoading ? (
+            <div className="text-sm text-gray-600">Загрузка...</div>
+          ) : (
+            <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
+              {JSON.stringify(loggedUserData, null, 2)}
+            </pre>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

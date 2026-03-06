@@ -11,12 +11,14 @@ const STATUS_LABELS: Record<OperatorTaskStatus, string> = {
   open: 'Открыта',
   in_progress: 'В работе',
   done: 'Выполнена',
+  checked: 'Проверена',
 };
 
 const STATUS_COLORS: Record<OperatorTaskStatus, string> = {
   open: 'bg-red-100 text-red-700',
   in_progress: 'bg-yellow-100 text-yellow-700',
   done: 'bg-green-100 text-green-700',
+  checked: 'bg-blue-100 text-blue-700',
 };
 
 const PRIORITY_COLORS: Record<1 | 2 | 3, string> = {
@@ -106,7 +108,7 @@ export function OperatorTasksTab() {
   const openActionModal = (task: OperatorTask) => {
     setActionTask(task);
     setActionNote('');
-    setActionStatus(task.status === 'done' ? 'open' : '');
+    setActionStatus(task.status === 'done' || task.status === 'checked' ? 'open' : '');
     setActionPriority(normalizePriority(task.priority));
   };
 
@@ -217,7 +219,7 @@ export function OperatorTasksTab() {
 
       <div className="flex flex-wrap gap-2 items-center">
         <span className="text-xs text-muted-foreground">Статус:</span>
-        {(['all', 'open', 'in_progress', 'done'] as FilterStatus[]).map((status) => (
+        {(['all', 'open', 'in_progress', 'done', 'checked'] as FilterStatus[]).map((status) => (
           <button
             key={status}
             type="button"
@@ -256,7 +258,7 @@ export function OperatorTasksTab() {
       {!loading && filtered.length > 0 && (
         <div className="space-y-3">
           {filtered.map((task) => {
-            const isDone = task.status === 'done';
+            const isDone = task.status === 'done' || task.status === 'checked';
             const isExpanded = expanded[task.id] ?? false;
             const historyCount = task.history?.length ?? 0;
             const priority = normalizePriority(task.priority);
@@ -393,6 +395,7 @@ export function OperatorTasksTab() {
                 <option value="open">Открыта</option>
                 <option value="in_progress">В работе</option>
                 <option value="done">Выполнена</option>
+                <option value="checked">Проверена</option>
               </select>
             </div>
 

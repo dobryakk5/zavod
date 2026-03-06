@@ -23,6 +23,7 @@ from core.models import (
     TelegramTask,
     Topic,
     TrendItem,
+    UserTenantBinding,
 )
 from core.services.seo_generation import has_active_generation
 from core.services.posting_service import update_post_status_after_publish
@@ -131,6 +132,26 @@ def _parse_task_priority(value):
     return priority
 
 
+def _parse_task_contact_id(value):
+    if value in (None, ""):
+        return None
+    try:
+        contact_id = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("Некорректный contact_id.")
+    if contact_id <= 0:
+        raise ValueError("contact_id должен быть положительным.")
+    return contact_id
+
+
+def _tenant_has_contact(client_id: int, contact_id: int) -> bool:
+    return UserTenantBinding.objects.filter(
+        tenant_id=client_id,
+        contact_id=contact_id,
+        contact_id__gt=0,
+    ).exists()
+
+
 class CRMTaskListCreateView(APIView):
     permission_classes = [IsTenantMember]
 
@@ -168,6 +189,16 @@ class CRMTaskListCreateView(APIView):
         elif manual in {"0", "false", "False"}:
             queryset = queryset.filter(level__isnull=False)
 
+        contact_id = request.query_params.get("contact_id")
+        if contact_id not in (None, ""):
+            try:
+                contact_id_int = _parse_task_contact_id(contact_id)
+            except ValueError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            if not _tenant_has_contact(client.id, contact_id_int):
+                return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
+            queryset = queryset.filter(contact_id=contact_id_int)
+
         serializer = CRMTaskSerializer(queryset, many=True)
         return Response(serializer.data)
 
@@ -199,8 +230,16 @@ class CRMTaskListCreateView(APIView):
         if priority is None:
             priority = 2
 
+        try:
+            contact_id = _parse_task_contact_id(request.data.get("contact_id"))
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        if contact_id is not None and not _tenant_has_contact(client.id, contact_id):
+            return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
+
         task = CRMTask.objects.create(
             level=level,
+            contact_id=contact_id,
             title=title,
             description=description,
             status="open",

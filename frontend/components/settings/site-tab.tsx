@@ -61,6 +61,15 @@ type EventProductRow = {
   startTimestamp: number;
 };
 
+type PublicProductRow = {
+  id: number;
+  productName: string;
+  typeLabel: string;
+  shortDescription: string;
+  priceLabel: string;
+  publicPath: string;
+};
+
 const isEventProductType = (product: ClientProduct): boolean => {
   const typeName = (product.product_type_name ?? product.product_type?.name ?? '').trim().toLowerCase();
   return EVENT_PRODUCT_TYPE_KEYS.has(typeName);
@@ -162,6 +171,8 @@ export function SiteTab() {
 
   const activeSitePage = searchParams.get('sitePage') ?? '';
   const isEventsPage = activeSitePage === 'events';
+  const isProductsPage = activeSitePage === 'products';
+  const isTasksPage = activeSitePage === 'tasks';
 
   const buildSiteUrl = useCallback(
     (sitePage: string | null) => {
@@ -192,7 +203,7 @@ export function SiteTab() {
         setProducts(productsData);
       } catch {
         setClientId(null);
-        setLoadingError('Не удалось загрузить список мероприятий.');
+        setLoadingError('Не удалось загрузить данные страницы.');
       } finally {
         setLoading(false);
       }
@@ -204,6 +215,8 @@ export function SiteTab() {
   const publicPageEditorPath = useMemo(() => (publicPagePath ? `${publicPagePath}/edit` : ''), [publicPagePath]);
   const quizEditorPath = useMemo(() => (publicPagePath ? `${publicPagePath}/quiz/edit` : ''), [publicPagePath]);
   const publicEventsPath = useMemo(() => (publicPagePath ? `${publicPagePath}/events` : ''), [publicPagePath]);
+  const publicProductsPath = useMemo(() => (publicPagePath ? `${publicPagePath}/products` : ''), [publicPagePath]);
+  const publicTasksPath = useMemo(() => (publicPagePath ? `${publicPagePath}/tasks` : ''), [publicPagePath]);
   const publicPageShareUrl = useMemo(() => {
     if (!publicPagePath) {
       return '';
@@ -222,6 +235,24 @@ export function SiteTab() {
     }
     return `${window.location.origin}${publicEventsPath}`;
   }, [publicEventsPath]);
+  const publicProductsShareUrl = useMemo(() => {
+    if (!publicProductsPath) {
+      return '';
+    }
+    if (typeof window === 'undefined') {
+      return publicProductsPath;
+    }
+    return `${window.location.origin}${publicProductsPath}`;
+  }, [publicProductsPath]);
+  const publicTasksShareUrl = useMemo(() => {
+    if (!publicTasksPath) {
+      return '';
+    }
+    if (typeof window === 'undefined') {
+      return publicTasksPath;
+    }
+    return `${window.location.origin}${publicTasksPath}`;
+  }, [publicTasksPath]);
 
   const handleCopyPublicPageLink = useCallback(async () => {
     if (!publicPageShareUrl) {
@@ -248,6 +279,32 @@ export function SiteTab() {
       toast.error('Не удалось скопировать ссылку');
     }
   }, [publicEventsShareUrl]);
+
+  const handleCopyProductsLink = useCallback(async () => {
+    if (!publicProductsShareUrl) {
+      toast.error('Ссылка пока недоступна');
+      return;
+    }
+    try {
+      await copyTextToClipboard(publicProductsShareUrl);
+      toast.success('Ссылка скопирована');
+    } catch {
+      toast.error('Не удалось скопировать ссылку');
+    }
+  }, [publicProductsShareUrl]);
+
+  const handleCopyTasksLink = useCallback(async () => {
+    if (!publicTasksShareUrl) {
+      toast.error('Ссылка пока недоступна');
+      return;
+    }
+    try {
+      await copyTextToClipboard(publicTasksShareUrl);
+      toast.success('Ссылка скопирована');
+    } catch {
+      toast.error('Не удалось скопировать ссылку');
+    }
+  }, [publicTasksShareUrl]);
 
   const rubFormatter = useMemo(
     () =>
@@ -290,6 +347,24 @@ export function SiteTab() {
       .sort((a, b) => a.startTimestamp - b.startTimestamp);
   }, [products, rubFormatter, timezone]);
 
+  const publicProducts = useMemo<PublicProductRow[]>(() => {
+    return products
+      .filter((product) => product.status === 'active' || !product.status)
+      .filter((product) => !isEventProductType(product))
+      .map((product) => {
+        const minPackagePrice = resolveMinPackagePrice(product);
+        return {
+          id: product.id,
+          productName: (product.name || '').trim() || `Продукт #${product.id}`,
+          typeLabel: (product.product_type_name || product.product_type?.name || '').trim() || 'Без типа',
+          shortDescription: (product.short_description || '').trim(),
+          priceLabel: minPackagePrice !== null ? `от ${rubFormatter.format(minPackagePrice)}` : '',
+          publicPath: clientId ? `/c/${clientId}/products/${product.id}` : '',
+        };
+      })
+      .sort((a, b) => a.productName.localeCompare(b.productName, 'ru'));
+  }, [clientId, products, rubFormatter]);
+
   if (isEventsPage) {
     return (
       <div className="space-y-3 rounded-lg border bg-background p-5">
@@ -328,13 +403,15 @@ export function SiteTab() {
         {!loading && !loadingError && eventProducts.length > 0 && (
           <div className="space-y-2">
             {eventProducts.map((item) => (
-              <div key={item.id} className="rounded-md border p-3">
+              <Link
+                key={item.id}
+                href={`/product/${item.id}`}
+                className="block rounded-md border p-3 transition-colors hover:bg-accent/30"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{item.eventTitle}</p>
-                    <Link href={`/product/${item.id}`} className="text-xs text-blue-600 hover:underline">
-                      {item.productName}
-                    </Link>
+                    <p className="text-xs text-blue-600">{item.productName}</p>
                   </div>
                   {(item.durationLabel || item.priceLabel) && (
                     <div className="shrink-0 text-right text-xs text-muted-foreground">
@@ -347,10 +424,113 @@ export function SiteTab() {
                   <p>Дата: {item.dateLabel}</p>
                   <p>Локация: {item.locationLabel}</p>
                 </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (isProductsPage) {
+    return (
+      <div className="space-y-3 rounded-lg border bg-background p-5">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold">Продукты</h2>
+            <p className="text-sm text-muted-foreground">
+              Список берётся из активных продуктов (кроме типа «Мероприятие»).
+            </p>
+          </div>
+          <div className="flex items-center gap-1">
+            {publicProductsPath && (
+              <a
+                href={publicProductsPath}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-input bg-background text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                aria-label="Открыть публичную страницу продуктов"
+                title="Открыть публичную страницу продуктов"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </a>
+            )}
+            <Button type="button" variant="outline" onClick={() => router.replace(buildSiteUrl(null))}>
+              Назад
+            </Button>
+          </div>
+        </div>
+
+        {loading && <p className="text-sm text-muted-foreground">Загрузка продуктов...</p>}
+        {!loading && loadingError && <p className="text-sm text-red-500">{loadingError}</p>}
+        {!loading && !loadingError && publicProducts.length === 0 && (
+          <p className="text-sm text-muted-foreground">Пока нет активных продуктов.</p>
+        )}
+
+        {!loading && !loadingError && publicProducts.length > 0 && (
+          <div className="space-y-2">
+            {publicProducts.map((item) => (
+              <div key={item.id} className="rounded-md border p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{item.productName}</p>
+                    {item.publicPath ? (
+                      <a
+                        href={item.publicPath}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                      >
+                        {item.typeLabel}
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">{item.typeLabel}</span>
+                    )}
+                  </div>
+                  {item.priceLabel && <div className="shrink-0 text-right text-xs text-muted-foreground">{item.priceLabel}</div>}
+                </div>
+                {item.shortDescription && <p className="mt-2 text-xs text-muted-foreground">{item.shortDescription}</p>}
               </div>
             ))}
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (isTasksPage) {
+    return (
+      <div className="space-y-3 rounded-lg border bg-background p-5">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold">Задания</h2>
+            <p className="text-sm text-muted-foreground">
+              Контакт видит только свои задания после входа через Telegram/VK.
+            </p>
+          </div>
+          <div className="flex items-center gap-1">
+            {publicTasksPath && (
+              <a
+                href={publicTasksPath}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-input bg-background text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                aria-label="Открыть публичную страницу заданий"
+                title="Открыть публичную страницу заданий"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </a>
+            )}
+            <Button type="button" variant="outline" onClick={() => router.replace(buildSiteUrl(null))}>
+              Назад
+            </Button>
+          </div>
+        </div>
+
+        <p className="text-sm text-muted-foreground">
+          На странице отображаются задания, привязанные к контакту в CRM.
+        </p>
       </div>
     );
   }
@@ -441,6 +621,69 @@ export function SiteTab() {
           )}
           {!loading && !loadingError && (
             <span className="text-xs text-muted-foreground">({eventProducts.length})</span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-muted-foreground">4.</span>
+          <Link href={buildSiteUrl('products')} className="text-blue-600 hover:underline">
+            Продукты
+          </Link>
+          {publicProductsPath && (
+            <>
+              <span className="text-muted-foreground">·</span>
+              <a
+                href={publicProductsPath}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+              >
+                {publicProductsPath}
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => void handleCopyProductsLink()}
+                aria-label="Скопировать ссылку на страницу продуктов"
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          )}
+          {!loading && !loadingError && (
+            <span className="text-xs text-muted-foreground">({publicProducts.length})</span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-muted-foreground">5.</span>
+          <Link href={buildSiteUrl('tasks')} className="text-blue-600 hover:underline">
+            Задания
+          </Link>
+          {publicTasksPath && (
+            <>
+              <span className="text-muted-foreground">·</span>
+              <a
+                href={publicTasksPath}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+              >
+                {publicTasksPath}
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => void handleCopyTasksLink()}
+                aria-label="Скопировать ссылку на страницу заданий"
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </Button>
+            </>
           )}
         </div>
       </div>

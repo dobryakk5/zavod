@@ -316,7 +316,7 @@ export interface TelegramTask {
   rating: number | null;
 }
 
-export type OperatorTaskStatus = 'open' | 'in_progress' | 'done';
+export type OperatorTaskStatus = 'open' | 'in_progress' | 'done' | 'checked';
 
 export interface OperatorTask {
   id: number;
@@ -521,6 +521,7 @@ export interface ProductType {
 }
 
 export interface ProductStructure {
+  rich_description?: Record<string, unknown> | null;
   audience?: Array<{ parameter: string; value: string }>;
   transformation?: Array<{ was: string; became: string }>;
   metrics?: Array<{ metric: string; promise: string }>;

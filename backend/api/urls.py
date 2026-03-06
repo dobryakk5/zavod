@@ -139,6 +139,7 @@ from .views_public_client_page import (
     PublicClientPageBuyProductView,
     PublicClientPagePurchasesView,
     PublicClientPagePaymentStatusView,
+    PublicClientPageTasksView,
     PublicClientPageView,
 )
 
@@ -220,6 +221,7 @@ urlpatterns = [
 
     # Client endpoints
     path('public/client-page/<int:client_id>/', PublicClientPageView.as_view(), name='public-client-page'),
+    path('public/client-page/<int:client_id>/tasks/', PublicClientPageTasksView.as_view(), name='public-client-page-tasks'),
     path('public/client-page/<int:client_id>/buy/', PublicClientPageBuyProductView.as_view(), name='public-client-page-buy'),
     path('public/client-page/<int:client_id>/payment-status/', PublicClientPagePaymentStatusView.as_view(), name='public-client-page-payment-status'),
     path('public/client-page/<int:client_id>/purchases/', PublicClientPagePurchasesView.as_view(), name='public-client-page-purchases'),

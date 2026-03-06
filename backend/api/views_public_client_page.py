@@ -18,6 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.models import (
+    CRMTask,
     Client,
     ClientProduct,
     ContactProductPurchase,
@@ -654,6 +655,46 @@ class PublicClientPageView(APIView):
                 # Public mode intentionally does not expose tenant CRM events.
                 # Frontend uses this endpoint for read-only rendering and gates booking by auth.
                 "events": [],
+            }
+        )
+
+
+class PublicClientPageTasksView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def get(self, request, client_id: int):
+        client_exists = Client.objects.filter(id=client_id).exists()
+        if not client_exists:
+            raise Http404("Клиент не найден")
+
+        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        if contact_id is None or contact_id <= 0:
+            return Response(
+                {"detail": "Для просмотра заданий войдите как контакт через Telegram или VK."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        items = list(
+            CRMTask.objects
+            .filter(contact_id=int(contact_id))
+            .values(
+                "id",
+                "contact_id",
+                "title",
+                "description",
+                "status",
+                "priority",
+                "created_at",
+                "updated_at",
+            )
+            .order_by("-updated_at", "-id")
+        )
+
+        return Response(
+            {
+                "contact_id": int(contact_id),
+                "items": items,
             }
         )
 

@@ -16,7 +16,28 @@ from core.models import (
     MapCRMNote,
     MapCRMPayment,
     MapCRMTag,
+    UserTenantBinding,
 )
+from .utils import get_active_client
+
+
+def _active_client_id_from_context(serializer: serializers.Serializer) -> int | None:
+    request = serializer.context.get("request")
+    if not request or not getattr(request, "user", None):
+        return None
+    try:
+        return int(get_active_client(request.user).id)
+    except Exception:
+        return None
+
+
+def _tenant_contact_queryset(tenant_id: int):
+    contact_ids = (
+        UserTenantBinding.objects
+        .filter(tenant_id=tenant_id, contact_id__isnull=False, contact_id__gt=0)
+        .values_list("contact_id", flat=True)
+    )
+    return MapContact.objects.filter(id__in=contact_ids)
 
 
 class MapCRMCategorySerializer(serializers.ModelSerializer):
@@ -141,6 +162,18 @@ class MapContactSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Сумма сделки не может быть отрицательной.")
         return value
 
+    def validate_parent_id(self, value):
+        if value is None:
+            return None
+        tenant_id = _active_client_id_from_context(self)
+        if tenant_id is None:
+            if not MapContact.objects.filter(id=value).exists():
+                raise serializers.ValidationError("Родительский контакт не найден.")
+            return value
+        if not _tenant_contact_queryset(tenant_id).filter(id=value).exists():
+            raise serializers.ValidationError("Родительский контакт недоступен в этом тенанте.")
+        return value
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
         instance = getattr(self, "instance", None)
@@ -229,14 +262,20 @@ class MapCRMPaymentSerializer(serializers.ModelSerializer):
         return value
 
     def validate_contact_id(self, value):
-        if not MapContact.objects.filter(id=value).exists():
+        tenant_id = _active_client_id_from_context(self)
+        queryset = _tenant_contact_queryset(tenant_id) if tenant_id is not None else MapContact.objects.all()
+        if not queryset.filter(id=value).exists():
             raise serializers.ValidationError("Контакт не найден.")
         return value
 
     def validate_deal_id(self, value):
         if value is None:
             return None
-        if not MapCRMDeal.objects.filter(id=value).exists():
+        tenant_id = _active_client_id_from_context(self)
+        queryset = MapCRMDeal.objects.filter(id=value)
+        if tenant_id is not None:
+            queryset = queryset.filter(contact_id__in=_tenant_contact_queryset(tenant_id).values_list("id", flat=True))
+        if not queryset.exists():
             raise serializers.ValidationError("Сделка не найдена.")
         return value
 
@@ -252,7 +291,13 @@ class MapCRMPaymentSerializer(serializers.ModelSerializer):
             next_deal_id = getattr(instance, "deal_id", None)
 
         if next_deal_id:
-            deal = MapCRMDeal.objects.filter(id=next_deal_id).only("id", "contact_id").first()
+            deal_queryset = MapCRMDeal.objects.filter(id=next_deal_id)
+            tenant_id = _active_client_id_from_context(self)
+            if tenant_id is not None:
+                deal_queryset = deal_queryset.filter(
+                    contact_id__in=_tenant_contact_queryset(tenant_id).values_list("id", flat=True)
+                )
+            deal = deal_queryset.only("id", "contact_id").first()
             if deal is None:
                 raise serializers.ValidationError({"deal_id": "Сделка не найдена."})
             if next_contact_id is None:
@@ -347,7 +392,9 @@ class MapCRMDealSerializer(serializers.ModelSerializer):
         read_only_fields = ["created_at", "updated_at", "contact_name"]
 
     def validate_contact_id(self, value):
-        if not MapContact.objects.filter(id=value).exists():
+        tenant_id = _active_client_id_from_context(self)
+        queryset = _tenant_contact_queryset(tenant_id) if tenant_id is not None else MapContact.objects.all()
+        if not queryset.filter(id=value).exists():
             raise serializers.ValidationError("Контакт не найден.")
         return value
 
@@ -476,6 +523,12 @@ class MapCRMEventSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["created_at", "updated_at"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant_id = _active_client_id_from_context(self)
+        if tenant_id is not None:
+            self.fields["contact_id"].queryset = _tenant_contact_queryset(tenant_id)
+
 
 class MapAvailabilityEventSerializer(serializers.ModelSerializer):
     tenant_id = serializers.IntegerField(source="tenant.id", read_only=True)
@@ -514,3 +567,9 @@ class MapCRMNoteSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant_id = _active_client_id_from_context(self)
+        if tenant_id is not None:
+            self.fields["contact_id"].queryset = _tenant_contact_queryset(tenant_id)

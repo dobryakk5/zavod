@@ -42,6 +42,8 @@ import {
 } from '@/lib/api/crm';
 import { clientApi } from '@/lib/api/client';
 import { clientProductsApi } from '@/lib/api/clientProducts';
+import { operatorTasksApi } from '@/lib/api/operatorTasks';
+import type { OperatorTask, OperatorTaskStatus } from '@/lib/types';
 import { PaymentsTable } from '@/components/crm/payments-table';
 import {
   DEFAULT_TENANT_TIMEZONE,
@@ -163,6 +165,36 @@ const DEAL_STAGE_LABELS: Record<Deal['stage'], string> = {
   lost: 'Срыв',
 };
 
+const TASK_STAGE_ORDER: OperatorTaskStatus[] = ['open', 'in_progress', 'done', 'checked'];
+
+const TASK_STAGE_LABELS: Record<OperatorTaskStatus, string> = {
+  open: 'Создано',
+  in_progress: 'Выполняется',
+  done: 'Выполнено',
+  checked: 'Проверено',
+};
+
+function normalizeTaskStatus(raw: unknown): OperatorTaskStatus {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (value === 'open' || value === 'in_progress' || value === 'done' || value === 'checked') {
+    return value;
+  }
+  return 'open';
+}
+
+function normalizeOperatorTask(task: OperatorTask): OperatorTask {
+  return {
+    ...task,
+    status: normalizeTaskStatus(task.status),
+    history: Array.isArray(task.history)
+      ? task.history.map((entry) => ({
+        ...entry,
+        status: entry.status ? normalizeTaskStatus(entry.status) : null,
+      }))
+      : task.history,
+  };
+}
+
 function formatDealAmount(value: Deal['amount'], currency: Deal['currency']): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
   const normalized = new Intl.NumberFormat('ru-RU', {
@@ -264,6 +296,15 @@ export default function ContactDetailPage() {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [servicePackages, setServicePackages] = useState<ContactServicePackageItem[]>([]);
   const [servicePackagesError, setServicePackagesError] = useState<string | null>(null);
+  const [tasks, setTasks] = useState<OperatorTask[]>([]);
+  const [tasksError, setTasksError] = useState<string | null>(null);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDescription, setNewTaskDescription] = useState('');
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [draggingTaskId, setDraggingTaskId] = useState<number | null>(null);
+  const [kanbanDropStage, setKanbanDropStage] = useState<OperatorTaskStatus | null>(null);
+  const [movingTaskId, setMovingTaskId] = useState<number | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
   const [contactFacts, setContactFacts] = useState<CRMContactFact[]>([]);
   const [contactTags, setContactTags] = useState<ContactTag[]>([]);
@@ -354,7 +395,7 @@ export default function ContactDetailPage() {
       setServicePackagesError('Не удалось загрузить остатки пакетов услуг.');
     }
   }, [contactId]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'deals' | 'schedule' | 'notes'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'deals' | 'tasks' | 'schedule' | 'notes'>('overview');
   const [telegramInfo, setTelegramInfo] = useState<ContactTelegramInfo | null>(null);
   const [telegramInfoError, setTelegramInfoError] = useState<string | null>(null);
   const [telegramDialogOpen, setTelegramDialogOpen] = useState(false);
@@ -367,7 +408,7 @@ export default function ContactDetailPage() {
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'overview' || tab === 'deals' || tab === 'schedule' || tab === 'notes') {
+    if (tab === 'overview' || tab === 'deals' || tab === 'tasks' || tab === 'schedule' || tab === 'notes') {
       setActiveTab(tab);
     }
   }, [searchParams]);
@@ -402,6 +443,7 @@ export default function ContactDetailPage() {
     const fetchData = async () => {
       try {
         setLoading(true);
+        setTasksLoading(true);
         const telegramInfoPromise = crmContactsApi
           .telegramLink(contactId)
           .then((data) => ({ data, error: null as string | null }))
@@ -437,6 +479,13 @@ export default function ContactDetailPage() {
               error: 'Не удалось загрузить остатки пакетов услуг.',
             };
           });
+        const tasksPromise = operatorTasksApi
+          .list({ contact_id: contactId })
+          .then((data) => ({ data, error: null as string | null }))
+          .catch((err) => {
+            console.error('Failed to load tasks:', err);
+            return { data: [] as OperatorTask[], error: 'Не удалось загрузить задания.' };
+          });
         const [
           contactData,
           categoriesData,
@@ -450,6 +499,7 @@ export default function ContactDetailPage() {
           contactTagsData,
           telegramInfoData,
           servicePackagesData,
+          tasksData,
         ] = await Promise.all([
           crmContactsApi.detail(contactId),
           crmCategoriesApi.list(),
@@ -463,6 +513,7 @@ export default function ContactDetailPage() {
           crmContactTagsApi.list(contactId),
           telegramInfoPromise,
           servicePackagesPromise,
+          tasksPromise,
         ]);
 
         setContact(contactData);
@@ -476,6 +527,8 @@ export default function ContactDetailPage() {
         setPayments(paymentsData.filter(payment => payment.contact_id === contactId));
         setServicePackages(Array.isArray(servicePackagesData.data.items) ? servicePackagesData.data.items : []);
         setServicePackagesError(servicePackagesData.error);
+        setTasks(tasksData.data.map(normalizeOperatorTask));
+        setTasksError(tasksData.error);
         setNotes(notesData.filter(note => note.contact_id === contactId));
         setContactFacts(contactFactsData);
         setContactTags(contactTagsData);
@@ -492,6 +545,7 @@ export default function ContactDetailPage() {
         setError('Не удалось загрузить данные контакта. Проверьте API /crm/contacts/, /crm/categories/, /crm/event-types/, /crm/deals/, /crm/events/, /crm/payments/, /crm/notes/, /crm/contact-tags/ и /crm/contacts/:id/facts/.');
       } finally {
         setLoading(false);
+        setTasksLoading(false);
       }
     };
 
@@ -576,6 +630,79 @@ export default function ContactDetailPage() {
     });
     router.push(`/clients/deals/new?${params.toString()}`);
   }, [contact, router]);
+
+  const handleCreateTask = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!contact) return;
+    const title = newTaskTitle.trim();
+    if (!title || creatingTask) return;
+
+    setCreatingTask(true);
+    setTasksError(null);
+    try {
+      const created = await operatorTasksApi.create({
+        contact_id: contact.id,
+        title,
+        description: newTaskDescription.trim() || null,
+        priority: 2,
+      });
+      setTasks((prev) => [normalizeOperatorTask(created), ...prev]);
+      setNewTaskTitle('');
+      setNewTaskDescription('');
+      toast.success('Задание создано');
+    } catch (err) {
+      console.error('Error creating task:', err);
+      setTasksError('Не удалось создать задание.');
+      toast.error('Не удалось создать задание');
+    } finally {
+      setCreatingTask(false);
+    }
+  };
+
+  const moveTaskToStage = async (taskId: number, targetStage: OperatorTaskStatus) => {
+    const currentTask = tasks.find((item) => item.id === taskId);
+    if (!currentTask) return;
+    if (currentTask.status === targetStage) return;
+
+    setTasksError(null);
+    setMovingTaskId(taskId);
+
+    const previousTasks = tasks;
+    setTasks((prev) =>
+      prev.map((item) =>
+        item.id === taskId
+          ? { ...item, status: targetStage }
+          : item
+      )
+    );
+
+    try {
+      const entry = await operatorTasksApi.addHistory(taskId, {
+        note: `Стадия изменена на «${TASK_STAGE_LABELS[targetStage]}»`,
+        status: targetStage,
+      });
+
+      const normalizedStatus = entry.status ? normalizeTaskStatus(entry.status) : targetStage;
+      setTasks((prev) =>
+        prev.map((item) => {
+          if (item.id !== taskId) return item;
+          return {
+            ...item,
+            status: normalizedStatus,
+            updated_at: entry.created_at,
+            history: [...(item.history ?? []), { ...entry, status: normalizedStatus }],
+          };
+        })
+      );
+    } catch (err) {
+      console.error('Failed to move task stage:', err);
+      setTasks(previousTasks);
+      setTasksError('Не удалось изменить стадию задания.');
+      toast.error('Не удалось изменить стадию задания');
+    } finally {
+      setMovingTaskId(null);
+    }
+  };
 
   const handleCreateNote = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -1116,6 +1243,24 @@ export default function ContactDetailPage() {
       return b.id - a.id;
     });
   }, [deals]);
+  const sortedTasks = useMemo(() => {
+    return [...tasks].sort((a, b) => {
+      const aTime = new Date(a.updated_at || a.created_at || '').getTime();
+      const bTime = new Date(b.updated_at || b.created_at || '').getTime();
+      if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) return bTime - aTime;
+      return b.id - a.id;
+    });
+  }, [tasks]);
+  const taskKanbanColumns = useMemo(() => {
+    const columns = TASK_STAGE_ORDER.reduce<Record<OperatorTaskStatus, OperatorTask[]>>((acc, stage) => {
+      acc[stage] = [];
+      return acc;
+    }, {} as Record<OperatorTaskStatus, OperatorTask[]>);
+    sortedTasks.forEach((task) => {
+      columns[task.status].push(task);
+    });
+    return columns;
+  }, [sortedTasks]);
 
   const paymentEventDateById = useMemo(() => {
     const map = new Map<number, string>();
@@ -1262,9 +1407,10 @@ export default function ContactDetailPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="overview">Обзор</TabsTrigger>
           <TabsTrigger value="deals">Сделки</TabsTrigger>
+          <TabsTrigger value="tasks">Задания</TabsTrigger>
           <TabsTrigger value="schedule">Расписание</TabsTrigger>
           <TabsTrigger value="notes">Заметки</TabsTrigger>
         </TabsList>
@@ -1730,6 +1876,129 @@ export default function ContactDetailPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="tasks" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Новые задания</CardTitle>
+              <CardDescription>Добавьте задания для клиента</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleCreateTask} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="task-title">Название</Label>
+                  <Input
+                    id="task-title"
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    placeholder="Например, фиксируй финансы"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="task-description">Описание</Label>
+                  <Textarea
+                    id="task-description"
+                    value={newTaskDescription}
+                    onChange={(e) => setNewTaskDescription(e.target.value)}
+                    placeholder="Короткое описание задания"
+                    rows={3}
+                  />
+                </div>
+                <Button type="submit" disabled={!newTaskTitle.trim() || creatingTask}>
+                  {creatingTask ? 'Создаем...' : 'Создать задание'}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+
+          {tasksError ? (
+            <p className="text-sm text-red-500">{tasksError}</p>
+          ) : null}
+
+          {tasksLoading ? (
+            <p className="text-sm text-muted-foreground">Загружаем задания...</p>
+          ) : null}
+
+          {!tasksLoading && sortedTasks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Заданий пока нет.</p>
+          ) : null}
+
+          {!tasksLoading && sortedTasks.length > 0 ? (
+            <div className="grid gap-4 xl:grid-cols-4">
+              {TASK_STAGE_ORDER.map((stage) => (
+                <div
+                  key={stage}
+                  className={`rounded-xl border bg-card/70 p-3 shadow-sm transition-colors ${
+                    kanbanDropStage === stage && draggingTaskId !== null ? 'border-primary bg-primary/5' : ''
+                  }`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setKanbanDropStage(stage);
+                  }}
+                  onDragLeave={(event) => {
+                    const related = event.relatedTarget as Node | null;
+                    if (related && event.currentTarget.contains(related)) return;
+                    setKanbanDropStage((prev) => (prev === stage ? null : prev));
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const draggedIdRaw = event.dataTransfer.getData('text/plain');
+                    const draggedId = Number.parseInt(draggedIdRaw, 10);
+                    const resolvedId =
+                      Number.isFinite(draggedId) && draggedId > 0 ? draggedId : draggingTaskId;
+                    setKanbanDropStage(null);
+                    setDraggingTaskId(null);
+                    if (!resolvedId) return;
+                    void moveTaskToStage(resolvedId, stage);
+                  }}
+                >
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="text-sm font-semibold">{TASK_STAGE_LABELS[stage]}</div>
+                    <Badge variant="secondary">{taskKanbanColumns[stage].length}</Badge>
+                  </div>
+                  <div className="min-h-[120px] space-y-2">
+                    {taskKanbanColumns[stage].length === 0 ? (
+                      <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">Пусто</div>
+                    ) : (
+                      taskKanbanColumns[stage].map((task) => (
+                        <div
+                          key={task.id}
+                          draggable
+                          onDragStart={(event) => {
+                            setDraggingTaskId(task.id);
+                            event.dataTransfer.setData('text/plain', String(task.id));
+                            event.dataTransfer.effectAllowed = 'move';
+                          }}
+                          onDragEnd={() => {
+                            setDraggingTaskId(null);
+                            setKanbanDropStage(null);
+                          }}
+                          className={`cursor-grab rounded-lg border bg-background p-3 text-left shadow-sm active:cursor-grabbing ${
+                            movingTaskId === task.id ? 'opacity-60' : ''
+                          }`}
+                        >
+                          <div className="text-sm font-medium">{task.title}</div>
+                          {task.description ? (
+                            <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{task.description}</p>
+                          ) : null}
+                          <div className="mt-2 text-[11px] text-muted-foreground">
+                            Обновлено:{' '}
+                            {formatInTenantTimezone(task.updated_at || task.created_at, tenantTimezone, {
+                              day: '2-digit',
+                              month: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </TabsContent>
 
         <TabsContent value="schedule" className="space-y-6">

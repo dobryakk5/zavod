@@ -26,12 +26,14 @@ const STATUS_LABELS: Record<OperatorTaskStatus, string> = {
   open: 'Открыта',
   in_progress: 'В работе',
   done: 'Выполнена',
+  checked: 'Проверена',
 };
 
 const STATUS_COLORS: Record<OperatorTaskStatus, string> = {
   open: 'bg-red-100 text-red-700',
   in_progress: 'bg-yellow-100 text-yellow-700',
   done: 'bg-green-100 text-green-700',
+  checked: 'bg-blue-100 text-blue-700',
 };
 
 function formatTaskAuthor(createdBy: number, username?: string | null): string {
@@ -66,7 +68,7 @@ function TaskModal({ item, tasks, creating, onClose, onCreateTask, onAddHistory 
     const note = (noteInputs[task.id] ?? '').trim();
     if (!note || submitting[task.id]) return;
     const status = (
-      task.status === 'done'
+      task.status === 'done' || task.status === 'checked'
         ? 'open'
         : (statusInputs[task.id] || null)
     ) as OperatorTaskStatus | null;
@@ -155,7 +157,7 @@ function TaskModal({ item, tasks, creating, onClose, onCreateTask, onAddHistory 
                 )}
 
                 {/* Add step form */}
-                {task.status !== 'done' && (
+                {task.status !== 'done' && task.status !== 'checked' && (
                   <div className="space-y-2 pt-1">
                     <textarea
                       value={noteInputs[task.id] ?? ''}
@@ -180,6 +182,7 @@ function TaskModal({ item, tasks, creating, onClose, onCreateTask, onAddHistory 
                         <option value="">Статус без изменений</option>
                         <option value="in_progress">В работе</option>
                         <option value="done">Выполнена</option>
+                        <option value="checked">Проверена</option>
                       </select>
                       <Button
                         type="button"
@@ -195,7 +198,7 @@ function TaskModal({ item, tasks, creating, onClose, onCreateTask, onAddHistory 
                 )}
 
                 {/* Reopen if done */}
-                {task.status === 'done' && (
+                {(task.status === 'done' || task.status === 'checked') && (
                   <div className="space-y-2 pt-1">
                     <textarea
                       value={noteInputs[task.id] ?? ''}
@@ -404,8 +407,8 @@ export default function ScheduleTasksView() {
   const getTaskBadge = (levelId: number) => {
     const tasks = tasksByLevelId[levelId] ?? [];
     if (tasks.length === 0) return null;
-    const hasOpen = tasks.some((t) => t.status !== 'done');
-    const allDone = tasks.every((t) => t.status === 'done');
+    const hasOpen = tasks.some((t) => t.status === 'open' || t.status === 'in_progress');
+    const allDone = tasks.every((t) => t.status === 'done' || t.status === 'checked');
     if (allDone) return { label: `✓ ${tasks.length}`, color: 'bg-green-100 text-green-700' };
     if (hasOpen) return { label: `● ${tasks.length}`, color: 'bg-red-100 text-red-700' };
     return null;

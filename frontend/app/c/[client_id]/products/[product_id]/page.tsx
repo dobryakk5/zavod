@@ -5,8 +5,16 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { generateHTML } from '@tiptap/html';
 import { createKbExtensions } from '@/components/kb/tiptapExtensions';
+import { normalizeTiptapDoc } from '@/components/products/event-description-editor';
 import { ApiError, API_BASE_URL, apiFetch } from '@/lib/api';
 import type { ClientProduct } from '@/lib/types';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   parseResponseDetail,
   PAYMENT_PROVIDER_LABELS,
@@ -16,21 +24,9 @@ import {
   resolvePackagePrice,
 } from '../../shared/public-product-payment';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  DEFAULT_TENANT_TIMEZONE,
-  formatInTenantTimezone,
-  localDateTimeStringToUtcISOString,
-  normalizeTenantTimezone,
-  toTenantDate,
-} from '@/lib/timezone';
-
-const EVENT_PRODUCT_TYPE_KEYS = new Set(['мероприятие', 'event']);
+  isEventProductType,
+  isProductActive,
+} from '../../events/event-products';
 
 type PublicClientPageResponse = {
   client?: {
@@ -44,108 +40,29 @@ type PublicClientPageResponse = {
   products?: ClientProduct[];
 };
 
-type ParsedProductEventDate = {
-  date: Date;
-  hasTime: boolean;
-};
-
-type EventPackage = {
+type ProductPackage = {
   index: number;
   name: string;
   description: string;
   price: number | null;
 };
 
-const isProductActive = (product: ClientProduct): boolean => {
-  if (!product.status) {
-    return true;
-  }
-  return product.status === 'active';
-};
+const getPendingProductPurchaseStorageKey = (clientId: number, productId: number) =>
+  `client-page:pending-product-purchase:${clientId}:${productId}`;
 
-const isEventProductType = (product: ClientProduct): boolean => {
-  const typeName = (product.product_type_name ?? product.product_type?.name ?? '').trim().toLowerCase();
-  if (EVENT_PRODUCT_TYPE_KEYS.has(typeName)) {
-    return true;
-  }
-  return Boolean(product.structure?.event);
-};
-
-const parseProductEventDate = (rawValue: unknown, timezone: string): ParsedProductEventDate | null => {
-  const raw = String(rawValue ?? '').trim();
-  if (!raw) {
-    return null;
-  }
-
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$/i.test(raw)) {
-    const tenantDate = toTenantDate(raw, timezone);
-    if (Number.isNaN(tenantDate.getTime())) {
-      return null;
-    }
-    return { date: tenantDate, hasTime: true };
-  }
-
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(raw)) {
-    const utcValue = localDateTimeStringToUtcISOString(raw, timezone);
-    if (!utcValue) {
-      return null;
-    }
-    const tenantDate = toTenantDate(utcValue, timezone);
-    if (Number.isNaN(tenantDate.getTime())) {
-      return null;
-    }
-    return { date: tenantDate, hasTime: true };
-  }
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    const utcValue = localDateTimeStringToUtcISOString(`${raw}T12:00`, timezone);
-    if (!utcValue) {
-      return null;
-    }
-    const tenantDate = toTenantDate(utcValue, timezone);
-    if (Number.isNaN(tenantDate.getTime())) {
-      return null;
-    }
-    return { date: tenantDate, hasTime: false };
-  }
-
-  return null;
-};
-
-const formatParsedProductEventDate = (parsed: ParsedProductEventDate, timezone: string): string => {
-  const options: Intl.DateTimeFormatOptions = parsed.hasTime
-    ? {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }
-    : {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-      };
-  return formatInTenantTimezone(parsed.date, timezone, options);
-};
-
-const getPendingEventPurchaseStorageKey = (clientId: number, eventId: number) =>
-  `client-page:pending-event-purchase:${clientId}:${eventId}`;
-
-export default function PublicEventPage() {
-  const { client_id: rawClientId, event_id: rawEventId } = useParams<{ client_id: string; event_id: string }>();
+export default function PublicProductPage() {
+  const { client_id: rawClientId, product_id: rawProductId } = useParams<{ client_id: string; product_id: string }>();
   const searchParams = useSearchParams();
   const pageClientId = Number(rawClientId);
-  const pageEventId = Number(rawEventId);
+  const pageProductId = Number(rawProductId);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [timezone, setTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
   const [clientName, setClientName] = useState('');
   const [brandName, setBrandName] = useState('');
-  const [eventProduct, setEventProduct] = useState<ClientProduct | null>(null);
+  const [product, setProduct] = useState<ClientProduct | null>(null);
   const [providerDialogOpen, setProviderDialogOpen] = useState(false);
-  const [pendingPackage, setPendingPackage] = useState<EventPackage | null>(null);
+  const [pendingPackage, setPendingPackage] = useState<ProductPackage | null>(null);
   const [buyingPackageIndex, setBuyingPackageIndex] = useState<number | null>(null);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [purchaseStatusLoading, setPurchaseStatusLoading] = useState(false);
@@ -157,14 +74,14 @@ export default function PublicEventPage() {
   const [purchaseDeliveryTitle, setPurchaseDeliveryTitle] = useState<string | null>(null);
 
   useEffect(() => {
-    const loadEvent = async () => {
+    const loadProduct = async () => {
       if (!Number.isFinite(pageClientId) || pageClientId <= 0) {
         setError('Некорректный идентификатор клиента.');
         setLoading(false);
         return;
       }
-      if (!Number.isFinite(pageEventId) || pageEventId <= 0) {
-        setError('Некорректный идентификатор мероприятия.');
+      if (!Number.isFinite(pageProductId) || pageProductId <= 0) {
+        setError('Некорректный идентификатор продукта.');
         setLoading(false);
         return;
       }
@@ -173,30 +90,29 @@ export default function PublicEventPage() {
       setError(null);
       try {
         const data = await apiFetch<PublicClientPageResponse>(`/public/client-page/${pageClientId}/`);
-        setTimezone(normalizeTenantTimezone(data?.settings?.timezone));
         setClientName(String(data?.client?.name ?? '').trim());
         setBrandName(String(data?.settings?.brand_name ?? '').trim());
 
         const list = Array.isArray(data?.products) ? data.products : [];
-        const selected = list.find((product) => product.id === pageEventId) ?? null;
-        if (!selected || !isProductActive(selected) || !isEventProductType(selected)) {
-          setEventProduct(null);
-          setError('Мероприятие не найдено или недоступно.');
+        const selected = list.find((item) => item.id === pageProductId) ?? null;
+        if (!selected || !isProductActive(selected) || isEventProductType(selected)) {
+          setProduct(null);
+          setError('Продукт не найден или недоступен.');
           return;
         }
-        setEventProduct(selected);
+        setProduct(selected);
       } catch {
-        setError('Не удалось загрузить мероприятие.');
+        setError('Не удалось загрузить продукт.');
       } finally {
         setLoading(false);
       }
     };
 
-    void loadEvent();
-  }, [pageClientId, pageEventId]);
+    void loadProduct();
+  }, [pageClientId, pageProductId]);
 
   useEffect(() => {
-    if (loading || !Number.isFinite(pageClientId) || pageClientId <= 0 || !Number.isFinite(pageEventId) || pageEventId <= 0) {
+    if (loading || !Number.isFinite(pageClientId) || pageClientId <= 0 || !Number.isFinite(pageProductId) || pageProductId <= 0) {
       return;
     }
 
@@ -210,7 +126,7 @@ export default function PublicEventPage() {
 
     if (!pendingPaymentId && typeof window !== 'undefined') {
       try {
-        const raw = window.localStorage.getItem(getPendingEventPurchaseStorageKey(pageClientId, pageEventId));
+        const raw = window.localStorage.getItem(getPendingProductPurchaseStorageKey(pageClientId, pageProductId));
         if (raw) {
           const parsed = JSON.parse(raw) as { paymentId?: unknown; createdAt?: unknown };
           const localPaymentId = typeof parsed?.paymentId === 'string' ? parsed.paymentId.trim() : '';
@@ -252,7 +168,7 @@ export default function PublicEventPage() {
             setPurchaseDeliveryTitle(null);
           }
           if (typeof window !== 'undefined') {
-            window.localStorage.removeItem(getPendingEventPurchaseStorageKey(pageClientId, pageEventId));
+            window.localStorage.removeItem(getPendingProductPurchaseStorageKey(pageClientId, pageProductId));
           }
           return;
         }
@@ -275,7 +191,7 @@ export default function PublicEventPage() {
 
     setCheckedPaymentId(pendingPaymentId);
     void checkPurchaseStatus(pendingPaymentId);
-  }, [checkedPaymentId, loading, pageClientId, pageEventId, searchParams]);
+  }, [checkedPaymentId, loading, pageClientId, pageProductId, searchParams]);
 
   const rubFormatter = useMemo(
     () =>
@@ -287,39 +203,30 @@ export default function PublicEventPage() {
     []
   );
 
-  const eventData = eventProduct?.structure?.event;
-  const eventTitle = (eventData?.title || '').trim() || (eventProduct?.name || '').trim() || `Мероприятие #${pageEventId}`;
-  const shortDescription = (eventProduct?.short_description || '').trim();
-  const parsedDate = parseProductEventDate(eventData?.date, timezone);
-  const dateLabel = parsedDate
-    ? formatParsedProductEventDate(parsedDate, timezone)
-    : String(eventData?.date ?? '').trim() || 'Не указано';
-  const locationLabel = String(eventData?.location ?? '').trim() || 'Не указано';
-  const durationLabel = (() => {
-    const durationRaw = eventData?.duration_minutes;
-    if (typeof durationRaw === 'number' && Number.isFinite(durationRaw) && durationRaw > 0) {
-      return `${Math.round(durationRaw)} мин`;
-    }
-    return 'Не указана';
-  })();
-
+  const productName = (product?.name || '').trim() || `Продукт #${pageProductId}`;
+  const shortDescription = (product?.short_description || '').trim();
   const descriptionHtml = useMemo(() => {
-    const description = eventData?.description;
-    if (!description || typeof description !== 'object' || Array.isArray(description)) {
+    const description = product?.structure?.rich_description as unknown;
+    if (
+      description == null
+      || (typeof description === 'string' && !description.trim())
+      || (typeof description === 'object' && !Array.isArray(description) && !Object.keys(description).length)
+    ) {
       return '';
     }
     try {
-      return generateHTML(description as Record<string, unknown>, createKbExtensions());
+      const normalized = normalizeTiptapDoc(description);
+      return generateHTML(normalized, createKbExtensions());
     } catch {
       return '';
     }
-  }, [eventData?.description]);
+  }, [product?.structure?.rich_description]);
 
-  const packages = useMemo<EventPackage[]>(() => {
-    if (!Array.isArray(eventProduct?.packages)) {
+  const packages = useMemo<ProductPackage[]>(() => {
+    if (!Array.isArray(product?.packages)) {
       return [];
     }
-    return eventProduct.packages.map((item, index) => {
+    return product.packages.map((item, index) => {
       const fallbackName = `Пакет ${index + 1}`;
       return {
         index,
@@ -328,12 +235,12 @@ export default function PublicEventPage() {
         price: resolvePackagePrice((item as { price?: unknown })?.price),
       };
     });
-  }, [eventProduct?.packages]);
+  }, [product?.packages]);
 
   const displayClient = brandName || clientName || `Клиент #${pageClientId}`;
 
-  const handleBuyPackage = async (pkg: EventPackage, provider: PaymentProvider) => {
-    if (!eventProduct || pkg.price === null || buyingPackageIndex !== null) {
+  const handleBuyPackage = async (pkg: ProductPackage, provider: PaymentProvider) => {
+    if (!product || pkg.price === null || buyingPackageIndex !== null) {
       return;
     }
     if (!Number.isFinite(pageClientId) || pageClientId <= 0) {
@@ -351,10 +258,10 @@ export default function PublicEventPage() {
     try {
       const authRedirectPath = typeof window !== 'undefined'
         ? `${window.location.pathname}${window.location.search}`
-        : `/c/${pageClientId}/events/${eventProduct.id}`;
+        : `/c/${pageClientId}/products/${product.id}`;
       const returnUrl = typeof window !== 'undefined'
-        ? `${window.location.origin}/c/${pageClientId}/events/${eventProduct.id}`
-        : `/c/${pageClientId}/events/${eventProduct.id}`;
+        ? `${window.location.origin}/c/${pageClientId}/products/${product.id}`
+        : `/c/${pageClientId}/products/${product.id}`;
       const response = await fetch(`${API_BASE_URL}/public/client-page/${pageClientId}/buy/`, {
         method: 'POST',
         credentials: 'include',
@@ -362,7 +269,7 @@ export default function PublicEventPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          product_id: eventProduct.id,
+          product_id: product.id,
           package_index: pkg.index,
           provider,
           return_url: returnUrl,
@@ -398,10 +305,10 @@ export default function PublicEventPage() {
 
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(
-          getPendingEventPurchaseStorageKey(pageClientId, eventProduct.id),
+          getPendingProductPurchaseStorageKey(pageClientId, product.id),
           JSON.stringify({
             paymentId,
-            eventId: eventProduct.id,
+            productId: product.id,
             packageIndex: pkg.index,
             createdAt: Date.now(),
           })
@@ -415,7 +322,7 @@ export default function PublicEventPage() {
     }
   };
 
-  const handleRequestProvider = (pkg: EventPackage) => {
+  const handleRequestProvider = (pkg: ProductPackage) => {
     if (pkg.price === null || buyingPackageIndex !== null) {
       return;
     }
@@ -427,19 +334,19 @@ export default function PublicEventPage() {
   if (loading) {
     return (
       <div className="mx-auto max-w-3xl p-6">
-        <div className="rounded-2xl border p-6 text-sm text-muted-foreground">Загрузка мероприятия...</div>
+        <div className="rounded-2xl border p-6 text-sm text-muted-foreground">Загрузка продукта...</div>
       </div>
     );
   }
 
-  if (error || !eventProduct) {
+  if (error || !product) {
     return (
       <div className="mx-auto max-w-3xl p-6 space-y-4">
         <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">
-          {error || 'Мероприятие не найдено.'}
+          {error || 'Продукт не найден.'}
         </div>
-        <Link href={`/c/${pageClientId}/events`} className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent">
-          К списку мероприятий
+        <Link href={`/c/${pageClientId}/products`} className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent">
+          К списку продуктов
         </Link>
       </div>
     );
@@ -449,45 +356,28 @@ export default function PublicEventPage() {
     <div className="mx-auto max-w-3xl p-6 space-y-4">
       <div className="rounded-2xl border p-6 shadow-sm space-y-2">
         <div className="text-sm text-muted-foreground">{displayClient}</div>
-        <h1 className="text-2xl font-semibold">{eventTitle}</h1>
-        <Link href={`/c/${pageClientId}/events`} className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent">
-          К списку мероприятий
+        <h1 className="text-2xl font-semibold">{productName}</h1>
+        <Link href={`/c/${pageClientId}/products`} className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent">
+          К списку продуктов
         </Link>
       </div>
 
-      <div className="rounded-2xl border p-6 shadow-sm">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Название</div>
-            <div className="mt-1 text-sm font-medium">{eventTitle}</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Дата/время</div>
-            <div className="mt-1 text-sm">{dateLabel}</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Локация</div>
-            <div className="mt-1 text-sm">{locationLabel}</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Длительность</div>
-            <div className="mt-1 text-sm">{durationLabel}</div>
-          </div>
+      <div className="rounded-2xl border p-6 shadow-sm space-y-4">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Название</div>
+          <div className="mt-1 text-sm font-medium">{productName}</div>
         </div>
-
-        <div className="mt-5 space-y-4">
-          <div>
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Краткое описание</div>
-            <div className="mt-1 text-sm">{shortDescription || 'Не указано'}</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Описание</div>
-            {descriptionHtml ? (
-              <div className="tiptap prose prose-slate mt-2 max-w-none" dangerouslySetInnerHTML={{ __html: descriptionHtml }} />
-            ) : (
-              <div className="mt-1 text-sm text-muted-foreground">Не указано</div>
-            )}
-          </div>
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Краткое описание</div>
+          <div className="mt-1 text-sm">{shortDescription || 'Не указано'}</div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Описание</div>
+          {descriptionHtml ? (
+            <div className="tiptap prose prose-slate mt-2 max-w-none" dangerouslySetInnerHTML={{ __html: descriptionHtml }} />
+          ) : (
+            <div className="mt-1 text-sm text-muted-foreground">Не указано</div>
+          )}
         </div>
       </div>
 

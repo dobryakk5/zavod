@@ -571,6 +571,7 @@ class QuizAnswer(models.Model):
 class UserTenantBinding(models.Model):
     PROVIDER_TELEGRAM = "telegram"
     PROVIDER_VK = "vk"
+    PROVIDER_CONTACT = "contact"
 
     tenant = models.ForeignKey(
         Client, on_delete=models.CASCADE, db_column="tenant_id", related_name="telegram_user_bindings"
@@ -646,6 +647,7 @@ class CRMTask(models.Model):
         TelegramTask, on_delete=models.SET_NULL, db_column="level_id",
         related_name="crm_tasks", blank=True, null=True,
     )
+    contact_id = models.IntegerField(blank=True, null=True)
     title = models.TextField()
     description = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, default="open")

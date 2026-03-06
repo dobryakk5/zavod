@@ -58,6 +58,18 @@ from .utils import get_active_client
 crm_workflow_dispatcher = CRMWorkflowDispatcher()
 
 
+def _tenant_contact_ids_queryset(tenant_id: int):
+    return (
+        UserTenantBinding.objects
+        .filter(tenant_id=tenant_id, contact_id__isnull=False, contact_id__gt=0)
+        .values_list("contact_id", flat=True)
+    )
+
+
+def _tenant_contact_queryset(tenant_id: int):
+    return MapContact.objects.filter(id__in=_tenant_contact_ids_queryset(tenant_id))
+
+
 def _upsert_event_payment(event: MapCRMEvent) -> int | None:
     if event.price is None:
         return None
@@ -116,12 +128,34 @@ class MapContactViewSet(viewsets.ModelViewSet):
     ordering = ["name"]
 
     def get_queryset(self):
-        return MapContact.objects.prefetch_related(
+        client = get_active_client(self.request.user)
+        return _tenant_contact_queryset(int(client.id)).prefetch_related(
             Prefetch(
                 "contact_tags",
                 queryset=MapContactTag.objects.select_related("tag"),
             )
         )
+
+    def perform_create(self, serializer):
+        client = get_active_client(self.request.user)
+        contact = serializer.save()
+        UserTenantBinding.objects.get_or_create(
+            tenant_id=client.id,
+            provider=UserTenantBinding.PROVIDER_CONTACT,
+            provider_user_id=f"contact:{int(contact.id)}",
+            defaults={
+                "contact_id": int(contact.id),
+                "is_active": True,
+            },
+        )
+
+    def perform_destroy(self, instance):
+        client = get_active_client(self.request.user)
+        contact_id = int(instance.id)
+        UserTenantBinding.objects.filter(tenant_id=client.id, contact_id=contact_id).delete()
+        has_bindings = UserTenantBinding.objects.filter(contact_id=contact_id).exists()
+        if not has_bindings:
+            instance.delete()
 
     @action(detail=True, methods=["get"], url_path="facts")
     def facts(self, request, pk=None):
@@ -233,7 +267,12 @@ class MapCRMPaymentViewSet(viewsets.ModelViewSet):
         return MapCRMPaymentSerializer
 
     def get_queryset(self):
-        return MapCRMPayment.objects.select_related("contact", "deal")
+        client = get_active_client(self.request.user)
+        return (
+            MapCRMPayment.objects
+            .select_related("contact", "deal")
+            .filter(contact_id__in=_tenant_contact_ids_queryset(int(client.id)))
+        )
 
     def _record_paid_product_purchase(self, payment: MapCRMPayment) -> None:
         if str(getattr(payment, "status", "") or "") != "paid":
@@ -358,7 +397,13 @@ class MapCRMDealViewSet(viewsets.ModelViewSet):
         return MapCRMDealSerializer
 
     def get_queryset(self):
-        return MapCRMDeal.objects.select_related("contact").annotate(payments_count=Count("payments"))
+        client = get_active_client(self.request.user)
+        return (
+            MapCRMDeal.objects
+            .select_related("contact")
+            .filter(contact_id__in=_tenant_contact_ids_queryset(int(client.id)))
+            .annotate(payments_count=Count("payments"))
+        )
 
 
 class MapCRMCategoryViewSet(viewsets.ModelViewSet):
@@ -387,6 +432,14 @@ class MapContactTagsViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ["contact_id", "tag_id"]
 
+    def get_queryset(self):
+        client = get_active_client(self.request.user)
+        return (
+            MapContactTag.objects
+            .select_related("contact", "tag")
+            .filter(contact_id__in=_tenant_contact_ids_queryset(int(client.id)))
+        )
+
     @action(detail=False, methods=["delete"], url_path="remove")
     def remove_by_ids(self, request):
         """DELETE с body {contact_id, tag_id} — совместимость со старым ContactTagsView."""
@@ -397,7 +450,7 @@ class MapContactTagsViewSet(viewsets.ModelViewSet):
                 {"error": "contact_id и tag_id обязательны."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        deleted, _ = MapContactTag.objects.filter(
+        deleted, _ = self.get_queryset().filter(
             contact_id=contact_id,
             tag_id=tag_id,
         ).delete()
@@ -437,7 +490,13 @@ class MapCRMEventViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
-        return MapCRMEvent.objects.select_related("contact", "event_type").order_by("-start_time")
+        client = get_active_client(self.request.user)
+        return (
+            MapCRMEvent.objects
+            .select_related("contact", "event_type")
+            .filter(contact_id__in=_tenant_contact_ids_queryset(int(client.id)))
+            .order_by("-start_time")
+        )
 
     def perform_create(self, serializer):
         event = serializer.save()
@@ -512,19 +571,25 @@ class MapCRMNoteViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
-        return MapCRMNote.objects.select_related("contact").order_by("-created_at")
+        client = get_active_client(self.request.user)
+        return (
+            MapCRMNote.objects
+            .select_related("contact")
+            .filter(contact_id__in=_tenant_contact_ids_queryset(int(client.id)))
+            .order_by("-created_at")
+        )
 
 
 class ContactTelegramLinkView(APIView):
     permission_classes = [IsTenantMember]
 
     def get(self, request, contact_id: int):
-        contact_row = MapContact.objects.filter(id=contact_id).values("tg_username").first()
+        client = get_active_client(request.user)
+        contact_row = _tenant_contact_queryset(int(client.id)).filter(id=contact_id).values("tg_username").first()
         if contact_row is None:
             return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
         contact_tg_username = contact_row.get("tg_username")
 
-        client = get_active_client(request.user)
         tenant_service = TenantService()
         try:
             link = tenant_service.generate_telegram_link(client.id, contact_id=contact_id)

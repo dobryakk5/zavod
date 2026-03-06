@@ -104,6 +104,7 @@ type StructurePayloadInput = {
   packagingName: string;
   packagingSlogan: string;
   packagingPromise: string;
+  richDescription: Record<string, unknown>;
   eventTitle: string;
   eventDate: string;
   eventLocation: string;
@@ -143,6 +144,7 @@ const isEventTypeName = (value: string | null | undefined): boolean => EVENT_TYP
 
 const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure => {
   const base = (raw ?? {}) as Record<string, unknown>;
+  const rich_description = normalizeTiptapDoc(base.rich_description);
   const audience = Array.isArray(base.audience)
     ? (base.audience as Array<Record<string, unknown>>).map((row) => ({
         parameter: toStr(row?.parameter),
@@ -220,6 +222,7 @@ const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure =
   };
 
   return {
+    rich_description,
     audience,
     transformation,
     metrics,
@@ -252,6 +255,7 @@ const serializeRelatedProducts = (items: RelatedProductRef[]) =>
   }));
 
 const buildStructurePayload = (input: StructurePayloadInput): ProductStructure => ({
+  rich_description: normalizeTiptapDoc(input.richDescription),
   audience: input.audience
     .map((row) => ({ parameter: row.parameter.trim(), value: row.value.trim() }))
     .filter((row) => row.parameter.length > 0 || row.value.length > 0),
@@ -324,6 +328,7 @@ const buildPayloadFromProduct = (data: ClientProduct): ProductPayload | null => 
     packagingName: structure.packaging?.name ?? '',
     packagingSlogan: structure.packaging?.slogan ?? '',
     packagingPromise: structure.packaging?.promise ?? '',
+    richDescription: normalizeTiptapDoc(structure.rich_description),
     eventTitle: isEvent ? nextName : (structure.event?.title ?? ''),
     eventDate: structure.event?.date ?? '',
     eventLocation: structure.event?.location ?? '',
@@ -371,6 +376,7 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [packagingName, setPackagingName] = useState('');
   const [packagingSlogan, setPackagingSlogan] = useState('');
   const [packagingPromise, setPackagingPromise] = useState('');
+  const [richDescription, setRichDescription] = useState<Record<string, unknown>>(EMPTY_TIPTAP_DOC);
   const [eventTitle, setEventTitle] = useState('');
   const [eventDate, setEventDate] = useState('');
   const [eventLocation, setEventLocation] = useState('');
@@ -477,6 +483,7 @@ export default function ProductPage({ params }: ProductPageProps) {
       setPackagingName(structure.packaging?.name ?? '');
       setPackagingSlogan(structure.packaging?.slogan ?? '');
       setPackagingPromise(structure.packaging?.promise ?? '');
+      setRichDescription(normalizeTiptapDoc(structure.rich_description));
       setEventTitle(structure.event?.title ?? '');
       setEventDate(structure.event?.date ?? '');
       setEventLocation(structure.event?.location ?? '');
@@ -823,6 +830,7 @@ export default function ProductPage({ params }: ProductPageProps) {
         packagingName,
         packagingSlogan,
         packagingPromise,
+        richDescription,
         eventTitle: isEventProduct ? productName : eventTitle,
         eventDate,
         eventLocation,
@@ -855,6 +863,7 @@ export default function ProductPage({ params }: ProductPageProps) {
       packagingName,
       packagingSlogan,
       packagingPromise,
+      richDescription,
       isEventProduct,
       eventTitle,
       eventDate,
@@ -959,6 +968,7 @@ export default function ProductPage({ params }: ProductPageProps) {
       setPackagingName(updatedStructure.packaging?.name ?? '');
       setPackagingSlogan(updatedStructure.packaging?.slogan ?? '');
       setPackagingPromise(updatedStructure.packaging?.promise ?? '');
+      setRichDescription(normalizeTiptapDoc(updatedStructure.rich_description));
       setEventTitle(updatedStructure.event?.title ?? '');
       setEventDate(updatedStructure.event?.date ?? '');
       setEventLocation(updatedStructure.event?.location ?? '');
@@ -1111,6 +1121,18 @@ export default function ProductPage({ params }: ProductPageProps) {
             disabled={!canEdit || saving}
           />
         </div>
+
+        {!isEventProduct ? (
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Описание (TipTap)</div>
+            <EventDescriptionEditor
+              value={richDescription}
+              onChange={setRichDescription}
+              editable={canEdit && !saving}
+              placeholder="Подробно опишите продукт, формат, программу и ожидаемый результат..."
+            />
+          </div>
+        ) : null}
 
         {isEventProduct ? (
           <div className="space-y-4 rounded-lg border bg-background/40 p-3">
