@@ -640,7 +640,7 @@ function SettingsPanel({
         )}
 
         {/* ── READ-ONLY ── */}
-        {['header', 'booking', 'purchases', 'planned_meetings', 'referrals'].includes(blockKey) && (
+        {['header', 'events', 'booking', 'purchases', 'planned_meetings', 'referrals'].includes(blockKey) && (
           <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground text-center">
             Этот блок не требует настроек — он автоматически отображает данные клиента.
           </div>
@@ -797,6 +797,14 @@ function renderBlockContent({
         <button type="button" className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-medium text-white">
           Купить
         </button>
+      </div>
+    </div>
+  );
+
+  if (blockKey === 'events') return (
+    <div className="px-8 py-8">
+      <div className="rounded-xl border p-4 text-sm text-muted-foreground">
+        Здесь будет список опубликованных мероприятий с переходом в карточку мероприятия.
       </div>
     </div>
   );
@@ -1136,6 +1144,7 @@ export default function ClientPageEditor() {
       nextBlocks.custom_content = textIndices.length > 0;
       nextBlocks.header = nextBlockOrder.includes('header');
       nextBlocks.product = nextBlockOrder.includes('product');
+      nextBlocks.events = nextBlockOrder.includes('events');
       nextBlocks.purchases = nextBlockOrder.includes('purchases');
       nextBlocks.booking = nextBlockOrder.includes('booking');
       nextBlocks.planned_meetings = nextBlockOrder.includes('planned_meetings');
@@ -1171,6 +1180,7 @@ export default function ClientPageEditor() {
       nextBlocks.custom_content = requiredTextCount > 0;
       nextBlocks.header = nextBlockOrder.includes('header');
       nextBlocks.product = nextBlockOrder.includes('product');
+      nextBlocks.events = nextBlockOrder.includes('events');
       nextBlocks.purchases = nextBlockOrder.includes('purchases');
       nextBlocks.booking = nextBlockOrder.includes('booking');
       nextBlocks.planned_meetings = nextBlockOrder.includes('planned_meetings');

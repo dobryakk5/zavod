@@ -25,7 +25,6 @@ import { createKbExtensions } from '@/components/kb/tiptapExtensions';
 import {
   DEFAULT_TENANT_TIMEZONE,
   formatInTenantTimezone,
-  localDateTimeStringToUtcISOString,
   normalizeTenantTimezone,
   tenantDateToUtcISOString,
   toTenantDate,
@@ -36,6 +35,19 @@ import {
   resolveClientPageVideoSource,
   type ClientPageBlockKey,
 } from '@/lib/client-page-template';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import EventsContent from './events/content';
+import {
+  buildEventProductRows,
+  isEventProductType,
+  parseProductEventDate,
+} from './events/event-products';
 
 type ReferralStatsResponse = {
   has_code?: boolean;
@@ -203,7 +215,6 @@ const PAYMENT_PROVIDER_LABELS: Record<PaymentProvider, string> = {
   yookassa: 'YooKassa',
   tbank: 'T-Bank',
 };
-const EVENT_PRODUCT_TYPE_KEYS = new Set(['мероприятие', 'event']);
 
 const normalizeTiptapJson = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -454,41 +465,12 @@ const availabilityMatchesDate = (baseStart: Date, checkDate: Date, repeatType: A
   return targetDate.getTime() === baseDate.getTime();
 };
 
-const isEventProductType = (product: ClientProduct): boolean => {
-  const typeName = (product.product_type_name ?? product.product_type?.name ?? '').trim().toLowerCase();
-  return EVENT_PRODUCT_TYPE_KEYS.has(typeName);
-};
-
 const parseProductEventStart = (rawValue: unknown, timezone: string): Date | null => {
-  const raw = String(rawValue ?? '').trim();
-  if (!raw) {
+  const parsed = parseProductEventDate(rawValue, timezone);
+  if (!parsed) {
     return null;
   }
-
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$/i.test(raw)) {
-    const tenantDate = toTenantDate(raw, timezone);
-    return Number.isNaN(tenantDate.getTime()) ? null : tenantDate;
-  }
-
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(raw)) {
-    const utcValue = localDateTimeStringToUtcISOString(raw, timezone);
-    if (!utcValue) {
-      return null;
-    }
-    const tenantDate = toTenantDate(utcValue, timezone);
-    return Number.isNaN(tenantDate.getTime()) ? null : tenantDate;
-  }
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    const utcValue = localDateTimeStringToUtcISOString(`${raw}T12:00`, timezone);
-    if (!utcValue) {
-      return null;
-    }
-    const tenantDate = toTenantDate(utcValue, timezone);
-    return Number.isNaN(tenantDate.getTime()) ? null : tenantDate;
-  }
-
-  return null;
+  return parsed.date;
 };
 
 const buildProductBusyIntervals = (
@@ -726,6 +708,8 @@ export default function ContactClientPage() {
   const [purchaseDeliveryLink, setPurchaseDeliveryLink] = useState<string | null>(null);
   const [purchaseDeliveryTitle, setPurchaseDeliveryTitle] = useState<string | null>(null);
   const [checkedPurchasePaymentId, setCheckedPurchasePaymentId] = useState<string | null>(null);
+  const [purchaseSuccessModalOpen, setPurchaseSuccessModalOpen] = useState(false);
+  const [purchaseSuccessModalMessage, setPurchaseSuccessModalMessage] = useState<string | null>(null);
   const [purchasesLoading, setPurchasesLoading] = useState(false);
   const [purchases, setPurchases] = useState<ContactPurchaseListItem[]>([]);
   const [purchasesError, setPurchasesError] = useState<string | null>(null);
@@ -742,6 +726,10 @@ export default function ContactClientPage() {
         maximumFractionDigits: 2,
       }),
     []
+  );
+  const eventProducts = useMemo(
+    () => buildEventProductRows(activeProducts, timezone, rubFormatter),
+    [activeProducts, rubFormatter, timezone]
   );
 
   const plannedMeetings = useMemo<PlannedMeeting[]>(() => {
@@ -1059,15 +1047,19 @@ export default function ContactClientPage() {
       const delivery = statusResponse?.delivery || null;
 
       if (paymentStatus === 'succeeded' && statusResponse?.paid) {
+        const successMessage = delivery?.ready && delivery.url
+          ? 'Оплата прошла успешно. Ссылка на продукт доступна ниже.'
+          : (delivery?.message || 'Оплата прошла успешно.');
         if (delivery?.ready && delivery.url) {
           setPurchaseDeliveryLink(delivery.url);
           setPurchaseDeliveryTitle((delivery.document_title || '').trim() || 'Открыть продукт');
-          setPurchaseStatusMessage('Оплата прошла успешно. Ссылка на продукт доступна ниже.');
         } else {
           setPurchaseDeliveryLink(null);
           setPurchaseDeliveryTitle(null);
-          setPurchaseStatusMessage(delivery?.message || 'Оплата прошла успешно.');
         }
+        setPurchaseStatusMessage(successMessage);
+        setPurchaseSuccessModalMessage(successMessage);
+        setPurchaseSuccessModalOpen(true);
         if (typeof window !== 'undefined') {
           window.localStorage.removeItem(getPendingProductPurchaseStorageKey(pageClientId));
         }
@@ -1327,6 +1319,8 @@ export default function ContactClientPage() {
     setPurchaseStatusMessage(null);
     setPurchaseDeliveryLink(null);
     setPurchaseDeliveryTitle(null);
+    setPurchaseSuccessModalOpen(false);
+    setPurchaseSuccessModalMessage(null);
 
     try {
       const origin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -1853,6 +1847,18 @@ export default function ContactClientPage() {
           </div>
         )}
 
+        {isBlockEnabled('events') && (
+          <div style={{ order: getBlockOrder('events') }}>
+            <EventsContent
+              clientId={pageClientId}
+              displayName={displayName}
+              eventProducts={eventProducts}
+              titleAs="h2"
+              showBackLink={false}
+            />
+          </div>
+        )}
+
         {isBlockEnabled('purchases') && (
           <div style={{ order: getBlockOrder('purchases') }}>
             <div className="rounded-2xl border p-6 shadow-sm space-y-3">
@@ -2197,6 +2203,40 @@ export default function ContactClientPage() {
       </div>
       )}
     </div>
+    <Dialog open={purchaseSuccessModalOpen} onOpenChange={setPurchaseSuccessModalOpen}>
+      <DialogContent className="sm:max-w-md bg-white text-gray-900 dark:bg-white dark:text-gray-900 dark:border-gray-200">
+        <DialogHeader>
+          <DialogTitle>Покупка успешно оформлена</DialogTitle>
+          <DialogDescription className="text-gray-600 dark:text-gray-600">
+            {purchaseSuccessModalMessage || 'Оплата прошла успешно.'}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="text-sm text-gray-600">
+            Подтверждение отправлено в ваш основной мессенджер (Telegram или VK).
+          </div>
+          {purchaseDeliveryLink && (
+            <a
+              href={purchaseDeliveryLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent"
+            >
+              {purchaseDeliveryTitle || 'Открыть цифровой продукт'}
+            </a>
+          )}
+          <div>
+            <button
+              type="button"
+              onClick={() => setPurchaseSuccessModalOpen(false)}
+              className="rounded-lg border px-3 py-2 text-sm hover:bg-accent"
+            >
+              Понятно
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
     </div>
   );
 }

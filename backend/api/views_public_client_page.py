@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import uuid
 from datetime import datetime, timezone as dt_timezone
@@ -31,6 +32,7 @@ from core.services.contact_service_packages import (
     grant_service_package_to_purchase,
 )
 from core.services.crm_workflow_dispatcher import CRMWorkflowDispatcher
+from core.tasks.chains import _send_telegram_message, _send_vk_message
 
 from .authentication import CookieJWTAuthentication
 from .views_payments import (
@@ -40,6 +42,7 @@ from .views_payments import (
 )
 
 
+logger = logging.getLogger(__name__)
 crm_workflow_dispatcher = CRMWorkflowDispatcher()
 
 PAYMENT_PROVIDER_YOOKASSA = YooKassaPayment.PROVIDER_YOOKASSA
@@ -373,22 +376,22 @@ def _record_contact_product_purchase(
     yk_payment: YooKassaPayment,
     payment_payload: dict,
     fallback_contact_id: int | None = None,
-) -> ContactProductPurchase | None:
+) -> tuple[ContactProductPurchase | None, bool]:
     if payment_payload.get("status") != "succeeded" or not payment_payload.get("paid"):
-        return None
+        return None, False
 
     metadata = payment_payload.get("metadata") or {}
     if str(metadata.get("payment_kind") or "") != "digital_product":
-        return None
+        return None, False
     if str(metadata.get("client_id") or "") != str(client.id):
-        return None
+        return None, False
 
     try:
         product_id = int(str(metadata.get("product_id") or ""))
     except (TypeError, ValueError):
-        return None
+        return None, False
     if product_id <= 0:
-        return None
+        return None, False
 
     contact_id = None
     try:
@@ -401,7 +404,7 @@ def _record_contact_product_purchase(
     if contact_id is None and fallback_contact_id is not None:
         contact_id = int(fallback_contact_id)
     if contact_id is None or contact_id <= 0:
-        return None
+        return None, False
 
     selected_package_index: int | None = None
     try:
@@ -465,7 +468,114 @@ def _record_contact_product_purchase(
             top_up=True,
             package_index=selected_package_index,
         )
-    return purchase
+    return purchase, (not already_processed_same_payment)
+
+
+def _resolve_contact_binding_for_notification(*, client_id: int, contact_id: int | None) -> UserTenantBinding | None:
+    if contact_id is None:
+        return None
+    try:
+        contact_id_int = int(contact_id)
+    except (TypeError, ValueError):
+        return None
+    if contact_id_int <= 0:
+        return None
+
+    return (
+        UserTenantBinding.objects
+        .filter(
+            tenant_id=client_id,
+            contact_id=contact_id_int,
+            is_active=True,
+            provider__in=(UserTenantBinding.PROVIDER_TELEGRAM, UserTenantBinding.PROVIDER_VK),
+        )
+        .order_by("-bound_at", "-id")
+        .first()
+    )
+
+
+def _format_purchase_success_message(
+    *,
+    product: ClientProduct | None,
+    amount: str | None,
+    currency: str | None,
+) -> str:
+    product_name = (getattr(product, "name", "") or "").strip()
+    structure = product.structure if isinstance(getattr(product, "structure", None), dict) else {}
+    is_event = isinstance(structure.get("event"), dict)
+    item_label = "мероприятие" if is_event else "товар"
+
+    message_lines = [
+        "Оплата прошла успешно.",
+        f"Вы купили {item_label}{f': {product_name}' if product_name else ''}.",
+    ]
+
+    amount_label = ""
+    try:
+        parsed_amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+        if parsed_amount > 0:
+            amount_label = f"{parsed_amount:.2f}"
+    except (InvalidOperation, TypeError, ValueError):
+        amount_label = ""
+    currency_label = (str(currency or "RUB").strip().upper()[:3] or "RUB")
+    if amount_label:
+        message_lines.append(f"Сумма: {amount_label} {currency_label}")
+
+    return "\n".join(message_lines)
+
+
+def _notify_contact_purchase_success(
+    *,
+    client: Client,
+    contact_id: int | None,
+    product: ClientProduct | None,
+    amount: str | None,
+    currency: str | None,
+) -> bool:
+    binding = _resolve_contact_binding_for_notification(client_id=client.id, contact_id=contact_id)
+    if binding is None:
+        return False
+
+    message_text = _format_purchase_success_message(
+        product=product,
+        amount=amount,
+        currency=currency,
+    )
+    provider = str(getattr(binding, "provider", "") or "").strip().lower()
+    provider_user_id = str(getattr(binding, "provider_user_id", "") or "").strip()
+    if provider == UserTenantBinding.PROVIDER_TELEGRAM:
+        chat_id_raw = provider_user_id
+        if not chat_id_raw:
+            telegram_chat_id = getattr(binding, "telegram_chat_id", None)
+            if telegram_chat_id is not None:
+                chat_id_raw = str(telegram_chat_id)
+        try:
+            chat_id = int(chat_id_raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "purchase notification skipped: invalid telegram chat id client_id=%s contact_id=%s value=%r",
+                client.id,
+                contact_id,
+                chat_id_raw,
+            )
+            return False
+        return _send_telegram_message(chat_id, text=message_text)
+
+    if provider == UserTenantBinding.PROVIDER_VK:
+        if not provider_user_id:
+            logger.warning(
+                "purchase notification skipped: empty vk provider_user_id client_id=%s contact_id=%s",
+                client.id,
+                contact_id,
+            )
+            return False
+        return _send_vk_message(
+            tenant_id=client.id,
+            vk_user_id=provider_user_id,
+            text=message_text,
+        )
+
+    return False
 
 
 class PublicClientPageView(APIView):
@@ -887,7 +997,7 @@ class PublicClientPagePaymentStatusView(APIView):
             result["test_mode"] = is_test_mode
 
         if payment_status == YooKassaPayment.STATUS_SUCCEEDED and paid:
-            _record_contact_product_purchase(
+            purchase, purchase_was_new_payment = _record_contact_product_purchase(
                 client=client,
                 yk_payment=yk_payment,
                 payment_payload=payment_payload,
@@ -917,6 +1027,23 @@ class PublicClientPagePaymentStatusView(APIView):
                 else None
             )
             result["delivery"] = _build_digital_product_delivery_payload(client, product)
+            if purchase_was_new_payment:
+                contact_id_for_notification: int | None = None
+                if purchase is not None and getattr(purchase, "contact_id", None) is not None:
+                    try:
+                        contact_id_for_notification = int(getattr(purchase, "contact_id"))
+                    except (TypeError, ValueError):
+                        contact_id_for_notification = None
+                if contact_id_for_notification is None:
+                    contact_id_for_notification = metadata_contact_id or fallback_contact_id
+
+                _notify_contact_purchase_success(
+                    client=client,
+                    contact_id=contact_id_for_notification,
+                    product=product,
+                    amount=amount_value,
+                    currency=currency_value,
+                )
 
         return Response(result)
 

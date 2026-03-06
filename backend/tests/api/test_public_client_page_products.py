@@ -232,6 +232,94 @@ class TestPublicClientPageDigitalProductPayments:
         assert purchase.last_payment_id == YooKassaPayment.objects.get(payment_id="pay_ok_1").id
         assert purchase.product_name == active_product.name
 
+    def test_payment_status_notifies_contact_once_per_payment(self, api_client, active_product, monkeypatch):
+        YooKassaPayment.objects.create(
+            payment_id="pay_notify_1",
+            client=active_product.owner,
+            status="pending",
+            amount=Decimal("1990.00"),
+            plan_code=f"digital_product:{active_product.id}:contact:321",
+        )
+        monkeypatch.setattr(
+            "api.views_public_client_page._get_yookassa_credentials",
+            lambda client: ("shop", "secret", "basic"),
+        )
+        monkeypatch.setattr(
+            "api.views_public_client_page._yookassa_request",
+            lambda *args, **kwargs: _MockYooKassaResponse(
+                status_code=200,
+                payload={
+                    "id": "pay_notify_1",
+                    "status": "succeeded",
+                    "paid": True,
+                    "metadata": {
+                        "payment_kind": "digital_product",
+                        "client_id": str(active_product.owner_id),
+                        "product_id": str(active_product.id),
+                        "contact_id": "321",
+                    },
+                    "amount": {"value": "1990.00", "currency": "RUB"},
+                },
+            ),
+        )
+
+        notifications: list[dict] = []
+        monkeypatch.setattr(
+            "api.views_public_client_page._notify_contact_purchase_success",
+            lambda **kwargs: notifications.append(kwargs) or True,
+        )
+
+        url = reverse("public-client-page-payment-status", kwargs={"client_id": active_product.owner_id})
+        first = api_client.get(url, {"payment_id": "pay_notify_1"})
+        second = api_client.get(url, {"payment_id": "pay_notify_1"})
+
+        assert first.status_code == 200, first.content
+        assert second.status_code == 200, second.content
+        assert len(notifications) == 1
+
+    def test_payment_status_notifies_even_when_payment_already_succeeded(self, api_client, active_product, monkeypatch):
+        YooKassaPayment.objects.create(
+            payment_id="pay_notify_2",
+            client=active_product.owner,
+            status=YooKassaPayment.STATUS_SUCCEEDED,
+            amount=Decimal("1990.00"),
+            plan_code=f"digital_product:{active_product.id}:contact:555",
+        )
+        monkeypatch.setattr(
+            "api.views_public_client_page._get_yookassa_credentials",
+            lambda client: ("shop", "secret", "basic"),
+        )
+        monkeypatch.setattr(
+            "api.views_public_client_page._yookassa_request",
+            lambda *args, **kwargs: _MockYooKassaResponse(
+                status_code=200,
+                payload={
+                    "id": "pay_notify_2",
+                    "status": "succeeded",
+                    "paid": True,
+                    "metadata": {
+                        "payment_kind": "digital_product",
+                        "client_id": str(active_product.owner_id),
+                        "product_id": str(active_product.id),
+                        "contact_id": "555",
+                    },
+                    "amount": {"value": "1990.00", "currency": "RUB"},
+                },
+            ),
+        )
+
+        notifications: list[dict] = []
+        monkeypatch.setattr(
+            "api.views_public_client_page._notify_contact_purchase_success",
+            lambda **kwargs: notifications.append(kwargs) or True,
+        )
+
+        url = reverse("public-client-page-payment-status", kwargs={"client_id": active_product.owner_id})
+        response = api_client.get(url, {"payment_id": "pay_notify_2"})
+
+        assert response.status_code == 200, response.content
+        assert len(notifications) == 1
+
     def test_tbank_payment_status_returns_share_link_when_product_page_exists(
         self,
         api_client,

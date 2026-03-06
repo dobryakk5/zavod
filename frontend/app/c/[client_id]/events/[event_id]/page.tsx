@@ -1,12 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { generateHTML } from '@tiptap/html';
 import { createKbExtensions } from '@/components/kb/tiptapExtensions';
-import { API_BASE_URL, apiFetch } from '@/lib/api';
+import { ApiError, API_BASE_URL, apiFetch } from '@/lib/api';
 import type { ClientProduct } from '@/lib/types';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   DEFAULT_TENANT_TIMEZONE,
   formatInTenantTimezone,
@@ -50,6 +57,19 @@ type PublicBuyProductResponse = {
   id?: string;
   payment_url?: string;
   confirmation_url?: string;
+};
+
+type PublicProductPaymentStatusResponse = {
+  payment_id?: string;
+  provider?: PaymentProvider | string;
+  status?: string;
+  paid?: boolean;
+  delivery?: {
+    ready?: boolean;
+    url?: string;
+    document_title?: string;
+    message?: string;
+  } | null;
 };
 
 const isProductActive = (product: ClientProduct): boolean => {
@@ -151,8 +171,12 @@ const parseResponseDetail = (rawText: string): string => {
   }
 };
 
+const getPendingEventPurchaseStorageKey = (clientId: number, eventId: number) =>
+  `client-page:pending-event-purchase:${clientId}:${eventId}`;
+
 export default function PublicEventPage() {
   const { client_id: rawClientId, event_id: rawEventId } = useParams<{ client_id: string; event_id: string }>();
+  const searchParams = useSearchParams();
   const pageClientId = Number(rawClientId);
   const pageEventId = Number(rawEventId);
 
@@ -165,6 +189,13 @@ export default function PublicEventPage() {
   const [selectedPaymentProvider, setSelectedPaymentProvider] = useState<PaymentProvider>('yookassa');
   const [buyingPackageIndex, setBuyingPackageIndex] = useState<number | null>(null);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [purchaseStatusLoading, setPurchaseStatusLoading] = useState(false);
+  const [purchaseStatusError, setPurchaseStatusError] = useState<string | null>(null);
+  const [checkedPaymentId, setCheckedPaymentId] = useState<string | null>(null);
+  const [purchaseSuccessModalOpen, setPurchaseSuccessModalOpen] = useState(false);
+  const [purchaseSuccessModalMessage, setPurchaseSuccessModalMessage] = useState<string | null>(null);
+  const [purchaseDeliveryLink, setPurchaseDeliveryLink] = useState<string | null>(null);
+  const [purchaseDeliveryTitle, setPurchaseDeliveryTitle] = useState<string | null>(null);
 
   useEffect(() => {
     const loadEvent = async () => {
@@ -204,6 +235,88 @@ export default function PublicEventPage() {
 
     void loadEvent();
   }, [pageClientId, pageEventId]);
+
+  useEffect(() => {
+    if (loading || !Number.isFinite(pageClientId) || pageClientId <= 0 || !Number.isFinite(pageEventId) || pageEventId <= 0) {
+      return;
+    }
+
+    const queryPaymentId = (
+      searchParams.get('payment_id')
+      || searchParams.get('paymentId')
+      || searchParams.get('PaymentId')
+      || ''
+    ).trim();
+    let pendingPaymentId = queryPaymentId;
+
+    if (!pendingPaymentId && typeof window !== 'undefined') {
+      try {
+        const raw = window.localStorage.getItem(getPendingEventPurchaseStorageKey(pageClientId, pageEventId));
+        if (raw) {
+          const parsed = JSON.parse(raw) as { paymentId?: unknown; createdAt?: unknown };
+          const localPaymentId = typeof parsed?.paymentId === 'string' ? parsed.paymentId.trim() : '';
+          const createdAt = typeof parsed?.createdAt === 'number' ? parsed.createdAt : 0;
+          const isFresh = createdAt > 0 && Date.now() - createdAt < 1000 * 60 * 60 * 24;
+          if (localPaymentId && isFresh) {
+            pendingPaymentId = localPaymentId;
+          }
+        }
+      } catch {
+        // ignore invalid localStorage payload
+      }
+    }
+
+    if (!pendingPaymentId || checkedPaymentId === pendingPaymentId) {
+      return;
+    }
+
+    const checkPurchaseStatus = async (paymentId: string) => {
+      setPurchaseStatusLoading(true);
+      setPurchaseStatusError(null);
+      try {
+        const statusResponse = await apiFetch<PublicProductPaymentStatusResponse>(
+          `/public/client-page/${pageClientId}/payment-status/?payment_id=${encodeURIComponent(paymentId)}`
+        );
+        const paymentStatus = (statusResponse?.status || '').trim();
+        const delivery = statusResponse?.delivery || null;
+        if (paymentStatus === 'succeeded' && statusResponse?.paid) {
+          const successMessage = delivery?.ready && delivery.url
+            ? 'Оплата прошла успешно. Доступ к покупке активирован.'
+            : (delivery?.message || 'Оплата прошла успешно. Доступ к покупке активирован.');
+          setPurchaseSuccessModalMessage(successMessage);
+          setPurchaseSuccessModalOpen(true);
+          if (delivery?.ready && delivery.url) {
+            setPurchaseDeliveryLink(delivery.url);
+            setPurchaseDeliveryTitle((delivery.document_title || '').trim() || 'Открыть покупку');
+          } else {
+            setPurchaseDeliveryLink(null);
+            setPurchaseDeliveryTitle(null);
+          }
+          if (typeof window !== 'undefined') {
+            window.localStorage.removeItem(getPendingEventPurchaseStorageKey(pageClientId, pageEventId));
+          }
+          return;
+        }
+
+        if (paymentStatus) {
+          setPurchaseStatusError(`Статус оплаты: ${paymentStatus}. Если вы уже оплатили, обновите страницу через несколько секунд.`);
+          return;
+        }
+        setPurchaseStatusError('Статус оплаты пока не получен.');
+      } catch (statusError) {
+        if (statusError instanceof ApiError && statusError.status === 401) {
+          setPurchaseStatusError('Для подтверждения оплаты войдите как контакт через Telegram или VK.');
+          return;
+        }
+        setPurchaseStatusError('Не удалось проверить статус оплаты.');
+      } finally {
+        setPurchaseStatusLoading(false);
+      }
+    };
+
+    setCheckedPaymentId(pendingPaymentId);
+    void checkPurchaseStatus(pendingPaymentId);
+  }, [checkedPaymentId, loading, pageClientId, pageEventId, searchParams]);
 
   const rubFormatter = useMemo(
     () =>
@@ -270,6 +383,11 @@ export default function PublicEventPage() {
 
     setBuyingPackageIndex(pkg.index);
     setPurchaseError(null);
+    setPurchaseStatusError(null);
+    setPurchaseSuccessModalOpen(false);
+    setPurchaseSuccessModalMessage(null);
+    setPurchaseDeliveryLink(null);
+    setPurchaseDeliveryTitle(null);
     try {
       const authRedirectPath = typeof window !== 'undefined'
         ? `${window.location.pathname}${window.location.search}`
@@ -319,6 +437,15 @@ export default function PublicEventPage() {
       }
 
       if (typeof window !== 'undefined') {
+        window.localStorage.setItem(
+          getPendingEventPurchaseStorageKey(pageClientId, eventProduct.id),
+          JSON.stringify({
+            paymentId,
+            eventId: eventProduct.id,
+            packageIndex: pkg.index,
+            createdAt: Date.now(),
+          })
+        );
         window.location.href = paymentUrl;
       }
     } catch {
@@ -450,8 +577,46 @@ export default function PublicEventPage() {
         <div className="text-xs text-muted-foreground">
           Для покупки войдите как контакт через Telegram или VK на странице клиента.
         </div>
+        {purchaseStatusLoading && (
+          <div className="text-sm text-muted-foreground">Проверяем оплату...</div>
+        )}
+        {purchaseStatusError && <div className="text-sm text-amber-700">{purchaseStatusError}</div>}
         {purchaseError && <div className="text-sm text-red-600">{purchaseError}</div>}
       </div>
+      <Dialog open={purchaseSuccessModalOpen} onOpenChange={setPurchaseSuccessModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white text-gray-900 dark:bg-white dark:text-gray-900 dark:border-gray-200">
+          <DialogHeader>
+            <DialogTitle>Покупка успешно оформлена</DialogTitle>
+            <DialogDescription className="text-gray-600 dark:text-gray-600">
+              {purchaseSuccessModalMessage || 'Оплата прошла успешно.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="text-sm text-gray-600">
+              Подтверждение отправлено в ваш основной мессенджер (Telegram или VK).
+            </div>
+            {purchaseDeliveryLink && (
+              <a
+                href={purchaseDeliveryLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent"
+              >
+                {purchaseDeliveryTitle || 'Открыть покупку'}
+              </a>
+            )}
+            <div>
+              <button
+                type="button"
+                onClick={() => setPurchaseSuccessModalOpen(false)}
+                className="rounded-lg border px-3 py-2 text-sm hover:bg-accent"
+              >
+                Понятно
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
