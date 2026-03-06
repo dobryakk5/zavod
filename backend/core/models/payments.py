@@ -32,7 +32,14 @@ class PaymentPlan(models.Model):
 
 
 class YooKassaPayment(models.Model):
-    """Хранит связь payment_id → Client для вебхуков YooKassa."""
+    """Хранит связь payment_id → Client для провайдеров онлайн-оплаты."""
+
+    PROVIDER_YOOKASSA = "yookassa"
+    PROVIDER_TBANK = "tbank"
+    PROVIDER_CHOICES = [
+        (PROVIDER_YOOKASSA, "YooKassa"),
+        (PROVIDER_TBANK, "T-Bank"),
+    ]
 
     STATUS_PENDING = "pending"
     STATUS_SUCCEEDED = "succeeded"
@@ -50,7 +57,13 @@ class YooKassaPayment(models.Model):
         max_length=100,
         unique=True,
         db_index=True,
-        verbose_name="ID платежа в YooKassa",
+        verbose_name="ID платежа у провайдера",
+    )
+    provider = models.CharField(
+        max_length=32,
+        choices=PROVIDER_CHOICES,
+        default=PROVIDER_YOOKASSA,
+        verbose_name="Платежный провайдер",
     )
     client = models.ForeignKey(
         "Client",
@@ -90,7 +103,7 @@ class YooKassaPayment(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.payment_id} — {self.client} — {self.status}"
+        return f"{self.provider}:{self.payment_id} — {self.client} — {self.status}"
 
 
 class ContactProductPurchase(models.Model):

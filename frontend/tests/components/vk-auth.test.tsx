@@ -107,6 +107,7 @@ describe('VKAuth', () => {
     });
     expect(sessionStorage.getItem('vk_auth_state')).toBe('vk-state-1');
     expect(sessionStorage.getItem('vk_auth_mode')).toBe('login');
+    expect(sessionStorage.getItem('vk_auth_redirect_to')).toBe('/welcome');
   });
 
   it('handles popup error message and clears auth state', async () => {
@@ -310,6 +311,7 @@ describe('VKAuth', () => {
     await waitFor(() => {
       expect(sessionStorage.getItem('vk_auth_state')).toBe('vk-state-success');
     });
+    expect(sessionStorage.getItem('vk_auth_redirect_to')).toBe('/vk-dashboard');
 
     window.dispatchEvent(
       new MessageEvent('message', {
@@ -331,6 +333,7 @@ describe('VKAuth', () => {
     expect(popup.close).toHaveBeenCalledTimes(1);
     expect(sessionStorage.getItem('vk_auth_state')).toBeNull();
     expect(sessionStorage.getItem('vk_auth_mode')).toBeNull();
+    expect(sessionStorage.getItem('vk_auth_redirect_to')).toBeNull();
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       'https://api.example.com/auth/vk',

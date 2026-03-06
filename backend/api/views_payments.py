@@ -530,6 +530,56 @@ class YooKassaSaveCredentialsView(APIView):
         return Response({"ok": True, "webhook_url": _get_client_webhook_url(client)})
 
 
+class TBankSaveCredentialsView(APIView):
+    """
+    Сохраняет ключи T-Bank для текущего клиента.
+    POST /payments/tbank/credentials/
+    Body: { "terminal_key": "...", "secret_key": "...", "test_mode": true|false }
+    """
+    permission_classes = [IsTenantMember]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        terminal_key = (request.data.get("terminal_key") or "").strip()
+        secret_key = (request.data.get("secret_key") or "").strip()
+
+        if not terminal_key or not secret_key:
+            return Response(
+                {"detail": "terminal_key и secret_key обязательны."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        test_mode_raw = request.data.get("test_mode")
+        explicit_test_mode = None
+        if isinstance(test_mode_raw, bool):
+            explicit_test_mode = test_mode_raw
+        elif isinstance(test_mode_raw, str) and test_mode_raw.strip().lower() in {"1", "true", "yes", "on"}:
+            explicit_test_mode = True
+        elif isinstance(test_mode_raw, str) and test_mode_raw.strip().lower() in {"0", "false", "no", "off"}:
+            explicit_test_mode = False
+
+        test_mode = (
+            explicit_test_mode
+            if explicit_test_mode is not None
+            else (terminal_key == "TinkoffBankTest" or secret_key == "TinkoffBankTest")
+        )
+
+        client.tbank_terminal_key = terminal_key
+        client.tbank_secret_key = secret_key
+        client.tbank_connected = True
+        client.tbank_test_mode = bool(test_mode)
+        client.save(update_fields=["tbank_terminal_key", "tbank_secret_key", "tbank_connected", "tbank_test_mode"])
+
+        logger.info(
+            "tbank: credentials saved client_id=%s terminal_key=%s test_mode=%s",
+            client.id,
+            terminal_key,
+            test_mode,
+        )
+
+        return Response({"ok": True, "test_mode": bool(test_mode)})
+
+
 # ---------------------------------------------------------------------------
 # UPDATED: CreatePayment — теперь берёт ключи клиента
 # ---------------------------------------------------------------------------

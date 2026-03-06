@@ -10,6 +10,7 @@ import { ChannelSelector } from '@/components/settings/channel-selector';
 import { VkIntegrationsPanel } from '@/components/settings/vk-integrations-panel';
 import { PaymentTab } from '@/components/settings/payment-tab';
 import { KnowledgeBaseTab } from '@/components/settings/knowledge-base-tab';
+import { SiteTab } from '@/components/settings/site-tab';
 import { RagChatWidget } from '@/components/settings/rag-chat-widget';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
@@ -17,7 +18,7 @@ export default function SettingsPageClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const tabParam = searchParams.get('tab') ?? 'client';
-  const availableTabs = useMemo(() => new Set(['client', 'social', 'payment', 'kb']), []);
+  const availableTabs = useMemo(() => new Set(['client', 'social', 'site', 'payment', 'kb']), []);
   const [activeTab, setActiveTab] = useState(() => (availableTabs.has(tabParam) ? tabParam : 'client'));
 
   useEffect(() => {
@@ -47,6 +48,7 @@ export default function SettingsPageClient() {
         <TabsList>
           <TabsTrigger value="client">Настройки клиента</TabsTrigger>
           <TabsTrigger value="social">Социальные аккаунты</TabsTrigger>
+          <TabsTrigger value="site">Сайт</TabsTrigger>
           <TabsTrigger value="payment">Оплата</TabsTrigger>
           <TabsTrigger value="kb">База знаний</TabsTrigger>
         </TabsList>
@@ -85,6 +87,12 @@ export default function SettingsPageClient() {
 
           <div className="space-y-3 rounded-xl border bg-background p-5">
             <VkIntegrationsPanel />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="site" className="space-y-6">
+          <div className="max-w-2xl">
+            <SiteTab />
           </div>
         </TabsContent>
 

@@ -57,6 +57,7 @@ from .views import (
     YooKassaOAuthCallbackView,
     YooKassaOAuthDisconnectView,
     YooKassaSaveCredentialsView,
+    TBankSaveCredentialsView,
     SocialAccountViewSet,
     SEOKeywordSetViewSet,
     StoryViewSet,
@@ -127,6 +128,11 @@ from .views_chains import (
     ChainEdgeDetailView,
     ChainEdgeConditionsView,
     ChainEdgeConditionDetailView,
+)
+from .views_quiz_builder import (
+    QuizBuilderCurrentView,
+    QuizPublicDetailView,
+    QuizPublicSubmitView,
 )
 from .views_public_client_page import (
     PublicClientPageBuyProductView,
@@ -251,6 +257,7 @@ urlpatterns = [
     path('payments/yookassa/callback/', YooKassaOAuthCallbackView.as_view(), name='yookassa-oauth-callback'),
     path('payments/yookassa/disconnect/', YooKassaOAuthDisconnectView.as_view(), name='yookassa-oauth-disconnect'),
     path('payments/yookassa/credentials/', YooKassaSaveCredentialsView.as_view(), name='yookassa-credentials'),
+    path('payments/tbank/credentials/', TBankSaveCredentialsView.as_view(), name='tbank-credentials'),
     path('payments/webhook/', YooKassaWebhookView.as_view(), name='yookassa-webhook'),
 
     # Legacy list views (kept for backward compatibility)
@@ -297,6 +304,11 @@ urlpatterns = [
     path('chains/<int:chain_id>/edges/<int:edge_id>/', ChainEdgeDetailView.as_view(), name='chains-edge-detail'),
     path('chains/<int:chain_id>/edges/<int:edge_id>/conditions/', ChainEdgeConditionsView.as_view(), name='chains-edge-conditions'),
     path('chains/<int:chain_id>/edges/<int:edge_id>/conditions/<int:condition_id>/', ChainEdgeConditionDetailView.as_view(), name='chains-edge-condition'),
+
+    # Quiz builder endpoints
+    path('quiz-builder/current/', QuizBuilderCurrentView.as_view(), name='quiz-builder-current'),
+    path('public/quiz/<int:quiz_id>/', QuizPublicDetailView.as_view(), name='public-quiz-detail'),
+    path('public/quiz/<int:quiz_id>/submit/', QuizPublicSubmitView.as_view(), name='public-quiz-submit'),
 
     # Include router URLs
     path('', include(router.urls)),

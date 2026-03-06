@@ -38,6 +38,9 @@ YOOKASSA_API_URL = os.getenv("YOOKASSA_API_URL", "https://api.yookassa.ru/v3/pay
 YOOKASSA_WEBHOOK_SECRET = os.getenv("YOOKASSA_WEBHOOK_SECRET", "")
 YOOKASSA_CLIENT_ID = os.getenv("YOOKASSA_CLIENT_ID", "")
 YOOKASSA_CLIENT_SECRET = os.getenv("YOOKASSA_CLIENT_SECRET", "")
+TBANK_API_URL = os.getenv("TBANK_API_URL", "https://securepay.tinkoff.ru/v2")
+TBANK_TERMINAL_KEY = os.getenv("TBANK_TERMINAL_KEY", "TinkoffBankTest")
+TBANK_SECRET_KEY = os.getenv("TBANK_SECRET_KEY", "TinkoffBankTest")
 SITE_BASE_URL = os.getenv("SITE_BASE_URL", "")
 
 DEFAULT_ALLOWED_HOSTS = [

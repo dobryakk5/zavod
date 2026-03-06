@@ -5,6 +5,7 @@ Django не управляет миграциями этих таблиц.
 import uuid
 
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 from django.utils import timezone
 
@@ -430,6 +431,137 @@ class ChainSession(models.Model):
 
     def __str__(self):
         return f"{self.user_id}:{self.chain_id}:{self.status}"
+
+
+# ============================================================================
+# Quiz builder (chains.quiz_*)
+# ============================================================================
+
+class Quiz(models.Model):
+    tenant = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="tenant_id", related_name="quizzes")
+    title = models.CharField(max_length=255, default="Мой квиз")
+    accent_color = models.CharField(max_length=7, default="#5b5ef4")
+    is_published = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."quizzes'
+        ordering = ("-updated_at", "-id")
+
+    def __str__(self):
+        return f"{self.tenant_id}:{self.title}"
+
+
+class QuizScreen(models.Model):
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, db_column="quiz_id", related_name="screens")
+    kind = models.CharField(max_length=16)
+    position = models.SmallIntegerField(default=0)
+    title = models.CharField(max_length=500, default="")
+    subtitle = models.CharField(max_length=1000, blank=True, null=True)
+    question_type = models.CharField(max_length=16, blank=True, null=True)
+    placeholder = models.CharField(max_length=255, blank=True, null=True)
+    min_val = models.SmallIntegerField(blank=True, null=True)
+    max_val = models.SmallIntegerField(blank=True, null=True)
+    max_rating = models.SmallIntegerField(blank=True, null=True)
+    is_required = models.BooleanField(default=False)
+    is_default_result = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."quiz_screens'
+        ordering = ("position", "id")
+
+    def __str__(self):
+        return f"{self.quiz_id}:{self.kind}@{self.position}"
+
+
+class QuizOption(models.Model):
+    screen = models.ForeignKey(QuizScreen, on_delete=models.CASCADE, db_column="screen_id", related_name="options")
+    label = models.CharField(max_length=255, default="")
+    emoji = models.CharField(max_length=32, default="")
+    next_screen = models.ForeignKey(
+        QuizScreen,
+        on_delete=models.SET_NULL,
+        db_column="next_screen_id",
+        related_name="incoming_branch_options",
+        blank=True,
+        null=True,
+    )
+    next_special = models.CharField(max_length=16, blank=True, null=True)
+    position = models.SmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."quiz_options'
+        ordering = ("position", "id")
+
+    def __str__(self):
+        return f"{self.screen_id}:{self.position}:{self.label[:24]}"
+
+
+class QuizResultRule(models.Model):
+    screen = models.ForeignKey(QuizScreen, on_delete=models.CASCADE, db_column="screen_id", related_name="result_rules")
+    position = models.SmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."quiz_result_rules'
+        ordering = ("position", "id")
+
+    def __str__(self):
+        return f"screen={self.screen_id} rule@{self.position}"
+
+
+class QuizResultCondition(models.Model):
+    rule = models.ForeignKey(QuizResultRule, on_delete=models.CASCADE, db_column="rule_id", related_name="conditions")
+    screen = models.ForeignKey(QuizScreen, on_delete=models.CASCADE, db_column="screen_id", related_name="result_conditions")
+    operator = models.CharField(max_length=16)
+    value = models.JSONField(default=list)
+    position = models.SmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."quiz_result_conditions'
+        ordering = ("position", "id")
+
+    def __str__(self):
+        return f"rule={self.rule_id} cond={self.operator}@{self.position}"
+
+
+class QuizAnswer(models.Model):
+    tenant = models.ForeignKey(Client, on_delete=models.CASCADE, db_column="tenant_id", related_name="quiz_answers")
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, db_column="quiz_id", related_name="answers")
+    contact_id = models.BigIntegerField()
+    screen = models.ForeignKey(
+        QuizScreen,
+        on_delete=models.SET_NULL,
+        db_column="screen_id",
+        related_name="answers",
+        blank=True,
+        null=True,
+    )
+    value_text = models.TextField(blank=True, null=True)
+    value_number = models.SmallIntegerField(blank=True, null=True)
+    value_options = ArrayField(models.BigIntegerField(), blank=True, null=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'chains"."quiz_answers'
+        ordering = ("created_at", "id")
+
+    def __str__(self):
+        return f"quiz={self.quiz_id} contact={self.contact_id} screen={self.screen_id or '-'}"
 
 
 # ============================================================================

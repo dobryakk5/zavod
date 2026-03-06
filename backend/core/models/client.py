@@ -144,6 +144,30 @@ class Client(models.Model):
         verbose_name="YooKassa Return URL",
         help_text="Если пусто — генерируется автоматически как /payments/return/<uuid>/",
     )
+    tbank_connected = models.BooleanField(
+        default=False,
+        verbose_name="T-Bank подключен",
+        help_text="True если клиент сохранил ключи T-Bank для приема платежей",
+    )
+    tbank_terminal_key = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="T-Bank Terminal Key",
+        help_text="TerminalKey из личного кабинета T-Bank",
+    )
+    tbank_secret_key = models.CharField(
+        max_length=500,
+        blank=True,
+        null=True,
+        verbose_name="T-Bank Secret Key",
+        help_text="SecretKey из личного кабинета T-Bank",
+    )
+    tbank_test_mode = models.BooleanField(
+        default=False,
+        verbose_name="T-Bank тестовый режим",
+        help_text="Используются тестовые ключи TinkoffBankTest",
+    )
 
     # --- Описание бизнеса и аудитории ---
     avatar = models.TextField(

@@ -169,6 +169,20 @@ export type ContactTelegramInfo = {
   link: string;
 };
 
+export type ContactFact = {
+  id: number;
+  contact_id: number;
+  tenant_id: number;
+  category: string;
+  fact_type: string;
+  fact_value: string;
+  source: string;
+  confidence: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ServicePackageBalance = {
   enabled: boolean;
   mode: 'count' | 'minutes';
@@ -239,6 +253,10 @@ export const crmContactsApi = {
 
   servicePackages: async (id: number | string): Promise<ContactServicePackagesResponse> => {
     return apiFetch<ContactServicePackagesResponse>(`/crm/contacts/${id}/service-packages/`);
+  },
+
+  facts: async (id: number | string): Promise<ContactFact[]> => {
+    return apiFetch<ContactFact[]>(`/crm/contacts/${id}/facts/`);
   },
 };
 

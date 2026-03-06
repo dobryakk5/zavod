@@ -39,6 +39,7 @@ const buildUrl = (path: string) => `${API_URL}${path}`;
 const VK_REDIRECT_URI =
   process.env.NEXT_PUBLIC_VK_AUTH_REDIRECT_URI ??
   (typeof window !== 'undefined' ? `${window.location.origin}/auth/vk/callback` : '');
+const VK_AUTH_REDIRECT_KEY = 'vk_auth_redirect_to';
 const API_MISSING_MESSAGE = 'NEXT_PUBLIC_API_URL не задан — настроите URL бэкенда в .env';
 
 const parseVkResponse = async (response: Response) => {
@@ -121,6 +122,7 @@ export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
           setStatus({ type: 'success', text: 'Успешная авторизация!' });
           sessionStorage.removeItem('vk_auth_state');
           sessionStorage.removeItem('vk_auth_mode');
+          sessionStorage.removeItem(VK_AUTH_REDIRECT_KEY);
           onClose();
           router.push(resolvedRedirectTo);
         } else {
@@ -209,6 +211,7 @@ export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
 
       sessionStorage.setItem('vk_auth_state', authState);
       sessionStorage.setItem('vk_auth_mode', 'login');
+      sessionStorage.setItem(VK_AUTH_REDIRECT_KEY, resolvedRedirectTo);
 
       const width = 600;
       const height = 700;
@@ -236,6 +239,7 @@ export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
           popup.close();
           sessionStorage.removeItem('vk_auth_state');
           sessionStorage.removeItem('vk_auth_mode');
+          sessionStorage.removeItem(VK_AUTH_REDIRECT_KEY);
           setLoading(false);
           setStatus({ type: 'error', text: 'Авторизация VK отменена или завершилась ошибкой' });
           return;
@@ -263,16 +267,18 @@ export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
           cleanupPopupFlow();
           sessionStorage.removeItem('vk_auth_state');
           sessionStorage.removeItem('vk_auth_mode');
+          sessionStorage.removeItem(VK_AUTH_REDIRECT_KEY);
           setLoading(false);
         }
       }, 500);
     } catch {
       sessionStorage.removeItem('vk_auth_state');
       sessionStorage.removeItem('vk_auth_mode');
+      sessionStorage.removeItem(VK_AUTH_REDIRECT_KEY);
       setStatus({ type: 'error', text: 'Ошибка запуска авторизации VK' });
       setLoading(false);
     }
-  }, [cleanupPopupFlow, ensureApiConfigured, exchangeCode]);
+  }, [cleanupPopupFlow, ensureApiConfigured, exchangeCode, resolvedRedirectTo]);
 
   const handleLogout = async () => {
     if (!ensureApiConfigured()) {

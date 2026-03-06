@@ -99,6 +99,7 @@ from .views_payments import (  # noqa: F401
     YooKassaOAuthCallbackView,
     YooKassaOAuthDisconnectView,
     YooKassaSaveCredentialsView,
+    TBankSaveCredentialsView,
 )
 from .views_vk_auth import VkAuthUrlView, VkAuthView  # noqa: F401
 from .views_vk_messages import VkMessageCallbackView  # noqa: F401

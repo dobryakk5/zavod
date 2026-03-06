@@ -45,6 +45,9 @@ export type ClientPageVideoBlockConfig = {
 export type ClientPageExtraBlocksConfig = {
   image: ClientPageImageBlockConfig;
   video: ClientPageVideoBlockConfig;
+  images: ClientPageImageBlockConfig[];
+  videos: ClientPageVideoBlockConfig[];
+  text_blocks: Record<string, unknown>[];
 };
 
 export type ClientPageTemplateConfig = {
@@ -125,6 +128,8 @@ export const CLIENT_PAGE_BLOCK_DEFAULT_ORDER: ClientPageBlockKey[] = [
   'referrals',
 ];
 
+const REPEATABLE_BLOCK_KEYS = new Set<ClientPageBlockKey>(['image', 'video', 'custom_content']);
+
 export const DEFAULT_CLIENT_PAGE_BLOCKS: ClientPageBlocksConfig = {
   hero: false,
   image: false,
@@ -168,6 +173,9 @@ export const DEFAULT_CLIENT_PAGE_VIDEO_BLOCK_CONFIG: ClientPageVideoBlockConfig 
 export const DEFAULT_CLIENT_PAGE_EXTRA_BLOCKS_CONFIG: ClientPageExtraBlocksConfig = {
   image: { ...DEFAULT_CLIENT_PAGE_IMAGE_BLOCK_CONFIG },
   video: { ...DEFAULT_CLIENT_PAGE_VIDEO_BLOCK_CONFIG },
+  images: [],
+  videos: [],
+  text_blocks: [],
 };
 
 const createDefaultBlockOrder = (blocks: ClientPageBlocksConfig): ClientPageBlockKey[] => {
@@ -184,6 +192,9 @@ export const createDefaultClientPageTemplateConfig = (): ClientPageTemplateConfi
     extra_blocks: {
       image: { ...DEFAULT_CLIENT_PAGE_IMAGE_BLOCK_CONFIG },
       video: { ...DEFAULT_CLIENT_PAGE_VIDEO_BLOCK_CONFIG },
+      images: [],
+      videos: [],
+      text_blocks: [],
     },
   };
 };
@@ -265,13 +276,32 @@ const normalizeExtraBlocksConfig = (value: unknown): ClientPageExtraBlocksConfig
     return {
       image: { ...DEFAULT_CLIENT_PAGE_IMAGE_BLOCK_CONFIG },
       video: { ...DEFAULT_CLIENT_PAGE_VIDEO_BLOCK_CONFIG },
+      images: [],
+      videos: [],
+      text_blocks: [],
     };
   }
 
   const raw = value as Record<string, unknown>;
+  const rawImages = Array.isArray(raw.images) ? raw.images : [];
+  const images = rawImages
+    .map((item) => normalizeImageBlockConfig(item));
+
+  const rawVideos = Array.isArray(raw.videos) ? raw.videos : [];
+  const videos = rawVideos
+    .map((item) => normalizeVideoBlockConfig(item));
+
+  const rawTextBlocks = Array.isArray(raw.text_blocks) ? raw.text_blocks : [];
+  const textBlocks = rawTextBlocks
+    .filter((item) => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    .map((item) => item as Record<string, unknown>);
+
   return {
     image: normalizeImageBlockConfig(raw.image),
     video: normalizeVideoBlockConfig(raw.video),
+    images,
+    videos,
+    text_blocks: textBlocks,
   };
 };
 
@@ -285,7 +315,14 @@ const normalizeBlockOrder = (
 
   const unique: ClientPageBlockKey[] = [];
   parsed.forEach((key) => {
-    if (blocks[key] && !unique.includes(key)) {
+    if (!blocks[key]) {
+      return;
+    }
+    if (REPEATABLE_BLOCK_KEYS.has(key)) {
+      unique.push(key);
+      return;
+    }
+    if (!unique.includes(key)) {
       unique.push(key);
     }
   });

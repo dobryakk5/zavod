@@ -203,7 +203,7 @@ export function TelegramAuth({ open, onClose, redirectTo, tenantId }: TelegramAu
         setUser(payload.user);
         setStatus({ type: 'success', text: 'Dev режим активирован!' });
         onClose();
-        router.push('/welcome');
+        router.push(resolvedRedirectTo);
       } else {
         setStatus({ type: 'error', text: resolveErrorMessage(payload, text, 'Ошибка dev авторизации') });
       }

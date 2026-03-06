@@ -119,7 +119,45 @@ class TestPublicClientPageDigitalProductPayments:
         yk_payment = YooKassaPayment.objects.get(payment_id="pay_123")
         assert yk_payment.client_id == active_product.owner_id
         assert yk_payment.amount == Decimal("1990.00")
-        assert yk_payment.plan_code == f"digital_product:{active_product.id}"
+        assert yk_payment.plan_code == f"digital_product:{active_product.id}:contact:123"
+
+    def test_buy_creates_tbank_payment_record(self, api_client, active_product, monkeypatch, settings):
+        settings.TBANK_TERMINAL_KEY = "terminal_key"
+        settings.TBANK_SECRET_KEY = "secret_key"
+        settings.TBANK_API_URL = "https://securepay.tinkoff.ru/v2"
+        monkeypatch.setattr(
+            "api.views_public_client_page._resolve_request_contact_id_for_client",
+            lambda request, client_id: 123,
+        )
+        monkeypatch.setattr(
+            "api.views_public_client_page._tbank_request",
+            lambda *args, **kwargs: {
+                "Success": True,
+                "PaymentId": "tb_123",
+                "Status": "NEW",
+                "PaymentURL": "https://pay.example/tbank",
+            },
+        )
+
+        url = reverse("public-client-page-buy", kwargs={"client_id": active_product.owner_id})
+        response = api_client.post(
+            url,
+            {"product_id": active_product.id, "provider": "tbank"},
+            format="json",
+        )
+
+        assert response.status_code == 201, response.content
+        body = response.json()
+        assert body["id"] == "tb_123"
+        assert body["provider"] == "tbank"
+        assert body["payment_url"] == "https://pay.example/tbank"
+
+        payment = YooKassaPayment.objects.get(payment_id="tb_123")
+        assert payment.client_id == active_product.owner_id
+        assert payment.provider == YooKassaPayment.PROVIDER_TBANK
+        assert payment.status == YooKassaPayment.STATUS_PENDING
+        assert payment.plan_code == f"digital_product:{active_product.id}:contact:123"
+        assert payment.amount == Decimal("1990.00")
 
     def test_buy_requires_contact_auth(self, api_client, active_product, monkeypatch):
         monkeypatch.setattr(
@@ -193,6 +231,63 @@ class TestPublicClientPageDigitalProductPayments:
         )
         assert purchase.last_payment_id == YooKassaPayment.objects.get(payment_id="pay_ok_1").id
         assert purchase.product_name == active_product.name
+
+    def test_tbank_payment_status_returns_share_link_when_product_page_exists(
+        self,
+        api_client,
+        active_product,
+        monkeypatch,
+        settings,
+    ):
+        settings.TBANK_TERMINAL_KEY = "terminal_key"
+        settings.TBANK_SECRET_KEY = "secret_key"
+        settings.TBANK_API_URL = "https://securepay.tinkoff.ru/v2"
+
+        document = KbDocument.objects.create(
+            workspace=active_product.owner,
+            title="Digital Course",
+            document_type="product",
+            content={"type": "doc", "content": []},
+            is_published=True,
+        )
+        active_product.digital_product_document = document
+        active_product.save(update_fields=["digital_product_document"])
+
+        YooKassaPayment.objects.create(
+            payment_id="tb_ok_1",
+            client=active_product.owner,
+            provider=YooKassaPayment.PROVIDER_TBANK,
+            status=YooKassaPayment.STATUS_PENDING,
+            amount=Decimal("1990.00"),
+            plan_code=f"digital_product:{active_product.id}:contact:321",
+        )
+
+        monkeypatch.setattr(
+            "api.views_public_client_page._tbank_request",
+            lambda *args, **kwargs: {
+                "Success": True,
+                "PaymentId": "tb_ok_1",
+                "Status": "CONFIRMED",
+                "Amount": 199000,
+            },
+        )
+
+        url = reverse("public-client-page-payment-status", kwargs={"client_id": active_product.owner_id})
+        response = api_client.get(url, {"payment_id": "tb_ok_1"})
+
+        assert response.status_code == 200, response.content
+        body = response.json()
+        assert body["provider"] == "tbank"
+        assert body["status"] == "succeeded"
+        assert body["paid"] is True
+        assert body["delivery"]["ready"] is True
+        assert "/kb/share/" in body["delivery"]["url"]
+        purchase = ContactProductPurchase.objects.get(
+            client_id=active_product.owner_id,
+            contact_id=321,
+            product_id=active_product.id,
+        )
+        assert purchase.last_payment_id == YooKassaPayment.objects.get(payment_id="tb_ok_1").id
 
     def test_payment_status_returns_owner_message_when_product_page_missing(self, api_client, active_product, monkeypatch):
         YooKassaPayment.objects.create(

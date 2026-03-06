@@ -1,10 +1,9 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Copy, ExternalLink, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import * as z from 'zod';
 import { clientApi } from '@/lib/api/client';
 import { seoApi } from '@/lib/api/seo';
@@ -45,40 +44,12 @@ const settingsFormSchema = z.object({
 
 type SettingsFormValues = z.infer<typeof settingsFormSchema>;
 
-const copyTextToClipboard = async (value: string): Promise<void> => {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText && window.isSecureContext) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
-
-  if (typeof document === 'undefined') {
-    throw new Error('Clipboard is unavailable');
-  }
-
-  const textarea = document.createElement('textarea');
-  textarea.value = value;
-  textarea.setAttribute('readonly', '');
-  textarea.style.position = 'fixed';
-  textarea.style.top = '-9999px';
-  document.body.appendChild(textarea);
-  textarea.select();
-
-  const copied = document.execCommand('copy');
-  document.body.removeChild(textarea);
-
-  if (!copied) {
-    throw new Error('Copy failed');
-  }
-};
-
 export function ClientSettingsForm() {
   const [settings, setSettings] = useState<ClientSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [generatingSEO, setGeneratingSEO] = useState(false);
   const [generatingBooks, setGeneratingBooks] = useState(false);
   const [generatingSemantics, setGeneratingSemantics] = useState(false);
-  const [publicPagePath, setPublicPagePath] = useState('');
-  const [publicPageShareUrl, setPublicPageShareUrl] = useState('');
   const { canEdit } = useRole();
 
   const form = useForm<SettingsFormValues>({
@@ -109,16 +80,6 @@ export function ClientSettingsForm() {
         objections: data.objections || '',
         expert_books: data.expert_books || '',
       });
-      try {
-        const info = await clientApi.info();
-        const path = `/c/${info.client.id}`;
-        const origin = typeof window !== 'undefined' ? window.location.origin : '';
-        setPublicPagePath(path);
-        setPublicPageShareUrl(origin ? `${origin}${path}` : path);
-      } catch {
-        setPublicPagePath('');
-        setPublicPageShareUrl('');
-      }
     } catch (error) {
       toast.error('Не удалось загрузить настройки');
     }
@@ -221,21 +182,6 @@ export function ClientSettingsForm() {
     }
   };
 
-  const handleCopyPublicPageLink = useCallback(async () => {
-    if (!publicPageShareUrl) {
-      toast.error('Ссылка пока недоступна');
-      return;
-    }
-    try {
-      await copyTextToClipboard(publicPageShareUrl);
-      toast.success('Ссылка скопирована');
-    } catch {
-      toast.error('Не удалось скопировать ссылку');
-    }
-  }, [publicPageShareUrl]);
-
-  const publicPageEditorPath = publicPagePath ? `${publicPagePath}/edit` : '';
-
   if (!settings) {
     return <div className="text-center py-8">Загрузка...</div>;
   }
@@ -250,44 +196,7 @@ export function ClientSettingsForm() {
           name="brand_name"
           render={({ field }) => (
             <FormItem>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <FormLabel>Название бренда</FormLabel>
-                <div className="flex items-center gap-1.5 text-xs">
-                  {publicPageEditorPath ? (
-                    <Link href={publicPageEditorPath} className="text-blue-600 hover:underline">
-                      Моя страница
-                    </Link>
-                  ) : (
-                    <span className="text-muted-foreground">Моя страница</span>
-                  )}
-                  {publicPagePath ? (
-                    <>
-                      <span className="text-muted-foreground">·</span>
-                      <a
-                        href={publicPagePath}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-blue-600 hover:underline"
-                      >
-                        {publicPagePath}
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => void handleCopyPublicPageLink()}
-                        aria-label="Скопировать ссылку на мою страницу"
-                      >
-                        <Copy className="h-3.5 w-3.5" />
-                      </Button>
-                    </>
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </div>
-              </div>
+              <FormLabel>Название бренда</FormLabel>
               <FormControl>
                 <Input placeholder="Например: Ромашка и партнеры" {...field} />
               </FormControl>

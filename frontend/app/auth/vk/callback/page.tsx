@@ -8,6 +8,7 @@ const VK_REDIRECT_URI =
   process.env.NEXT_PUBLIC_VK_AUTH_REDIRECT_URI ??
   (typeof window !== 'undefined' ? `${window.location.origin}/auth/vk/callback` : '');
 const buildUrl = (path: string) => `${API_URL}${path}`;
+const VK_AUTH_REDIRECT_KEY = 'vk_auth_redirect_to';
 
 type VkAuthPayload = {
   user?: {
@@ -49,12 +50,19 @@ function VkCallbackContent() {
     const clearState = () => {
       sessionStorage.removeItem('vk_auth_state');
       sessionStorage.removeItem('vk_auth_mode');
+      sessionStorage.removeItem(VK_AUTH_REDIRECT_KEY);
     };
 
     const resolveErrorRoute = (code: string) =>
       isLinkMode ? `/settings?tab=social&error=${code}` : `/login?error=${code}`;
 
-    const resolveSuccessRoute = () => (isLinkMode ? '/settings?tab=social&linked=vk' : '/welcome');
+    const resolveSuccessRoute = () => {
+      if (isLinkMode) {
+        return '/settings?tab=social&linked=vk';
+      }
+      const redirectTo = (sessionStorage.getItem(VK_AUTH_REDIRECT_KEY) || '').trim();
+      return redirectTo.startsWith('/') ? redirectTo : '/welcome';
+    };
 
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     const code = (params.get('code') || hashParams.get('code') || '').trim();
@@ -123,8 +131,9 @@ function VkCallbackContent() {
       .then(({ response, payload, text }) => {
         const success = isLinkMode ? Boolean(payload?.linked) : Boolean(payload?.user?.vkId);
         if (response.ok && success) {
+          const successRoute = resolveSuccessRoute();
           clearState();
-          router.replace(resolveSuccessRoute());
+          router.replace(successRoute);
           return;
         }
         setStatusText(payload?.error || text || 'Ошибка авторизации');

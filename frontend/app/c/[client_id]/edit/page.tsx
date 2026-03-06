@@ -68,10 +68,12 @@ import type { ClientProduct, ClientSettings } from '@/lib/types';
 
 type ImageBlockConfig = ClientPageImageBlockConfig;
 type VideoBlockConfig = ClientPageVideoBlockConfig;
+type TextBlockContent = Record<string, unknown>;
 
 type LocalBlockData = {
-  image: ImageBlockConfig;
-  video: VideoBlockConfig;
+  images: ImageBlockConfig[];
+  videos: VideoBlockConfig[];
+  textBlocks: TextBlockContent[];
 };
 
 const DEFAULT_IMAGE_CONFIG: ImageBlockConfig = {
@@ -83,6 +85,44 @@ const DEFAULT_VIDEO_CONFIG: VideoBlockConfig = {
 };
 
 type ExtendedBlockKey = ClientPageBlockKey;
+type CanvasBlockId = string;
+type CanvasBlockInstance = {
+  id: CanvasBlockId;
+  key: ExtendedBlockKey;
+  repeatIndex: number | null;
+};
+
+const REPEATABLE_BLOCK_KEYS = new Set<ExtendedBlockKey>(['image', 'video', 'custom_content']);
+
+const isRepeatableBlockKey = (key: ExtendedBlockKey): boolean => REPEATABLE_BLOCK_KEYS.has(key);
+
+const makeCanvasBlockId = (key: ExtendedBlockKey, repeatIndex: number | null): CanvasBlockId => {
+  if (repeatIndex === null || !isRepeatableBlockKey(key)) {
+    return key;
+  }
+  return `${key}:${repeatIndex}`;
+};
+
+const parseCanvasBlockId = (id: CanvasBlockId): CanvasBlockInstance => {
+  const [rawKey, rawIndex] = id.split(':');
+  if (rawKey === 'image' || rawKey === 'video' || rawKey === 'custom_content') {
+    const parsedIndex = Number(rawIndex);
+    return {
+      id,
+      key: rawKey,
+      repeatIndex: Number.isFinite(parsedIndex) && parsedIndex >= 0 ? parsedIndex : 0,
+    };
+  }
+  return { id, key: rawKey as ExtendedBlockKey, repeatIndex: null };
+};
+
+const cloneTiptapDoc = (value: Record<string, unknown>): Record<string, unknown> => {
+  try {
+    return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+  } catch {
+    return normalizeTiptapContent(value);
+  }
+};
 
 // ─── Video URL resolver ───────────────────────────────────────────────────────
 
@@ -235,18 +275,22 @@ function AddBlockDivider({ onClick }: { onClick: () => void }) {
 // ─── Sortable canvas block ────────────────────────────────────────────────────
 
 function SortableCanvasBlock({
-  blockKey, label, isSelected, isFirst, isLast,
+  blockId, blockKey, label, isSelected, isFirst, isLast, canRemove,
   onSelect, onRemove, onMoveUp, onMoveDown, children,
 }: {
-  blockKey: ExtendedBlockKey; label: string; isSelected: boolean;
+  blockId: CanvasBlockId;
+  blockKey: ExtendedBlockKey;
+  label: string;
+  isSelected: boolean;
   isFirst: boolean; isLast: boolean;
+  canRemove: boolean;
   onSelect: () => void; onRemove: () => void;
   onMoveUp: () => void; onMoveDown: () => void;
   children: React.ReactNode;
 }) {
   const [hov, setHov] = useState(false);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: blockKey });
+    useSortable({ id: blockId });
 
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
@@ -286,7 +330,7 @@ function SortableCanvasBlock({
             {...attributes} {...listeners}>
             <GripVertical className="h-3.5 w-3.5" />
           </button>
-          {blockKey !== 'hero' && (
+          {canRemove && (
             <button type="button" title="Удалить" onClick={onRemove}
               className="flex h-7 w-7 items-center justify-center rounded-md border border-red-200
                          bg-white text-red-500 shadow hover:bg-red-50">
@@ -321,28 +365,40 @@ function Checkbox({ label, checked, onChange }: { label: string; checked: boolea
 }
 
 function SettingsPanel({
-  blockKey, blockLabel, config, localData, content,
+  blockId, blockKey, blockLabel, repeatIndex, config, localData,
   activeProducts, selectedProduct, selectedProductPriceLabel,
   templateFields, editorRef,
   onUpdateHero, onUpdateConfig, onUpdateImage, onUpdateVideo,
-  onUpdateContent, onInsertTemplateField, onCopyToken, onClose,
+  onUpdateTextContent, onInsertTemplateField, onCopyToken, onClose,
 }: {
-  blockKey: ExtendedBlockKey; blockLabel: string;
+  blockId: CanvasBlockId;
+  blockKey: ExtendedBlockKey;
+  blockLabel: string;
+  repeatIndex: number | null;
   config: ClientPageTemplateConfig; localData: LocalBlockData;
-  content: Record<string, unknown>;
   activeProducts: ClientProduct[]; selectedProduct: ClientProduct | null;
   selectedProductPriceLabel: string;
   templateFields: typeof TEMPLATE_FIELDS;
   editorRef: React.MutableRefObject<Editor | null>;
   onUpdateHero: (p: Partial<ClientPageHeroConfig>) => void;
   onUpdateConfig: (p: Partial<ClientPageTemplateConfig>) => void;
-  onUpdateImage: (p: Partial<ImageBlockConfig>) => void;
-  onUpdateVideo: (p: Partial<VideoBlockConfig>) => void;
-  onUpdateContent: (v: Record<string, unknown>) => void;
+  onUpdateImage: (index: number, p: Partial<ImageBlockConfig>) => void;
+  onUpdateVideo: (index: number, p: Partial<VideoBlockConfig>) => void;
+  onUpdateTextContent: (index: number, v: Record<string, unknown>) => void;
   onInsertTemplateField: (t: string) => void;
   onCopyToken: (t: string) => void;
   onClose: () => void;
 }) {
+  const activeImage = repeatIndex === null
+    ? null
+    : (localData.images[repeatIndex] || { ...DEFAULT_IMAGE_CONFIG });
+  const activeVideo = repeatIndex === null
+    ? null
+    : (localData.videos[repeatIndex] || { ...DEFAULT_VIDEO_CONFIG });
+  const activeTextContent = repeatIndex === null
+    ? null
+    : normalizeTiptapContent(localData.textBlocks[repeatIndex]);
+
   return (
     <div className="flex h-full flex-col border-l bg-white">
       <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
@@ -425,53 +481,53 @@ function SettingsPanel({
         )}
 
         {/* ── IMAGE ── */}
-        {blockKey === 'image' && (
+        {blockKey === 'image' && activeImage && repeatIndex !== null && (
           <>
             <Field label="URL картинки">
               <input className="input-base w-full" placeholder="https://example.com/photo.jpg"
-                value={localData.image.url}
-                onChange={(e) => onUpdateImage({ url: e.target.value })} />
+                value={activeImage.url}
+                onChange={(e) => onUpdateImage(repeatIndex, { url: e.target.value })} />
             </Field>
 
-            {localData.image.url && (
+            {activeImage.url && (
               <div className="overflow-hidden rounded-xl border bg-slate-50">
                 <Image
-                  src={localData.image.url}
-                  alt={localData.image.alt || 'preview'}
+                  src={activeImage.url}
+                  alt={activeImage.alt || 'preview'}
                   width={1600}
                   height={900}
                   unoptimized
                   loader={({ src }) => src}
                   className="w-full"
-                  style={{ maxHeight: Math.min(localData.image.max_height, 360), objectFit: localData.image.fit }}
+                  style={{ maxHeight: Math.min(activeImage.max_height, 360), objectFit: activeImage.fit }}
                 />
               </div>
             )}
 
             <Field label="Alt-текст (для SEO)">
               <input className="input-base w-full" placeholder="Описание картинки"
-                value={localData.image.alt}
-                onChange={(e) => onUpdateImage({ alt: e.target.value })} />
+                value={activeImage.alt}
+                onChange={(e) => onUpdateImage(repeatIndex, { alt: e.target.value })} />
             </Field>
 
             <Field label="Подпись под картинкой">
               <input className="input-base w-full" placeholder="Необязательно"
-                value={localData.image.caption}
-                onChange={(e) => onUpdateImage({ caption: e.target.value })} />
+                value={activeImage.caption}
+                onChange={(e) => onUpdateImage(repeatIndex, { caption: e.target.value })} />
             </Field>
 
             <div className="grid grid-cols-2 gap-3">
               <Field label="Отображение">
-                <select className="input-base w-full" value={localData.image.fit}
-                  onChange={(e) => onUpdateImage({ fit: e.target.value as 'cover' | 'contain' })}>
+                <select className="input-base w-full" value={activeImage.fit}
+                  onChange={(e) => onUpdateImage(repeatIndex, { fit: e.target.value as 'cover' | 'contain' })}>
                   <option value="cover">Обрезать (cover)</option>
                   <option value="contain">Вписать (contain)</option>
                 </select>
               </Field>
-              <Field label={`Макс. высота: ${localData.image.max_height}px`}>
+              <Field label={`Макс. высота: ${activeImage.max_height}px`}>
                 <input type="range" min={120} max={900} step={20}
-                  value={localData.image.max_height}
-                  onChange={(e) => onUpdateImage({ max_height: Number(e.target.value) })}
+                  value={activeImage.max_height}
+                  onChange={(e) => onUpdateImage(repeatIndex, { max_height: Number(e.target.value) })}
                   className="w-full accent-blue-500 mt-2" />
               </Field>
             </div>
@@ -479,17 +535,17 @@ function SettingsPanel({
         )}
 
         {/* ── VIDEO ── */}
-        {blockKey === 'video' && (
+        {blockKey === 'video' && activeVideo && repeatIndex !== null && (
           <>
             <Field label="Ссылка на видео">
               <input className="input-base w-full"
                 placeholder="YouTube, Vimeo или прямая .mp4 ссылка"
-                value={localData.video.url}
-                onChange={(e) => onUpdateVideo({ url: e.target.value })} />
+                value={activeVideo.url}
+                onChange={(e) => onUpdateVideo(repeatIndex, { url: e.target.value })} />
             </Field>
 
-            {localData.video.url && (() => {
-              const r = resolveVideoEmbed(localData.video.url);
+            {activeVideo.url && (() => {
+              const r = resolveVideoEmbed(activeVideo.url);
               return (
                 <div className="overflow-hidden rounded-xl border bg-black aspect-video">
                   {r.type === 'iframe' && (
@@ -516,8 +572,8 @@ function SettingsPanel({
 
             <Field label="Подпись под видео">
               <input className="input-base w-full" placeholder="Необязательно"
-                value={localData.video.caption}
-                onChange={(e) => onUpdateVideo({ caption: e.target.value })} />
+                value={activeVideo.caption}
+                onChange={(e) => onUpdateVideo(repeatIndex, { caption: e.target.value })} />
             </Field>
           </>
         )}
@@ -551,7 +607,7 @@ function SettingsPanel({
         )}
 
         {/* ── CUSTOM CONTENT ── */}
-        {blockKey === 'custom_content' && (
+        {blockKey === 'custom_content' && activeTextContent && repeatIndex !== null && (
           <>
             <div className="space-y-2">
               <div className="text-xs font-medium text-muted-foreground">Шаблонные поля</div>
@@ -572,8 +628,9 @@ function SettingsPanel({
             </div>
             <div className="rounded-xl border overflow-hidden">
               <TipTapEditor
-                initialContent={content}
-                onChange={onUpdateContent}
+                key={`${blockId}-editor`}
+                initialContent={activeTextContent}
+                onChange={(value) => onUpdateTextContent(repeatIndex, value)}
                 onEditorReady={(editor) => { editorRef.current = editor; }}
                 autoSave={false} showToolbar
                 placeholder="Напишите описание, оффер, FAQ..."
@@ -596,17 +653,25 @@ function SettingsPanel({
 // ─── Block canvas renders ─────────────────────────────────────────────────────
 
 function renderBlockContent({
-  blockKey, config, localData, displayName, niche,
-  selectedProduct, selectedProductPriceLabel, customContentHtml, previewValues,
+  blockKey, repeatIndex, config, localData, displayName, niche,
+  selectedProduct, selectedProductPriceLabel, previewValues,
 }: {
-  blockKey: ExtendedBlockKey; config: ClientPageTemplateConfig; localData: LocalBlockData;
+  blockKey: ExtendedBlockKey;
+  repeatIndex: number | null;
+  config: ClientPageTemplateConfig;
+  localData: LocalBlockData;
   displayName: string; niche: string; selectedProduct: ClientProduct | null;
-  selectedProductPriceLabel: string; customContentHtml: string;
+  selectedProductPriceLabel: string;
   previewValues: Record<string, string>;
 }): React.ReactNode {
 
   if (blockKey === 'image') {
-    const img = localData.image;
+    const img = repeatIndex === null
+      ? null
+      : (localData.images[repeatIndex] || { ...DEFAULT_IMAGE_CONFIG });
+    if (!img) {
+      return null;
+    }
     if (!img.url) {
       return (
         <div className="flex flex-col items-center justify-center gap-3 py-16 bg-slate-50 text-muted-foreground">
@@ -637,7 +702,12 @@ function renderBlockContent({
   }
 
   if (blockKey === 'video') {
-    const vid = localData.video;
+    const vid = repeatIndex === null
+      ? null
+      : (localData.videos[repeatIndex] || { ...DEFAULT_VIDEO_CONFIG });
+    if (!vid) {
+      return null;
+    }
     if (!vid.url) {
       return (
         <div className="flex flex-col items-center justify-center gap-3 py-16 bg-slate-50 text-muted-foreground">
@@ -733,14 +803,37 @@ function renderBlockContent({
 
   if (blockKey === 'custom_content') return (
     <div className="px-8 py-8">
-      {customContentHtml ? (
-        <div className="tiptap prose prose-slate max-w-none"
-          dangerouslySetInnerHTML={{ __html: customContentHtml }} />
-      ) : (
-        <div className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">
-          Откройте настройки блока, чтобы добавить контент
-        </div>
-      )}
+      {(() => {
+        if (repeatIndex === null) {
+          return (
+            <div className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">
+              Не удалось определить текстовый блок
+            </div>
+          );
+        }
+        const source = normalizeTiptapContent(localData.textBlocks[repeatIndex]);
+        try {
+          const replaced = replaceTemplateTokensInTiptapNode(source, previewValues) as Record<string, unknown>;
+          const html = generateHTML(replaced, createKbExtensions());
+          if (!html) {
+            return (
+              <div className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">
+                Откройте настройки блока, чтобы добавить контент
+              </div>
+            );
+          }
+          return (
+            <div className="tiptap prose prose-slate max-w-none"
+              dangerouslySetInnerHTML={{ __html: html }} />
+          );
+        } catch {
+          return (
+            <div className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">
+              Ошибка рендера контента
+            </div>
+          );
+        }
+      })()}
     </div>
   );
 
@@ -793,14 +886,13 @@ export default function ClientPageEditor() {
   const [settings, setSettings]           = useState<ClientSettings | null>(null);
   const [products, setProducts]           = useState<ClientProduct[]>([]);
   const [config, setConfig]               = useState<ClientPageTemplateConfig>(createDefaultClientPageTemplateConfig);
-  const [content, setContent]             = useState<Record<string, unknown>>({ ...EMPTY_TIPTAP_DOC });
   const [publicPageUrl, setPublicPageUrl] = useState('');
   const [localData, setLocalData]         = useState<LocalBlockData>({
-    image: { ...DEFAULT_IMAGE_CONFIG },
-    video: { ...DEFAULT_VIDEO_CONFIG },
+    images: [],
+    videos: [],
+    textBlocks: [],
   });
-  const [extBlockOrder, setExtBlockOrder] = useState<ExtendedBlockKey[]>([]);
-  const [selectedBlockKey, setSelectedBlockKey] = useState<ExtendedBlockKey | null>(null);
+  const [selectedBlockId, setSelectedBlockId] = useState<CanvasBlockId | null>(null);
   const [showBlockPicker, setShowBlockPicker]   = useState(false);
 
   const sensors = useSensors(
@@ -828,12 +920,11 @@ export default function ClientPageEditor() {
     [],
   );
 
-  const inactiveBlocks = useMemo(() => {
-    const active = new Set(extBlockOrder);
-    return CLIENT_PAGE_BLOCK_LIBRARY.filter(
-      (b) => !active.has(b.key as ExtendedBlockKey),
-    ) as CombinedBlockMeta[];
-  }, [extBlockOrder]);
+  const repeatableCountByKey = useMemo(() => ({
+    image: localData.images.length,
+    video: localData.videos.length,
+    custom_content: localData.textBlocks.length,
+  }), [localData.images.length, localData.videos.length, localData.textBlocks.length]);
 
   const displayName    = useMemo(
     () => settings?.brand_name?.trim() || clientName || `Клиент #${pageClientId}`,
@@ -848,19 +939,77 @@ export default function ClientPageEditor() {
     product_service: (settings?.product_service || '').trim(),
   }), [displayName, niche, selectedProduct, selectedProductPriceLabel, settings?.product_service]);
 
-  const customContentHtml = useMemo(() => {
-    try {
-      const replaced = replaceTemplateTokensInTiptapNode(content, previewValues) as Record<string, unknown>;
-      return generateHTML(replaced, createKbExtensions());
-    } catch { return ''; }
-  }, [content, previewValues]);
+  const canvasBlockOrder = useMemo<CanvasBlockId[]>(() => {
+    const counters = { image: 0, video: 0, custom_content: 0 };
+    const result: CanvasBlockId[] = [];
 
-  const selectedBlockMeta = selectedBlockKey ? allBlockMeta.get(selectedBlockKey) : null;
+    config.block_order.forEach((key) => {
+      if (!config.blocks[key]) {
+        return;
+      }
+      if (key === 'image') {
+        result.push(makeCanvasBlockId(key, counters.image));
+        counters.image += 1;
+        return;
+      }
+      if (key === 'video') {
+        result.push(makeCanvasBlockId(key, counters.video));
+        counters.video += 1;
+        return;
+      }
+      if (key === 'custom_content') {
+        result.push(makeCanvasBlockId(key, counters.custom_content));
+        counters.custom_content += 1;
+        return;
+      }
+      if (!result.includes(key)) {
+        result.push(key);
+      }
+    });
 
-  // Sync canvas order with enabled blocks in config
-  useEffect(() => {
-    setExtBlockOrder(config.block_order.filter((k) => config.blocks[k]) as ExtendedBlockKey[]);
-  }, [config.block_order, config.blocks]);
+    const requiredImageCount = Math.max(repeatableCountByKey.image, config.blocks.image ? 1 : 0);
+    while (counters.image < requiredImageCount) {
+      result.push(makeCanvasBlockId('image', counters.image));
+      counters.image += 1;
+    }
+    const requiredVideoCount = Math.max(repeatableCountByKey.video, config.blocks.video ? 1 : 0);
+    while (counters.video < requiredVideoCount) {
+      result.push(makeCanvasBlockId('video', counters.video));
+      counters.video += 1;
+    }
+    const requiredTextCount = Math.max(repeatableCountByKey.custom_content, config.blocks.custom_content ? 1 : 0);
+    while (counters.custom_content < requiredTextCount) {
+      result.push(makeCanvasBlockId('custom_content', counters.custom_content));
+      counters.custom_content += 1;
+    }
+
+    if (!result.includes('hero')) {
+      result.unshift('hero');
+    }
+    return result;
+  }, [config.block_order, config.blocks, repeatableCountByKey]);
+
+  const canvasBlockInstances = useMemo<CanvasBlockInstance[]>(
+    () => canvasBlockOrder.map((id) => parseCanvasBlockId(id)),
+    [canvasBlockOrder],
+  );
+
+  const inactiveBlocks = useMemo(() => {
+    return CLIENT_PAGE_BLOCK_LIBRARY.filter((block) => {
+      const key = block.key as ExtendedBlockKey;
+      if (isRepeatableBlockKey(key)) {
+        return true;
+      }
+      return !canvasBlockInstances.some((item) => item.key === key);
+    }) as CombinedBlockMeta[];
+  }, [canvasBlockInstances]);
+
+  const selectedBlockInstance = useMemo<CanvasBlockInstance | null>(() => {
+    if (!selectedBlockId) return null;
+    return canvasBlockInstances.find((instance) => instance.id === selectedBlockId) || null;
+  }, [canvasBlockInstances, selectedBlockId]);
+
+  const selectedBlockMeta = selectedBlockInstance ? allBlockMeta.get(selectedBlockInstance.key) : null;
 
   // ── Load ──────────────────────────────────────────────────
 
@@ -898,11 +1047,30 @@ export default function ClientPageEditor() {
         },
       };
       setConfig(patchedConfig);
-      setContent(normalizeTiptapContent(settingsData?.client_page_content));
+      const imagesFromConfig = rawConfig.extra_blocks.images.length > 0
+        ? rawConfig.extra_blocks.images.map((item) => ({ ...DEFAULT_IMAGE_CONFIG, ...item }))
+        : ((rawConfig.extra_blocks.image.url.trim() || rawConfig.blocks.image)
+          ? [{ ...DEFAULT_IMAGE_CONFIG, ...rawConfig.extra_blocks.image }]
+          : []);
+      const videosFromConfig = rawConfig.extra_blocks.videos.length > 0
+        ? rawConfig.extra_blocks.videos.map((item) => ({ ...DEFAULT_VIDEO_CONFIG, ...item }))
+        : ((rawConfig.extra_blocks.video.url.trim() || rawConfig.blocks.video)
+          ? [{ ...DEFAULT_VIDEO_CONFIG, ...rawConfig.extra_blocks.video }]
+          : []);
+      const textBlocksFromConfig = rawConfig.extra_blocks.text_blocks.length > 0
+        ? rawConfig.extra_blocks.text_blocks.map((item) => normalizeTiptapContent(item))
+        : (() => {
+          if (settingsData?.client_page_content && typeof settingsData.client_page_content === 'object' && !Array.isArray(settingsData.client_page_content)) {
+            return [normalizeTiptapContent(settingsData.client_page_content)];
+          }
+          return [];
+        })();
       setLocalData({
-        image: { ...DEFAULT_IMAGE_CONFIG, ...(rawConfig.extra_blocks?.image || {}) },
-        video: { ...DEFAULT_VIDEO_CONFIG, ...(rawConfig.extra_blocks?.video || {}) },
+        images: imagesFromConfig,
+        videos: videosFromConfig,
+        textBlocks: textBlocksFromConfig.map((item) => cloneTiptapDoc(item)),
       });
+      setSelectedBlockId(null);
 
       const origin = typeof window !== 'undefined' ? window.location.origin : '';
       setPublicPageUrl(origin ? `${origin}/c/${activeId}` : `/c/${activeId}`);
@@ -916,29 +1084,144 @@ export default function ClientPageEditor() {
 
   // ── Actions ───────────────────────────────────────────────
 
+  const reorderByIndices = <T,>(source: T[], indices: number[], fallback: () => T): T[] => {
+    return indices.map((index) => source[index] ?? fallback());
+  };
+
+  const applyCanvasOrder = useCallback((nextOrder: CanvasBlockId[]) => {
+    const parsed = nextOrder.map((id) => parseCanvasBlockId(id));
+    const imageIndices: number[] = [];
+    const videoIndices: number[] = [];
+    const textIndices: number[] = [];
+    const seenNonRepeatable = new Set<ExtendedBlockKey>();
+    const nextBlockOrder: ExtendedBlockKey[] = [];
+
+    parsed.forEach((item) => {
+      if (item.key === 'image') {
+        imageIndices.push(item.repeatIndex ?? 0);
+        nextBlockOrder.push('image');
+        return;
+      }
+      if (item.key === 'video') {
+        videoIndices.push(item.repeatIndex ?? 0);
+        nextBlockOrder.push('video');
+        return;
+      }
+      if (item.key === 'custom_content') {
+        textIndices.push(item.repeatIndex ?? 0);
+        nextBlockOrder.push('custom_content');
+        return;
+      }
+      if (!seenNonRepeatable.has(item.key)) {
+        seenNonRepeatable.add(item.key);
+        nextBlockOrder.push(item.key);
+      }
+    });
+
+    if (!nextBlockOrder.includes('hero')) {
+      nextBlockOrder.unshift('hero');
+    } else {
+      const heroIndex = nextBlockOrder.indexOf('hero');
+      if (heroIndex > 0) {
+        nextBlockOrder.splice(heroIndex, 1);
+        nextBlockOrder.unshift('hero');
+      }
+    }
+
+    setConfig((prev) => {
+      const nextBlocks = { ...prev.blocks };
+      nextBlocks.hero = true;
+      nextBlocks.image = imageIndices.length > 0;
+      nextBlocks.video = videoIndices.length > 0;
+      nextBlocks.custom_content = textIndices.length > 0;
+      nextBlocks.header = nextBlockOrder.includes('header');
+      nextBlocks.product = nextBlockOrder.includes('product');
+      nextBlocks.purchases = nextBlockOrder.includes('purchases');
+      nextBlocks.booking = nextBlockOrder.includes('booking');
+      nextBlocks.planned_meetings = nextBlockOrder.includes('planned_meetings');
+      nextBlocks.referrals = nextBlockOrder.includes('referrals');
+
+      return {
+        ...prev,
+        blocks: nextBlocks,
+        block_order: nextBlockOrder,
+      };
+    });
+
+    setLocalData((prev) => ({
+      ...prev,
+      images: reorderByIndices(prev.images, imageIndices, () => ({ ...DEFAULT_IMAGE_CONFIG })),
+      videos: reorderByIndices(prev.videos, videoIndices, () => ({ ...DEFAULT_VIDEO_CONFIG })),
+      textBlocks: reorderByIndices(prev.textBlocks, textIndices, () => cloneTiptapDoc(EMPTY_TIPTAP_DOC)),
+    }));
+    setSelectedBlockId(null);
+  }, []);
+
   const saveTemplate = async () => {
     setSaving(true); setSaveMessage(null);
     try {
+      const nextBlockOrder = canvasBlockInstances.map((item) => item.key);
+      const requiredImageCount = canvasBlockInstances.filter((item) => item.key === 'image').length;
+      const requiredVideoCount = canvasBlockInstances.filter((item) => item.key === 'video').length;
+      const requiredTextCount = canvasBlockInstances.filter((item) => item.key === 'custom_content').length;
+      const nextBlocks = { ...config.blocks };
+      nextBlocks.hero = true;
+      nextBlocks.image = requiredImageCount > 0;
+      nextBlocks.video = requiredVideoCount > 0;
+      nextBlocks.custom_content = requiredTextCount > 0;
+      nextBlocks.header = nextBlockOrder.includes('header');
+      nextBlocks.product = nextBlockOrder.includes('product');
+      nextBlocks.purchases = nextBlockOrder.includes('purchases');
+      nextBlocks.booking = nextBlockOrder.includes('booking');
+      nextBlocks.planned_meetings = nextBlockOrder.includes('planned_meetings');
+      nextBlocks.referrals = nextBlockOrder.includes('referrals');
+
+      const imagesForSave = Array.from({ length: requiredImageCount }, (_, index) => {
+        return { ...DEFAULT_IMAGE_CONFIG, ...(localData.images[index] || {}) };
+      });
+      const videosForSave = Array.from({ length: requiredVideoCount }, (_, index) => {
+        return { ...DEFAULT_VIDEO_CONFIG, ...(localData.videos[index] || {}) };
+      });
+      const textBlocksForSave = Array.from({ length: requiredTextCount }, (_, index) => {
+        return normalizeTiptapContent(localData.textBlocks[index]);
+      });
+      const firstTextBlock = textBlocksForSave[0] || cloneTiptapDoc(EMPTY_TIPTAP_DOC);
+
       const configForSave: ClientPageTemplateConfig = {
         ...config,
+        blocks: nextBlocks,
+        block_order: nextBlockOrder,
         extra_blocks: {
           ...config.extra_blocks,
-          image: { ...localData.image },
-          video: { ...localData.video },
+          image: imagesForSave[0] || { ...DEFAULT_IMAGE_CONFIG },
+          video: videosForSave[0] || { ...DEFAULT_VIDEO_CONFIG },
+          images: imagesForSave,
+          videos: videosForSave,
+          text_blocks: textBlocksForSave,
         },
       };
       const updated = await clientApi.updateSettings({
         client_page_config: configForSave as unknown as Record<string, unknown>,
-        client_page_content: content,
+        client_page_content: firstTextBlock,
       } as Partial<ClientSettings>);
       setSettings(updated);
       const normalized = normalizeClientPageTemplateConfig(updated?.client_page_config ?? configForSave);
       setConfig(normalized);
+      const updatedLegacyContent = normalizeTiptapContent(updated?.client_page_content ?? firstTextBlock);
+      const nextImages = normalized.extra_blocks.images.length > 0
+        ? normalized.extra_blocks.images.map((item) => ({ ...DEFAULT_IMAGE_CONFIG, ...item }))
+        : (normalized.blocks.image ? [{ ...DEFAULT_IMAGE_CONFIG, ...normalized.extra_blocks.image }] : []);
+      const nextVideos = normalized.extra_blocks.videos.length > 0
+        ? normalized.extra_blocks.videos.map((item) => ({ ...DEFAULT_VIDEO_CONFIG, ...item }))
+        : (normalized.blocks.video ? [{ ...DEFAULT_VIDEO_CONFIG, ...normalized.extra_blocks.video }] : []);
+      const nextTextBlocks = normalized.extra_blocks.text_blocks.length > 0
+        ? normalized.extra_blocks.text_blocks.map((item) => normalizeTiptapContent(item))
+        : (normalized.blocks.custom_content ? [updatedLegacyContent] : []);
       setLocalData({
-        image: { ...DEFAULT_IMAGE_CONFIG, ...(normalized.extra_blocks?.image || {}) },
-        video: { ...DEFAULT_VIDEO_CONFIG, ...(normalized.extra_blocks?.video || {}) },
+        images: nextImages,
+        videos: nextVideos,
+        textBlocks: nextTextBlocks.map((item) => cloneTiptapDoc(item)),
       });
-      setContent(normalizeTiptapContent(updated?.client_page_content ?? content));
       setSaveMessage('Изменения сохранены.');
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) { router.push('/login'); return; }
@@ -952,80 +1235,119 @@ export default function ClientPageEditor() {
   };
 
   const addBlock = (key: ExtendedBlockKey) => {
+    if (key === 'image') {
+      const nextIndex = localData.images.length;
+      setLocalData((prev) => ({ ...prev, images: [...prev.images, { ...DEFAULT_IMAGE_CONFIG }] }));
+      setConfig((prev) => ({
+        ...prev,
+        blocks: { ...prev.blocks, image: true },
+        block_order: [...prev.block_order, 'image'],
+      }));
+      setSelectedBlockId(makeCanvasBlockId('image', nextIndex));
+      setSaveMessage(null);
+      return;
+    }
+    if (key === 'video') {
+      const nextIndex = localData.videos.length;
+      setLocalData((prev) => ({ ...prev, videos: [...prev.videos, { ...DEFAULT_VIDEO_CONFIG }] }));
+      setConfig((prev) => ({
+        ...prev,
+        blocks: { ...prev.blocks, video: true },
+        block_order: [...prev.block_order, 'video'],
+      }));
+      setSelectedBlockId(makeCanvasBlockId('video', nextIndex));
+      setSaveMessage(null);
+      return;
+    }
+    if (key === 'custom_content') {
+      const nextIndex = localData.textBlocks.length;
+      setLocalData((prev) => ({ ...prev, textBlocks: [...prev.textBlocks, cloneTiptapDoc(EMPTY_TIPTAP_DOC)] }));
+      setConfig((prev) => ({
+        ...prev,
+        blocks: { ...prev.blocks, custom_content: true },
+        block_order: [...prev.block_order, 'custom_content'],
+      }));
+      setSelectedBlockId(makeCanvasBlockId('custom_content', nextIndex));
+      setSaveMessage(null);
+      return;
+    }
+
     setConfig((prev) => prev.blocks[key] ? prev : {
       ...prev,
       blocks: { ...prev.blocks, [key]: true },
       block_order: [...prev.block_order, key],
     });
     setSaveMessage(null);
-    setSelectedBlockKey(key);
+    setSelectedBlockId(key);
   };
 
-  const removeBlock = (key: ExtendedBlockKey) => {
-    if (key === 'hero') return;
-    setConfig((prev) => ({
-      ...prev,
-      blocks: { ...prev.blocks, [key]: false },
-      block_order: prev.block_order.filter((k) => k !== key),
-    }));
-    if (selectedBlockKey === key) setSelectedBlockKey(null);
+  const removeBlock = (blockId: CanvasBlockId) => {
+    const parsed = parseCanvasBlockId(blockId);
+    if (parsed.key === 'hero') return;
+    const nextOrder = canvasBlockOrder.filter((id) => id !== blockId);
+    applyCanvasOrder(nextOrder);
+    if (selectedBlockId === blockId) {
+      setSelectedBlockId(null);
+    }
     setSaveMessage(null);
   };
 
-  const moveBlock = (key: ExtendedBlockKey, dir: -1 | 1) => {
-    setConfig((prev) => {
-      const activeOrder = prev.block_order.filter((k) => prev.blocks[k]) as ExtendedBlockKey[];
-      const index = activeOrder.indexOf(key);
-      const target = index + dir;
-      if (index < 0 || target < 0 || target >= activeOrder.length) {
-        return prev;
-      }
-      const movedActive = arrayMove(activeOrder, index, target);
-      const hidden = prev.block_order.filter((k) => !prev.blocks[k]);
-      return { ...prev, block_order: [...movedActive, ...hidden] };
-    });
+  const moveBlock = (blockId: CanvasBlockId, dir: -1 | 1) => {
+    const index = canvasBlockOrder.indexOf(blockId);
+    const target = index + dir;
+    if (index < 0 || target < 0 || target >= canvasBlockOrder.length) {
+      return;
+    }
+    const moved = arrayMove(canvasBlockOrder, index, target);
+    applyCanvasOrder(moved);
     setSaveMessage(null);
   };
 
   const onDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    setConfig((prev) => {
-      const activeOrder = prev.block_order.filter((k) => prev.blocks[k]) as ExtendedBlockKey[];
-      const oi = activeOrder.indexOf(String(active.id) as ExtendedBlockKey);
-      const ni = activeOrder.indexOf(String(over.id) as ExtendedBlockKey);
-      if (oi < 0 || ni < 0) {
-        return prev;
-      }
-      const movedActive = arrayMove(activeOrder, oi, ni);
-      const hidden = prev.block_order.filter((k) => !prev.blocks[k]);
-      return { ...prev, block_order: [...movedActive, ...hidden] };
-    });
+    const oi = canvasBlockOrder.indexOf(String(active.id));
+    const ni = canvasBlockOrder.indexOf(String(over.id));
+    if (oi < 0 || ni < 0) return;
+    const moved = arrayMove(canvasBlockOrder, oi, ni);
+    applyCanvasOrder(moved);
     setSaveMessage(null);
   };
 
   const updateHero   = (p: Partial<ClientPageHeroConfig>) => { setConfig((c) => ({ ...c, hero: { ...c.hero, ...p } })); setSaveMessage(null); };
   const updateConfig = (p: Partial<ClientPageTemplateConfig>) => { setConfig((c) => ({ ...c, ...p })); setSaveMessage(null); };
-  const updateImage  = (p: Partial<ImageBlockConfig>) => {
-    setLocalData((d) => ({ ...d, image: { ...d.image, ...p } }));
-    setConfig((c) => ({
-      ...c,
-      extra_blocks: {
-        ...c.extra_blocks,
-        image: { ...c.extra_blocks.image, ...p },
-      },
-    }));
+  const updateImage = (index: number, patch: Partial<ImageBlockConfig>) => {
+    setLocalData((prev) => {
+      const nextImages = [...prev.images];
+      while (nextImages.length <= index) {
+        nextImages.push({ ...DEFAULT_IMAGE_CONFIG });
+      }
+      nextImages[index] = { ...DEFAULT_IMAGE_CONFIG, ...nextImages[index], ...patch };
+      return { ...prev, images: nextImages };
+    });
     setSaveMessage(null);
   };
-  const updateVideo  = (p: Partial<VideoBlockConfig>) => {
-    setLocalData((d) => ({ ...d, video: { ...d.video, ...p } }));
-    setConfig((c) => ({
-      ...c,
-      extra_blocks: {
-        ...c.extra_blocks,
-        video: { ...c.extra_blocks.video, ...p },
-      },
-    }));
+  const updateVideo = (index: number, patch: Partial<VideoBlockConfig>) => {
+    setLocalData((prev) => {
+      const nextVideos = [...prev.videos];
+      while (nextVideos.length <= index) {
+        nextVideos.push({ ...DEFAULT_VIDEO_CONFIG });
+      }
+      nextVideos[index] = { ...DEFAULT_VIDEO_CONFIG, ...nextVideos[index], ...patch };
+      return { ...prev, videos: nextVideos };
+    });
+    setSaveMessage(null);
+  };
+  const updateTextContent = (index: number, value: Record<string, unknown>) => {
+    const normalized = normalizeTiptapContent(value);
+    setLocalData((prev) => {
+      const nextTextBlocks = [...prev.textBlocks];
+      while (nextTextBlocks.length <= index) {
+        nextTextBlocks.push(cloneTiptapDoc(EMPTY_TIPTAP_DOC));
+      }
+      nextTextBlocks[index] = cloneTiptapDoc(normalized);
+      return { ...prev, textBlocks: nextTextBlocks };
+    });
     setSaveMessage(null);
   };
 
@@ -1090,7 +1412,7 @@ export default function ClientPageEditor() {
               </div>
 
               {/* Blocks */}
-              {extBlockOrder.length === 0 ? (
+              {canvasBlockOrder.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-24 gap-4">
                   <div className="text-4xl">🧩</div>
                   <div className="text-center">
@@ -1103,26 +1425,32 @@ export default function ClientPageEditor() {
                 </div>
               ) : (
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-                  <SortableContext items={extBlockOrder} strategy={verticalListSortingStrategy}>
+                  <SortableContext items={canvasBlockOrder} strategy={verticalListSortingStrategy}>
                     <div>
                       <AddBlockDivider onClick={() => setShowBlockPicker(true)} />
-                      {extBlockOrder.map((blockKey, index) => (
-                        <div key={blockKey}>
+                      {canvasBlockInstances.map((instance, index) => (
+                        <div key={instance.id}>
                           <SortableCanvasBlock
-                            blockKey={blockKey}
-                            label={allBlockMeta.get(blockKey)?.label ?? blockKey}
-                            isSelected={selectedBlockKey === blockKey}
+                            blockId={instance.id}
+                            blockKey={instance.key}
+                            label={`${allBlockMeta.get(instance.key)?.label ?? instance.key}${
+                              instance.repeatIndex === null ? '' : ` #${instance.repeatIndex + 1}`
+                            }`}
+                            isSelected={selectedBlockId === instance.id}
                             isFirst={index === 0}
-                            isLast={index === extBlockOrder.length - 1}
-                            onSelect={() => setSelectedBlockKey(selectedBlockKey === blockKey ? null : blockKey)}
-                            onRemove={() => removeBlock(blockKey)}
-                            onMoveUp={() => moveBlock(blockKey, -1)}
-                            onMoveDown={() => moveBlock(blockKey, 1)}
+                            isLast={index === canvasBlockInstances.length - 1}
+                            canRemove={instance.key !== 'hero'}
+                            onSelect={() => setSelectedBlockId(selectedBlockId === instance.id ? null : instance.id)}
+                            onRemove={() => removeBlock(instance.id)}
+                            onMoveUp={() => moveBlock(instance.id, -1)}
+                            onMoveDown={() => moveBlock(instance.id, 1)}
                           >
                             {renderBlockContent({
-                              blockKey, config, localData, displayName, niche,
+                              blockKey: instance.key,
+                              repeatIndex: instance.repeatIndex,
+                              config, localData, displayName, niche,
                               selectedProduct, selectedProductPriceLabel,
-                              customContentHtml, previewValues,
+                              previewValues,
                             })}
                           </SortableCanvasBlock>
                           <AddBlockDivider onClick={() => setShowBlockPicker(true)} />
@@ -1137,14 +1465,15 @@ export default function ClientPageEditor() {
         </main>
 
         {/* Settings panel */}
-        {selectedBlockKey && selectedBlockMeta && (
+        {selectedBlockInstance && selectedBlockMeta && (
           <aside className="w-80 shrink-0 overflow-hidden border-l bg-white">
             <SettingsPanel
-              blockKey={selectedBlockKey}
+              blockId={selectedBlockInstance.id}
+              blockKey={selectedBlockInstance.key}
               blockLabel={selectedBlockMeta.label}
+              repeatIndex={selectedBlockInstance.repeatIndex}
               config={config}
               localData={localData}
-              content={content}
               activeProducts={activeProducts}
               selectedProduct={selectedProduct}
               selectedProductPriceLabel={selectedProductPriceLabel}
@@ -1154,10 +1483,10 @@ export default function ClientPageEditor() {
               onUpdateConfig={updateConfig}
               onUpdateImage={updateImage}
               onUpdateVideo={updateVideo}
-              onUpdateContent={(v) => { setContent(v); setSaveMessage(null); }}
+              onUpdateTextContent={updateTextContent}
               onInsertTemplateField={insertTemplateField}
               onCopyToken={(t) => void copyTextToClipboard(t)}
-              onClose={() => setSelectedBlockKey(null)}
+              onClose={() => setSelectedBlockId(null)}
             />
           </aside>
         )}

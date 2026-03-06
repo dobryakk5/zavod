@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import secrets
 import uuid
 from datetime import datetime, timezone as dt_timezone
@@ -40,6 +41,106 @@ from .views_payments import (
 
 
 crm_workflow_dispatcher = CRMWorkflowDispatcher()
+
+PAYMENT_PROVIDER_YOOKASSA = YooKassaPayment.PROVIDER_YOOKASSA
+PAYMENT_PROVIDER_TBANK = YooKassaPayment.PROVIDER_TBANK
+SUPPORTED_PAYMENT_PROVIDERS = {PAYMENT_PROVIDER_YOOKASSA, PAYMENT_PROVIDER_TBANK}
+TBANK_SUCCESS_STATUSES = {"CONFIRMED"}
+TBANK_FAILED_STATUSES = {"REJECTED", "CANCELLED", "DEADLINE_EXPIRED"}
+
+
+def _resolve_public_payment_provider(raw_value: object) -> str:
+    provider = str(raw_value or PAYMENT_PROVIDER_YOOKASSA).strip().lower()
+    if provider not in SUPPORTED_PAYMENT_PROVIDERS:
+        return ""
+    return provider
+
+
+def _map_tbank_status_to_internal(status_value: object) -> str:
+    status_raw = str(status_value or "").strip().upper()
+    if status_raw in TBANK_SUCCESS_STATUSES:
+        return YooKassaPayment.STATUS_SUCCEEDED
+    if status_raw in TBANK_FAILED_STATUSES:
+        return YooKassaPayment.STATUS_CANCELED
+    return YooKassaPayment.STATUS_PENDING
+
+
+def _generate_tbank_token(params: dict, secret_key: str) -> str:
+    filtered = {
+        key: value
+        for key, value in params.items()
+        if key not in {"Token", "Receipt", "DATA", "Items"}
+        and not isinstance(value, (dict, list))
+    }
+    filtered["Password"] = secret_key
+    token_source = "".join(str(value) for key, value in sorted(filtered.items()))
+    return hashlib.sha256(token_source.encode("utf-8")).hexdigest()
+
+
+def _get_tbank_credentials(client: Client) -> tuple[str, str]:
+    terminal_key = str(getattr(client, "tbank_terminal_key", "") or "").strip()
+    secret_key = str(getattr(client, "tbank_secret_key", "") or "").strip()
+    if terminal_key and secret_key:
+        return terminal_key, secret_key
+
+    return (
+        str(getattr(settings, "TBANK_TERMINAL_KEY", "") or "").strip(),
+        str(getattr(settings, "TBANK_SECRET_KEY", "") or "").strip(),
+    )
+
+
+def _is_tbank_test_mode(client: Client, terminal_key: str, secret_key: str) -> bool:
+    if bool(getattr(client, "tbank_test_mode", False)):
+        return True
+    return terminal_key == "TinkoffBankTest" or secret_key == "TinkoffBankTest"
+
+
+def _tbank_request(endpoint: str, payload: dict, *, terminal_key: str, secret_key: str, timeout: int = 15) -> dict:
+    prepared = dict(payload)
+    prepared["TerminalKey"] = terminal_key
+    prepared["Token"] = _generate_tbank_token(prepared, secret_key)
+
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.post(
+            f"{str(getattr(settings, 'TBANK_API_URL', 'https://securepay.tinkoff.ru/v2')).rstrip('/')}/{endpoint}",
+            json=prepared,
+            timeout=timeout,
+        )
+    finally:
+        session.close()
+
+    response.raise_for_status()
+    result = response.json()
+    if not isinstance(result, dict):
+        raise ValueError("Invalid T-Bank response")
+    return result
+
+
+def _parse_digital_product_plan_code(plan_code: object) -> tuple[int | None, int | None]:
+    raw = str(plan_code or "").strip()
+    if not raw.startswith("digital_product:"):
+        return None, None
+
+    chunks = raw.split(":")
+    if len(chunks) < 2:
+        return None, None
+
+    product_id: int | None = None
+    contact_id: int | None = None
+    try:
+        product_id = int(chunks[1])
+    except (TypeError, ValueError):
+        product_id = None
+
+    if len(chunks) >= 4 and chunks[2] == "contact":
+        try:
+            contact_id = int(chunks[3])
+        except (TypeError, ValueError):
+            contact_id = None
+
+    return product_id, contact_id
 
 
 def _resolve_product_price(product: ClientProduct) -> Decimal | None:
@@ -380,16 +481,15 @@ class PublicClientPageBuyProductView(APIView):
         if not amount:
             return Response({"detail": "Для продукта не указана цена."}, status=status.HTTP_400_BAD_REQUEST)
 
-        shop_id, secret_or_token, auth_type = _get_yookassa_credentials(client)
-        if not secret_or_token:
+        provider = _resolve_public_payment_provider(request.data.get("provider"))
+        if not provider:
             return Response(
-                {"detail": "Оплата для этого клиента не настроена."},
+                {"detail": "Некорректный провайдер оплаты. Используйте yookassa или tbank."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         return_url = str(request.data.get("return_url") or "").strip() or _build_client_page_return_url(client_id)
-        idempotence_key = str(uuid.uuid4())
-        metadata_payload = {
+        metadata_payload: dict[str, str] = {
             "payment_kind": "digital_product",
             "client_id": str(client.id),
             "client_slug": str(client.slug),
@@ -403,6 +503,81 @@ class PublicClientPageBuyProductView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         metadata_payload["contact_id"] = str(bound_contact_id)
+        if provider == PAYMENT_PROVIDER_TBANK:
+            terminal_key, secret_key = _get_tbank_credentials(client)
+            if not terminal_key or not secret_key:
+                return Response(
+                    {"detail": "T-Bank для этого клиента не настроен."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            is_test_mode = _is_tbank_test_mode(client, terminal_key, secret_key)
+
+            order_id = f"cp-{client.id}-{product.id}-{uuid.uuid4().hex[:16]}"
+            payload = {
+                "OrderId": order_id,
+                "Amount": int(amount * 100),
+                "Description": f"Покупка продукта: {(product.name or '').strip() or f'#{product.id}'}",
+                "SuccessURL": return_url,
+                "FailURL": return_url,
+                "DATA": metadata_payload,
+            }
+
+            try:
+                data = _tbank_request(
+                    "Init",
+                    payload,
+                    terminal_key=terminal_key,
+                    secret_key=secret_key,
+                    timeout=15,
+                )
+            except requests.RequestException as exc:
+                return Response({"detail": f"T-Bank request failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+            except ValueError:
+                return Response({"detail": "T-Bank returned invalid response."}, status=status.HTTP_502_BAD_GATEWAY)
+
+            if not data.get("Success"):
+                return Response(
+                    {"detail": "T-Bank returned an error.", "body": data},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+            payment_id = str(data.get("PaymentId") or "").strip()
+            payment_url = str(data.get("PaymentURL") or "").strip()
+            mapped_status = _map_tbank_status_to_internal(data.get("Status"))
+
+            if payment_id:
+                YooKassaPayment.objects.get_or_create(
+                    payment_id=payment_id,
+                    defaults={
+                        "client": client,
+                        "provider": PAYMENT_PROVIDER_TBANK,
+                        "status": mapped_status,
+                        "amount": amount,
+                        "plan_code": f"digital_product:{product.id}:contact:{bound_contact_id}",
+                    },
+                )
+
+            return Response(
+                {
+                    "id": payment_id,
+                    "status": mapped_status,
+                    "provider": PAYMENT_PROVIDER_TBANK,
+                    "test_mode": is_test_mode,
+                    "payment_url": payment_url,
+                    "confirmation_url": payment_url,
+                    "product_id": product.id,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        shop_id, secret_or_token, auth_type = _get_yookassa_credentials(client)
+        if not secret_or_token:
+            return Response(
+                {"detail": "Оплата для этого клиента не настроена."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        idempotence_key = str(uuid.uuid4())
         payload = {
             "amount": {"value": f"{amount:.2f}", "currency": "RUB"},
             "confirmation": {"type": "redirect", "return_url": return_url},
@@ -439,9 +614,10 @@ class PublicClientPageBuyProductView(APIView):
                 payment_id=payment_id,
                 defaults={
                     "client": client,
+                    "provider": PAYMENT_PROVIDER_YOOKASSA,
                     "status": str(data.get("status") or YooKassaPayment.STATUS_PENDING),
                     "amount": amount,
-                    "plan_code": f"digital_product:{product.id}",
+                    "plan_code": f"digital_product:{product.id}:contact:{bound_contact_id}",
                 },
             )
 
@@ -449,6 +625,7 @@ class PublicClientPageBuyProductView(APIView):
             {
                 "id": payment_id,
                 "status": data.get("status"),
+                "provider": PAYMENT_PROVIDER_YOOKASSA,
                 "payment_url": confirmation_url,
                 "confirmation_url": confirmation_url,
                 "product_id": product.id,
@@ -474,78 +651,144 @@ class PublicClientPagePaymentStatusView(APIView):
         if not yk_payment:
             return Response({"detail": "Платеж не найден."}, status=status.HTTP_404_NOT_FOUND)
         previous_payment_status = str(yk_payment.status or "")
+        provider = str(getattr(yk_payment, "provider", PAYMENT_PROVIDER_YOOKASSA) or PAYMENT_PROVIDER_YOOKASSA).strip().lower()
+        fallback_contact_id = _resolve_request_contact_id_for_client(request, client_id)
 
-        shop_id, secret_or_token, auth_type = _get_yookassa_credentials(client)
-        if not secret_or_token:
-            return Response({"detail": "Оплата для этого клиента не настроена."}, status=status.HTTP_400_BAD_REQUEST)
+        metadata: dict[str, object] = {}
+        amount_value: str | None = None
+        currency_value = "RUB"
+        payment_status = YooKassaPayment.STATUS_PENDING
+        paid = False
+        product_id: int | None = None
+        metadata_contact_id: int | None = None
+        is_test_mode = False
 
-        request_kwargs = _build_yookassa_request_kwargs(shop_id, secret_or_token, auth_type, str(uuid.uuid4()))
-        request_kwargs["headers"].pop("Idempotence-Key", None)
-        api_url = f"{settings.YOOKASSA_API_URL.rstrip('/')}/{payment_id}"
+        if provider == PAYMENT_PROVIDER_TBANK:
+            terminal_key, secret_key = _get_tbank_credentials(client)
+            if not terminal_key or not secret_key:
+                return Response({"detail": "T-Bank для этого клиента не настроен."}, status=status.HTTP_400_BAD_REQUEST)
+            is_test_mode = _is_tbank_test_mode(client, terminal_key, secret_key)
 
-        try:
-            response = _yookassa_request("GET", api_url, timeout=15, **request_kwargs)
-        except requests.RequestException as exc:
-            return Response({"detail": f"YooKassa request failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+            try:
+                data = _tbank_request(
+                    "GetState",
+                    {"PaymentId": payment_id},
+                    terminal_key=terminal_key,
+                    secret_key=secret_key,
+                    timeout=15,
+                )
+            except requests.RequestException as exc:
+                return Response({"detail": f"T-Bank request failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+            except ValueError:
+                return Response({"detail": "T-Bank returned invalid response."}, status=status.HTTP_502_BAD_GATEWAY)
 
-        if response.status_code != 200:
-            return Response(
-                {"detail": "YooKassa returned an error.", "body": response.text, "status_code": response.status_code},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            if not data.get("Success"):
+                return Response({"detail": "T-Bank returned an error.", "body": data}, status=status.HTTP_502_BAD_GATEWAY)
 
-        data = response.json()
-        metadata = data.get("metadata") or {}
-        if str(metadata.get("client_id") or "") != str(client.id):
-            return Response({"detail": "Платеж не найден."}, status=status.HTTP_404_NOT_FOUND)
-        if str(metadata.get("payment_kind") or "") != "digital_product":
-            return Response({"detail": "Платеж не найден."}, status=status.HTTP_404_NOT_FOUND)
+            payment_status = _map_tbank_status_to_internal(data.get("Status"))
+            paid = payment_status == YooKassaPayment.STATUS_SUCCEEDED
 
-        payment_status = str(data.get("status") or "")
+            amount_raw = data.get("Amount")
+            try:
+                amount_decimal = Decimal(str(amount_raw)) / Decimal("100")
+                amount_value = f"{amount_decimal:.2f}"
+            except (InvalidOperation, TypeError, ValueError):
+                amount_value = f"{yk_payment.amount:.2f}" if yk_payment.amount is not None else None
+
+            parsed_product_id, parsed_contact_id = _parse_digital_product_plan_code(yk_payment.plan_code)
+            product_id = parsed_product_id
+            metadata_contact_id = parsed_contact_id
+            metadata = {
+                "payment_kind": "digital_product",
+                "client_id": str(client.id),
+                "product_id": str(product_id) if product_id is not None else "",
+                "contact_id": str(metadata_contact_id) if metadata_contact_id is not None else "",
+            }
+            payment_payload = {
+                "id": payment_id,
+                "status": payment_status,
+                "paid": paid,
+                "metadata": metadata,
+                "amount": {"value": amount_value, "currency": currency_value},
+            }
+        else:
+            shop_id, secret_or_token, auth_type = _get_yookassa_credentials(client)
+            if not secret_or_token:
+                return Response({"detail": "Оплата для этого клиента не настроена."}, status=status.HTTP_400_BAD_REQUEST)
+
+            request_kwargs = _build_yookassa_request_kwargs(shop_id, secret_or_token, auth_type, str(uuid.uuid4()))
+            request_kwargs["headers"].pop("Idempotence-Key", None)
+            api_url = f"{settings.YOOKASSA_API_URL.rstrip('/')}/{payment_id}"
+
+            try:
+                response = _yookassa_request("GET", api_url, timeout=15, **request_kwargs)
+            except requests.RequestException as exc:
+                return Response({"detail": f"YooKassa request failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+            if response.status_code != 200:
+                return Response(
+                    {"detail": "YooKassa returned an error.", "body": response.text, "status_code": response.status_code},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+            payment_payload = response.json()
+            metadata = payment_payload.get("metadata") or {}
+            if str(metadata.get("client_id") or "") != str(client.id):
+                return Response({"detail": "Платеж не найден."}, status=status.HTTP_404_NOT_FOUND)
+            if str(metadata.get("payment_kind") or "") != "digital_product":
+                return Response({"detail": "Платеж не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+            payment_status = str(payment_payload.get("status") or YooKassaPayment.STATUS_PENDING)
+            paid = bool(payment_payload.get("paid"))
+            amount_value = str((payment_payload.get("amount") or {}).get("value") or "") or None
+            currency_value = str((payment_payload.get("amount") or {}).get("currency") or "RUB").strip().upper() or "RUB"
+
+            try:
+                product_id = int(str(metadata.get("product_id")))
+            except (TypeError, ValueError):
+                product_id = None
+            try:
+                metadata_contact_raw = metadata.get("contact_id")
+                if metadata_contact_raw not in (None, ""):
+                    metadata_contact_id = int(str(metadata_contact_raw))
+            except (TypeError, ValueError):
+                metadata_contact_id = None
+
         if yk_payment.status != payment_status and payment_status:
             yk_payment.status = payment_status
             yk_payment.save(update_fields=["status"])
 
         result: dict[str, object] = {
             "payment_id": payment_id,
+            "provider": provider,
             "status": payment_status,
-            "paid": bool(data.get("paid")),
+            "paid": paid,
             "delivery": None,
         }
+        if provider == PAYMENT_PROVIDER_TBANK:
+            result["test_mode"] = is_test_mode
 
-        if payment_status == "succeeded" and data.get("paid"):
-            fallback_contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        if payment_status == YooKassaPayment.STATUS_SUCCEEDED and paid:
             _record_contact_product_purchase(
                 client=client,
                 yk_payment=yk_payment,
-                payment_payload=data,
+                payment_payload=payment_payload,
                 fallback_contact_id=fallback_contact_id,
             )
-            if previous_payment_status != "succeeded":
-                metadata_contact_id = None
-                try:
-                    metadata_contact_raw = metadata.get("contact_id")
-                    if metadata_contact_raw not in (None, ""):
-                        metadata_contact_id = int(str(metadata_contact_raw))
-                except (TypeError, ValueError):
-                    metadata_contact_id = None
+            if previous_payment_status != YooKassaPayment.STATUS_SUCCEEDED:
                 crm_workflow_dispatcher.dispatch_payment_paid(
                     tenant_id=client.id,
                     contact_id=metadata_contact_id or fallback_contact_id,
                     payment_payload={
                         "payment_id": payment_id,
                         "status": payment_status,
-                        "paid": bool(data.get("paid")),
-                        "amount": (data.get("amount") or {}).get("value"),
-                        "currency": (data.get("amount") or {}).get("currency"),
-                        "provider": "yookassa",
+                        "paid": paid,
+                        "amount": amount_value,
+                        "currency": currency_value,
+                        "provider": provider,
                         "provider_payment_id": payment_id,
                     },
                 )
-            try:
-                product_id = int(str(metadata.get("product_id")))
-            except (TypeError, ValueError):
-                product_id = None
 
             product = (
                 ClientProduct.objects

@@ -34,6 +34,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     pathname === '/'
     || pathname.startsWith('/login')
     || pathname.startsWith('/kb/share')
+    || pathname.startsWith('/quiz/')
     || (pathname.startsWith('/c/') && !isClientPageEditorRoute);
 
   const onLogout = async () => {

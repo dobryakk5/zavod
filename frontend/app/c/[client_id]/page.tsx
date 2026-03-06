@@ -103,9 +103,12 @@ type PublicClientPageResponse = {
   events?: Event[];
 };
 
+type PaymentProvider = 'yookassa' | 'tbank';
+
 type PublicBuyProductResponse = {
   id?: string;
   status?: string;
+  provider?: PaymentProvider | string;
   payment_url?: string;
   confirmation_url?: string;
   product_id?: number;
@@ -113,6 +116,7 @@ type PublicBuyProductResponse = {
 
 type PublicProductPaymentStatusResponse = {
   payment_id?: string;
+  provider?: PaymentProvider | string;
   status?: string;
   paid?: boolean;
   delivery?: {
@@ -187,6 +191,10 @@ const REFERRAL_STATUS_LABELS: Record<string, string> = {
   registered: 'Зарегистрирован',
   rewarded: 'Засчитан',
   expired: 'Истек',
+};
+const PAYMENT_PROVIDER_LABELS: Record<PaymentProvider, string> = {
+  yookassa: 'YooKassa',
+  tbank: 'T-Bank',
 };
 
 const normalizeTiptapJson = (value: unknown): Record<string, unknown> | null => {
@@ -636,6 +644,7 @@ export default function ContactClientPage() {
   const [inviterCodeLoading, setInviterCodeLoading] = useState(false);
   const [inviterCodeMessage, setInviterCodeMessage] = useState<string | null>(null);
   const [inviterCodeError, setInviterCodeError] = useState<string | null>(null);
+  const [selectedPaymentProvider, setSelectedPaymentProvider] = useState<PaymentProvider>('yookassa');
   const [buyingProductId, setBuyingProductId] = useState<number | null>(null);
   const [purchaseStatusLoading, setPurchaseStatusLoading] = useState(false);
   const [purchaseStatusMessage, setPurchaseStatusMessage] = useState<string | null>(null);
@@ -1019,7 +1028,12 @@ export default function ContactClientPage() {
       return;
     }
 
-    const queryPaymentId = (searchParams.get('payment_id') || '').trim();
+    const queryPaymentId = (
+      searchParams.get('payment_id')
+      || searchParams.get('paymentId')
+      || searchParams.get('PaymentId')
+      || ''
+    ).trim();
     let pendingPaymentId = queryPaymentId;
 
     if (!pendingPaymentId && typeof window !== 'undefined') {
@@ -1247,6 +1261,7 @@ export default function ContactClientPage() {
         method: 'POST',
         body: {
           product_id: selectedTemplateProduct.id,
+          provider: selectedPaymentProvider,
           return_url: returnUrl,
         },
       });
@@ -1381,46 +1396,89 @@ export default function ContactClientPage() {
     product_price: selectedTemplateProductPriceLabel,
     product_service: (settings?.product_service || '').trim(),
   };
-  const customContentHtml = (() => {
-    const source = normalizeTiptapJson(settings?.client_page_content);
-    if (!source) {
-      return '';
-    }
-    try {
-      const replacedJson = replaceTemplateTokensInTiptapNode(source, templateValues) as Record<string, unknown>;
-      return generateHTML(replacedJson, createKbExtensions());
-    } catch {
-      return '';
-    }
-  })();
+  const legacyCustomContent = normalizeTiptapJson(settings?.client_page_content);
   const heroConfig = pageTemplateConfig.hero;
   const heroTitle = replaceTemplateTokens(heroConfig.title, templateValues);
   const heroSubtitle = replaceTemplateTokens(heroConfig.subtitle, templateValues);
   const heroButtonText = replaceTemplateTokens(heroConfig.button_text, templateValues);
   const heroButtonUrl = replaceTemplateTokens(heroConfig.button_url, templateValues);
-  const imageBlockConfig = pageTemplateConfig.extra_blocks.image;
-  const imageBlockUrl = replaceTemplateTokens(imageBlockConfig.url || '', templateValues).trim();
-  const imageBlockAlt = replaceTemplateTokens(imageBlockConfig.alt || '', templateValues).trim();
-  const imageBlockCaption = replaceTemplateTokens(imageBlockConfig.caption || '', templateValues).trim();
-  const videoBlockConfig = pageTemplateConfig.extra_blocks.video;
-  const videoBlockUrl = replaceTemplateTokens(videoBlockConfig.url || '', templateValues).trim();
-  const videoBlockCaption = replaceTemplateTokens(videoBlockConfig.caption || '', templateValues).trim();
-  const videoBlockSource = resolveClientPageVideoSource(videoBlockUrl);
-  const blockOrderMap = pageTemplateConfig.block_order.reduce<Record<string, number>>((acc, key, index) => {
-    acc[key] = index;
+  const imageBlocks = (() => {
+    const source = pageTemplateConfig.extra_blocks.images.length > 0
+      ? pageTemplateConfig.extra_blocks.images
+      : ((pageTemplateConfig.extra_blocks.image.url.trim() || pageTemplateConfig.blocks.image)
+        ? [pageTemplateConfig.extra_blocks.image]
+        : []);
+    return source.map((item) => {
+      const url = replaceTemplateTokens(item.url || '', templateValues).trim();
+      return {
+        ...item,
+        url,
+        alt: replaceTemplateTokens(item.alt || '', templateValues).trim(),
+        caption: replaceTemplateTokens(item.caption || '', templateValues).trim(),
+      };
+    });
+  })();
+  const videoBlocks = (() => {
+    const source = pageTemplateConfig.extra_blocks.videos.length > 0
+      ? pageTemplateConfig.extra_blocks.videos
+      : ((pageTemplateConfig.extra_blocks.video.url.trim() || pageTemplateConfig.blocks.video)
+        ? [pageTemplateConfig.extra_blocks.video]
+        : []);
+    return source.map((item) => {
+      const url = replaceTemplateTokens(item.url || '', templateValues).trim();
+      return {
+        ...item,
+        url,
+        caption: replaceTemplateTokens(item.caption || '', templateValues).trim(),
+        source: resolveClientPageVideoSource(url),
+      };
+    });
+  })();
+  const textBlocksHtml = (() => {
+    const source = pageTemplateConfig.extra_blocks.text_blocks.length > 0
+      ? pageTemplateConfig.extra_blocks.text_blocks.map((item) => normalizeTiptapJson(item)).filter(Boolean)
+      : (legacyCustomContent ? [legacyCustomContent] : []);
+    return source.map((item) => {
+      if (!item) {
+        return '';
+      }
+      try {
+        const replacedJson = replaceTemplateTokensInTiptapNode(item, templateValues) as Record<string, unknown>;
+        return generateHTML(replacedJson, createKbExtensions());
+      } catch {
+        return '';
+      }
+    });
+  })();
+  const blockOrderMap = pageTemplateConfig.block_order.reduce<Record<string, number[]>>((acc, key, index) => {
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(index);
     return acc;
   }, {});
   const isBlockEnabled = (key: ClientPageBlockKey): boolean => {
     return Boolean(pageTemplateConfig.blocks[key]);
   };
-  const getBlockOrder = (key: ClientPageBlockKey): number => {
-    const explicitOrder = blockOrderMap[key];
+  const getBlockOrder = (key: ClientPageBlockKey, occurrence = 0): number => {
+    const explicitOrder = blockOrderMap[key]?.[occurrence];
     if (typeof explicitOrder === 'number') {
       return explicitOrder;
     }
     const fallbackOrder = CLIENT_PAGE_BLOCK_DEFAULT_ORDER.indexOf(key);
-    return fallbackOrder >= 0 ? pageTemplateConfig.block_order.length + fallbackOrder : pageTemplateConfig.block_order.length + 100;
+    return fallbackOrder >= 0
+      ? pageTemplateConfig.block_order.length + fallbackOrder + occurrence
+      : pageTemplateConfig.block_order.length + 100 + occurrence;
   };
+  const imageRenderCount = isBlockEnabled('image')
+    ? Math.max(imageBlocks.length, blockOrderMap.image?.length || 0, 1)
+    : 0;
+  const videoRenderCount = isBlockEnabled('video')
+    ? Math.max(videoBlocks.length, blockOrderMap.video?.length || 0, 1)
+    : 0;
+  const textRenderCount = isBlockEnabled('custom_content')
+    ? Math.max(textBlocksHtml.length, blockOrderMap.custom_content?.length || 0, 1)
+    : 0;
   const canUseContactFeatures = bookingContactId !== null;
   const isClientPreviewMode = hasTenantSession && !canUseContactFeatures;
   const isPublicPreviewMode = !hasTenantSession && !canUseContactFeatures;
@@ -1508,72 +1566,80 @@ export default function ContactClientPage() {
           </div>
         )}
 
-        {isBlockEnabled('image') && (
-          <div style={{ order: getBlockOrder('image') }}>
-            <div className="overflow-hidden rounded-2xl border p-4 shadow-sm">
-              {!imageBlockUrl ? (
-                <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-                  Изображение не настроено.
-                </div>
-              ) : (
-                <figure className="space-y-3">
-                  <Image
-                    src={imageBlockUrl}
-                    alt={imageBlockAlt || 'Изображение'}
-                    width={1600}
-                    height={900}
-                    unoptimized
-                    loader={({ src }) => src}
-                    className="w-full rounded-xl bg-slate-100"
-                    style={{
-                      maxHeight: imageBlockConfig.max_height,
-                      objectFit: imageBlockConfig.fit,
-                    }}
-                  />
-                  {imageBlockCaption && (
-                    <figcaption className="text-sm text-muted-foreground">{imageBlockCaption}</figcaption>
-                  )}
-                </figure>
-              )}
+        {Array.from({ length: imageRenderCount }).map((_, imageIndex) => {
+          const imageBlock = imageBlocks[imageIndex] || null;
+          const imageBlockUrl = imageBlock?.url?.trim() || '';
+          return (
+            <div key={`image-${imageIndex}`} style={{ order: getBlockOrder('image', imageIndex) }}>
+              <div className="overflow-hidden rounded-2xl border p-4 shadow-sm">
+                {!imageBlockUrl ? (
+                  <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                    Изображение не настроено.
+                  </div>
+                ) : (
+                  <figure className="space-y-3">
+                    <Image
+                      src={imageBlockUrl}
+                      alt={imageBlock?.alt || 'Изображение'}
+                      width={1600}
+                      height={900}
+                      unoptimized
+                      loader={({ src }) => src}
+                      className="w-full rounded-xl bg-slate-100"
+                      style={{
+                        maxHeight: imageBlock?.max_height || 420,
+                        objectFit: imageBlock?.fit || 'cover',
+                      }}
+                    />
+                    {imageBlock?.caption && (
+                      <figcaption className="text-sm text-muted-foreground">{imageBlock.caption}</figcaption>
+                    )}
+                  </figure>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })}
 
-        {isBlockEnabled('video') && (
-          <div style={{ order: getBlockOrder('video') }}>
-            <div className="rounded-2xl border p-4 shadow-sm">
-              {!videoBlockUrl ? (
-                <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-                  Видео не настроено.
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {videoBlockSource.type === 'youtube' || videoBlockSource.type === 'vimeo' ? (
-                    <div className="aspect-video overflow-hidden rounded-xl border">
-                      <iframe
-                        src={videoBlockSource.embed_url}
-                        title="Видео"
-                        className="h-full w-full"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                      />
-                    </div>
-                  ) : videoBlockSource.type === 'direct' ? (
-                    <video src={videoBlockSource.embed_url} controls className="aspect-video w-full rounded-xl border bg-black" />
-                  ) : (
-                    <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-                      Неподдерживаемый формат видео. Используйте YouTube, Vimeo или прямую ссылку `.mp4/.webm/.ogg`.
-                    </div>
-                  )}
+        {Array.from({ length: videoRenderCount }).map((_, videoIndex) => {
+          const videoBlock = videoBlocks[videoIndex] || null;
+          const videoBlockUrl = videoBlock?.url?.trim() || '';
+          return (
+            <div key={`video-${videoIndex}`} style={{ order: getBlockOrder('video', videoIndex) }}>
+              <div className="rounded-2xl border p-4 shadow-sm">
+                {!videoBlockUrl ? (
+                  <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                    Видео не настроено.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {videoBlock?.source.type === 'youtube' || videoBlock?.source.type === 'vimeo' ? (
+                      <div className="aspect-video overflow-hidden rounded-xl border">
+                        <iframe
+                          src={videoBlock.source.embed_url}
+                          title="Видео"
+                          className="h-full w-full"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                        />
+                      </div>
+                    ) : videoBlock?.source.type === 'direct' ? (
+                      <video src={videoBlock.source.embed_url} controls className="aspect-video w-full rounded-xl border bg-black" />
+                    ) : (
+                      <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                        Неподдерживаемый формат видео. Используйте YouTube, Vimeo или прямую ссылку `.mp4/.webm/.ogg`.
+                      </div>
+                    )}
 
-                  {videoBlockCaption && (
-                    <div className="text-sm text-muted-foreground">{videoBlockCaption}</div>
-                  )}
-                </div>
-              )}
+                    {videoBlock?.caption && (
+                      <div className="text-sm text-muted-foreground">{videoBlock.caption}</div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })}
 
         {isBlockEnabled('header') && (
           <div style={{ order: getBlockOrder('header') }}>
@@ -1610,28 +1676,50 @@ export default function ContactClientPage() {
                 </div>
               )}
 
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleBuySelectedProduct()}
-                  disabled={
-                    buyingProductId !== null
-                    || !canUseContactFeatures
-                    || selectedTemplateProductPrice === null
-                    || !Number.isFinite(selectedTemplateProductPrice)
-                  }
-                  className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
-                >
-                  {buyingProductId === selectedTemplateProduct.id ? 'Переход к оплате…' : 'Купить'}
-                </button>
-                {(selectedTemplateProductPrice === null || !Number.isFinite(selectedTemplateProductPrice)) && (
-                  <span className="text-xs text-muted-foreground">Цена не указана</span>
-                )}
-                {!canUseContactFeatures && (
-                  <span className="text-xs text-muted-foreground">
-                    Покупка доступна только после входа как контакт через Telegram или VK
-                  </span>
-                )}
+              <div className="mt-3 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Оплата через:</span>
+                  {(['yookassa', 'tbank'] as PaymentProvider[]).map((provider) => (
+                    <button
+                      key={provider}
+                      type="button"
+                      onClick={() => setSelectedPaymentProvider(provider)}
+                      disabled={buyingProductId !== null}
+                      className={`rounded-lg border px-3 py-1 text-xs font-medium transition disabled:opacity-60 ${
+                        selectedPaymentProvider === provider
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-border hover:bg-accent'
+                      }`}
+                    >
+                      {PAYMENT_PROVIDER_LABELS[provider]}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleBuySelectedProduct()}
+                    disabled={
+                      buyingProductId !== null
+                      || !canUseContactFeatures
+                      || selectedTemplateProductPrice === null
+                      || !Number.isFinite(selectedTemplateProductPrice)
+                    }
+                    className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
+                  >
+                    {buyingProductId === selectedTemplateProduct.id
+                      ? 'Переход к оплате…'
+                      : `Купить через ${PAYMENT_PROVIDER_LABELS[selectedPaymentProvider]}`}
+                  </button>
+                  {(selectedTemplateProductPrice === null || !Number.isFinite(selectedTemplateProductPrice)) && (
+                    <span className="text-xs text-muted-foreground">Цена не указана</span>
+                  )}
+                  {!canUseContactFeatures && (
+                    <span className="text-xs text-muted-foreground">
+                      Покупка доступна только после входа как контакт через Telegram или VK
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -1739,16 +1827,25 @@ export default function ContactClientPage() {
           </div>
         )}
 
-        {isBlockEnabled('custom_content') && customContentHtml && (
-          <div style={{ order: getBlockOrder('custom_content') }}>
-            <div className="rounded-2xl border p-6 shadow-sm">
-              <div
-                className="tiptap prose prose-slate max-w-none"
-                dangerouslySetInnerHTML={{ __html: customContentHtml }}
-              />
+        {Array.from({ length: textRenderCount }).map((_, textIndex) => {
+          const html = textBlocksHtml[textIndex] || '';
+          return (
+            <div key={`custom-content-${textIndex}`} style={{ order: getBlockOrder('custom_content', textIndex) }}>
+              <div className="rounded-2xl border p-6 shadow-sm">
+                {html ? (
+                  <div
+                    className="tiptap prose prose-slate max-w-none"
+                    dangerouslySetInnerHTML={{ __html: html }}
+                  />
+                ) : (
+                  <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                    Текстовый блок пустой.
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })}
 
         {isBlockEnabled('booking') && (
       <div id="booking" style={{ order: getBlockOrder('booking') }}>

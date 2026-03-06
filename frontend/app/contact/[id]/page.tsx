@@ -36,6 +36,7 @@ import {
   crmNotesApi,
   crmContactTagsApi,
   type Deal,
+  type ContactFact as CRMContactFact,
   type ContactServicePackageItem,
   type ContactTelegramInfo,
 } from '@/lib/api/crm';
@@ -264,6 +265,7 @@ export default function ContactDetailPage() {
   const [servicePackages, setServicePackages] = useState<ContactServicePackageItem[]>([]);
   const [servicePackagesError, setServicePackagesError] = useState<string | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
+  const [contactFacts, setContactFacts] = useState<CRMContactFact[]>([]);
   const [contactTags, setContactTags] = useState<ContactTag[]>([]);
   const [tagDescriptions, setTagDescriptions] = useState<Record<number, string>>({});
   const [savingTagId, setSavingTagId] = useState<number | null>(null);
@@ -444,6 +446,7 @@ export default function ContactDetailPage() {
           eventsData,
           paymentsData,
           notesData,
+          contactFactsData,
           contactTagsData,
           telegramInfoData,
           servicePackagesData,
@@ -456,6 +459,7 @@ export default function ContactDetailPage() {
           crmEventsApi.list(),
           crmPaymentsApi.list(),
           crmNotesApi.list(),
+          crmContactsApi.facts(contactId),
           crmContactTagsApi.list(contactId),
           telegramInfoPromise,
           servicePackagesPromise,
@@ -473,6 +477,7 @@ export default function ContactDetailPage() {
         setServicePackages(Array.isArray(servicePackagesData.data.items) ? servicePackagesData.data.items : []);
         setServicePackagesError(servicePackagesData.error);
         setNotes(notesData.filter(note => note.contact_id === contactId));
+        setContactFacts(contactFactsData);
         setContactTags(contactTagsData);
         setTelegramInfo(telegramInfoData.data);
         setTelegramInfoError(telegramInfoData.error);
@@ -484,7 +489,7 @@ export default function ContactDetailPage() {
         );
       } catch (err) {
         console.error('Error loading contact data:', err);
-        setError('Не удалось загрузить данные контакта. Проверьте API /crm/contacts/, /crm/categories/, /crm/event-types/, /crm/deals/, /crm/events/, /crm/payments/, /crm/notes/ и /crm/contact-tags/.');
+        setError('Не удалось загрузить данные контакта. Проверьте API /crm/contacts/, /crm/categories/, /crm/event-types/, /crm/deals/, /crm/events/, /crm/payments/, /crm/notes/, /crm/contact-tags/ и /crm/contacts/:id/facts/.');
       } finally {
         setLoading(false);
       }
@@ -1140,6 +1145,37 @@ export default function ContactDetailPage() {
     );
   }, [payments]);
 
+  const groupedContactFacts = useMemo(() => {
+    const categories = new Map<string, CRMContactFact[]>();
+    contactFacts.forEach((fact) => {
+      const key = (fact.category || 'other').trim() || 'other';
+      const existing = categories.get(key) || [];
+      existing.push(fact);
+      categories.set(key, existing);
+    });
+    return Array.from(categories.entries()).map(([category, items]) => ({
+      category,
+      items,
+    }));
+  }, [contactFacts]);
+
+  const factCategoryLabels: Record<string, string> = {
+    purchase: 'Покупка',
+    context: 'Контекст',
+    environment: 'Окружение',
+    attitude: 'Отношение',
+    constraints: 'Ограничения',
+    other: 'Прочее',
+  };
+
+  const formatFactType = (value: string): string => {
+    const normalized = String(value || '')
+      .replace(/^quiz_/, '')
+      .replace(/_/g, ' ')
+      .trim();
+    return normalized || 'факт';
+  };
+
   useEffect(() => {
     if (!newEventStart) {
       setNewEventEnd('');
@@ -1609,6 +1645,42 @@ export default function ContactDetailPage() {
                 </div>
               ) : (
                 <p className="text-center text-muted-foreground py-6">У контакта пока нет тегов</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Знания о лиде</CardTitle>
+              <CardDescription>Факты из диалогов и ответов квиза</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {groupedContactFacts.length > 0 ? (
+                <div className="space-y-4">
+                  {groupedContactFacts.map(({ category, items }) => (
+                    <div key={category} className="space-y-3 rounded-lg border bg-card p-4">
+                      <div className="text-sm font-semibold">
+                        {factCategoryLabels[category] || category}
+                      </div>
+                      <div className="space-y-2">
+                        {items.map((fact) => (
+                          <div key={fact.id} className="rounded-md border bg-muted/30 p-3 text-sm">
+                            <div>
+                              <span className="font-medium">{formatFactType(fact.fact_type)}</span>
+                              <span className="text-muted-foreground">: </span>
+                              <span>{fact.fact_value}</span>
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              Источник: {fact.source || '—'} · Уверенность: {fact.confidence || 0}/3
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-muted-foreground py-6">Пока нет сохраненных знаний о лиде</p>
               )}
             </CardContent>
           </Card>

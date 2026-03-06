@@ -13,6 +13,7 @@ from rest_framework.views import APIView
 
 from core.models import (
     ClientProduct,
+    ContactFact,
     MapAvailabilityEvent,
     MapContact,
     MapContactTag,
@@ -120,6 +121,34 @@ class MapContactViewSet(viewsets.ModelViewSet):
                 "contact_tags",
                 queryset=MapContactTag.objects.select_related("tag"),
             )
+        )
+
+    @action(detail=True, methods=["get"], url_path="facts")
+    def facts(self, request, pk=None):
+        contact = self.get_object()
+        client = get_active_client(request.user)
+        facts = (
+            ContactFact.objects
+            .filter(contact_id=int(contact.id), tenant_id=int(client.id), is_active=True)
+            .order_by("category", "fact_type", "-updated_at", "-id")
+        )
+        return Response(
+            [
+                {
+                    "id": int(item.id),
+                    "contact_id": int(item.contact_id),
+                    "tenant_id": int(item.tenant_id),
+                    "category": str(item.category or ""),
+                    "fact_type": str(item.fact_type or ""),
+                    "fact_value": str(item.fact_value or ""),
+                    "source": str(item.source or ""),
+                    "confidence": int(item.confidence or 0),
+                    "is_active": bool(item.is_active),
+                    "created_at": item.created_at,
+                    "updated_at": item.updated_at,
+                }
+                for item in facts
+            ]
         )
 
     @action(detail=True, methods=["get"], url_path="service-packages")
