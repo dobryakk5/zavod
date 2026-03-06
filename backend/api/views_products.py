@@ -130,11 +130,28 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
         if language not in {"ru", "en"}:
             language = "ru"
 
-        task = tasks.generate_client_product_for_type_task.delay(client.id, product_type.id, language=language)
+        requested_name = str(request.data.get("name") or "").strip() or None
+        requested_short_description = str(request.data.get("short_description") or "").strip() or None
+
+        task_kwargs = {"language": language}
+        if requested_name:
+            task_kwargs["name"] = requested_name
+        if requested_short_description:
+            task_kwargs["short_description"] = requested_short_description
+
+        task = tasks.generate_client_product_for_type_task.delay(
+            client.id,
+            product_type.id,
+            **task_kwargs,
+        )
         record_generation_event(
             client,
             GenerationEvent.EVENT_PRODUCT,
-            meta={"product_type_id": product_type.id},
+            meta={
+                "product_type_id": product_type.id,
+                "name_prefilled": bool(requested_name),
+                "description_prefilled": bool(requested_short_description),
+            },
         )
         payload = {"success": True, "message": f"Запущена генерация продукта типа {product_type.name}", "task_id": task.id}
         if getattr(task, "ready", None) and task.ready() and isinstance(getattr(task, "result", None), dict):

@@ -11,16 +11,19 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Input } from '@/components/ui/input';
 import { ApiError } from '@/lib/api';
 import { clientApi } from '@/lib/api/client';
+import { clientProductsApi } from '@/lib/api/clientProducts';
 import { cn } from '@/lib/utils';
 import {
   DEFAULT_TENANT_TIMEZONE,
   formatInTenantTimezone,
   formatTimeRangeInTenantTimezone,
   formatTenantOffsetLabel,
+  localDateTimeStringToUtcISOString,
   normalizeTenantTimezone,
   tenantDateToUtcISOString,
   toTenantDate,
 } from '@/lib/timezone';
+import type { ClientProduct } from '@/lib/types';
 import { useCalendarDnD } from './useCalendarDnD';
 import {
   crmAvailabilityEventsApi,
@@ -61,8 +64,24 @@ type CalendarAvailabilityItem = {
   kind: 'availability';
 };
 
-type CalendarItem = CalendarEventItem | CalendarAvailabilityItem;
+type CalendarProductEventItem = {
+  id: string;
+  productId: number;
+  title: string;
+  productName: string;
+  time: string;
+  location: string;
+  startDate: Date;
+  startTimestamp: number;
+  endTimestamp: number;
+  kind: 'product-event';
+};
+
+type EditableCalendarItem = CalendarEventItem | CalendarAvailabilityItem;
+type CalendarItem = EditableCalendarItem | CalendarProductEventItem;
 type ItemsByDate = Record<string, CalendarItem[]>;
+
+const EVENT_PRODUCT_TYPE_KEYS = new Set(['мероприятие', 'event']);
 
 const statusLabels: Record<Event['status'], string> = {
   scheduled: 'Запланировано',
@@ -80,6 +99,40 @@ const statusVariants: Record<Event['status'], 'default' | 'secondary' | 'destruc
 
 function formatTimeRange(start: string, end: string, timeZone: string) {
   return formatTimeRangeInTenantTimezone(start, end, timeZone);
+}
+
+function isEventProduct(product: ClientProduct): boolean {
+  const typeName = (product.product_type_name ?? product.product_type?.name ?? '').trim().toLowerCase();
+  return EVENT_PRODUCT_TYPE_KEYS.has(typeName);
+}
+
+function parseProductEventDate(value: string | null | undefined, timeZone: string): Date | null {
+  const raw = (value ?? '').trim();
+  if (!raw) return null;
+
+  const isoWithTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+  if (isoWithTimezone) {
+    const tenantDate = toTenantDate(raw, timeZone);
+    return Number.isNaN(tenantDate.getTime()) ? null : tenantDate;
+  }
+
+  const localDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(raw);
+  if (localDateTime) {
+    const utcValue = localDateTimeStringToUtcISOString(raw, timeZone);
+    if (!utcValue) return null;
+    const tenantDate = toTenantDate(utcValue, timeZone);
+    return Number.isNaN(tenantDate.getTime()) ? null : tenantDate;
+  }
+
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  if (dateOnly) {
+    const utcValue = localDateTimeStringToUtcISOString(`${raw}T12:00`, timeZone);
+    if (!utcValue) return null;
+    const tenantDate = toTenantDate(utcValue, timeZone);
+    return Number.isNaN(tenantDate.getTime()) ? null : tenantDate;
+  }
+
+  return null;
 }
 
 function eventToCalendarItem(
@@ -111,6 +164,36 @@ function eventToCalendarItem(
     startTimestamp: startDate.getTime(),
     endTimestamp,
     kind: 'event',
+  };
+}
+
+function productToCalendarItem(product: ClientProduct, timeZone: string): CalendarProductEventItem | null {
+  if (!isEventProduct(product)) return null;
+  const eventData = product.structure?.event;
+  const startDate = parseProductEventDate(eventData?.date, timeZone);
+  if (!startDate) return null;
+
+  const durationMinutesRaw = eventData?.duration_minutes;
+  const durationMinutes =
+    typeof durationMinutesRaw === 'number' && Number.isFinite(durationMinutesRaw) && durationMinutesRaw > 0
+      ? Math.max(15, Math.round(durationMinutesRaw))
+      : 60;
+  const endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
+  const time = formatAvailabilityTimeFromDate(startDate, durationMinutes, timeZone);
+  const productName = (product.name || '').trim() || `Продукт #${product.id}`;
+  const title = (eventData?.title || '').trim() || productName;
+
+  return {
+    id: `product-event-${product.id}`,
+    productId: product.id,
+    title,
+    productName,
+    time,
+    location: (eventData?.location || '').trim(),
+    startDate,
+    startTimestamp: startDate.getTime(),
+    endTimestamp: endDate.getTime(),
+    kind: 'product-event',
   };
 }
 
@@ -326,7 +409,7 @@ function WeekViewContent({
   weekDates: Date[];
   itemsByDate: ItemsByDate;
   onDayClick?: DayClickHandler;
-  onItemEdit?: (item: CalendarItem) => void;
+  onItemEdit?: (item: EditableCalendarItem) => void;
   onEventDrop?: EventDropHandler;
   timeZone: string;
 }) {
@@ -461,7 +544,11 @@ function WeekViewContent({
                     key={item.id}
                     className={cn(
                       'absolute left-1 right-1 rounded-md border px-2 py-1 text-[11px] shadow-sm bg-white',
-                      item.kind === 'availability' ? 'border-emerald-400' : 'border-amber-200 bg-amber-50',
+                      item.kind === 'availability'
+                        ? 'border-emerald-400'
+                        : item.kind === 'event'
+                          ? 'border-amber-200 bg-amber-50'
+                          : 'border-indigo-300 bg-indigo-50',
                       item.kind === 'event' &&
                         dnd.draggingEventId === item.eventId &&
                         'opacity-0 pointer-events-none'
@@ -502,29 +589,42 @@ function WeekViewContent({
                         </button>
                       </div>
                     ) : (
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <Link
-                            href={`/contact/${item.contactId}?tab=schedule`}
-                            className="truncate font-medium text-slate-900 hover:underline"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {item.contactName}
-                          </Link>
-                          <button
-                            type="button"
-                            className="inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onItemEdit?.(item);
-                            }}
-                            aria-label="Редактировать встречу"
-                          >
-                            <EditIcon className="h-3 w-3" />
-                          </button>
+                      item.kind === 'event' ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <Link
+                              href={`/contact/${item.contactId}?tab=schedule`}
+                              className="truncate font-medium text-slate-900 hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {item.contactName}
+                            </Link>
+                            <button
+                              type="button"
+                              className="inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onItemEdit?.(item);
+                              }}
+                              aria-label="Редактировать встречу"
+                            >
+                              <EditIcon className="h-3 w-3" />
+                            </button>
+                          </div>
+                          {item.time && <div className="text-[10px] text-slate-600">{item.time}</div>}
                         </div>
-                        {item.time && <div className="text-[10px] text-slate-600">{item.time}</div>}
-                      </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <Link
+                            href={`/product/${item.productId}`}
+                            className="block truncate font-medium text-indigo-900 hover:underline"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            {item.title}
+                          </Link>
+                          {item.time && <div className="text-[10px] text-indigo-700">{item.time}</div>}
+                        </div>
+                      )
                     )}
                   </div>
                 );
@@ -551,7 +651,7 @@ function MonthViewContent({
   cursor: Date;
   onDayClick?: DayClickHandler;
   showAvailability: boolean;
-  onItemEdit: (item: CalendarItem) => void;
+  onItemEdit: (item: EditableCalendarItem) => void;
   timeZone: string;
 }) {
   const todayKey = formatKey(toTenantDate(new Date(), timeZone));
@@ -570,7 +670,7 @@ function MonthViewContent({
         {monthDates.map((d) => {
           const k = formatKey(d);
           const items = itemsByDate[k] || [];
-          const visibleItems = showAvailability ? items : items.filter((item) => item.kind === 'event');
+          const visibleItems = showAvailability ? items : items.filter((item) => item.kind !== 'availability');
           const isCurrentMonth = d.getMonth() === cursor.getMonth();
           const isToday = todayKey === k;
           const containerClass = cn(
@@ -593,21 +693,38 @@ function MonthViewContent({
                     hour: '2-digit',
                     minute: '2-digit',
                   });
-                  const label = item.kind === 'availability' ? 'Доступно' : item.contactName;
+                  const label =
+                    item.kind === 'availability'
+                      ? 'Доступно'
+                      : item.kind === 'event'
+                        ? item.contactName
+                        : item.title;
                   return (
                     <div
                       key={item.id}
                       className={cn(
                         'flex items-center gap-2 truncate rounded px-1 py-0.5 transition hover:bg-slate-100 cursor-pointer',
-                        item.kind === 'availability' && 'text-emerald-700'
+                        item.kind === 'availability' && 'text-emerald-700',
+                        item.kind === 'product-event' && 'text-indigo-700'
                       )}
                       onClick={(event) => {
                         event.stopPropagation();
+                        if (item.kind === 'product-event') return;
                         onItemEdit(item);
                       }}
                     >
                       <span className="text-slate-400">{timeLabel}</span>
-                      <span className="truncate">{label}</span>
+                      {item.kind === 'product-event' ? (
+                        <Link
+                          href={`/product/${item.productId}`}
+                          className="truncate hover:underline"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          {label}
+                        </Link>
+                      ) : (
+                        <span className="truncate">{label}</span>
+                      )}
                     </div>
                   );
                 })}
@@ -636,7 +753,7 @@ function DayViewContent({
   cursor: Date;
   itemsByDate: ItemsByDate;
   onDayClick?: DayClickHandler;
-  onItemEdit?: (item: CalendarItem) => void;
+  onItemEdit?: (item: EditableCalendarItem) => void;
   onEventDrop?: EventDropHandler;
   timeZone: string;
 }) {
@@ -748,7 +865,11 @@ function DayViewContent({
                 key={item.id}
                 className={cn(
                   'absolute left-1 right-1 rounded-md border px-2 py-1 text-[11px] shadow-sm bg-white',
-                  item.kind === 'availability' ? 'border-emerald-400' : 'border-amber-200 bg-amber-50',
+                  item.kind === 'availability'
+                    ? 'border-emerald-400'
+                    : item.kind === 'event'
+                      ? 'border-amber-200 bg-amber-50'
+                      : 'border-indigo-300 bg-indigo-50',
                   item.kind === 'event' &&
                     dnd.draggingEventId === item.eventId &&
                     'opacity-0 pointer-events-none'
@@ -789,23 +910,36 @@ function DayViewContent({
                     </button>
                   </div>
                 ) : (
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="truncate font-medium text-slate-900">{item.contactName}</div>
-                      <button
-                        type="button"
-                        className="inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onItemEdit?.(item);
-                        }}
-                        aria-label="Редактировать встречу"
-                      >
-                        <EditIcon className="h-3 w-3" />
-                      </button>
+                  item.kind === 'event' ? (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="truncate font-medium text-slate-900">{item.contactName}</div>
+                        <button
+                          type="button"
+                          className="inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onItemEdit?.(item);
+                          }}
+                          aria-label="Редактировать встречу"
+                        >
+                          <EditIcon className="h-3 w-3" />
+                        </button>
+                      </div>
+                      {item.time && <div className="text-[10px] text-slate-600">{item.time}</div>}
                     </div>
-                    {item.time && <div className="text-[10px] text-slate-600">{item.time}</div>}
-                  </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <Link
+                        href={`/product/${item.productId}`}
+                        className="block truncate font-medium text-indigo-900 hover:underline"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {item.title}
+                      </Link>
+                      {item.time && <div className="text-[10px] text-indigo-700">{item.time}</div>}
+                    </div>
+                  )
                 )}
               </div>
             );
@@ -828,6 +962,7 @@ export default function ClientsSchedule() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [eventTypes, setEventTypes] = useState<EventType[]>([]);
   const [availabilityEvents, setAvailabilityEvents] = useState<AvailabilityEvent[]>([]);
+  const [products, setProducts] = useState<ClientProduct[]>([]);
   const [availabilityOpen, setAvailabilityOpen] = useState(false);
   const [availabilityDate, setAvailabilityDate] = useState<Date | null>(null);
   const [availabilityTime, setAvailabilityTime] = useState('10:00');
@@ -838,7 +973,7 @@ export default function ClientsSchedule() {
   const [availabilityEditingId, setAvailabilityEditingId] = useState<number | null>(null);
   const [showAvailabilityInMonth, setShowAvailabilityInMonth] = useState(false);
   const [monthEditOpen, setMonthEditOpen] = useState(false);
-  const [monthEditItem, setMonthEditItem] = useState<CalendarItem | null>(null);
+  const [monthEditItem, setMonthEditItem] = useState<EditableCalendarItem | null>(null);
   const [monthEditDate, setMonthEditDate] = useState<Date | null>(null);
   const [monthEditTime, setMonthEditTime] = useState('10:00');
   const [monthEditDuration, setMonthEditDuration] = useState('60');
@@ -862,17 +997,19 @@ export default function ClientsSchedule() {
       setLoading(true);
       setError(null);
       try {
-        const [eventsData, contactsData, eventTypesData, availabilityData, settingsData] = await Promise.all([
+        const [eventsData, contactsData, eventTypesData, availabilityData, productsData, settingsData] = await Promise.all([
           crmEventsApi.list(),
           crmContactsApi.list(),
           crmEventTypesApi.list(),
           crmAvailabilityEventsApi.list(),
+          clientProductsApi.list(),
           clientApi.getSettings(),
         ]);
         setEvents(eventsData);
         setContacts(contactsData);
         setEventTypes(eventTypesData);
         setAvailabilityEvents(availabilityData);
+        setProducts(productsData);
         setTenantTimezone(normalizeTenantTimezone(settingsData.timezone));
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
@@ -900,6 +1037,14 @@ export default function ClientsSchedule() {
 
     events.forEach((event) => {
       const item = eventToCalendarItem(event, contactsById, eventTypesById, normalizedTimezone);
+      if (!item) return;
+      const key = formatKey(new Date(item.startTimestamp));
+      if (!map[key]) map[key] = [];
+      map[key].push(item);
+    });
+
+    products.forEach((product) => {
+      const item = productToCalendarItem(product, normalizedTimezone);
       if (!item) return;
       const key = formatKey(new Date(item.startTimestamp));
       if (!map[key]) map[key] = [];
@@ -939,13 +1084,13 @@ export default function ClientsSchedule() {
     });
 
     Object.values(map).forEach((items) => {
-      const eventItems = items.filter((item) => item.kind === 'event') as CalendarEventItem[];
-      if (eventItems.length) {
+      const busyItems = items.filter((item) => item.kind === 'event' || item.kind === 'product-event');
+      if (busyItems.length) {
         const filtered = items.filter((item) => {
-          if (item.kind === 'event') return true;
+          if (item.kind !== 'availability') return true;
           const availabilityStart = item.startTimestamp;
           const availabilityEnd = item.startTimestamp + item.durationMinutes * 60 * 1000;
-          return !eventItems.some(
+          return !busyItems.some(
             (eventItem) =>
               availabilityStart < eventItem.endTimestamp &&
               availabilityEnd > eventItem.startTimestamp
@@ -959,7 +1104,7 @@ export default function ClientsSchedule() {
     });
 
     return map;
-  }, [events, contacts, eventTypes, availabilityEvents, view, cursor, weekDates, monthDates, normalizedTimezone]);
+  }, [events, contacts, eventTypes, availabilityEvents, products, view, cursor, weekDates, monthDates, normalizedTimezone]);
 
   function prev() {
     const nextCursor = new Date(cursor);
@@ -1026,7 +1171,7 @@ export default function ClientsSchedule() {
     return new Date(year, month - 1, day);
   }
 
-  function openMonthEdit(item: CalendarItem) {
+  function openMonthEdit(item: EditableCalendarItem) {
     const startDate = new Date(item.startTimestamp);
     if (Number.isNaN(startDate.getTime())) return;
     const duration =

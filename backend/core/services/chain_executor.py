@@ -16,6 +16,7 @@ from core.models import (
     ChainEdge,
     ChainNode,
     ChainSession,
+    Client,
     ClientProduct,
     ContactFact,
     MapAvailabilityEvent,
@@ -35,6 +36,7 @@ _NODE_TYPE_TO_ACTION: dict[str, str] = {
     "photo": "send_photo",
     "buttons": "send_buttons",
 }
+_EVENT_PRODUCT_TYPE_KEYS = frozenset({"мероприятие", "event"})
 
 
 def _is_chain_active(obj: Any) -> bool:
@@ -536,6 +538,8 @@ class ChainExecutor:
 
     def _build_booking_slots(self, *, tenant_id: int, exclude_event_id: int | None = None) -> list[dict[str, Any]]:
         now = timezone.now()
+        window_end = now + timedelta(days=90)
+        tenant_tz_name = _get_tenant_timezone_name(tenant_id)
         availability_items = list(
             MapAvailabilityEvent.objects
             .filter(tenant_id=tenant_id, start_time__gt=now)
@@ -544,7 +548,7 @@ class ChainExecutor:
         if not availability_items:
             return []
 
-        busy_qs = MapCRMEvent.objects.filter(status="scheduled", start_time__lt=now + timedelta(days=90))
+        busy_qs = MapCRMEvent.objects.filter(status="scheduled", start_time__lt=window_end)
         if exclude_event_id:
             busy_qs = busy_qs.exclude(id=exclude_event_id)
         busy_intervals: list[tuple[datetime, datetime]] = []
@@ -554,6 +558,12 @@ class ChainExecutor:
                 continue
             end_at = _coerce_datetime(event.end_time) or (start_at + timedelta(hours=1))
             busy_intervals.append((start_at, end_at))
+        for interval_start, interval_end in _collect_product_event_intervals(
+            tenant_id=tenant_id,
+            tenant_tz_name=tenant_tz_name,
+        ):
+            if interval_start < window_end and interval_end > now:
+                busy_intervals.append((interval_start, interval_end))
 
         result: list[dict[str, Any]] = []
         for availability in availability_items:
@@ -723,6 +733,7 @@ class ChainExecutor:
             if self._is_booking_interval_busy(
                 start_at=start_at,
                 end_at=end_at,
+                tenant_id=session.tenant_id,
                 exclude_event_id=event_id if mode == "reschedule" else None,
             ):
                 busy_text = str(payload.get("slot_busy_text") or "Этот слот уже занят. Выберите другой.")
@@ -836,6 +847,7 @@ class ChainExecutor:
         *,
         start_at: datetime,
         end_at: datetime,
+        tenant_id: int,
         exclude_event_id: int | None = None,
     ) -> bool:
         query = MapCRMEvent.objects.filter(
@@ -845,7 +857,15 @@ class ChainExecutor:
         )
         if exclude_event_id:
             query = query.exclude(id=exclude_event_id)
-        return query.exists()
+        if query.exists():
+            return True
+
+        tenant_tz_name = _get_tenant_timezone_name(tenant_id)
+        product_intervals = _collect_product_event_intervals(
+            tenant_id=tenant_id,
+            tenant_tz_name=tenant_tz_name,
+        )
+        return _interval_overlaps_any(start_at, end_at, product_intervals)
 
     def _enter_ai_assistant_node(self, session: ChainSession, node: ChainNode) -> list[dict[str, Any]]:
         payload = dict(node.payload or {})
@@ -1493,6 +1513,82 @@ def _get_tz(tz_name: str | None):
         return zoneinfo.ZoneInfo(str(tz_name or "Europe/Moscow"))
     except Exception:
         return None
+
+
+def _get_tenant_timezone_name(tenant_id: int) -> str:
+    tz_name = Client.objects.filter(id=tenant_id).values_list("timezone", flat=True).first()
+    return str(tz_name or "Europe/Moscow")
+
+
+def _parse_product_event_datetime(value: Any, tenant_tz_name: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    tz = _get_tz(tenant_tz_name) or timezone.get_current_timezone()
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$", raw, flags=re.IGNORECASE):
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        return parsed if timezone.is_aware(parsed) else timezone.make_aware(parsed, tz)
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$", raw):
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        return parsed if timezone.is_aware(parsed) else timezone.make_aware(parsed, tz)
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+        try:
+            parsed = datetime.fromisoformat(f"{raw}T12:00:00")
+        except ValueError:
+            return None
+        return timezone.make_aware(parsed, tz)
+
+    return None
+
+
+def _collect_product_event_intervals(
+    *,
+    tenant_id: int,
+    tenant_tz_name: str,
+) -> list[tuple[datetime, datetime]]:
+    intervals: list[tuple[datetime, datetime]] = []
+    products = (
+        ClientProduct.objects.select_related("product_type")
+        .filter(owner_id=tenant_id)
+        .only("id", "structure", "product_type__name")
+    )
+    for product in products:
+        type_name = (getattr(getattr(product, "product_type", None), "name", "") or "").strip().lower()
+        if type_name not in _EVENT_PRODUCT_TYPE_KEYS:
+            continue
+
+        structure = product.structure if isinstance(product.structure, dict) else {}
+        event_payload = structure.get("event")
+        if not isinstance(event_payload, dict):
+            continue
+
+        start_at = _parse_product_event_datetime(event_payload.get("date"), tenant_tz_name)
+        if not start_at:
+            continue
+
+        duration_raw = event_payload.get("duration_minutes")
+        try:
+            duration_minutes = int(duration_raw)
+        except (TypeError, ValueError):
+            duration_minutes = 60
+        if duration_minutes <= 0:
+            duration_minutes = 60
+
+        end_at = start_at + timedelta(minutes=max(15, duration_minutes))
+        intervals.append((start_at, end_at))
+
+    return intervals
 
 
 def _format_booking_slot_label(value: Any, tz_name: Any) -> str:

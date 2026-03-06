@@ -528,6 +528,13 @@ export interface ProductStructure {
   lesson_format?: Array<{ stage: string; percent: number | null }>;
   program_modules?: Array<{ module: string; result: string }>;
   packaging?: { name?: string | null; slogan?: string | null; promise?: string | null };
+  event?: {
+    title?: string | null;
+    date?: string | null;
+    location?: string | null;
+    duration_minutes?: number | null;
+    description?: Record<string, unknown> | null;
+  };
   related_products?: Array<{
     id: number;
     name: string;

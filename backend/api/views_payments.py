@@ -580,6 +580,57 @@ class TBankSaveCredentialsView(APIView):
         return Response({"ok": True, "test_mode": bool(test_mode)})
 
 
+class PaymentProvidersView(APIView):
+    """
+    Возвращает статус подключений платежных провайдеров для активного клиента.
+    GET /payments/providers/
+    """
+    permission_classes = [IsTenantMember]
+
+    @staticmethod
+    def _mask_value(value: str | None) -> str:
+        if not value:
+            return ""
+        raw = str(value)
+        if len(raw) <= 4:
+            return "*" * len(raw)
+        return f"{'*' * (len(raw) - 4)}{raw[-4:]}"
+
+    def get(self, request):
+        client = get_active_client(request.user)
+
+        has_yookassa_oauth = bool(getattr(client, "yookassa_oauth_token", None))
+        has_yookassa_manual = bool(getattr(client, "yookassa_shop_id", None) and getattr(client, "yookassa_secret_key", None))
+        yookassa_connected = bool(getattr(client, "yookassa_connected", False) or has_yookassa_oauth or has_yookassa_manual)
+        yookassa_connection_type = "none"
+        if has_yookassa_oauth:
+            yookassa_connection_type = "oauth"
+        elif has_yookassa_manual:
+            yookassa_connection_type = "manual"
+        elif yookassa_connected:
+            yookassa_connection_type = "connected"
+
+        tbank_terminal_key = getattr(client, "tbank_terminal_key", None)
+        tbank_secret_key = getattr(client, "tbank_secret_key", None)
+        has_tbank_keys = bool(tbank_terminal_key and tbank_secret_key)
+        tbank_connected = bool(getattr(client, "tbank_connected", False) and has_tbank_keys)
+
+        return Response(
+            {
+                "yookassa": {
+                    "connected": yookassa_connected,
+                    "connection_type": yookassa_connection_type,
+                },
+                "tbank": {
+                    "connected": tbank_connected,
+                    "test_mode": bool(getattr(client, "tbank_test_mode", False)),
+                    "terminal_key_masked": self._mask_value(tbank_terminal_key),
+                    "has_secret_key": bool(tbank_secret_key),
+                },
+            }
+        )
+
+
 # ---------------------------------------------------------------------------
 # UPDATED: CreatePayment — теперь берёт ключи клиента
 # ---------------------------------------------------------------------------

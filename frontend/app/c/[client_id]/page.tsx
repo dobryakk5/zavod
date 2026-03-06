@@ -25,6 +25,7 @@ import { createKbExtensions } from '@/components/kb/tiptapExtensions';
 import {
   DEFAULT_TENANT_TIMEZONE,
   formatInTenantTimezone,
+  localDateTimeStringToUtcISOString,
   normalizeTenantTimezone,
   tenantDateToUtcISOString,
   toTenantDate,
@@ -137,6 +138,12 @@ type ContactPurchaseListItem = {
   amount?: string | null;
   currency?: string | null;
   payment_id?: string | null;
+  package?: {
+    index?: number;
+    name?: string | null;
+    description?: string | null;
+    price?: string | number | null;
+  } | null;
   delivery?: {
     ready?: boolean;
     url?: string;
@@ -196,6 +203,7 @@ const PAYMENT_PROVIDER_LABELS: Record<PaymentProvider, string> = {
   yookassa: 'YooKassa',
   tbank: 'T-Bank',
 };
+const EVENT_PRODUCT_TYPE_KEYS = new Set(['мероприятие', 'event']);
 
 const normalizeTiptapJson = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -446,9 +454,73 @@ const availabilityMatchesDate = (baseStart: Date, checkDate: Date, repeatType: A
   return targetDate.getTime() === baseDate.getTime();
 };
 
+const isEventProductType = (product: ClientProduct): boolean => {
+  const typeName = (product.product_type_name ?? product.product_type?.name ?? '').trim().toLowerCase();
+  return EVENT_PRODUCT_TYPE_KEYS.has(typeName);
+};
+
+const parseProductEventStart = (rawValue: unknown, timezone: string): Date | null => {
+  const raw = String(rawValue ?? '').trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$/i.test(raw)) {
+    const tenantDate = toTenantDate(raw, timezone);
+    return Number.isNaN(tenantDate.getTime()) ? null : tenantDate;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(raw)) {
+    const utcValue = localDateTimeStringToUtcISOString(raw, timezone);
+    if (!utcValue) {
+      return null;
+    }
+    const tenantDate = toTenantDate(utcValue, timezone);
+    return Number.isNaN(tenantDate.getTime()) ? null : tenantDate;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const utcValue = localDateTimeStringToUtcISOString(`${raw}T12:00`, timezone);
+    if (!utcValue) {
+      return null;
+    }
+    const tenantDate = toTenantDate(utcValue, timezone);
+    return Number.isNaN(tenantDate.getTime()) ? null : tenantDate;
+  }
+
+  return null;
+};
+
+const buildProductBusyIntervals = (
+  products: ClientProduct[],
+  timezone: string
+): Array<{ startMs: number; endMs: number }> => {
+  return products
+    .filter((product) => isEventProductType(product))
+    .map((product) => {
+      const event = product.structure?.event;
+      const start = parseProductEventStart(event?.date, timezone);
+      if (!start) {
+        return null;
+      }
+      const durationRaw = event?.duration_minutes;
+      const durationMinutes =
+        typeof durationRaw === 'number' && Number.isFinite(durationRaw) && durationRaw > 0
+          ? Math.max(15, Math.round(durationRaw))
+          : 60;
+      const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+      return {
+        startMs: start.getTime(),
+        endMs: end.getTime(),
+      };
+    })
+    .filter((item): item is { startMs: number; endMs: number } => item !== null);
+};
+
 const buildSlots = (
   availabilityEvents: AvailabilityEvent[],
   events: Event[],
+  products: ClientProduct[],
   timezone: string,
   options?: BuildSlotsOptions
 ): Slot[] => {
@@ -478,6 +550,8 @@ const buildSlots = (
     })
     .filter((item): item is { startMs: number; endMs: number } => item !== null);
 
+  const productBusyIntervals = buildProductBusyIntervals(products, tz);
+  const allBusyIntervals = [...busyIntervals, ...productBusyIntervals];
   const slots: Slot[] = [];
 
   for (let offset = 0; offset <= SLOT_LOOKAHEAD_DAYS; offset += 1) {
@@ -514,7 +588,7 @@ const buildSlots = (
         return;
       }
 
-      const isBusy = busyIntervals.some((busy) =>
+      const isBusy = allBusyIntervals.some((busy) =>
         overlaps(startTenant.getTime(), endTenant.getTime(), busy.startMs, busy.endMs)
       );
       if (isBusy) {
@@ -690,13 +764,13 @@ export default function ContactClientPage() {
   );
   const slots = useMemo(
     () =>
-      buildSlots(availabilityEvents, events, timezone, {
+      buildSlots(availabilityEvents, events, products, timezone, {
         excludeEventIds: selectedMeetingForReschedule
           ? new Set([selectedMeetingForReschedule.id])
           : undefined,
         requiredDurationMinutes: selectedMeetingForReschedule?.durationMinutes,
       }),
-    [availabilityEvents, events, selectedMeetingForReschedule, timezone]
+    [availabilityEvents, events, products, selectedMeetingForReschedule, timezone]
   );
   const currentWeekStart = useMemo(
     () => startOfWeek(toTenantDate(new Date(), timezone)),
@@ -1077,7 +1151,7 @@ export default function ContactClientPage() {
 
     try {
       const latestEvents = await crmEventsApi.list();
-      const freshSlots = buildSlots(availabilityEvents, latestEvents, timezone, {
+      const freshSlots = buildSlots(availabilityEvents, latestEvents, products, timezone, {
         excludeEventIds: selectedMeetingForReschedule
           ? new Set([selectedMeetingForReschedule.id])
           : undefined,
@@ -1241,10 +1315,10 @@ export default function ContactClientPage() {
       return;
     }
     if (!bookingContactId) {
-      setPurchaseStatusError('Для покупки войдите как контакт через Telegram или VK.');
-      setPurchaseStatusMessage(null);
-      setPurchaseDeliveryLink(null);
-      setPurchaseDeliveryTitle(null);
+      if (typeof window !== 'undefined') {
+        const nextPath = `${window.location.pathname}${window.location.search}`;
+        window.location.href = `/login?next=${encodeURIComponent(nextPath)}&tenant_id=${pageClientId}`;
+      }
       return;
     }
 
@@ -1284,7 +1358,12 @@ export default function ContactClientPage() {
         window.location.href = paymentUrl;
         return;
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401 && typeof window !== 'undefined') {
+        const nextPath = `${window.location.pathname}${window.location.search}`;
+        window.location.href = `/login?next=${encodeURIComponent(nextPath)}&tenant_id=${pageClientId}`;
+        return;
+      }
       setPurchaseStatusError('Не удалось создать оплату. Обратитесь к владельцу портала.');
     } finally {
       setBuyingProductId(null);
@@ -1343,6 +1422,29 @@ export default function ContactClientPage() {
       }).format(rawAmount);
     } catch {
       return `${rawAmount} ${currency}`;
+    }
+  };
+
+  const formatPurchasePackageAmount = (item: ContactPurchaseListItem) => {
+    const rawAmount = item.package?.price;
+    const amount =
+      typeof rawAmount === 'number'
+        ? rawAmount
+        : typeof rawAmount === 'string'
+          ? Number(rawAmount)
+          : NaN;
+    const currency = (item.currency || 'RUB').trim().toUpperCase() || 'RUB';
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return '';
+    }
+    try {
+      return new Intl.NumberFormat('ru-RU', {
+        style: 'currency',
+        currency,
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      return `${amount} ${currency}`;
     }
   };
 
@@ -1776,6 +1878,9 @@ export default function ContactClientPage() {
                 const itemKey = String(item.id ?? `${item.product_id ?? 'product'}:${item.payment_id ?? ''}`);
                 const title = (item.product_name || '').trim() || `Продукт #${item.product_id ?? '—'}`;
                 const amountLabel = formatPurchaseAmount(item);
+                const packageName = (item.package?.name || '').trim();
+                const packageDescription = (item.package?.description || '').trim();
+                const packageAmountLabel = formatPurchasePackageAmount(item);
                 const serviceRemainingLabel = formatServicePackageRemaining(item);
                 const delivery = item.delivery || null;
                 const deliveryReady = Boolean(delivery?.ready && delivery?.url);
@@ -1793,6 +1898,15 @@ export default function ContactClientPage() {
                           {formatPurchaseTimestamp(item.paid_at)}
                           {amountLabel ? ` · ${amountLabel}` : ''}
                         </div>
+                        {packageName && (
+                          <div className="text-xs text-muted-foreground">
+                            Пакет: {packageName}
+                            {packageAmountLabel ? ` · ${packageAmountLabel}` : ''}
+                          </div>
+                        )}
+                        {packageDescription && (
+                          <div className="text-xs text-muted-foreground">{packageDescription}</div>
+                        )}
                         {serviceRemainingLabel && (
                           <div className="text-xs text-emerald-700">
                             {serviceRemainingLabel}

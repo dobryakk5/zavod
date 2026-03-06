@@ -73,12 +73,20 @@ def _normalize_service_mode(raw_kind: Any, raw_unit: Any) -> str | None:
     return None
 
 
-def extract_service_package_definition(product: ClientProduct | None) -> dict[str, Any] | None:
+def extract_service_package_definition(product: ClientProduct | None, package_index: int | None = None) -> dict[str, Any] | None:
     if product is None:
         return None
 
     raw_packages = product.packages if isinstance(product.packages, list) else []
-    for raw_item in raw_packages:
+    candidate_packages: list[Any]
+    if package_index is not None:
+        if package_index < 0 or package_index >= len(raw_packages):
+            return None
+        candidate_packages = [raw_packages[package_index]]
+    else:
+        candidate_packages = list(raw_packages)
+
+    for raw_item in candidate_packages:
         if not isinstance(raw_item, dict):
             continue
 
@@ -181,8 +189,9 @@ def grant_service_package_to_purchase(
     purchase: ContactProductPurchase,
     product: ClientProduct | None,
     top_up: bool = True,
+    package_index: int | None = None,
 ) -> bool:
-    definition = extract_service_package_definition(product)
+    definition = extract_service_package_definition(product, package_index=package_index)
     if not definition:
         return False
 

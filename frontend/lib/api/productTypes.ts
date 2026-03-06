@@ -1,5 +1,5 @@
 import { apiFetch } from '../api';
-import type { ClientProduct, ProductType } from '../types';
+import type { ProductGenerationResponse, ProductType } from '../types';
 
 export const productTypesApi = {
   list: async (): Promise<ProductType[]> => {
@@ -30,8 +30,11 @@ export const productTypesApi = {
     });
   },
 
-  generateProduct: async (id: string | number, payload?: { language?: 'ru' | 'en' }) => {
-    return apiFetch<ClientProduct>(`/products/types/${id}/generate-product/`, {
+  generateProduct: async (
+    id: string | number,
+    payload?: { language?: 'ru' | 'en'; name?: string; short_description?: string }
+  ) => {
+    return apiFetch<ProductGenerationResponse>(`/products/types/${id}/generate-product/`, {
       method: 'POST',
       body: payload ?? {}
     });

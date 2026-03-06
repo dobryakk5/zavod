@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { quizBuilderApi } from "@/lib/api/quiz-builder";
 
@@ -58,7 +59,15 @@ const QUESTION_TYPES: { type: QuestionType; label: string; icon: string; desc: s
   { type: "slider",   label: "Слайдер",        icon: "⇄", desc: "Числовой диапазон" },
 ];
 
-const EMOJIS = ["📈","🎯","💎","🚀","✨","💰","🔍","📢","📱","📧","✍️","🎬","🏠","🌿","⚡","🎵","🛒","💡","🔥","🎓"];
+const EMOJIS = [
+  "📈", "🎯", "💎", "🚀", "✨", "💰", "🔍", "📢", "📱", "📧",
+  "✍️", "🎬", "🏠", "🌿", "⚡", "🎵", "🛒", "💡", "🔥", "🎓",
+  "🏆", "📊", "📚", "🧠", "🧩", "🗓️", "⏰", "✅", "❗", "⭐",
+  "🌟", "📦", "📸", "🎨", "🛠️", "🧭", "🤝", "👑", "💬", "🧾",
+  "💼", "📍", "🌍", "🧪", "🔒", "🔓", "📎", "🧲", "🎁", "🍀",
+  "☕", "🍕", "🥇", "🥈", "🥉", "🎉", "🎪", "📝", "📌", "🪄",
+  "💥", "🫶", "🤖", "🛰️", "🛡️", "🔔", "📞", "🧵", "🪙", "🧰",
+];
 
 const ACCENT = "#5b5ef4";
 const ACCENT2 = "#ec4899";
@@ -863,6 +872,8 @@ function SettingsPanel({
                             gridTemplateColumns: "repeat(5, 1fr)",
                             gap: 4,
                             width: 172,
+                            maxHeight: 240,
+                            overflowY: "auto",
                             boxShadow: "0 16px 48px rgba(0,0,0,0.7)",
                             outline: "none",
                           }}
@@ -1115,6 +1126,7 @@ function AddScreenModal({
 // ─── Main Builder ─────────────────────────────────────────────────────────────
 
 export function QuizBuilder() {
+  const router = useRouter();
   const [quizId, setQuizId] = useState<number | null>(null);
   const [screens, setScreens] = useState<Screen[]>(defaultScreens);
   const [activeId, setActiveId] = useState<string>(screens[0].id);
@@ -1350,12 +1362,14 @@ export function QuizBuilder() {
       >
         {/* Logo */}
         <div className="flex items-center gap-3">
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-black"
-            style={{ background: `linear-gradient(135deg, ${accentColor}, ${ACCENT2})` }}
+          <button
+            type="button"
+            onClick={() => router.push("/settings?tab=site")}
+            className="px-2 py-1 rounded-lg text-xs font-semibold cursor-pointer border"
+            style={{ borderColor: "#e2e8f0", background: "#ffffff", color: "#475569" }}
           >
-            Q
-          </div>
+            ← Назад
+          </button>
           <input
             value={quizTitle}
             onChange={e => setQuizTitle(e.target.value)}

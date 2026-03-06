@@ -205,6 +205,28 @@ def _default_product_type_requirements() -> dict[str, dict[str, str]]:
             "requirements_program_modules": common_program_rules,
             "requirements_packaging": common_packaging_rules,
         },
+        "мероприятие": {
+            "requirements_name": """
+Сгенерируй name и short_description для продукта типа МЕРОПРИЯТИЕ.
+- Название: конкретная тема/формат события, 3–9 слов.
+- short_description: обязательно начинается с "Мероприятие:" и отражает формат (вебинар/воркшоп/интенсив/офлайн) + ключевую пользу.
+""".strip(),
+            "requirements_packages": """
+Сгенерируй packages для типа МЕРОПРИЯТИЕ.
+- 1–3 пакета (например, "Онлайн", "Офлайн", "VIP/Запись").
+- description: что включено в участие (доступ, материалы, Q&A, запись, бонусы).
+- price: число или null, если цена ещё не определена.
+""".strip(),
+            "requirements_audience": common_audience_rules,
+            "requirements_transformation": common_transformation_rules,
+            "requirements_metrics": common_metrics_rules,
+            "requirements_method": common_method_rules,
+            "requirements_lesson_format": f"""{common_lesson_format_rules}
+Для МЕРОПРИЯТИЯ сделай акцент на: анонс/регистрация → подготовка → проведение события → постматериалы/запись → follow-up и следующий шаг.
+""".strip(),
+            "requirements_program_modules": common_program_rules,
+            "requirements_packaging": common_packaging_rules,
+        },
     }
 
 
@@ -437,6 +459,34 @@ def migrate_client_product_types_to_system(client: Client) -> int:
     return updated_products
 
 
+def _dedupe_system_product_types(system_client: Client) -> int:
+    from core.models import ClientProduct  # local import to avoid circulars in managed=False models
+
+    removed = 0
+    rows = list(ProductType.objects.filter(owner=system_client).order_by("id"))
+    grouped: dict[str, list[ProductType]] = {}
+
+    for row in rows:
+        key = _normalize_name(row.name)
+        if not key:
+            continue
+        grouped.setdefault(key, []).append(row)
+
+    for items in grouped.values():
+        if len(items) <= 1:
+            continue
+        keep = items[0]
+        duplicates = items[1:]
+        duplicate_ids = [item.id for item in duplicates]
+        if not duplicate_ids:
+            continue
+        ClientProduct.objects.filter(product_type_id__in=duplicate_ids).update(product_type=keep)
+        ProductType.objects.filter(id__in=duplicate_ids).delete()
+        removed += len(duplicate_ids)
+
+    return removed
+
+
 @transaction.atomic
 def ensure_system_product_type_templates() -> int:
     """
@@ -452,5 +502,31 @@ def ensure_system_product_type_templates() -> int:
     if source_client and source_client.pk != system_client.pk:
         added = sync_product_types(source_client, system_client)
 
+    event_name = "Мероприятие"
+    existing_names = {
+        _normalize_name(name)
+        for name in ProductType.objects.filter(owner=system_client).values_list("name", flat=True)
+    }
+    event_key = _normalize_name(event_name)
+    if event_key not in existing_names:
+        event_template = _default_product_type_requirements().get(event_key) or _generic_product_type_requirements(event_name)
+        ProductType.objects.create(
+            owner=system_client,
+            name=event_name,
+            value="Событие с фиксированными датой/местом и продажей участия.",
+            goal="Регистрация и продажа мест на мероприятие.",
+            requirements_name=event_template.get("requirements_name"),
+            requirements_packages=event_template.get("requirements_packages"),
+            requirements_audience=event_template.get("requirements_audience"),
+            requirements_transformation=event_template.get("requirements_transformation"),
+            requirements_metrics=event_template.get("requirements_metrics"),
+            requirements_method=event_template.get("requirements_method"),
+            requirements_lesson_format=event_template.get("requirements_lesson_format"),
+            requirements_program_modules=event_template.get("requirements_program_modules"),
+            requirements_packaging=event_template.get("requirements_packaging"),
+        )
+        added += 1
+
+    _dedupe_system_product_types(system_client)
     ensure_system_product_type_requirements()
     return added

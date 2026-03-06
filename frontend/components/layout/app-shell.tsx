@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { ReactNode, useEffect, useMemo, useState } from 'react';
@@ -29,6 +30,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarAvatarUrl, setSidebarAvatarUrl] = useState<string | null>(null);
+  const [sidebarAvatarInitial, setSidebarAvatarInitial] = useState('U');
   const isClientPageEditorRoute = /^\/c\/[^/]+\/edit(?:\/.*)?$/.test(pathname);
   const isPublicRoute =
     pathname === '/'
@@ -54,6 +57,68 @@ export function AppShell({ children }: { children: ReactNode }) {
       setMobileMenuOpen(false);
     }
   }, [isPublicRoute, pathname]);
+
+  useEffect(() => {
+    if (isPublicRoute) {
+      setSidebarAvatarUrl(null);
+      setSidebarAvatarInitial('U');
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchSidebarAvatar = async () => {
+      try {
+        const response = await fetch(buildApiUrl('/auth/social/accounts'), {
+          credentials: 'include'
+        });
+        if (!response.ok) {
+          return;
+        }
+
+        const data = await response.json();
+        const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+        const photoUrl = accounts
+          .map((account: {
+            extra_data?: {
+              photo_url?: string;
+              photo_storage_url?: string;
+              first_name?: string;
+              username?: string;
+              screen_name?: string;
+            };
+          }) => account?.extra_data?.photo_storage_url || account?.extra_data?.photo_url)
+          .find((url: unknown) => typeof url === 'string' && url.trim().length > 0) as string | undefined;
+        const name = accounts
+          .map((account: {
+            extra_data?: {
+              first_name?: string;
+              username?: string;
+              screen_name?: string;
+            };
+          }) => account?.extra_data?.username || account?.extra_data?.screen_name || account?.extra_data?.first_name)
+          .find((value: unknown) => typeof value === 'string' && value.trim().length > 0) as string | undefined;
+        const normalizedName = (name || '').trim().replace(/^@+/, '');
+        const initial = (normalizedName[0] || 'U').toUpperCase();
+
+        if (!cancelled) {
+          setSidebarAvatarUrl(photoUrl ?? null);
+          setSidebarAvatarInitial(initial);
+        }
+      } catch {
+        if (!cancelled) {
+          setSidebarAvatarUrl(null);
+          setSidebarAvatarInitial('U');
+        }
+      }
+    };
+
+    void fetchSidebarAvatar();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPublicRoute]);
 
   const navLinks = useMemo(() => {
     return navItems.map((item) => {
@@ -124,10 +189,26 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside className="hidden w-64 flex-col gap-4 border-r bg-muted/30 p-4 md:flex">
         <div className="text-xl font-bold">Fibonatty</div>
         <nav className="flex flex-col gap-1">{navLinks}</nav>
-        <div className="mt-auto">
-          <Button variant="outline" className="w-full" onClick={onLogout}>
+        <div className="mt-auto flex items-center gap-2">
+          <Button variant="outline" className="flex-1" onClick={onLogout}>
             Выйти
           </Button>
+          {sidebarAvatarUrl ? (
+            <Image
+              src={sidebarAvatarUrl}
+              alt="Аватар пользователя"
+              width={32}
+              height={32}
+              className="h-8 w-8 rounded-full object-cover ring-1 ring-border"
+              unoptimized
+              loading="lazy"
+              onError={() => setSidebarAvatarUrl(null)}
+            />
+          ) : (
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary ring-1 ring-border">
+              {sidebarAvatarInitial}
+            </div>
+          )}
         </div>
       </aside>
 

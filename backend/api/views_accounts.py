@@ -25,6 +25,7 @@ from core.models import GenerationEvent, Post, Schedule, SemanticGroup
 
 from .authentication import CookieJWTAuthentication
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
+from .social_avatar_storage import persist_social_avatar
 from .serializers import ClientSettingsSerializer, ClientSummarySerializer
 from .utils import enforce_generation_limit, get_active_client
 
@@ -146,6 +147,13 @@ class TelegramAuthView(APIView):
             )
 
         telegram_id_str = str(telegram_id)
+        stored_photo_url, avatar_metadata = persist_social_avatar(
+            request=request,
+            photo_url=photo_url,
+            provider=UserSocialAccount.PROVIDER_TELEGRAM,
+            provider_id=telegram_id_str,
+        )
+        photo_url = stored_photo_url or photo_url
         tenant_id_raw = request.data.get("tenant_id")
         tenant_id_hint = None
         if tenant_id_raw not in (None, ""):
@@ -199,25 +207,22 @@ class TelegramAuthView(APIView):
                 {"error": "У пользователя уже привязан другой Telegram-аккаунт"},
                 status=status.HTTP_409_CONFLICT,
             )
+        extra_data = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "username": username,
+            "photo_url": photo_url,
+            **avatar_metadata,
+        }
         if linked_for_user:
-            linked_for_user.extra_data = {
-                "first_name": first_name,
-                "last_name": last_name,
-                "username": username,
-                "photo_url": photo_url,
-            }
+            linked_for_user.extra_data = extra_data
             linked_for_user.save(update_fields=["extra_data", "updated_at"])
         elif not linked_social:
             UserSocialAccount.objects.create(
                 user=user,
                 provider=UserSocialAccount.PROVIDER_TELEGRAM,
                 provider_id=telegram_id_str,
-                extra_data={
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "username": username,
-                    "photo_url": photo_url,
-                },
+                extra_data=extra_data,
             )
 
         # If the login came from /c/<client_id>, create/bind a CRM contact for that tenant.

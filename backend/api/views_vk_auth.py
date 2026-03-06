@@ -19,6 +19,7 @@ from core.models import Client, MapContact, UserSocialAccount, UserTenantBinding
 from core.services.telegram_user_service import TelegramUserService
 
 from .authentication import CookieJWTAuthentication
+from .social_avatar_storage import persist_social_avatar
 from .views_accounts import COOKIE_MAX_AGE, COOKIE_SAMESITE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
 
 VK_OAUTH_URL = "https://id.vk.com/authorize"
@@ -164,7 +165,15 @@ def _find_user_by_vk_provider_id(vk_user_id: int | str):
     return social.user if social else None
 
 
-def _link_vk_to_user(user, vk_user_id: int | str, profile: dict, email: str | None) -> tuple[bool, str | None]:
+def _link_vk_to_user(
+    user,
+    vk_user_id: int | str,
+    profile: dict,
+    email: str | None,
+    *,
+    photo_url: str | None = None,
+    avatar_metadata: dict | None = None,
+) -> tuple[bool, str | None]:
     provider_id = str(vk_user_id)
     linked_to_other = (
         UserSocialAccount.objects.filter(
@@ -185,9 +194,11 @@ def _link_vk_to_user(user, vk_user_id: int | str, profile: dict, email: str | No
         "first_name": profile.get("first_name", ""),
         "last_name": profile.get("last_name", ""),
         "screen_name": profile.get("screen_name", ""),
-        "photo_url": profile.get("avatar"),
+        "photo_url": photo_url or profile.get("avatar"),
         "email": email or profile.get("email"),
     }
+    if avatar_metadata:
+        extra_data.update(avatar_metadata)
 
     if linked_for_user:
         linked_for_user.extra_data = extra_data
@@ -350,6 +361,12 @@ class VkAuthView(APIView):
             return Response({"error": "Invalid token response"}, status=status.HTTP_400_BAD_REQUEST)
 
         profile = _fetch_vk_profile(access_token=access_token, user_id=vk_user_id) or {}
+        stored_photo_url, avatar_metadata = persist_social_avatar(
+            request=request,
+            photo_url=profile.get("avatar"),
+            provider=UserSocialAccount.PROVIDER_VK,
+            provider_id=str(vk_user_id),
+        )
 
         user = _find_user_by_vk_provider_id(vk_user_id)
         if user is None:
@@ -360,7 +377,14 @@ class VkAuthView(APIView):
                 create_client_tenant=(tenant_id_hint is None),
             )
 
-        linked, error = _link_vk_to_user(user=user, vk_user_id=vk_user_id, profile=profile, email=email)
+        linked, error = _link_vk_to_user(
+            user=user,
+            vk_user_id=vk_user_id,
+            profile=profile,
+            email=email,
+            photo_url=stored_photo_url,
+            avatar_metadata=avatar_metadata,
+        )
         if not linked:
             return Response({"error": error}, status=status.HTTP_409_CONFLICT)
 
@@ -417,7 +441,7 @@ class VkAuthView(APIView):
                     "firstName": profile.get("first_name", "") or user.first_name,
                     "lastName": profile.get("last_name", "") or user.last_name,
                     "username": profile.get("screen_name", "") or user.username,
-                    "photoUrl": profile.get("avatar"),
+                    "photoUrl": stored_photo_url or profile.get("avatar"),
                     "authDate": str(user.date_joined),
                     "contactId": int(binding.contact_id) if binding and binding.contact_id is not None else None,
                     "tenantId": int(binding.tenant_id) if binding else None,

@@ -2,6 +2,8 @@
 Модуль для работы со встречами и календарём в Telegram боте
 """
 import calendar
+import json
+import re
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -46,6 +48,7 @@ MONTH_NAMES_RU = [
 ]
 WEEKDAY_SHORT_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 UTC_TZ = ZoneInfo("UTC")
+EVENT_PRODUCT_TYPE_KEYS = frozenset({"мероприятие", "event"})
 
 
 # States
@@ -281,30 +284,133 @@ def _get_availability_events(tenant_id: int) -> list[dict]:
         return _fetch_all(cursor)
 
 
-def _get_busy_events(contact_ids: list[int], exclude_event_id: int | None) -> list[dict]:
-    if not contact_ids:
-        return []
+def _parse_product_event_datetime(raw_value: object, tenant_tz: ZoneInfo) -> datetime | None:
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return None
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$", raw, flags=re.IGNORECASE):
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC_TZ)
+        return parsed
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$", raw):
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=tenant_tz)
+        return parsed.astimezone(UTC_TZ)
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+        try:
+            parsed = datetime.fromisoformat(f"{raw}T12:00:00")
+        except ValueError:
+            return None
+        parsed = parsed.replace(tzinfo=tenant_tz)
+        return parsed.astimezone(UTC_TZ)
+
+    return None
+
+
+def _get_product_busy_events(tenant_id: int, tenant_tz: ZoneInfo) -> list[dict]:
     schema = _map_schema()
-    now_utc_naive = timezone.now().astimezone(UTC_TZ).replace(tzinfo=None)
-    params: list = [contact_ids, now_utc_naive]
-    exclude_sql = ""
-    if exclude_event_id is not None:
-        exclude_sql = "AND id <> %s"
-        params.append(exclude_event_id)
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
-            SELECT id, start_time, end_time
-            FROM {schema}.crm_events
-            WHERE contact_id = ANY(%s)
-              AND status = 'scheduled'
-              AND end_time >= %s
-              {exclude_sql}
-            ORDER BY start_time ASC
+            SELECT
+                p.id,
+                p.structure
+            FROM {schema}.products p
+            LEFT JOIN {schema}.product_types pt ON pt.id = p.product_type_id
+            WHERE p.owner_id = %s
+              AND lower(trim(coalesce(pt.name, ''))) = ANY(%s)
             """,
-            params,
+            [tenant_id, list(EVENT_PRODUCT_TYPE_KEYS)],
         )
-        return _fetch_all(cursor)
+        rows = _fetch_all(cursor)
+
+    busy: list[dict] = []
+    for row in rows:
+        structure_raw = row.get("structure")
+        if isinstance(structure_raw, str):
+            try:
+                structure = json.loads(structure_raw)
+            except json.JSONDecodeError:
+                continue
+        elif isinstance(structure_raw, dict):
+            structure = structure_raw
+        else:
+            continue
+
+        event_payload = structure.get("event")
+        if not isinstance(event_payload, dict):
+            continue
+
+        start_dt = _parse_product_event_datetime(event_payload.get("date"), tenant_tz)
+        if start_dt is None:
+            continue
+
+        duration_raw = event_payload.get("duration_minutes")
+        try:
+            duration_minutes = int(duration_raw)
+        except (TypeError, ValueError):
+            duration_minutes = 60
+        if duration_minutes <= 0:
+            duration_minutes = 60
+
+        end_dt = start_dt + timedelta(minutes=max(15, duration_minutes))
+        busy.append(
+            {
+                "id": f"product-{row.get('id')}",
+                "start_time": start_dt,
+                "end_time": end_dt,
+            }
+        )
+
+    return busy
+
+
+def _get_busy_events(
+    tenant_id: int,
+    contact_ids: list[int],
+    exclude_event_id: int | None,
+    tenant_tz: ZoneInfo,
+) -> list[dict]:
+    busy_events: list[dict] = []
+    if contact_ids:
+        schema = _map_schema()
+        now_utc_naive = timezone.now().astimezone(UTC_TZ).replace(tzinfo=None)
+        params: list = [contact_ids, now_utc_naive]
+        exclude_sql = ""
+        if exclude_event_id is not None:
+            exclude_sql = "AND id <> %s"
+            params.append(exclude_event_id)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT id, start_time, end_time
+                FROM {schema}.crm_events
+                WHERE contact_id = ANY(%s)
+                  AND status = 'scheduled'
+                  AND end_time >= %s
+                  {exclude_sql}
+                ORDER BY start_time ASC
+                """,
+                params,
+            )
+            busy_events = _fetch_all(cursor)
+
+    product_busy_events = _get_product_busy_events(tenant_id, tenant_tz)
+    if product_busy_events:
+        busy_events.extend(product_busy_events)
+    return busy_events
 
 
 def _get_contact_busy_dates(
@@ -424,10 +530,10 @@ def _get_available_dates(
     availability_events = _get_availability_events(tenant_id)
     if not availability_events:
         return []
-    contact_ids = _get_tenant_contact_ids(tenant_id, contact_id)
-    busy_events = _get_busy_events(contact_ids, exclude_event_id)
-
     tenant_tz = _resolve_timezone(tz_name)
+    contact_ids = _get_tenant_contact_ids(tenant_id, contact_id)
+    busy_events = _get_busy_events(tenant_id, contact_ids, exclude_event_id, tenant_tz)
+
     today = timezone.now().astimezone(UTC_TZ).astimezone(tenant_tz).date()
     available_dates: list[date] = []
     for offset in range(SCHEDULE_LOOKAHEAD_DAYS + 1):
@@ -456,9 +562,9 @@ def _get_slots_for_date(
     availability_events = _get_availability_events(tenant_id)
     if not availability_events:
         return []
-    contact_ids = _get_tenant_contact_ids(tenant_id, contact_id)
-    busy_events = _get_busy_events(contact_ids, exclude_event_id)
     tenant_tz = _resolve_timezone(tz_name)
+    contact_ids = _get_tenant_contact_ids(tenant_id, contact_id)
+    busy_events = _get_busy_events(tenant_id, contact_ids, exclude_event_id, tenant_tz)
     return _build_slots_for_date(
         check_date,
         availability_events,

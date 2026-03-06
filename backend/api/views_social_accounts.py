@@ -19,6 +19,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from core.models import Client, UserSocialAccount, UserTenantRole  # Client used in resolution
 
 from .authentication import CookieJWTAuthentication
+from .social_avatar_storage import persist_social_avatar
 from .views_accounts import COOKIE_MAX_AGE, COOKIE_SAMESITE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
 from .views_vk_auth import _exchange_code_for_token, _fetch_vk_profile, _get_vk_config
 
@@ -414,12 +415,19 @@ class LinkVkView(APIView):
             return Response({"error": "Invalid token response"}, status=status.HTTP_400_BAD_REQUEST)
 
         profile = _fetch_vk_profile(access_token=access_token, user_id=vk_user_id) or {}
+        stored_photo_url, avatar_metadata = persist_social_avatar(
+            request=request,
+            photo_url=profile.get("avatar"),
+            provider=UserSocialAccount.PROVIDER_VK,
+            provider_id=str(vk_user_id),
+        )
         extra_data = {
             "first_name": profile.get("first_name", ""),
             "last_name": profile.get("last_name", ""),
             "screen_name": profile.get("screen_name", ""),
-            "photo_url": profile.get("avatar"),
+            "photo_url": stored_photo_url or profile.get("avatar"),
             "email": email or profile.get("email"),
+            **avatar_metadata,
         }
 
         ok, error, conflicting_user = _link_provider(
@@ -448,7 +456,7 @@ class LinkVkView(APIView):
                 "linked": True,
                 "provider": UserSocialAccount.PROVIDER_VK,
                 "providerDisplayName": display_name,
-                "photoUrl": profile.get("avatar"),
+                "photoUrl": extra_data.get("photo_url"),
             }
         )
 
@@ -473,11 +481,18 @@ class LinkTelegramView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        stored_photo_url, avatar_metadata = persist_social_avatar(
+            request=request,
+            photo_url=telegram_data.get("photo_url"),
+            provider=UserSocialAccount.PROVIDER_TELEGRAM,
+            provider_id=str(telegram_id),
+        )
         extra_data = {
             "first_name": telegram_data.get("first_name", ""),
             "last_name": telegram_data.get("last_name", ""),
             "username": telegram_data.get("username", ""),
-            "photo_url": telegram_data.get("photo_url"),
+            "photo_url": stored_photo_url or telegram_data.get("photo_url"),
+            **avatar_metadata,
         }
 
         ok, error, conflicting_user = _link_provider(
@@ -505,7 +520,7 @@ class LinkTelegramView(APIView):
                     f"{telegram_data.get('first_name', '')} {telegram_data.get('last_name', '')}".strip()
                     or telegram_data.get("username", "")
                 ),
-                "photoUrl": telegram_data.get("photo_url"),
+                "photoUrl": extra_data.get("photo_url"),
             }
         )
 

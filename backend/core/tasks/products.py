@@ -129,7 +129,15 @@ def _create_client_product_with_sequence_retry(create_fn):
 
 
 @shared_task(bind=True, max_retries=0)
-def generate_client_product_for_type_task(self, client_id: int, product_type_id: int, *, language: str = "ru") -> Dict[str, Any]:
+def generate_client_product_for_type_task(
+    self,
+    client_id: int,
+    product_type_id: int,
+    *,
+    language: str = "ru",
+    name: Optional[str] = None,
+    short_description: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Generate and create a ClientProduct for the given system ProductType.
 
@@ -151,6 +159,22 @@ def generate_client_product_for_type_task(self, client_id: int, product_type_id:
             return {"success": False, "error": "В Wordstat нет избранных фраз. Отметьте нужные фразы как «избранное» и повторите."}
 
         requirements_override = _requirements_payload(product_type)
+        requested_name = (name or "").strip()
+        requested_short_description = (short_description or "").strip()
+        if requested_name or requested_short_description:
+            extra_name_rules = ["ДОПОЛНИТЕЛЬНО ДЛЯ ЭТОГО ПРОДУКТА"]
+            if requested_name:
+                extra_name_rules.append(f"- Название строго: '{requested_name}'.")
+            else:
+                extra_name_rules.append("- Придумай название сам(а): 2–6 слов, конкретно и по типу продукта.")
+
+            if requested_short_description:
+                extra_name_rules.append(
+                    f"- short_description максимально близко по смыслу к: '{requested_short_description}'."
+                )
+            extra_name_rules.append(f"- short_description должен начинаться с '{product_type.name}:'.")
+            requirements_override["name"] = f"{requirements_override['name']}\n\n" + "\n".join(extra_name_rules)
+
         extra_context = _extra_context_for_client(client)
 
         generator = _new_ai_generator()
@@ -175,12 +199,32 @@ def generate_client_product_for_type_task(self, client_id: int, product_type_id:
         if not isinstance(product_data, dict):
             return {"success": False, "error": "Некорректный ответ генератора", "raw_response": result.get("raw_response")}
 
+        generated_name = str(product_data.get("name") or "").strip()
+        final_name = requested_name or generated_name or product_type.name
+
+        generated_short_description = str(product_data.get("short_description") or "").strip()
+        if requested_short_description:
+            final_short_description = requested_short_description
+        elif generated_short_description:
+            final_short_description = generated_short_description
+        else:
+            final_short_description = f"{product_type.name}: {final_name}"
+
+        def _normalize_typed_description(type_name: str, value: str) -> str:
+            cleaned = (value or "").strip()
+            prefix = f"{(type_name or '').strip()}:".strip()
+            if not prefix or prefix == ":":
+                return cleaned
+            if cleaned.lower().startswith(prefix.lower()):
+                return cleaned
+            return f"{prefix} {cleaned}".strip()
+
         def _create_product():
             return ClientProduct.objects.create(
                 owner=client,
                 product_type=product_type,
-                name=str(product_data.get("name") or product_type.name).strip() or product_type.name,
-                short_description=(str(product_data.get("short_description") or "").strip() or None),
+                name=final_name,
+                short_description=_normalize_typed_description(product_type.name, final_short_description) or None,
                 packages=product_data.get("packages") if isinstance(product_data.get("packages"), list) else [],
                 structure=product_data.get("structure") if isinstance(product_data.get("structure"), dict) else {},
             )

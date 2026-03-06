@@ -154,10 +154,6 @@ export function PaymentTab() {
   const [promoCode, setPromoCode] = useState('');
   const [promoLoading, setPromoLoading] = useState(false);
   const [promoError, setPromoError] = useState('');
-  const [connectLoading, setConnectLoading] = useState(false);
-  const [tbankTerminalKey, setTbankTerminalKey] = useState('');
-  const [tbankSecretKey, setTbankSecretKey] = useState('');
-  const [tbankSaveLoading, setTbankSaveLoading] = useState(false);
   const [referralLoading, setReferralLoading] = useState(false);
   const [referralCount, setReferralCount] = useState<number | null>(null);
   const [referralUrl, setReferralUrl] = useState('');
@@ -362,51 +358,11 @@ export function PaymentTab() {
     void refreshStatus(paymentId);
   }, [paymentId, refreshStatus]);
 
-  const handleConnectYookassa = async () => {
-    setConnectLoading(true);
-    try {
-      const response = await apiFetch<{ redirect_url?: string }>('/payments/yookassa/connect/');
-      if (response?.redirect_url) {
-        window.location.href = response.redirect_url;
-        return;
-      }
-      toast.error('Не удалось получить ссылку подключения YooKassa.');
-    } catch (connectError) {
-      console.error('Failed to start YooKassa OAuth', connectError);
-      toast.error('Не удалось начать подключение YooKassa.');
-    } finally {
-      setConnectLoading(false);
-    }
-  };
-
-  const handleSaveTBankCredentials = async () => {
-    const terminalKey = tbankTerminalKey.trim();
-    const secretKey = tbankSecretKey.trim();
-    if (!terminalKey || !secretKey) {
-      toast.error('Введите TerminalKey и SecretKey для T-Bank.');
+  const openProvidersWindow = () => {
+    if (typeof window === 'undefined') {
       return;
     }
-
-    setTbankSaveLoading(true);
-    try {
-      const response = await apiFetch<{ ok?: boolean; test_mode?: boolean }>('/payments/tbank/credentials/', {
-        method: 'POST',
-        body: {
-          terminal_key: terminalKey,
-          secret_key: secretKey,
-        },
-      });
-      if (response?.ok) {
-        toast.success(response.test_mode ? 'Сохранено в тестовом режиме T-Bank.' : 'Ключи T-Bank сохранены.');
-        return;
-      }
-      toast.error('Не удалось сохранить ключи T-Bank.');
-    } catch (saveError) {
-      console.error('Failed to save T-Bank credentials', saveError);
-      toast.error('Не удалось сохранить ключи T-Bank.');
-    } finally {
-      setTbankSaveLoading(false);
-    }
+    window.open('/settings/payment-providers', '_blank', 'noopener,noreferrer');
   };
 
   const handlePartnerProgram = async () => {
@@ -604,40 +560,11 @@ export function PaymentTab() {
         <div>
           <button
             type="button"
-            onClick={handleConnectYookassa}
-            disabled={connectLoading}
-            className="text-sm text-blue-600 underline underline-offset-2 hover:text-blue-700 disabled:opacity-50"
+            onClick={openProvidersWindow}
+            className="text-sm text-blue-600 underline underline-offset-2 hover:text-blue-700"
           >
-            {connectLoading ? 'Переходим в YooKassa...' : 'Подключить прием платежей от своих клиентов'}
+            Подключить прием платежей от своих клиентов
           </button>
-        </div>
-        <div className="rounded-xl border p-3 space-y-2">
-          <div className="text-sm font-medium">T-Bank ключи для текущего клиента</div>
-          <div className="grid gap-2 md:grid-cols-2">
-            <Input
-              value={tbankTerminalKey}
-              onChange={(event) => setTbankTerminalKey(event.target.value)}
-              placeholder="TerminalKey"
-            />
-            <Input
-              value={tbankSecretKey}
-              onChange={(event) => setTbankSecretKey(event.target.value)}
-              placeholder="SecretKey"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void handleSaveTBankCredentials()}
-              disabled={tbankSaveLoading}
-            >
-              {tbankSaveLoading ? 'Сохраняем...' : 'Сохранить T-Bank ключи'}
-            </Button>
-            <span className="text-xs text-muted-foreground">
-              Если оставите тестовые ключи `TinkoffBankTest`, платежи будут в тестовом режиме.
-            </span>
-          </div>
         </div>
         <div>
           <button

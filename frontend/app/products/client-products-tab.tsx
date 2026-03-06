@@ -68,6 +68,7 @@ export function ClientProductsTab() {
 
   const [createName, setCreateName] = useState('');
   const [createShortDescription, setCreateShortDescription] = useState('');
+  const [createTypeId, setCreateTypeId] = useState<number | null>(null);
   const [filterTypeId, setFilterTypeId] = useState<number | null>(null);
   const [creatingManual, setCreatingManual] = useState(false);
   const [creatingAuto, setCreatingAuto] = useState(false);
@@ -88,6 +89,20 @@ export function ClientProductsTab() {
     const core = types.find((t) => t.name.trim().toLowerCase() === 'core');
     return core?.name ?? 'Core';
   }, [types]);
+
+  const isCreateTypeCore = useMemo(() => {
+    if (createTypeId == null || coreTypeId == null) return false;
+    return createTypeId === coreTypeId;
+  }, [coreTypeId, createTypeId]);
+
+  useEffect(() => {
+    if (types.length === 0) return;
+    setCreateTypeId((prev) => {
+      if (prev != null && types.some((t) => t.id === prev)) return prev;
+      if (coreTypeId != null) return coreTypeId;
+      return types[0]?.id ?? null;
+    });
+  }, [coreTypeId, types]);
 
   useEffect(() => {
     const load = async () => {
@@ -120,25 +135,43 @@ export function ClientProductsTab() {
     [router]
   );
 
-  const handleCreateCoreManual = async () => {
+  const handleCreateManual = async () => {
     const name = createName.trim();
     const short_description = createShortDescription.trim();
-    if (!name || !short_description) return;
+    if (!name || createTypeId == null) return;
     if (creatingManual || creatingAuto) return;
     setCreatingManual(true);
     setError(null);
     try {
-      const created = await clientProductsApi.createCore({
-        name,
-        short_description
-      });
+      const created = isCreateTypeCore
+        ? await clientProductsApi.createCore({
+            name,
+            short_description
+          })
+        : await clientProductsApi.create({
+            name,
+            product_type_id: createTypeId,
+            short_description: short_description ? short_description : null,
+            status: 'draft',
+            packages: [],
+          });
       setProducts((prev) => [created, ...prev]);
       setCreateName('');
       setCreateShortDescription('');
       openProduct(created.id);
     } catch (err) {
-      console.error('Failed to create core product', err);
-      setError('Не удалось создать core-продукт.');
+      console.error('Failed to create product', err);
+      if (err instanceof ApiError) {
+        try {
+          const payload = err.body ? JSON.parse(err.body) : null;
+          const message = payload?.error || payload?.detail;
+          if (message) {
+            setError(String(message));
+            return;
+          }
+        } catch {}
+      }
+      setError('Не удалось создать продукт.');
     } finally {
       setCreatingManual(false);
     }
@@ -149,6 +182,10 @@ export function ClientProductsTab() {
     const short_description = createShortDescription.trim();
     if (!name || !short_description) return;
     if (creatingManual || creatingAuto) return;
+    if (!isCreateTypeCore) {
+      setError('Автопилот сейчас доступен только для Core-продукта. Для остальных типов используйте «Вручную».');
+      return;
+    }
     setCreatingAuto(true);
     setError(null);
     let keepLoading = false;
@@ -352,7 +389,8 @@ export function ClientProductsTab() {
 
   const hasAnyProducts = products.length > 0 || pendingProducts.length > 0;
   const coreOnboarding = !loading && !error && !hasAnyProducts;
-  const canCreateCore = Boolean(createName.trim() && createShortDescription.trim());
+  const canCreateManual = Boolean(createName.trim() && createTypeId != null && (!isCreateTypeCore || createShortDescription.trim()));
+  const canCreateAuto = Boolean(isCreateTypeCore && createName.trim() && createShortDescription.trim());
   const isDeleteDialogOpen = productToDelete != null;
 
   useEffect(() => {
@@ -382,10 +420,29 @@ export function ClientProductsTab() {
             onChange={(e) => setCreateShortDescription(e.target.value)}
             className="w-full max-w-sm"
           />
+          <div className="w-full max-w-xs">
+            <Select
+              value={createTypeId == null ? 'none' : String(createTypeId)}
+              onValueChange={(value) => setCreateTypeId(value === 'none' ? null : Number(value))}
+              disabled={loading || creatingAuto || creatingManual}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Тип продукта" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">— Выберите тип —</SelectItem>
+                {types.map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button
               onClick={() => void handleCreateCoreAuto()}
-              disabled={!canCreateCore || creatingAuto || creatingManual}
+              disabled={!canCreateAuto || creatingAuto || creatingManual}
             >
               {creatingAuto ? (
                 <span className="inline-flex items-center gap-2">
@@ -398,8 +455,8 @@ export function ClientProductsTab() {
             </Button>
             <Button
               variant="secondary"
-              onClick={() => void handleCreateCoreManual()}
-              disabled={!canCreateCore || creatingManual || creatingAuto}
+              onClick={() => void handleCreateManual()}
+              disabled={!canCreateManual || creatingManual || creatingAuto}
             >
               {creatingManual ? 'Создание…' : 'Вручную'}
             </Button>
@@ -407,8 +464,8 @@ export function ClientProductsTab() {
         </div>
         <p className="text-xs text-muted-foreground">
           {coreOnboarding
-            ? 'Создайте основной продукт (Core): заполните название и описание, затем выберите «Вручную» или «Автопилот».'
-            : 'В общем списке создаем Core продукты. Внутри Core - всё остальное.'}
+            ? 'Создайте первый продукт: укажите название, выберите тип и нажмите «Вручную». Для Core также доступен «Автопилот».'
+            : 'В этом списке можно создавать продукты любого типа. Для Core также доступен «Автопилот».'}
         </p>
       </div>
 

@@ -118,41 +118,119 @@ def _tbank_request(endpoint: str, payload: dict, *, terminal_key: str, secret_ke
     return result
 
 
-def _parse_digital_product_plan_code(plan_code: object) -> tuple[int | None, int | None]:
+def _parse_digital_product_plan_code(plan_code: object) -> tuple[int | None, int | None, int | None]:
     raw = str(plan_code or "").strip()
     if not raw.startswith("digital_product:"):
-        return None, None
+        return None, None, None
 
     chunks = raw.split(":")
     if len(chunks) < 2:
-        return None, None
+        return None, None, None
 
     product_id: int | None = None
     contact_id: int | None = None
+    package_index: int | None = None
     try:
         product_id = int(chunks[1])
     except (TypeError, ValueError):
         product_id = None
 
-    if len(chunks) >= 4 and chunks[2] == "contact":
-        try:
-            contact_id = int(chunks[3])
-        except (TypeError, ValueError):
-            contact_id = None
+    index = 2
+    while index + 1 < len(chunks):
+        token = chunks[index]
+        value = chunks[index + 1]
+        if token == "contact":
+            try:
+                contact_id = int(value)
+            except (TypeError, ValueError):
+                contact_id = None
+        elif token == "package":
+            try:
+                parsed_package_index = int(value)
+                package_index = parsed_package_index if parsed_package_index >= 0 else None
+            except (TypeError, ValueError):
+                package_index = None
+        index += 2
 
-    return product_id, contact_id
+    return product_id, contact_id, package_index
 
 
-def _resolve_product_price(product: ClientProduct) -> Decimal | None:
+def _resolve_product_price(product: ClientProduct, package_index: int | None = None) -> tuple[Decimal | None, dict | None, int | None]:
     packages = product.packages if isinstance(product.packages, list) else []
-    for item in packages:
+    if package_index is not None:
+        if package_index < 0 or package_index >= len(packages):
+            return None, None, None
+        item = packages[package_index]
+        if not isinstance(item, dict):
+            return None, None, None
+        raw_price = item.get("price")
+        try:
+            price = Decimal(str(raw_price)).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError, ValueError):
+            return None, None, None
+        if price > 0:
+            return price, item, package_index
+        return None, None, None
+
+    for index, item in enumerate(packages):
         raw_price = item.get("price") if isinstance(item, dict) else None
         try:
             price = Decimal(str(raw_price)).quantize(Decimal("0.01"))
         except (InvalidOperation, TypeError, ValueError):
             continue
-        if price > 0:
-            return price
+        if price > 0 and isinstance(item, dict):
+            return price, item, index
+    return None, None, None
+
+
+def _resolve_product_package_payload(product: ClientProduct | None, package_index: int | None) -> dict[str, object] | None:
+    if product is None or package_index is None:
+        return None
+
+    raw_packages = product.packages if isinstance(product.packages, list) else []
+    if package_index < 0 or package_index >= len(raw_packages):
+        return None
+
+    raw_package = raw_packages[package_index]
+    if not isinstance(raw_package, dict):
+        return None
+
+    package_name = str(raw_package.get("name") or "").strip()
+    package_description = str(raw_package.get("description") or "").strip()
+    package_price: str | None = None
+    try:
+        parsed_price = Decimal(str(raw_package.get("price"))).quantize(Decimal("0.01"))
+        if parsed_price > 0:
+            package_price = f"{parsed_price:.2f}"
+    except (InvalidOperation, TypeError, ValueError):
+        package_price = None
+
+    return {
+        "index": int(package_index),
+        "name": package_name or f"Пакет {package_index + 1}",
+        "description": package_description,
+        "price": package_price,
+    }
+
+
+def _infer_product_package_index_by_amount(product: ClientProduct | None, amount: Decimal | None) -> int | None:
+    if product is None or amount is None:
+        return None
+
+    raw_packages = product.packages if isinstance(product.packages, list) else []
+    matches: list[int] = []
+    for index, raw_package in enumerate(raw_packages):
+        if not isinstance(raw_package, dict):
+            continue
+        try:
+            package_price = Decimal(str(raw_package.get("price"))).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+        if package_price > 0 and package_price == amount:
+            matches.append(index)
+
+    if len(matches) == 1:
+        return matches[0]
     return None
 
 
@@ -325,6 +403,16 @@ def _record_contact_product_purchase(
     if contact_id is None or contact_id <= 0:
         return None
 
+    selected_package_index: int | None = None
+    try:
+        selected_package_index_raw = metadata.get("package_index")
+        if selected_package_index_raw not in (None, ""):
+            parsed_package_index = int(str(selected_package_index_raw))
+            if parsed_package_index >= 0:
+                selected_package_index = parsed_package_index
+    except (TypeError, ValueError):
+        selected_package_index = None
+
     product = (
         ClientProduct.objects
         .filter(owner_id=client.id, id=product_id)
@@ -371,7 +459,12 @@ def _record_contact_product_purchase(
         },
     )
     if not already_processed_same_payment:
-        grant_service_package_to_purchase(purchase=purchase, product=product, top_up=True)
+        grant_service_package_to_purchase(
+            purchase=purchase,
+            product=product,
+            top_up=True,
+            package_index=selected_package_index,
+        )
     return purchase
 
 
@@ -469,6 +562,17 @@ class PublicClientPageBuyProductView(APIView):
         except (TypeError, ValueError):
             return Response({"detail": "product_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
+        package_index: int | None = None
+        package_index_raw = request.data.get("package_index")
+        if package_index_raw not in (None, ""):
+            try:
+                parsed_package_index = int(package_index_raw)
+            except (TypeError, ValueError):
+                return Response({"detail": "package_index must be an integer."}, status=status.HTTP_400_BAD_REQUEST)
+            if parsed_package_index < 0:
+                return Response({"detail": "package_index must be >= 0."}, status=status.HTTP_400_BAD_REQUEST)
+            package_index = parsed_package_index
+
         product = (
             ClientProduct.objects
             .filter(owner_id=client_id, id=product_id, status=ClientProduct.STATUS_ACTIVE)
@@ -477,9 +581,11 @@ class PublicClientPageBuyProductView(APIView):
         if not product:
             return Response({"detail": "Продукт не найден или недоступен."}, status=status.HTTP_404_NOT_FOUND)
 
-        amount = _resolve_product_price(product)
-        if not amount:
-            return Response({"detail": "Для продукта не указана цена."}, status=status.HTTP_400_BAD_REQUEST)
+        amount, selected_package, resolved_package_index = _resolve_product_price(product, package_index=package_index)
+        if amount is None:
+            if package_index is None:
+                return Response({"detail": "Для продукта не указана цена."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Пакет не найден или у него не указана цена."}, status=status.HTTP_400_BAD_REQUEST)
 
         provider = _resolve_public_payment_provider(request.data.get("provider"))
         if not provider:
@@ -496,6 +602,12 @@ class PublicClientPageBuyProductView(APIView):
             "product_id": str(product.id),
             "product_name": (product.name or "").strip()[:128],
         }
+        if resolved_package_index is not None:
+            metadata_payload["package_index"] = str(resolved_package_index)
+        if isinstance(selected_package, dict):
+            package_name = str(selected_package.get("name") or "").strip()
+            if package_name:
+                metadata_payload["package_name"] = package_name[:128]
         bound_contact_id = _resolve_request_contact_id_for_client(request, client_id)
         if bound_contact_id is None or bound_contact_id <= 0:
             return Response(
@@ -503,6 +615,10 @@ class PublicClientPageBuyProductView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         metadata_payload["contact_id"] = str(bound_contact_id)
+        plan_code = f"digital_product:{product.id}:contact:{bound_contact_id}"
+        if resolved_package_index is not None:
+            plan_code = f"digital_product:{product.id}:package:{resolved_package_index}:contact:{bound_contact_id}"
+
         if provider == PAYMENT_PROVIDER_TBANK:
             terminal_key, secret_key = _get_tbank_credentials(client)
             if not terminal_key or not secret_key:
@@ -553,7 +669,7 @@ class PublicClientPageBuyProductView(APIView):
                         "provider": PAYMENT_PROVIDER_TBANK,
                         "status": mapped_status,
                         "amount": amount,
-                        "plan_code": f"digital_product:{product.id}:contact:{bound_contact_id}",
+                        "plan_code": plan_code,
                     },
                 )
 
@@ -617,7 +733,7 @@ class PublicClientPageBuyProductView(APIView):
                     "provider": PAYMENT_PROVIDER_YOOKASSA,
                     "status": str(data.get("status") or YooKassaPayment.STATUS_PENDING),
                     "amount": amount,
-                    "plan_code": f"digital_product:{product.id}:contact:{bound_contact_id}",
+                    "plan_code": plan_code,
                 },
             )
 
@@ -695,7 +811,7 @@ class PublicClientPagePaymentStatusView(APIView):
             except (InvalidOperation, TypeError, ValueError):
                 amount_value = f"{yk_payment.amount:.2f}" if yk_payment.amount is not None else None
 
-            parsed_product_id, parsed_contact_id = _parse_digital_product_plan_code(yk_payment.plan_code)
+            parsed_product_id, parsed_contact_id, parsed_package_index = _parse_digital_product_plan_code(yk_payment.plan_code)
             product_id = parsed_product_id
             metadata_contact_id = parsed_contact_id
             metadata = {
@@ -704,6 +820,8 @@ class PublicClientPagePaymentStatusView(APIView):
                 "product_id": str(product_id) if product_id is not None else "",
                 "contact_id": str(metadata_contact_id) if metadata_contact_id is not None else "",
             }
+            if parsed_package_index is not None:
+                metadata["package_index"] = str(parsed_package_index)
             payment_payload = {
                 "id": payment_id,
                 "status": payment_status,
@@ -843,6 +961,14 @@ class PublicClientPagePurchasesView(APIView):
                 or (purchase.product_name or "").strip()
                 or f"Продукт #{purchase.product_id}"
             )
+            selected_package_index: int | None = None
+            if purchase.last_payment_id and purchase.last_payment:
+                parsed_product_id, _, parsed_package_index = _parse_digital_product_plan_code(purchase.last_payment.plan_code)
+                if parsed_product_id in (None, int(purchase.product_id)):
+                    selected_package_index = parsed_package_index
+            if selected_package_index is None:
+                selected_package_index = _infer_product_package_index_by_amount(product, purchase.amount)
+            package_payload = _resolve_product_package_payload(product, selected_package_index)
             items.append(
                 {
                     "id": purchase.id,
@@ -852,6 +978,7 @@ class PublicClientPagePurchasesView(APIView):
                     "amount": str(purchase.amount) if purchase.amount is not None else None,
                     "currency": purchase.currency or "RUB",
                     "payment_id": purchase.last_payment.payment_id if purchase.last_payment_id else None,
+                    "package": package_payload,
                     "delivery": _build_digital_product_delivery_payload(client, product),
                     "service_package": build_service_package_payload(purchase),
                 }

@@ -1,16 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, ExternalLink, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ExternalLink, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { CustomTextarea } from '@/components/ui/custom-textarea';
+import { DateTimePicker } from '@/components/ui/date-time-picker';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { EventDescriptionEditor, EMPTY_TIPTAP_DOC, normalizeTiptapDoc } from '@/components/products/event-description-editor';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import { productTypesApi } from '@/lib/api/productTypes';
 import { ApiError } from '@/lib/api';
@@ -76,6 +78,13 @@ type MetricRow = { metric: string; promise: string };
 type MethodRow = { component: string; template: string };
 type LessonFormatRow = { stage: string; percent: number | null };
 type ProgramModuleRow = { module: string; result: string };
+type EventDetails = {
+  title: string;
+  date: string;
+  location: string;
+  duration_minutes: number | null;
+  description: Record<string, unknown>;
+};
 type RelatedProductRef = NonNullable<ProductStructure['related_products']>[number];
 type ProductPayload = {
   name: string;
@@ -95,8 +104,15 @@ type StructurePayloadInput = {
   packagingName: string;
   packagingSlogan: string;
   packagingPromise: string;
+  eventTitle: string;
+  eventDate: string;
+  eventLocation: string;
+  eventDuration: string;
+  eventDescription: Record<string, unknown>;
   relatedProducts: RelatedProductRef[];
 };
+
+const EVENT_TYPE_KEYS = new Set(['мероприятие', 'event']);
 
 const toStr = (value: unknown) => (typeof value === 'string' ? value : value == null ? '' : String(value));
 
@@ -122,6 +138,8 @@ const resolveProductId = (result?: Record<string, unknown>) => {
 
 const normalizeProductStatus = (value: string | null | undefined): ProductStatus =>
   value === 'active' ? 'active' : 'draft';
+
+const isEventTypeName = (value: string | null | undefined): boolean => EVENT_TYPE_KEYS.has((value ?? '').trim().toLowerCase());
 
 const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure => {
   const base = (raw ?? {}) as Record<string, unknown>;
@@ -192,6 +210,14 @@ const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure =
         })
         .filter((item): item is Exclude<typeof item, null> => item !== null)
     : [];
+  const eventRaw = (base.event ?? {}) as Record<string, unknown>;
+  const event: EventDetails = {
+    title: toStr(eventRaw.title),
+    date: toStr(eventRaw.date),
+    location: toStr(eventRaw.location),
+    duration_minutes: toNumberOrNull(eventRaw.duration_minutes),
+    description: normalizeTiptapDoc(eventRaw.description),
+  };
 
   return {
     audience,
@@ -204,6 +230,13 @@ const normalizeStructure = (raw: ClientProduct['structure']): ProductStructure =
       name: packaging?.name == null ? '' : toStr(packaging?.name),
       slogan: packaging?.slogan == null ? '' : toStr(packaging?.slogan),
       promise: packaging?.promise == null ? '' : toStr(packaging?.promise)
+    },
+    event: {
+      title: event.title,
+      date: event.date,
+      location: event.location,
+      duration_minutes: event.duration_minutes,
+      description: event.description,
     },
     related_products,
   };
@@ -245,12 +278,23 @@ const buildStructurePayload = (input: StructurePayloadInput): ProductStructure =
     slogan: input.packagingSlogan.trim() ? input.packagingSlogan.trim() : null,
     promise: input.packagingPromise.trim() ? input.packagingPromise.trim() : null
   },
+  event: {
+    title: input.eventTitle.trim() ? input.eventTitle.trim() : null,
+    date: input.eventDate.trim() ? input.eventDate.trim() : null,
+    location: input.eventLocation.trim() ? input.eventLocation.trim() : null,
+    duration_minutes: (() => {
+      const parsed = Number.parseInt(input.eventDuration.trim(), 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    })(),
+    description: normalizeTiptapDoc(input.eventDescription),
+  },
   related_products: serializeRelatedProducts(input.relatedProducts)
 });
 
 const buildPayloadFromProduct = (data: ClientProduct): ProductPayload | null => {
   const nextName = (data.name ?? '').trim();
   if (!nextName) return null;
+  const isEvent = isEventTypeName(data.product_type_name ?? data.product_type?.name ?? null);
 
   const normalizedPackages = normalizePackages(data.packages)
     .map((pkg) => ({
@@ -280,6 +324,11 @@ const buildPayloadFromProduct = (data: ClientProduct): ProductPayload | null => 
     packagingName: structure.packaging?.name ?? '',
     packagingSlogan: structure.packaging?.slogan ?? '',
     packagingPromise: structure.packaging?.promise ?? '',
+    eventTitle: isEvent ? nextName : (structure.event?.title ?? ''),
+    eventDate: structure.event?.date ?? '',
+    eventLocation: structure.event?.location ?? '',
+    eventDuration: structure.event?.duration_minutes == null ? '' : String(Math.round(structure.event.duration_minutes)),
+    eventDescription: normalizeTiptapDoc(structure.event?.description),
     relatedProducts: structure.related_products ?? []
   });
 
@@ -322,6 +371,11 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [packagingName, setPackagingName] = useState('');
   const [packagingSlogan, setPackagingSlogan] = useState('');
   const [packagingPromise, setPackagingPromise] = useState('');
+  const [eventTitle, setEventTitle] = useState('');
+  const [eventDate, setEventDate] = useState('');
+  const [eventLocation, setEventLocation] = useState('');
+  const [eventDuration, setEventDuration] = useState('');
+  const [eventDescription, setEventDescription] = useState<Record<string, unknown>>(EMPTY_TIPTAP_DOC);
   const [relatedProducts, setRelatedProducts] = useState<RelatedProductRef[]>([]);
 
   const [createRelatedName, setCreateRelatedName] = useState('');
@@ -331,6 +385,12 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [creatingRelatedTaskId, setCreatingRelatedTaskId] = useState<string | null>(null);
   const [creatingRelatedMap, setCreatingRelatedMap] = useState(false);
   const [creatingDigitalProductPage, setCreatingDigitalProductPage] = useState(false);
+  const [creatingAiProduct, setCreatingAiProduct] = useState(false);
+  const [creatingAiTaskId, setCreatingAiTaskId] = useState<string | null>(null);
+  const [isStructureOpen, setIsStructureOpen] = useState(false);
+  const [isPackagesOpen, setIsPackagesOpen] = useState(false);
+  const structureBlockRef = useRef<HTMLDivElement | null>(null);
+  const packagesBlockRef = useRef<HTMLDivElement | null>(null);
 
   const coreTypeId = useMemo(() => {
     const core = types.find((t) => t.name.trim().toLowerCase() === 'core');
@@ -342,9 +402,35 @@ export default function ProductPage({ params }: ProductPageProps) {
     return (product?.product_type_name ?? '').trim().toLowerCase() === 'core';
   }, [coreTypeId, product?.product_type_name, productTypeId]);
 
+  const selectedTypeName = useMemo(() => {
+    if (productTypeId != null) {
+      const currentType = types.find((t) => t.id === productTypeId);
+      if (currentType?.name) return currentType.name;
+    }
+    return product?.product_type_name ?? '';
+  }, [product?.product_type_name, productTypeId, types]);
+
+  const isEventProduct = useMemo(() => isEventTypeName(selectedTypeName), [selectedTypeName]);
+
   const relatedTypeOptions = useMemo(() => {
     return types.filter((t) => t.name.trim().toLowerCase() !== 'core');
   }, [types]);
+
+  const keepBlockStartInView = useCallback((ref: RefObject<HTMLDivElement | null>) => {
+    window.requestAnimationFrame(() => {
+      ref.current?.scrollIntoView({ behavior: 'auto', block: 'start' });
+    });
+  }, []);
+
+  const toggleStructureSection = useCallback(() => {
+    setIsStructureOpen((prev) => !prev);
+    keepBlockStartInView(structureBlockRef);
+  }, [keepBlockStartInView]);
+
+  const togglePackagesSection = useCallback(() => {
+    setIsPackagesOpen((prev) => !prev);
+    keepBlockStartInView(packagesBlockRef);
+  }, [keepBlockStartInView]);
 
   useEffect(() => {
     let isActive = true;
@@ -391,6 +477,11 @@ export default function ProductPage({ params }: ProductPageProps) {
       setPackagingName(structure.packaging?.name ?? '');
       setPackagingSlogan(structure.packaging?.slogan ?? '');
       setPackagingPromise(structure.packaging?.promise ?? '');
+      setEventTitle(structure.event?.title ?? '');
+      setEventDate(structure.event?.date ?? '');
+      setEventLocation(structure.event?.location ?? '');
+      setEventDuration(structure.event?.duration_minutes == null ? '' : String(Math.round(structure.event.duration_minutes)));
+      setEventDescription(normalizeTiptapDoc(structure.event?.description));
       setRelatedProducts(structure.related_products ?? []);
       const payload = buildPayloadFromProduct(data);
       pendingPayloadRef.current = payload;
@@ -524,6 +615,50 @@ export default function ProductPage({ params }: ProductPageProps) {
     }
   };
 
+  const handleAiGenerateProduct = async () => {
+    if (!canEdit || saving || creatingAiProduct || productTypeId == null) return;
+    setCreatingAiProduct(true);
+    try {
+      const requestedName = productName.trim();
+      const requestedDescription = shortDescription.trim();
+      const response = await productTypesApi.generateProduct(productTypeId, {
+        language: 'ru',
+        name: requestedName || undefined,
+        short_description: requestedDescription || undefined,
+      });
+
+      if (response.product?.id != null) {
+        toast.success('ИИ-продукт создан');
+        router.push(`/product/${response.product.id}`);
+        return;
+      }
+
+      if (response.task_id) {
+        setCreatingAiTaskId(response.task_id);
+        toast.success(response.message || 'Запущена ИИ-генерация продукта');
+        return;
+      }
+
+      setCreatingAiProduct(false);
+      toast.error(response.error || 'Не удалось запустить ИИ-генерацию');
+    } catch (err) {
+      console.error('Failed to generate product via AI', err);
+      if (err instanceof ApiError) {
+        try {
+          const payload = err.body ? JSON.parse(err.body) : null;
+          const message = payload?.detail || payload?.error;
+          if (message) {
+            toast.error(String(message));
+            setCreatingAiProduct(false);
+            return;
+          }
+        } catch {}
+      }
+      toast.error('Не удалось запустить ИИ-генерацию');
+      setCreatingAiProduct(false);
+    }
+  };
+
   useEffect(() => {
     if (!creatingRelatedTaskId) return;
     let cancelled = false;
@@ -595,6 +730,50 @@ export default function ProductPage({ params }: ProductPageProps) {
     };
   }, [creatingRelatedTaskId]);
 
+  useEffect(() => {
+    if (!creatingAiTaskId) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const status = await clientProductsApi.generationStatus(creatingAiTaskId);
+        if (cancelled) return;
+
+        if (status.status === 'success') {
+          const generatedProductId = status.product?.id ?? resolveProductId(status.result);
+          if (generatedProductId != null) {
+            toast.success('ИИ-продукт создан');
+            router.push(`/product/${generatedProductId}`);
+          } else {
+            toast.error('Продукт создан, но не удалось определить его id');
+          }
+          setCreatingAiTaskId(null);
+          setCreatingAiProduct(false);
+          return;
+        }
+
+        if (status.status === 'failure' || status.status === 'revoked') {
+          toast.error(status.error || 'ИИ-генерация завершилась с ошибкой');
+          setCreatingAiTaskId(null);
+          setCreatingAiProduct(false);
+        }
+      } catch (err) {
+        console.error('Failed to fetch AI generation status', err);
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, 2000);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [creatingAiTaskId, router]);
+
   const handleCreateRelatedMap = async () => {
     if (!canEdit || creatingRelatedMap || productId == null) return;
     setCreatingRelatedMap(true);
@@ -644,6 +823,11 @@ export default function ProductPage({ params }: ProductPageProps) {
         packagingName,
         packagingSlogan,
         packagingPromise,
+        eventTitle: isEventProduct ? productName : eventTitle,
+        eventDate,
+        eventLocation,
+        eventDuration,
+        eventDescription,
         relatedProducts: override?.relatedProducts ?? relatedProducts
       });
 
@@ -671,6 +855,12 @@ export default function ProductPage({ params }: ProductPageProps) {
       packagingName,
       packagingSlogan,
       packagingPromise,
+      isEventProduct,
+      eventTitle,
+      eventDate,
+      eventLocation,
+      eventDuration,
+      eventDescription,
       relatedProducts
     ]
   );
@@ -769,6 +959,11 @@ export default function ProductPage({ params }: ProductPageProps) {
       setPackagingName(updatedStructure.packaging?.name ?? '');
       setPackagingSlogan(updatedStructure.packaging?.slogan ?? '');
       setPackagingPromise(updatedStructure.packaging?.promise ?? '');
+      setEventTitle(updatedStructure.event?.title ?? '');
+      setEventDate(updatedStructure.event?.date ?? '');
+      setEventLocation(updatedStructure.event?.location ?? '');
+      setEventDuration(updatedStructure.event?.duration_minutes == null ? '' : String(Math.round(updatedStructure.event.duration_minutes)));
+      setEventDescription(normalizeTiptapDoc(updatedStructure.event?.description));
       setRelatedProducts(updatedStructure.related_products ?? []);
       lastSavedHashRef.current = JSON.stringify(payload);
       pendingPayloadRef.current = payload;
@@ -835,14 +1030,32 @@ export default function ProductPage({ params }: ProductPageProps) {
 
       <div className="space-y-1">
         <h1 className="text-3xl font-bold">Продукт</h1>
-        <p className="text-gray-500">
-          Структура продукта и пакеты ({packagesCount}).
-        </p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-gray-500">Структура продукта и пакеты ({packagesCount}).</p>
+          {canEdit ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleAiGenerateProduct()}
+              disabled={saving || creatingAiProduct || productTypeId == null}
+            >
+              {creatingAiProduct ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  ИИ генерация...
+                </span>
+              ) : (
+                'ИИ генерация'
+              )}
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <div className="rounded-xl border bg-card/70 p-4 shadow-sm space-y-4">
         <div className="space-y-2">
-          <div className="text-sm font-medium">Название продукта</div>
+          <div className="text-sm font-medium">{isEventProduct ? 'Название мероприятия' : 'Название продукта'}</div>
           <Input value={productName} onChange={(e) => setProductName(e.target.value)} disabled={!canEdit || saving} />
         </div>
 
@@ -871,7 +1084,7 @@ export default function ProductPage({ params }: ProductPageProps) {
         </div>
 
         <div className="space-y-2">
-          <div className="text-sm font-medium">Статус продукта</div>
+          <div className="text-sm font-medium">Статус</div>
           <Select
             value={productStatus}
             onValueChange={(value) => setProductStatus(value === 'active' ? 'active' : 'draft')}
@@ -892,13 +1105,67 @@ export default function ProductPage({ params }: ProductPageProps) {
 
         <div className="space-y-2">
           <div className="text-sm font-medium">Краткое описание</div>
-          <CustomTextarea
+          <Input
             value={shortDescription}
             onChange={(e) => setShortDescription(e.target.value)}
-            className="min-h-[110px]"
             disabled={!canEdit || saving}
           />
         </div>
+
+        {isEventProduct ? (
+          <div className="space-y-4 rounded-lg border bg-background/40 p-3">
+            <div className="space-y-1">
+              <div className="text-sm font-medium">Поля мероприятия</div>
+              <div className="text-xs text-muted-foreground">
+                Для типа «Мероприятие» дополнительно заполняются дата, длительность, место и подробное описание в формате TipTap.
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <div className="text-xs font-medium text-muted-foreground">Дата и время</div>
+                <DateTimePicker
+                  value={eventDate}
+                  onChange={setEventDate}
+                  placeholder="Выберите дату и время"
+                  disabled={!canEdit || saving}
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs font-medium text-muted-foreground">Длительность (мин)</div>
+                <Input
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputMode="numeric"
+                  value={eventDuration}
+                  onChange={(e) => setEventDuration(e.target.value)}
+                  placeholder="Например: 90"
+                  disabled={!canEdit || saving}
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs font-medium text-muted-foreground">Место</div>
+                <Input
+                  value={eventLocation}
+                  onChange={(e) => setEventLocation(e.target.value)}
+                  placeholder="Онлайн / офлайн-локация"
+                  disabled={!canEdit || saving}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">Описание</div>
+              <EventDescriptionEditor
+                value={eventDescription}
+                onChange={setEventDescription}
+                editable={canEdit && !saving}
+                placeholder="Программа, тайминг, спикеры, бонусы, формат участия..."
+              />
+            </div>
+          </div>
+        ) : null}
 
         <div className="space-y-2">
           <div className="text-sm font-medium">Цифровой продукт (База знаний)</div>
@@ -1070,13 +1337,28 @@ export default function ProductPage({ params }: ProductPageProps) {
         </div>
       ) : null}
 
-      <div className="rounded-xl border bg-card/70 p-4 shadow-sm space-y-6">
-        <div className="space-y-1">
-          <div className="text-sm font-medium">Структура продукта</div>
-          <div className="text-xs text-muted-foreground">Заполните блоки по шаблону (ЦА → трансформация → метрики → метод → формат → программа → упаковка).</div>
+      <div ref={structureBlockRef} className="rounded-xl border bg-card/70 p-4 shadow-sm">
+        <div className="flex items-start gap-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="mt-0.5 h-8 w-8"
+            onClick={toggleStructureSection}
+            aria-label={isStructureOpen ? 'Свернуть структуру продукта' : 'Развернуть структуру продукта'}
+            title={isStructureOpen ? 'Свернуть' : 'Развернуть'}
+          >
+            <ChevronDown className={`h-4 w-4 transition-transform ${isStructureOpen ? 'rotate-180' : ''}`} />
+          </Button>
+          <div className="space-y-1">
+            <div className="text-sm font-medium">Структура продукта</div>
+            <div className="text-xs text-muted-foreground">Заполните блоки по шаблону (ЦА → трансформация → метрики → метод → формат → программа → упаковка).</div>
+          </div>
         </div>
 
-        <div className="space-y-3">
+        {isStructureOpen ? (
+          <div className="mt-6 space-y-6">
+            <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm font-medium">1. ЦА (кому)</div>
             {canEdit && (
@@ -1527,31 +1809,47 @@ export default function ProductPage({ params }: ProductPageProps) {
             </div>
           </div>
         </div>
+          </div>
+        ) : null}
       </div>
 
-      <div className="rounded-xl border bg-card/70 p-4 shadow-sm space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="space-y-1">
-            <div className="text-sm font-medium">Пакеты</div>
-            <div className="text-xs text-muted-foreground">
-              Добавьте пакеты (например, Basic/Pro). Для пакета услуг укажите тип списания: по встречам или по минутам.
-              Для автосписания используйте один сервисный пакет на продукт.
+      <div ref={packagesBlockRef} className="rounded-xl border bg-card/70 p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-1 items-start gap-3">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="mt-0.5 h-8 w-8"
+              onClick={togglePackagesSection}
+              aria-label={isPackagesOpen ? 'Свернуть пакеты' : 'Развернуть пакеты'}
+              title={isPackagesOpen ? 'Свернуть' : 'Развернуть'}
+            >
+              <ChevronDown className={`h-4 w-4 transition-transform ${isPackagesOpen ? 'rotate-180' : ''}`} />
+            </Button>
+            <div className="space-y-1 flex-1">
+              <div className="text-sm font-medium">Пакеты</div>
+              <div className="text-xs text-muted-foreground">
+                Добавьте пакеты (например, Basic/Pro). Для пакета услуг укажите тип списания: по встречам или по минутам.
+                Для автосписания используйте один сервисный пакет на продукт.
+              </div>
             </div>
           </div>
           {canEdit && (
-            <Button type="button" variant="secondary" size="sm" onClick={handleAddPackage} disabled={saving}>
+            <Button type="button" variant="secondary" size="sm" onClick={handleAddPackage} disabled={saving || !isPackagesOpen}>
               <Plus className="h-4 w-4 mr-2" />
               Добавить пакет
             </Button>
           )}
         </div>
 
-        {packages.length === 0 ? (
-          <div className="text-sm text-muted-foreground">Пакетов пока нет.</div>
-        ) : (
-          <div className="space-y-3">
-            {packages.map((pkg, index) => (
-              <div key={index} className="rounded-lg border bg-background p-3 space-y-2">
+        {isPackagesOpen ? (
+          packages.length === 0 ? (
+            <div className="mt-4 text-sm text-muted-foreground">Пакетов пока нет.</div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {packages.map((pkg, index) => (
+                <div key={index} className="rounded-lg border bg-background p-3 space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-sm font-medium">Пакет #{index + 1}</div>
                   {canEdit && (
@@ -1693,22 +1991,23 @@ export default function ProductPage({ params }: ProductPageProps) {
                     </>
                   )}
                 </div>
-                <div className="space-y-1">
-                  <div className="text-xs font-medium text-muted-foreground">Наполнение</div>
-                  <CustomTextarea
-                    value={pkg.description ?? ''}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      setPackages((prev) => prev.map((p, i) => (i === index ? { ...p, description: next } : p)));
-                    }}
-                    disabled={!canEdit || saving}
-                    className="min-h-[80px]"
-                  />
+                  <div className="space-y-1">
+                    <div className="text-xs font-medium text-muted-foreground">Наполнение</div>
+                    <CustomTextarea
+                      value={pkg.description ?? ''}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setPackages((prev) => prev.map((p, i) => (i === index ? { ...p, description: next } : p)));
+                      }}
+                      disabled={!canEdit || saving}
+                      className="min-h-[80px]"
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )
+        ) : null}
       </div>
 
       <div className="flex items-center justify-end gap-2">

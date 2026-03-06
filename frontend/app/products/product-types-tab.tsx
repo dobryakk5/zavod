@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { ProductType } from '@/lib/types';
 import { ApiError } from '@/lib/api';
+import { clientProductsApi } from '@/lib/api/clientProducts';
 import { productTypesApi } from '@/lib/api/productTypes';
 import { Copy, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -253,7 +254,16 @@ export function ProductTypesTab() {
     setGeneratingId(type.id);
     setError(null);
     try {
-      const created = await productTypesApi.generateProduct(type.id);
+      const baseName = (type.name || '').trim();
+      const productName = baseName ? `${baseName} — новый продукт` : 'Новый продукт';
+      const shortDescription = baseName ? `${baseName}: описание продукта` : 'Описание продукта';
+      const created = await clientProductsApi.create({
+        name: productName,
+        product_type_id: type.id,
+        short_description: shortDescription,
+        status: 'draft',
+        packages: [],
+      });
       toast.success('Продукт создан');
       router.push(`/product/${created.id}`);
     } catch (err) {
@@ -268,7 +278,7 @@ export function ProductTypesTab() {
           }
         } catch {}
       }
-      setError('Не удалось сгенерировать продукт.');
+      setError('Не удалось создать продукт.');
     } finally {
       setGeneratingId(null);
     }
