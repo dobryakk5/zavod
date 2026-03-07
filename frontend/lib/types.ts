@@ -321,10 +321,12 @@ export type OperatorTaskStatus = 'open' | 'in_progress' | 'done' | 'checked';
 export interface OperatorTask {
   id: number;
   level_id: number | null;
+  contact_id?: number | null;
   title: string;
   description: string | null;
   status: OperatorTaskStatus;
   priority: 1 | 2 | 3;
+  due_at?: string | null;
   created_by: number;
   created_by_username?: string | null;
   created_at: string;

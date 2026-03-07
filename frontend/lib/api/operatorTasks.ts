@@ -26,6 +26,7 @@ export const operatorTasksApi = {
     title: string;
     description?: string | null;
     priority?: 1 | 2 | 3;
+    due_at?: string | null;
   }) {
     return apiFetch<OperatorTask>('/telegram-tasks/crm-tasks/', {
       method: 'POST',
@@ -35,6 +36,7 @@ export const operatorTasksApi = {
         title: data.title,
         description: data.description ?? null,
         priority: data.priority ?? 2,
+        due_at: data.due_at ?? null,
       },
     });
   },

@@ -685,6 +685,7 @@ class PublicClientPageTasksView(APIView):
                 "description",
                 "status",
                 "priority",
+                "due_at",
                 "created_at",
                 "updated_at",
             )

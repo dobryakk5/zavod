@@ -13,6 +13,7 @@ type PublicContactTask = {
   description: string | null;
   status: OperatorTaskStatus;
   priority: 1 | 2 | 3;
+  due_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -144,6 +145,25 @@ export default function PublicTasksPage() {
                       <div className="text-sm font-medium">{task.title}</div>
                       {task.description ? (
                         <p className="mt-1 text-xs text-muted-foreground">{task.description}</p>
+                      ) : null}
+                      {task.due_at ? (
+                        <p
+                          className={`mt-2 text-xs ${
+                            (task.status === 'done' || task.status === 'checked')
+                              ? 'text-muted-foreground'
+                              : new Date(task.due_at).getTime() < Date.now()
+                                ? 'text-red-500'
+                                : 'text-muted-foreground'
+                          }`}
+                        >
+                          Дедлайн: {new Date(task.due_at).toLocaleString('ru-RU', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </p>
                       ) : null}
                     </div>
                   ))

@@ -214,6 +214,7 @@ CELERY_BEAT_SCHEDULER = "celery.beat:PersistentScheduler"
 SCHEDULES_POLL_SECONDS = int(os.getenv("SCHEDULES_POLL_SECONDS", "60"))
 MEETING_REMINDERS_POLL_SECONDS = int(os.getenv("MEETING_REMINDERS_POLL_SECONDS", "60"))
 PAYMENT_REMINDERS_POLL_SECONDS = int(os.getenv("PAYMENT_REMINDERS_POLL_SECONDS", "60"))
+TASK_REMINDERS_POLL_SECONDS = int(os.getenv("TASK_REMINDERS_POLL_SECONDS", "60"))
 RAG_INDEXING_ENABLED = os.getenv("RAG_INDEXING_ENABLED", "True").strip().lower() in {
     "1",
     "true",
@@ -236,6 +237,10 @@ CELERY_BEAT_SCHEDULE = {
     "payment-reminders": {
         "task": "core.tasks.payment_reminders.send_payment_reminders",
         "schedule": timedelta(seconds=PAYMENT_REMINDERS_POLL_SECONDS),
+    },
+    "task-deadline-reminders": {
+        "task": "core.tasks.task_deadline_reminders.send_task_deadline_reminders",
+        "schedule": timedelta(seconds=TASK_REMINDERS_POLL_SECONDS),
     },
     "kb-rag-indexing": {
         "task": "core.tasks.process_pending_kb_rag_indexing",

@@ -652,6 +652,7 @@ class CRMTask(models.Model):
     description = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, default="open")
     priority = models.IntegerField(default=2)
+    due_at = models.DateTimeField(blank=True, null=True)
     created_by = models.IntegerField(default=0)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(default=timezone.now)

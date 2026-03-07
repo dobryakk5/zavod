@@ -230,6 +230,7 @@ class CRMTaskHistorySerializer(serializers.ModelSerializer):
 class CRMTaskSerializer(serializers.ModelSerializer):
     level_id = serializers.IntegerField(allow_null=True, required=False)
     contact_id = serializers.IntegerField(allow_null=True, required=False)
+    due_at = serializers.DateTimeField(allow_null=True, required=False)
     created_by_username = serializers.SerializerMethodField()
     history = CRMTaskHistorySerializer(source="history_entries", many=True, read_only=True)
 
@@ -255,6 +256,7 @@ class CRMTaskSerializer(serializers.ModelSerializer):
             "description",
             "status",
             "priority",
+            "due_at",
             "created_by",
             "created_by_username",
             "created_at",

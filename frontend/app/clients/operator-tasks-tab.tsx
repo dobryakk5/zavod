@@ -58,6 +58,7 @@ export function OperatorTasksTab() {
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newPriority, setNewPriority] = useState<1 | 2 | 3>(2);
+  const [newDueAt, setNewDueAt] = useState('');
   const [creating, setCreating] = useState(false);
 
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
@@ -87,17 +88,25 @@ export function OperatorTasksTab() {
   const handleCreate = async () => {
     const title = newTitle.trim();
     if (!title || creating) return;
+    const dueAtDate = newDueAt ? new Date(newDueAt) : null;
+    if (dueAtDate && Number.isNaN(dueAtDate.getTime())) {
+      setError('Некорректный дедлайн.');
+      return;
+    }
+    const dueAtIso = dueAtDate ? dueAtDate.toISOString() : null;
     setCreating(true);
     try {
       const created = await operatorTasksApi.create({
         title,
         description: newDescription.trim() || null,
         priority: newPriority,
+        due_at: dueAtIso,
       });
       setTasks((prev) => [{ ...created, priority: normalizePriority(created.priority) }, ...prev]);
       setNewTitle('');
       setNewDescription('');
       setNewPriority(2);
+      setNewDueAt('');
     } catch {
       setError('Не удалось создать задачу.');
     } finally {
@@ -211,6 +220,12 @@ export function OperatorTasksTab() {
             <option value={2}>Приоритет 2</option>
             <option value={3}>Приоритет 3</option>
           </select>
+          <Input
+            type="datetime-local"
+            value={newDueAt}
+            onChange={(e) => setNewDueAt(e.target.value)}
+            className="h-8 max-w-[220px] text-sm"
+          />
           <Button size="sm" className="h-8" disabled={creating || !newTitle.trim()} onClick={() => void handleCreate()}>
             {creating ? 'Создание…' : 'Добавить'}
           </Button>
@@ -289,6 +304,22 @@ export function OperatorTasksTab() {
                     </div>
                     {task.description && (
                       <p className="text-xs text-muted-foreground">{task.description}</p>
+                    )}
+                    {task.due_at && (
+                      <p
+                        className={`text-xs ${
+                          isDone ? 'text-muted-foreground' : new Date(task.due_at).getTime() < Date.now() ? 'text-red-500' : 'text-muted-foreground'
+                        }`}
+                      >
+                        Дедлайн:{' '}
+                        {new Date(task.due_at).toLocaleString('ru-RU', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </p>
                     )}
                     <p className="text-xs text-muted-foreground">
                       {new Date(task.created_at).toLocaleDateString('ru-RU', {

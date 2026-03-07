@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 # NOTE: This module is kept for backward-compatible imports and gradual refactors.
+from datetime import timezone as dt_timezone
 
 from django.db import transaction
 from django.db.models import Prefetch, Q
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action
@@ -152,6 +154,17 @@ def _tenant_has_contact(client_id: int, contact_id: int) -> bool:
     ).exists()
 
 
+def _parse_task_due_at(value):
+    if value in (None, ""):
+        return None
+    parsed = parse_datetime(str(value).strip())
+    if parsed is None:
+        raise ValueError("Некорректный due_at. Используйте ISO datetime.")
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone=dt_timezone.utc)
+    return parsed
+
+
 class CRMTaskListCreateView(APIView):
     permission_classes = [IsTenantMember]
 
@@ -237,6 +250,11 @@ class CRMTaskListCreateView(APIView):
         if contact_id is not None and not _tenant_has_contact(client.id, contact_id):
             return Response({"error": "Контакт не найден."}, status=status.HTTP_404_NOT_FOUND)
 
+        try:
+            due_at = _parse_task_due_at(request.data.get("due_at"))
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         task = CRMTask.objects.create(
             level=level,
             contact_id=contact_id,
@@ -244,6 +262,7 @@ class CRMTaskListCreateView(APIView):
             description=description,
             status="open",
             priority=priority,
+            due_at=due_at,
             created_by=request.user.id,
         )
         serializer = CRMTaskSerializer(task)

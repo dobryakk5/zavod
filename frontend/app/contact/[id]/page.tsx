@@ -301,6 +301,7 @@ export default function ContactDetailPage() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDescription, setNewTaskDescription] = useState('');
+  const [newTaskDueAt, setNewTaskDueAt] = useState('');
   const [creatingTask, setCreatingTask] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<number | null>(null);
   const [kanbanDropStage, setKanbanDropStage] = useState<OperatorTaskStatus | null>(null);
@@ -343,6 +344,7 @@ export default function ContactDetailPage() {
   const [newEventEnd, setNewEventEnd] = useState('');
   const [newEventLocation, setNewEventLocation] = useState('');
   const [newEventPrice, setNewEventPrice] = useState('');
+  const taskDueAtInputRef = useRef<HTMLInputElement | null>(null);
   const [newEventTypeId, setNewEventTypeId] = useState<string>('none');
   const [savingEvent, setSavingEvent] = useState(false);
   const eventStartInputRef = useRef<HTMLInputElement | null>(null);
@@ -636,6 +638,14 @@ export default function ContactDetailPage() {
     if (!contact) return;
     const title = newTaskTitle.trim();
     if (!title || creatingTask) return;
+    const dueAtPayload = newTaskDueAt
+      ? localDateTimeStringToUtcISOString(newTaskDueAt, tenantTimezone)
+      : null;
+    if (newTaskDueAt && !dueAtPayload) {
+      setTasksError('Некорректный дедлайн.');
+      toast.error('Некорректный дедлайн');
+      return;
+    }
 
     setCreatingTask(true);
     setTasksError(null);
@@ -645,10 +655,12 @@ export default function ContactDetailPage() {
         title,
         description: newTaskDescription.trim() || null,
         priority: 2,
+        due_at: dueAtPayload,
       });
       setTasks((prev) => [normalizeOperatorTask(created), ...prev]);
       setNewTaskTitle('');
       setNewTaskDescription('');
+      setNewTaskDueAt('');
       toast.success('Задание создано');
     } catch (err) {
       console.error('Error creating task:', err);
@@ -1905,6 +1917,27 @@ export default function ContactDetailPage() {
                     rows={3}
                   />
                 </div>
+                <div className="space-y-2">
+                  <div className="flex items-center">
+                    <Label htmlFor="task-due-at">Дедлайн</Label>
+                    <button
+                      type="button"
+                      className="ml-[10px] inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground shadow-none transition-shadow hover:shadow hover:text-foreground"
+                      onClick={() => taskDueAtInputRef.current?.showPicker?.()}
+                      onMouseDown={(e) => e.preventDefault()}
+                      aria-label="Выбрать дедлайн"
+                    >
+                      <CalendarIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <Input
+                    ref={taskDueAtInputRef}
+                    id="task-due-at"
+                    type="datetime-local"
+                    value={newTaskDueAt}
+                    onChange={(e) => setNewTaskDueAt(e.target.value)}
+                  />
+                </div>
                 <Button type="submit" disabled={!newTaskTitle.trim() || creatingTask}>
                   {creatingTask ? 'Создаем...' : 'Создать задание'}
                 </Button>
@@ -1981,6 +2014,26 @@ export default function ContactDetailPage() {
                           <div className="text-sm font-medium">{task.title}</div>
                           {task.description ? (
                             <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{task.description}</p>
+                          ) : null}
+                          {task.due_at ? (
+                            <div
+                              className={`mt-2 text-[11px] ${
+                                (task.status === 'done' || task.status === 'checked')
+                                  ? 'text-muted-foreground'
+                                  : new Date(task.due_at).getTime() < Date.now()
+                                    ? 'text-red-500'
+                                    : 'text-muted-foreground'
+                              }`}
+                            >
+                              Дедлайн:{' '}
+                              {formatInTenantTimezone(task.due_at, tenantTimezone, {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </div>
                           ) : null}
                           <div className="mt-2 text-[11px] text-muted-foreground">
                             Обновлено:{' '}
