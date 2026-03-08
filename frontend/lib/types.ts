@@ -386,13 +386,79 @@ export interface ClientProduct {
   product_type_name?: string | null;
   product_type?: ProductType | null;
   short_description?: string | null;
-  digital_product_document_id?: number | null;
-  digital_product_document_title?: string | null;
+  has_course?: boolean;
+  course_published?: boolean;
   packages?: ProductPackageConfig[] | null;
   structure?: ProductStructure | null;
   owner_id?: number;
   created_at?: string;
   updated_at?: string;
+}
+
+export type ProductCourseLessonUnlockCondition =
+  | 'after_student_complete'
+  | 'after_curator_complete'
+  | 'after_timer';
+
+export interface ProductCourseLesson {
+  id: number;
+  module_id: number;
+  title: string;
+  content?: Record<string, unknown>;
+  position: number;
+  is_preview: boolean;
+  unlock_at?: string | null;
+  is_locked?: boolean;
+  is_completed?: boolean;
+  youtube_video_id?: string | null;
+  rutube_video_id?: string | null;
+  vk_owner_id?: string | null;
+  vk_video_id?: string | null;
+  vk_hash?: string | null;
+}
+
+export interface ProductCourseModule {
+  id: number;
+  course_id: number;
+  title: string;
+  cover_url?: string | null;
+  position: number;
+  unlock_at?: string | null;
+  open_lessons_immediately?: boolean;
+  lesson_unlock_condition?: ProductCourseLessonUnlockCondition;
+  unlock_delay_days?: number;
+  unlock_delay_hours?: number;
+  unlock_delay_minutes?: number;
+  is_locked?: boolean;
+  lessons: ProductCourseLesson[];
+}
+
+export interface ProductCourseProgress {
+  completed_lessons: number;
+  total_lessons: number;
+  percent: number;
+}
+
+export interface ProductCourse {
+  id: number;
+  owner_id: number;
+  product_id: number;
+  title: string;
+  description?: string | null;
+  cover_url?: string | null;
+  is_published: boolean;
+  lessons_count?: number;
+  progress?: ProductCourseProgress;
+  modules: ProductCourseModule[];
+}
+
+export interface CourseDeliveryPayload {
+  ready?: boolean;
+  course_id?: number;
+  course_title?: string;
+  url?: string;
+  message?: string;
+  missing_course?: boolean;
 }
 
 // ============================================================================

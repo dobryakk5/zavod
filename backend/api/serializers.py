@@ -14,6 +14,10 @@ from core.models import (
     ChannelAnalysis,
     Client,
     ClientProduct,
+    ProductCourse,
+    ProductCourseLesson,
+    ProductCourseModule,
+    ProductCourseProgress,
     Chain,
     ChainCondition,
     ChainEdge,
@@ -1935,6 +1939,161 @@ class ChainConditionSerializer(serializers.ModelSerializer):
         return instance
 
 
+class ProductCourseLessonSerializer(serializers.ModelSerializer):
+    module_id = serializers.IntegerField(read_only=True)
+    video_provider = serializers.SerializerMethodField()
+    is_locked = serializers.SerializerMethodField()
+    is_completed = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductCourseLesson
+        fields = [
+            "id",
+            "module_id",
+            "title",
+            "content",
+            "position",
+            "is_preview",
+            "unlock_at",
+            "is_locked",
+            "is_completed",
+            "video_provider",
+            "youtube_video_id",
+            "rutube_video_id",
+            "vk_owner_id",
+            "vk_video_id",
+            "vk_hash",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "module_id",
+            "is_locked",
+            "is_completed",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_is_locked(self, obj: ProductCourseLesson) -> bool:
+        locked_ids = self.context.get("locked_lesson_ids")
+        if isinstance(locked_ids, set):
+            return int(obj.id) in locked_ids
+        return False
+
+    def get_video_provider(self, obj: ProductCourseLesson) -> str | None:
+        if getattr(obj, "youtube_video_id", None):
+            return "youtube"
+        if getattr(obj, "rutube_video_id", None):
+            return "rutube"
+        if getattr(obj, "vk_owner_id", None) and getattr(obj, "vk_video_id", None):
+            return "vk"
+        return None
+
+    def get_is_completed(self, obj: ProductCourseLesson) -> bool:
+        completed_ids = self.context.get("completed_lesson_ids")
+        if isinstance(completed_ids, set):
+            return int(obj.id) in completed_ids
+        return False
+
+
+class ProductCourseModuleSerializer(serializers.ModelSerializer):
+    course_id = serializers.IntegerField(read_only=True)
+    lessons = serializers.SerializerMethodField()
+    is_locked = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductCourseModule
+        fields = [
+            "id",
+            "course_id",
+            "title",
+            "cover_url",
+            "position",
+            "unlock_at",
+            "open_lessons_immediately",
+            "lesson_unlock_condition",
+            "unlock_delay_days",
+            "unlock_delay_hours",
+            "unlock_delay_minutes",
+            "is_locked",
+            "lessons",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "course_id", "is_locked", "created_at", "updated_at"]
+
+    def get_lessons(self, obj: ProductCourseModule):
+        lessons = getattr(obj, "_prefetched_lessons", None)
+        if lessons is None:
+            lessons = getattr(obj, "lessons", None)
+        if hasattr(lessons, "all"):
+            lessons_data = lessons.all()
+        elif lessons is not None:
+            lessons_data = lessons
+        else:
+            lessons_data = ProductCourseLesson.objects.filter(module=obj).order_by("position", "id")
+        return ProductCourseLessonSerializer(lessons_data, many=True, context=self.context).data
+
+    def get_is_locked(self, obj: ProductCourseModule) -> bool:
+        locked_ids = self.context.get("locked_module_ids")
+        if isinstance(locked_ids, set):
+            return int(obj.id) in locked_ids
+        return False
+
+
+class ProductCourseSerializer(serializers.ModelSerializer):
+    owner_id = serializers.IntegerField(read_only=True)
+    product_id = serializers.IntegerField(read_only=True)
+    modules = serializers.SerializerMethodField()
+    lessons_count = serializers.SerializerMethodField()
+    progress = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductCourse
+        fields = [
+            "id",
+            "owner_id",
+            "product_id",
+            "title",
+            "description",
+            "cover_url",
+            "is_published",
+            "modules",
+            "lessons_count",
+            "progress",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "owner_id", "product_id", "created_at", "updated_at"]
+
+    def get_modules(self, obj: ProductCourse):
+        modules = getattr(obj, "_prefetched_modules", None)
+        if modules is None:
+            modules = getattr(obj, "modules", None)
+        if hasattr(modules, "all"):
+            modules_data = modules.all()
+        elif modules is not None:
+            modules_data = modules
+        else:
+            modules_data = ProductCourseModule.objects.filter(course=obj).order_by("position", "id")
+        return ProductCourseModuleSerializer(modules_data, many=True, context=self.context).data
+
+    def get_lessons_count(self, obj: ProductCourse) -> int:
+        return ProductCourseLesson.objects.filter(module__course=obj).count()
+
+    def get_progress(self, obj: ProductCourse):
+        total_lessons = ProductCourseLesson.objects.filter(module__course=obj).count()
+        completed_ids = self.context.get("completed_lesson_ids")
+        completed_lessons = len(completed_ids) if isinstance(completed_ids, set) else 0
+        percent = round((completed_lessons / total_lessons * 100) if total_lessons else 0, 1)
+        return {
+            "completed_lessons": completed_lessons,
+            "total_lessons": total_lessons,
+            "percent": percent,
+        }
+
+
 class ClientProductSerializer(serializers.ModelSerializer):
     owner_id = serializers.IntegerField(read_only=True)
     product_type_id = serializers.PrimaryKeyRelatedField(
@@ -1945,14 +2104,21 @@ class ClientProductSerializer(serializers.ModelSerializer):
     )
     product_type_name = serializers.CharField(source="product_type.name", read_only=True)
     product_type = serializers.SerializerMethodField()
-    digital_product_document_id = serializers.IntegerField(read_only=True)
-    digital_product_document_title = serializers.CharField(source="digital_product_document.title", read_only=True)
+    has_course = serializers.SerializerMethodField()
+    course_published = serializers.SerializerMethodField()
 
     def get_product_type(self, obj: ClientProduct):
         product_type = getattr(obj, "product_type", None)
         if not product_type:
             return None
         return ProductTypeSerializer(product_type).data
+
+    def get_has_course(self, obj: ClientProduct) -> bool:
+        return bool(getattr(obj, "course", None))
+
+    def get_course_published(self, obj: ClientProduct) -> bool:
+        course = getattr(obj, "course", None)
+        return bool(getattr(course, "is_published", False)) if course else False
 
     class Meta:
         model = ClientProduct
@@ -1964,8 +2130,8 @@ class ClientProductSerializer(serializers.ModelSerializer):
             "product_type",
             "status",
             "short_description",
-            "digital_product_document_id",
-            "digital_product_document_title",
+            "has_course",
+            "course_published",
             "packages",
             "structure",
             "owner_id",

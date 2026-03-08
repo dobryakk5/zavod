@@ -23,17 +23,22 @@ from core.models import (
     InboxEmailMessage,
     InboxReplyMessage,
     MapContact,
+    ProductCourseComment,
+    ProductCourseEvent,
+    ProductCourseLesson,
+    ProductCourseProgress,
     TelegramTask,
     UserTenantBinding,
 )
-from core.tasks.chains import _send_vk_message
+from core.tasks.chains import _send_telegram_message, _send_vk_message
 
 from .permissions import IsTenantMember
 from .utils import get_active_client
 
 
 InboxChannel = str
-SUPPORTED_REPLY_CHANNELS = {"telegram", "vk", "email"}
+SUPPORTED_REPLY_CHANNELS = {"telegram", "vk", "email", "courses"}
+COURSE_THREAD_PREFIX = "course"
 
 
 def _get_client_tz(client):
@@ -319,6 +324,190 @@ def _parse_vk_thread_id(thread_id: str) -> str | None:
     return value or None
 
 
+def _build_course_thread_id(*, owner_id: int, contact_id: int, lesson_id: int) -> str:
+    return f"{COURSE_THREAD_PREFIX}:{owner_id}:{contact_id}:{lesson_id}"
+
+
+def _parse_course_thread_id(thread_id: str) -> tuple[int | None, int | None, int | None]:
+    raw = _safe_text(thread_id)
+    parts = raw.split(":")
+    if len(parts) != 4 or parts[0] != COURSE_THREAD_PREFIX:
+        return None, None, None
+    try:
+        owner_id = int(parts[1])
+        contact_id = int(parts[2])
+        lesson_id = int(parts[3])
+    except (TypeError, ValueError):
+        return None, None, None
+    if owner_id <= 0 or contact_id <= 0 or lesson_id <= 0:
+        return None, None, None
+    return owner_id, contact_id, lesson_id
+
+
+def _build_curator_course_module_url(*, product_id: int, module_id: int) -> str:
+    base_url = _safe_text(getattr(settings, "SITE_BASE_URL", "")).rstrip("/")
+    path = f"/product/{product_id}/course/{module_id}"
+    return f"{base_url}{path}" if base_url else path
+
+
+def _send_telegram_text_message(*, chat_id: int, text: str) -> tuple[str, dict[str, Any]]:
+    token = (getattr(settings, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+    if not token:
+        raise ValueError("TELEGRAM_BOT_TOKEN не настроен.")
+    response = requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": text},
+        timeout=15,
+    )
+    data = response.json() if response.content else {}
+    if response.status_code != 200 or not bool(data.get("ok")):
+        description = _safe_text(data.get("description")) or _safe_text(data)
+        raise ValueError(description or "Telegram API вернул ошибку.")
+    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+    external_message_id = _safe_text(result.get("message_id"))
+    metadata = {"telegram_chat_id": str(chat_id)}
+    return external_message_id, metadata
+
+
+def _resolve_contact_binding(*, client, contact_id: int, provider: str) -> UserTenantBinding | None:
+    return (
+        UserTenantBinding.objects
+        .filter(
+            tenant=client,
+            contact_id=int(contact_id),
+            provider=provider,
+            is_active=True,
+        )
+        .order_by("-bound_at", "-id")
+        .first()
+    )
+
+
+def _send_course_message_via_channel(
+    *,
+    client,
+    contact: MapContact | None,
+    contact_id: int,
+    channel: str,
+    text: str,
+) -> tuple[str, dict[str, Any]]:
+    if channel == ProductCourseComment.CHANNEL_COURSES:
+        return "", {}
+
+    if channel == ProductCourseComment.CHANNEL_TELEGRAM:
+        binding = _resolve_contact_binding(client=client, contact_id=contact_id, provider=UserTenantBinding.PROVIDER_TELEGRAM)
+        if binding is None:
+            raise ValueError("У контакта нет активной Telegram привязки.")
+        raw_chat_id = _safe_text(binding.telegram_chat_id) or _safe_text(binding.provider_user_id)
+        try:
+            chat_id = int(raw_chat_id)
+        except (TypeError, ValueError):
+            raise ValueError("У контакта некорректный Telegram chat_id.")
+        external_message_id, metadata = _send_telegram_text_message(chat_id=chat_id, text=text)
+        return external_message_id, {**metadata, "contact_id": int(contact_id)}
+
+    if channel == ProductCourseComment.CHANNEL_VK:
+        binding = _resolve_contact_binding(client=client, contact_id=contact_id, provider=UserTenantBinding.PROVIDER_VK)
+        if binding is None:
+            raise ValueError("У контакта нет активной VK привязки.")
+        vk_user_id = _safe_text(binding.provider_user_id)
+        if not vk_user_id:
+            raise ValueError("У контакта пустой VK идентификатор.")
+        ok = _send_vk_message(
+            tenant_id=client.id,
+            vk_user_id=vk_user_id,
+            text=text,
+        )
+        if not ok:
+            raise ValueError("Не удалось отправить сообщение в VK.")
+        return "", {"vk_user_id": vk_user_id, "contact_id": int(contact_id)}
+
+    if channel == ProductCourseComment.CHANNEL_EMAIL:
+        recipient = _safe_text(getattr(contact, "email", None))
+        if not recipient:
+            raise ValueError("У контакта нет email для отправки.")
+        sent = send_mail(
+            "Комментарий по уроку",
+            text,
+            getattr(settings, "DEFAULT_FROM_EMAIL", "support@fibonatty.ru"),
+            [recipient],
+            fail_silently=False,
+        )
+        if not sent:
+            raise ValueError("SMTP не подтвердил отправку письма.")
+        return "", {"to_email": recipient, "contact_id": int(contact_id)}
+
+    raise ValueError("Канал ответа не поддерживается для курсов.")
+
+
+def _resolve_course_lesson_context(
+    *,
+    client,
+    thread_id: str,
+    lesson_id: int | None = None,
+    contact_id: int | None = None,
+) -> tuple[ProductCourseLesson, int]:
+    parsed_owner_id, parsed_contact_id, parsed_lesson_id = _parse_course_thread_id(thread_id)
+    if parsed_owner_id is not None and parsed_owner_id != int(client.id):
+        raise ValueError("thread_id относится к другому клиенту.")
+
+    resolved_contact_id = int(parsed_contact_id) if parsed_contact_id else None
+    resolved_lesson_id = int(parsed_lesson_id) if parsed_lesson_id else None
+    if contact_id is not None:
+        resolved_contact_id = int(contact_id)
+    if lesson_id is not None:
+        resolved_lesson_id = int(lesson_id)
+
+    if not resolved_contact_id or resolved_contact_id <= 0:
+        raise ValueError("Не удалось определить contact_id для course thread.")
+    if not resolved_lesson_id or resolved_lesson_id <= 0:
+        raise ValueError("Не удалось определить lesson_id для course thread.")
+
+    lesson = (
+        ProductCourseLesson.objects
+        .select_related("module__course__product")
+        .filter(id=resolved_lesson_id, module__course__owner_id=client.id)
+        .first()
+    )
+    if lesson is None:
+        raise ValueError("Урок не найден или не принадлежит клиенту.")
+
+    return lesson, int(resolved_contact_id)
+
+
+def _notify_contact_about_course_acceptance(
+    *,
+    client,
+    contact_id: int,
+    text: str,
+) -> tuple[bool, str | None]:
+    telegram_binding = _resolve_contact_binding(
+        client=client,
+        contact_id=contact_id,
+        provider=UserTenantBinding.PROVIDER_TELEGRAM,
+    )
+    if telegram_binding is not None:
+        raw_chat_id = _safe_text(telegram_binding.telegram_chat_id) or _safe_text(telegram_binding.provider_user_id)
+        try:
+            chat_id = int(raw_chat_id)
+        except (TypeError, ValueError):
+            chat_id = 0
+        if chat_id > 0 and _send_telegram_message(chat_id=chat_id, text=text):
+            return True, ProductCourseComment.CHANNEL_TELEGRAM
+
+    vk_binding = _resolve_contact_binding(
+        client=client,
+        contact_id=contact_id,
+        provider=UserTenantBinding.PROVIDER_VK,
+    )
+    vk_user_id = _safe_text(getattr(vk_binding, "provider_user_id", None))
+    if vk_user_id:
+        if _send_vk_message(tenant_id=client.id, vk_user_id=vk_user_id, text=text):
+            return True, ProductCourseComment.CHANNEL_VK
+
+    return False, None
+
+
 def _send_telegram_reply(*, client, thread_id: str, text: str) -> tuple[str, dict[str, Any]]:
     telegram_user_id = _parse_telegram_thread_id(thread_id)
     if telegram_user_id is None:
@@ -335,26 +524,8 @@ def _send_telegram_reply(*, client, thread_id: str, text: str) -> tuple[str, dic
     )
     chat_id = int(binding.telegram_chat_id) if (binding and binding.telegram_chat_id) else telegram_user_id
 
-    token = (getattr(settings, "TELEGRAM_BOT_TOKEN", "") or "").strip()
-    if not token:
-        raise ValueError("TELEGRAM_BOT_TOKEN не настроен.")
-
-    response = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text},
-        timeout=15,
-    )
-    data = response.json() if response.content else {}
-    if response.status_code != 200 or not bool(data.get("ok")):
-        description = _safe_text(data.get("description")) or _safe_text(data)
-        raise ValueError(description or "Telegram API вернул ошибку.")
-
-    result = data.get("result") if isinstance(data.get("result"), dict) else {}
-    external_message_id = _safe_text(result.get("message_id"))
-    metadata = {
-        "telegram_user_id": str(telegram_user_id),
-        "telegram_chat_id": str(chat_id),
-    }
+    external_message_id, metadata = _send_telegram_text_message(chat_id=chat_id, text=text)
+    metadata["telegram_user_id"] = str(telegram_user_id)
     return external_message_id, metadata
 
 
@@ -793,6 +964,178 @@ def _build_email_threads(client, *, tzinfo) -> list[dict[str, Any]]:
     return result
 
 
+def _course_author_name(*, role: str, contact: MapContact | None) -> str:
+    if role == ProductCourseComment.AUTHOR_STUDENT:
+        return _safe_text(getattr(contact, "name", None)) or "Ученик"
+    if role == ProductCourseComment.AUTHOR_CURATOR:
+        return "Куратор"
+    return "Система"
+
+
+def _course_event_to_message(event: ProductCourseEvent, *, contact: MapContact | None, tzinfo) -> dict[str, Any]:
+    dt = _ensure_aware_datetime(event.created_at)
+    course_title = _safe_text(getattr(event.course, "title", None))
+    lesson_title = _safe_text(getattr(event.lesson, "title", None))
+    curator_url = _build_curator_course_module_url(
+        product_id=int(event.product_id),
+        module_id=int(event.module_id),
+    )
+
+    if event.event_type == ProductCourseEvent.EVENT_LESSON_ACCEPTED:
+        text = (
+            "Куратор принял урок.\n"
+            f"Курс: {course_title or '—'}\n"
+            f"Урок: {lesson_title or '—'}\n"
+            f"Ссылка куратора: {curator_url}"
+        )
+    else:
+        text = (
+            "Ученик отметил урок как завершенный.\n"
+            f"Курс: {course_title or '—'}\n"
+            f"Урок: {lesson_title or '—'}\n"
+            f"Ссылка куратора: {curator_url}"
+        )
+
+    direction = "in" if event.actor_role == ProductCourseEvent.ACTOR_STUDENT else "out"
+    return {
+        "id": f"course-event-{event.id}",
+        "channel": ProductCourseComment.CHANNEL_COURSES,
+        "direction": direction,
+        "author": _course_author_name(role=_safe_text(event.actor_role), contact=contact),
+        "text": text,
+        "createdAtLabel": _format_dt_label(dt, tzinfo),
+        "createdAtSort": _to_sort_ts(dt),
+        "_created_at": dt.isoformat() if dt else None,
+    }
+
+
+def _course_comment_to_message(comment: ProductCourseComment, *, contact: MapContact | None, tzinfo) -> dict[str, Any]:
+    dt = _ensure_aware_datetime(comment.created_at)
+    direction = "in" if comment.author_role == ProductCourseComment.AUTHOR_STUDENT else "out"
+    return {
+        "id": f"course-comment-{comment.id}",
+        "channel": _safe_text(comment.channel) or ProductCourseComment.CHANNEL_COURSES,
+        "direction": direction,
+        "author": _course_author_name(role=_safe_text(comment.author_role), contact=contact),
+        "text": _safe_text(comment.message_text) or "[пустое сообщение]",
+        "createdAtLabel": _format_dt_label(dt, tzinfo),
+        "createdAtSort": _to_sort_ts(dt),
+        "_created_at": dt.isoformat() if dt else None,
+    }
+
+
+def _build_course_threads(client, *, tzinfo) -> list[dict[str, Any]]:
+    try:
+        events = list(
+            ProductCourseEvent.objects
+            .filter(owner=client)
+            .select_related("product", "course", "module", "lesson")
+            .order_by("-created_at", "-id")[:800]
+        )
+    except (ProgrammingError, OperationalError):
+        return []
+    if not events:
+        return []
+
+    sorted_events = sorted(events, key=lambda item: (item.created_at, item.id))
+    contact_ids = {int(item.contact_id) for item in sorted_events if item.contact_id}
+    contacts_by_id = {
+        int(contact.id): contact
+        for contact in MapContact.objects.filter(id__in=contact_ids)
+    } if contact_ids else {}
+
+    groups: dict[str, dict[str, Any]] = {}
+    for event in sorted_events:
+        contact_id = int(event.contact_id)
+        lesson_id = int(event.lesson_id)
+        thread_id = _build_course_thread_id(owner_id=int(client.id), contact_id=contact_id, lesson_id=lesson_id)
+        contact = contacts_by_id.get(contact_id)
+        thread = groups.get(thread_id)
+        if thread is None:
+            fallback_name = _safe_text(getattr(contact, "name", None)) or f"Ученик #{contact_id}"
+            channels = _contact_channels(contact, channel=ProductCourseComment.CHANNEL_COURSES, handle=f"course:{contact_id}:{lesson_id}")
+            thread = {
+                "client_payload": _contact_payload(
+                    contact,
+                    fallback_name=fallback_name,
+                    manager="Куратор",
+                    channels=channels,
+                ),
+                "messages": [],
+                "accepted": False,
+                "meta": {
+                    "contact_id": contact_id,
+                    "product_id": int(event.product_id),
+                    "course_id": int(event.course_id),
+                    "module_id": int(event.module_id),
+                    "lesson_id": lesson_id,
+                    "course_title": _safe_text(getattr(event.course, "title", None)),
+                    "lesson_title": _safe_text(getattr(event.lesson, "title", None)),
+                    "curator_url": _build_curator_course_module_url(
+                        product_id=int(event.product_id),
+                        module_id=int(event.module_id),
+                    ),
+                },
+            }
+            groups[thread_id] = thread
+
+        if event.event_type == ProductCourseEvent.EVENT_LESSON_ACCEPTED:
+            thread["accepted"] = True
+        thread["messages"].append(_course_event_to_message(event, contact=contact, tzinfo=tzinfo))
+
+    lesson_ids = {int(item["meta"]["lesson_id"]) for item in groups.values()}
+    comments = list(
+        ProductCourseComment.objects
+        .filter(owner=client, contact_id__in=contact_ids, lesson_id__in=lesson_ids)
+        .order_by("created_at", "id")
+    )
+    for comment in comments:
+        thread_id = _build_course_thread_id(
+            owner_id=int(client.id),
+            contact_id=int(comment.contact_id),
+            lesson_id=int(comment.lesson_id),
+        )
+        thread = groups.get(thread_id)
+        if thread is None:
+            continue
+        contact = contacts_by_id.get(int(comment.contact_id))
+        thread["messages"].append(_course_comment_to_message(comment, contact=contact, tzinfo=tzinfo))
+
+    result: list[dict[str, Any]] = []
+    for thread_id, thread in groups.items():
+        meta = thread["meta"]
+        accepted = bool(thread["accepted"])
+        course_title = _safe_text(meta.get("course_title")) or "Курс"
+        lesson_title = _safe_text(meta.get("lesson_title")) or "Урок"
+        status_value = "closed" if accepted else "new"
+        service_level = "normal" if accepted else "high"
+        payload = _thread_base(
+            thread_id=thread_id,
+            source_channel=ProductCourseComment.CHANNEL_COURSES,
+            inquiry_type="support",
+            service_level=service_level,
+            status_value=status_value,
+            client_payload=thread["client_payload"],
+            subject=f"Курсы · {course_title} / {lesson_title}",
+            messages=thread["messages"],
+            unread_count=0,
+            tzinfo=tzinfo,
+        )
+        payload["courseEvent"] = {
+            "contact_id": int(meta["contact_id"]),
+            "product_id": int(meta["product_id"]),
+            "course_id": int(meta["course_id"]),
+            "module_id": int(meta["module_id"]),
+            "lesson_id": int(meta["lesson_id"]),
+            "course_title": course_title,
+            "lesson_title": lesson_title,
+            "curator_url": _safe_text(meta.get("curator_url")),
+            "accepted": accepted,
+        }
+        result.append(payload)
+    return result
+
+
 def _derive_email_thread_key(*, subject: str, from_email: str, raw_thread_key: str) -> str:
     if raw_thread_key:
         return raw_thread_key
@@ -898,6 +1241,7 @@ class UnifiedInboxReplyView(APIView):
         thread_id = _safe_text(request.data.get("thread_id"))
         channel = _safe_text(request.data.get("channel")).lower()
         text = _safe_text(request.data.get("text"))
+        is_course_thread = _parse_course_thread_id(thread_id)[0] is not None
 
         if not thread_id:
             return Response({"error": "thread_id обязателен."}, status=status.HTTP_400_BAD_REQUEST)
@@ -908,6 +1252,88 @@ class UnifiedInboxReplyView(APIView):
             )
         if not text:
             return Response({"error": "Текст ответа пустой."}, status=status.HTTP_400_BAD_REQUEST)
+        if not is_course_thread and channel == ProductCourseComment.CHANNEL_COURSES:
+            return Response({"error": "Канал courses доступен только для course thread."}, status=status.HTTP_400_BAD_REQUEST)
+
+        author = (
+            _safe_text(getattr(request.user, "first_name", None)) and _safe_text(getattr(request.user, "last_name", None))
+            and f"{_safe_text(request.user.first_name)} {_safe_text(request.user.last_name)}"
+        ) or _safe_text(getattr(request.user, "first_name", None)) or _safe_text(getattr(request.user, "username", None)) or "Менеджер"
+
+        contact_id_raw = request.data.get("contact_id")
+        contact_id: int | None = None
+        try:
+            if contact_id_raw not in (None, ""):
+                contact_id = int(contact_id_raw)
+        except (TypeError, ValueError):
+            contact_id = None
+
+        if is_course_thread:
+            try:
+                lesson, resolved_contact_id = _resolve_course_lesson_context(
+                    client=client,
+                    thread_id=thread_id,
+                    lesson_id=None,
+                    contact_id=contact_id,
+                )
+                contact = MapContact.objects.filter(id=resolved_contact_id).first()
+                course = lesson.module.course
+                product = course.product
+                contextual_text = (
+                    f"Курс: {_safe_text(course.title) or '—'}\n"
+                    f"Урок: {_safe_text(lesson.title) or '—'}\n\n"
+                    f"{text}"
+                )
+                external_message_id, metadata = _send_course_message_via_channel(
+                    client=client,
+                    contact=contact,
+                    contact_id=resolved_contact_id,
+                    channel=channel,
+                    text=contextual_text,
+                )
+                comment = ProductCourseComment.objects.create(
+                    owner=client,
+                    contact_id=resolved_contact_id,
+                    product_id=int(product.id),
+                    course_id=int(course.id),
+                    module_id=int(lesson.module_id),
+                    lesson_id=int(lesson.id),
+                    author_role=ProductCourseComment.AUTHOR_CURATOR,
+                    author_user_id=request.user.id if getattr(request.user, "is_authenticated", False) else None,
+                    channel=channel,
+                    message_text=text,
+                    metadata={
+                        "thread_id": thread_id,
+                        "course_title": _safe_text(course.title),
+                        "lesson_title": _safe_text(lesson.title),
+                        "external_message_id": external_message_id,
+                        **(metadata if isinstance(metadata, dict) else {}),
+                    },
+                )
+            except ValueError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            except requests.RequestException as exc:
+                return Response({"error": f"Ошибка сети при отправке: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+            except Exception as exc:  # noqa: BLE001
+                return Response({"error": f"Не удалось отправить сообщение: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            message = _course_comment_to_message(comment, contact=contact, tzinfo=tzinfo)
+            return Response(
+                {
+                    "ok": True,
+                    "thread_id": thread_id,
+                    "channel": channel,
+                    "message": {
+                        "id": message["id"],
+                        "channel": message["channel"],
+                        "direction": message["direction"],
+                        "author": author,
+                        "text": message["text"],
+                        "createdAtLabel": message["createdAtLabel"],
+                        "createdAtSort": message["createdAtSort"],
+                    },
+                }
+            )
 
         try:
             if channel == "telegram":
@@ -922,19 +1348,6 @@ class UnifiedInboxReplyView(APIView):
             return Response({"error": f"Ошибка сети при отправке: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
         except Exception as exc:  # noqa: BLE001
             return Response({"error": f"Не удалось отправить сообщение: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        author = (
-            _safe_text(getattr(request.user, "first_name", None)) and _safe_text(getattr(request.user, "last_name", None))
-            and f"{_safe_text(request.user.first_name)} {_safe_text(request.user.last_name)}"
-        ) or _safe_text(getattr(request.user, "first_name", None)) or _safe_text(getattr(request.user, "username", None)) or "Менеджер"
-
-        contact_id_raw = request.data.get("contact_id")
-        contact_id: int | None = None
-        try:
-            if contact_id_raw not in (None, ""):
-                contact_id = int(contact_id_raw)
-        except (TypeError, ValueError):
-            contact_id = None
 
         sent_at = timezone.now()
         try:
@@ -976,6 +1389,143 @@ class UnifiedInboxReplyView(APIView):
         )
 
 
+class UnifiedInboxCourseAcceptView(APIView):
+    permission_classes = [IsTenantMember]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        tzinfo = _get_client_tz(client)
+        thread_id = _safe_text(request.data.get("thread_id"))
+
+        lesson_id_raw = request.data.get("lesson_id")
+        contact_id_raw = request.data.get("contact_id")
+        lesson_id: int | None = None
+        contact_id: int | None = None
+        try:
+            if lesson_id_raw not in (None, ""):
+                lesson_id = int(lesson_id_raw)
+        except (TypeError, ValueError):
+            return Response({"error": "lesson_id must be integer."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            if contact_id_raw not in (None, ""):
+                contact_id = int(contact_id_raw)
+        except (TypeError, ValueError):
+            return Response({"error": "contact_id must be integer."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not thread_id and (lesson_id is None or contact_id is None):
+            return Response(
+                {"error": "thread_id или связка lesson_id + contact_id обязательны."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        canonical_thread_id = thread_id or _build_course_thread_id(
+            owner_id=int(client.id),
+            contact_id=int(contact_id),
+            lesson_id=int(lesson_id),
+        )
+
+        try:
+            lesson, resolved_contact_id = _resolve_course_lesson_context(
+                client=client,
+                thread_id=canonical_thread_id,
+                lesson_id=lesson_id,
+                contact_id=contact_id,
+            )
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        course = lesson.module.course
+        product = course.product
+        now = timezone.now()
+        progress, _ = ProductCourseProgress.objects.get_or_create(
+            owner=client,
+            contact_id=resolved_contact_id,
+            lesson_id=int(lesson.id),
+            defaults={"completed_at": now},
+        )
+        first_accept = progress.curator_completed_at is None
+        progress.curator_completed_at = now
+        progress.curator_user_id = request.user.id
+        progress.save(update_fields=["curator_completed_at", "curator_user_id"])
+
+        notified = False
+        notify_channel: str | None = None
+        comment: ProductCourseComment | None = None
+        if first_accept:
+            ProductCourseEvent.objects.create(
+                owner=client,
+                contact_id=resolved_contact_id,
+                product_id=int(product.id),
+                course_id=int(course.id),
+                module_id=int(lesson.module_id),
+                lesson_id=int(lesson.id),
+                progress_id=int(progress.id),
+                event_type=ProductCourseEvent.EVENT_LESSON_ACCEPTED,
+                actor_role=ProductCourseEvent.ACTOR_CURATOR,
+                actor_user_id=request.user.id,
+            )
+
+            notify_text = (
+                "Ваш урок принят куратором.\n"
+                f"Курс: {_safe_text(course.title) or '—'}\n"
+                f"Урок: {_safe_text(lesson.title) or '—'}"
+            )
+            notified, notify_channel = _notify_contact_about_course_acceptance(
+                client=client,
+                contact_id=resolved_contact_id,
+                text=notify_text,
+            )
+            comment = ProductCourseComment.objects.create(
+                owner=client,
+                contact_id=resolved_contact_id,
+                product_id=int(product.id),
+                course_id=int(course.id),
+                module_id=int(lesson.module_id),
+                lesson_id=int(lesson.id),
+                author_role=ProductCourseComment.AUTHOR_SYSTEM,
+                channel=ProductCourseComment.CHANNEL_COURSES,
+                message_text=(
+                    "Куратор принял урок."
+                    + (" Ученик уведомлен." if notified else " Уведомить ученика не удалось.")
+                ),
+                metadata={
+                    "thread_id": canonical_thread_id,
+                    "course_title": _safe_text(course.title),
+                    "lesson_title": _safe_text(lesson.title),
+                    "notified": bool(notified),
+                    "notify_channel": notify_channel,
+                },
+            )
+
+        response_payload: dict[str, Any] = {
+            "ok": True,
+            "thread_id": canonical_thread_id,
+            "lesson_id": int(lesson.id),
+            "contact_id": int(resolved_contact_id),
+            "accepted": True,
+            "already_accepted": not first_accept,
+            "notified": bool(notified),
+            "notify_channel": notify_channel,
+            "curator_completed_at": now,
+        }
+        if comment is not None:
+            message = _course_comment_to_message(
+                comment,
+                contact=MapContact.objects.filter(id=resolved_contact_id).first(),
+                tzinfo=tzinfo,
+            )
+            response_payload["message"] = {
+                "id": message["id"],
+                "channel": message["channel"],
+                "direction": message["direction"],
+                "author": message["author"],
+                "text": message["text"],
+                "createdAtLabel": message["createdAtLabel"],
+                "createdAtSort": message["createdAtSort"],
+            }
+        return Response(response_payload)
+
+
 class UnifiedInboxThreadsView(APIView):
     permission_classes = [IsTenantMember]
 
@@ -986,9 +1536,11 @@ class UnifiedInboxThreadsView(APIView):
         telegram_threads = _build_telegram_threads(client, tzinfo=tzinfo)
         vk_threads = _build_vk_threads(client, tzinfo=tzinfo)
         email_threads = _build_email_threads(client, tzinfo=tzinfo)
+        course_threads = _build_course_threads(client, tzinfo=tzinfo)
 
-        all_threads = [*telegram_threads, *vk_threads, *email_threads]
-        _append_reply_logs_to_threads(client, all_threads, tzinfo=tzinfo)
+        inbox_threads = [*telegram_threads, *vk_threads, *email_threads]
+        _append_reply_logs_to_threads(client, inbox_threads, tzinfo=tzinfo)
+        all_threads = [*inbox_threads, *course_threads]
         all_threads.sort(key=lambda item: int(item.get("lastMessageSort") or 0), reverse=True)
 
         channel_counts: dict[str, int] = defaultdict(int)
@@ -1011,6 +1563,10 @@ class UnifiedInboxThreadsView(APIView):
                         "enabled": True,
                         "thread_count": len(email_threads),
                         "reason": "Источник принимает письма через webhook /api/inbox/email/webhook/<client_uuid>/",
+                    },
+                    "courses": {
+                        "enabled": True,
+                        "thread_count": len(course_threads),
                     },
                 },
                 "counts": dict(channel_counts),

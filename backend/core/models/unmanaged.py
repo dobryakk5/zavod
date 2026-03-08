@@ -58,14 +58,6 @@ class ClientProduct(models.Model):
     )
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     short_description = models.TextField(blank=True, null=True)
-    digital_product_document = models.ForeignKey(
-        "KbDocument",
-        on_delete=models.SET_NULL,
-        db_column="digital_product_document_id",
-        related_name="digital_product_links",
-        blank=True,
-        null=True,
-    )
     packages = models.JSONField(default=list, blank=True)
     structure = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -78,6 +70,266 @@ class ClientProduct(models.Model):
 
     def __str__(self):
         return self.name
+
+
+# ============================================================================
+# Product LMS (map.product_course_*)
+# ============================================================================
+
+class ProductCourse(models.Model):
+    owner = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        db_column="owner_id",
+        related_name="product_courses",
+    )
+    product = models.OneToOneField(
+        ClientProduct,
+        on_delete=models.CASCADE,
+        db_column="product_id",
+        related_name="course",
+    )
+    title = models.TextField()
+    description = models.TextField(blank=True, null=True)
+    cover_url = models.TextField(blank=True, null=True)
+    is_published = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."product_courses'
+        ordering = ("-updated_at", "-id")
+
+    def __str__(self):
+        return self.title
+
+
+class ProductCourseModule(models.Model):
+    LESSON_UNLOCK_AFTER_STUDENT_COMPLETE = "after_student_complete"
+    LESSON_UNLOCK_AFTER_CURATOR_COMPLETE = "after_curator_complete"
+    LESSON_UNLOCK_AFTER_TIMER = "after_timer"
+    LESSON_UNLOCK_CONDITION_CHOICES = (
+        (LESSON_UNLOCK_AFTER_STUDENT_COMPLETE, "После отметки завершения урока"),
+        (LESSON_UNLOCK_AFTER_CURATOR_COMPLETE, "После отметки куратора"),
+        (LESSON_UNLOCK_AFTER_TIMER, "По таймеру после завершения"),
+    )
+
+    course = models.ForeignKey(
+        ProductCourse,
+        on_delete=models.CASCADE,
+        db_column="course_id",
+        related_name="modules",
+    )
+    title = models.TextField()
+    cover_url = models.TextField(blank=True, null=True)
+    position = models.IntegerField(default=0)
+    unlock_at = models.DateTimeField(blank=True, null=True)
+    open_lessons_immediately = models.BooleanField(default=False)
+    lesson_unlock_condition = models.CharField(
+        max_length=32,
+        choices=LESSON_UNLOCK_CONDITION_CHOICES,
+        default=LESSON_UNLOCK_AFTER_STUDENT_COMPLETE,
+    )
+    unlock_delay_days = models.IntegerField(default=0)
+    unlock_delay_hours = models.IntegerField(default=0)
+    unlock_delay_minutes = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."product_course_modules'
+        ordering = ("position", "id")
+
+    def __str__(self):
+        return self.title
+
+
+class ProductCourseLesson(models.Model):
+    module = models.ForeignKey(
+        ProductCourseModule,
+        on_delete=models.CASCADE,
+        db_column="module_id",
+        related_name="lessons",
+    )
+    title = models.TextField()
+    content = models.JSONField(default=dict, blank=True)
+    position = models.IntegerField(default=0)
+    is_preview = models.BooleanField(default=False)
+    unlock_at = models.DateTimeField(blank=True, null=True)
+    youtube_video_id = models.CharField(max_length=64, blank=True, null=True)
+    rutube_video_id = models.CharField(max_length=128, blank=True, null=True)
+    vk_owner_id = models.CharField(max_length=64, blank=True, null=True)
+    vk_video_id = models.CharField(max_length=64, blank=True, null=True)
+    vk_hash = models.CharField(max_length=128, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."product_course_lessons'
+        ordering = ("position", "id")
+
+    def __str__(self):
+        return self.title
+
+
+class ProductCourseProgress(models.Model):
+    owner = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        db_column="owner_id",
+        related_name="product_course_progress_items",
+    )
+    contact_id = models.BigIntegerField(db_index=True)
+    lesson = models.ForeignKey(
+        ProductCourseLesson,
+        on_delete=models.CASCADE,
+        db_column="lesson_id",
+        related_name="progress_items",
+    )
+    completed_at = models.DateTimeField(default=timezone.now)
+    curator_completed_at = models.DateTimeField(blank=True, null=True)
+    curator_user_id = models.BigIntegerField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."product_course_progress'
+        unique_together = ("owner", "contact_id", "lesson")
+        ordering = ("-completed_at", "-id")
+
+
+class ProductCourseEvent(models.Model):
+    EVENT_LESSON_COMPLETED = "lesson_completed"
+    EVENT_LESSON_ACCEPTED = "lesson_accepted"
+    EVENT_TYPE_CHOICES = (
+        (EVENT_LESSON_COMPLETED, "Урок завершен учеником"),
+        (EVENT_LESSON_ACCEPTED, "Урок принят куратором"),
+    )
+
+    ACTOR_STUDENT = "student"
+    ACTOR_CURATOR = "curator"
+    ACTOR_SYSTEM = "system"
+    ACTOR_ROLE_CHOICES = (
+        (ACTOR_STUDENT, "Ученик"),
+        (ACTOR_CURATOR, "Куратор"),
+        (ACTOR_SYSTEM, "Система"),
+    )
+
+    owner = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        db_column="owner_id",
+        related_name="product_course_events",
+    )
+    contact_id = models.BigIntegerField(db_index=True)
+    product = models.ForeignKey(
+        ClientProduct,
+        on_delete=models.CASCADE,
+        db_column="product_id",
+        related_name="course_events",
+    )
+    course = models.ForeignKey(
+        ProductCourse,
+        on_delete=models.CASCADE,
+        db_column="course_id",
+        related_name="events",
+    )
+    module = models.ForeignKey(
+        ProductCourseModule,
+        on_delete=models.CASCADE,
+        db_column="module_id",
+        related_name="events",
+    )
+    lesson = models.ForeignKey(
+        ProductCourseLesson,
+        on_delete=models.CASCADE,
+        db_column="lesson_id",
+        related_name="events",
+    )
+    progress = models.ForeignKey(
+        ProductCourseProgress,
+        on_delete=models.SET_NULL,
+        db_column="progress_id",
+        related_name="events",
+        null=True,
+        blank=True,
+    )
+    event_type = models.CharField(max_length=32, choices=EVENT_TYPE_CHOICES)
+    actor_role = models.CharField(max_length=16, choices=ACTOR_ROLE_CHOICES)
+    actor_user_id = models.BigIntegerField(blank=True, null=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."product_course_events'
+        ordering = ("-created_at", "-id")
+
+
+class ProductCourseComment(models.Model):
+    AUTHOR_STUDENT = "student"
+    AUTHOR_CURATOR = "curator"
+    AUTHOR_SYSTEM = "system"
+    AUTHOR_ROLE_CHOICES = (
+        (AUTHOR_STUDENT, "Ученик"),
+        (AUTHOR_CURATOR, "Куратор"),
+        (AUTHOR_SYSTEM, "Система"),
+    )
+
+    CHANNEL_COURSES = "courses"
+    CHANNEL_TELEGRAM = "telegram"
+    CHANNEL_VK = "vk"
+    CHANNEL_EMAIL = "email"
+    CHANNEL_CHOICES = (
+        (CHANNEL_COURSES, "Courses"),
+        (CHANNEL_TELEGRAM, "Telegram"),
+        (CHANNEL_VK, "VK"),
+        (CHANNEL_EMAIL, "Email"),
+    )
+
+    owner = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        db_column="owner_id",
+        related_name="product_course_comments",
+    )
+    contact_id = models.BigIntegerField(db_index=True)
+    product = models.ForeignKey(
+        ClientProduct,
+        on_delete=models.CASCADE,
+        db_column="product_id",
+        related_name="course_comments",
+    )
+    course = models.ForeignKey(
+        ProductCourse,
+        on_delete=models.CASCADE,
+        db_column="course_id",
+        related_name="comments",
+    )
+    module = models.ForeignKey(
+        ProductCourseModule,
+        on_delete=models.CASCADE,
+        db_column="module_id",
+        related_name="comments",
+    )
+    lesson = models.ForeignKey(
+        ProductCourseLesson,
+        on_delete=models.CASCADE,
+        db_column="lesson_id",
+        related_name="comments",
+    )
+    author_role = models.CharField(max_length=16, choices=AUTHOR_ROLE_CHOICES)
+    author_user_id = models.BigIntegerField(blank=True, null=True)
+    channel = models.CharField(max_length=16, choices=CHANNEL_CHOICES, default=CHANNEL_COURSES)
+    message_text = models.TextField()
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'map"."product_course_comments'
+        ordering = ("created_at", "id")
 
 
 # ============================================================================

@@ -90,6 +90,7 @@ from .views import (
     KbLinkPreviewView,
     ClientChannelView,
     EmailInboxWebhookView,
+    UnifiedInboxCourseAcceptView,
     UnifiedInboxReplyView,
     UnifiedInboxThreadsView,
 )
@@ -137,6 +138,10 @@ from .views_quiz_builder import (
 )
 from .views_public_client_page import (
     PublicClientPageBuyProductView,
+    PublicClientPageProductCourseLessonCompleteView,
+    PublicClientPageProductCourseLessonCommentsView,
+    PublicClientPageProductCourseLessonView,
+    PublicClientPageProductCourseView,
     PublicClientPagePurchasesView,
     PublicClientPagePaymentStatusView,
     PublicClientPageTasksView,
@@ -225,6 +230,26 @@ urlpatterns = [
     path('public/client-page/<int:client_id>/buy/', PublicClientPageBuyProductView.as_view(), name='public-client-page-buy'),
     path('public/client-page/<int:client_id>/payment-status/', PublicClientPagePaymentStatusView.as_view(), name='public-client-page-payment-status'),
     path('public/client-page/<int:client_id>/purchases/', PublicClientPagePurchasesView.as_view(), name='public-client-page-purchases'),
+    path(
+        'public/client-page/<int:client_id>/products/<int:product_id>/course/',
+        PublicClientPageProductCourseView.as_view(),
+        name='public-client-page-product-course',
+    ),
+    path(
+        'public/client-page/<int:client_id>/products/<int:product_id>/course/lessons/<int:lesson_id>/',
+        PublicClientPageProductCourseLessonView.as_view(),
+        name='public-client-page-product-course-lesson',
+    ),
+    path(
+        'public/client-page/<int:client_id>/products/<int:product_id>/course/lessons/<int:lesson_id>/complete/',
+        PublicClientPageProductCourseLessonCompleteView.as_view(),
+        name='public-client-page-product-course-lesson-complete',
+    ),
+    path(
+        'public/client-page/<int:client_id>/products/<int:product_id>/course/lessons/<int:lesson_id>/comments/',
+        PublicClientPageProductCourseLessonCommentsView.as_view(),
+        name='public-client-page-product-course-lesson-comments',
+    ),
     path('client/info/', ClientInfoView.as_view(), name='client-info'),
     path('client/summary/', ClientSummaryView.as_view(), name='client-summary'),
     path('client/generation-events/', GenerationEventSummaryView.as_view(), name='client-generation-events'),
@@ -232,6 +257,7 @@ urlpatterns = [
     path('client/channel', ClientChannelView.as_view(), name='client-channel'),
     path('client/unified-inbox/', UnifiedInboxThreadsView.as_view(), name='client-unified-inbox'),
     path('client/unified-inbox/reply/', UnifiedInboxReplyView.as_view(), name='client-unified-inbox-reply'),
+    path('client/unified-inbox/course/accept/', UnifiedInboxCourseAcceptView.as_view(), name='client-unified-inbox-course-accept'),
     path('inbox/email/webhook/<uuid:client_uuid>/', EmailInboxWebhookView.as_view(), name='inbox-email-webhook'),
     path('client/expert-books/', ClientExpertBooksView.as_view(), name='client-expert-books'),
     path('client/book-semantics/', ClientBookSemanticsView.as_view(), name='client-book-semantics'),

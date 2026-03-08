@@ -61,6 +61,11 @@ const CHANNEL_META: Record<InboxChannel, { label: string; short: string; badgeCl
     short: 'IG',
     badgeClass: 'border-pink-200 bg-pink-50 text-pink-700',
   },
+  courses: {
+    label: 'Курсы',
+    short: 'LMS',
+    badgeClass: 'border-teal-200 bg-teal-50 text-teal-700',
+  },
 };
 
 const INQUIRY_TYPE_LABELS: Record<InquiryType, string> = {
@@ -113,6 +118,7 @@ const SLA_BADGE_CLASS: Record<SlaState, string> = {
 
 const selectClassName =
   'h-9 rounded-md border border-input bg-white px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring';
+const REPLY_CHANNEL_WHITELIST = new Set<InboxChannel>(['courses', 'telegram', 'vk', 'email']);
 
 function createSeedThreads(): InboxThread[] {
   return [
@@ -438,6 +444,7 @@ export default function UnifiedInboxTab() {
   const [draftsByThreadId, setDraftsByThreadId] = useState<Record<string, string>>({});
   const [replyChannelByThreadId, setReplyChannelByThreadId] = useState<Partial<Record<string, InboxChannel>>>({});
   const [sendingThreadId, setSendingThreadId] = useState<string | null>(null);
+  const [acceptingThreadId, setAcceptingThreadId] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -488,6 +495,7 @@ export default function UnifiedInboxTab() {
         email: 0,
         vk: 0,
         instagram: 0,
+        courses: 0,
       },
     );
 
@@ -545,9 +553,24 @@ export default function UnifiedInboxTab() {
     return filteredThreads.find((thread) => thread.id === selectedThreadId) ?? filteredThreads[0];
   }, [filteredThreads, selectedThreadId]);
 
+  const activeReplyChannels = useMemo(() => {
+    if (!activeThread) return [] as InboxChannel[];
+    const channels: InboxChannel[] = [];
+    const pushUnique = (value: InboxChannel) => {
+      if (!REPLY_CHANNEL_WHITELIST.has(value)) return;
+      if (!channels.includes(value)) channels.push(value);
+    };
+
+    pushUnique(activeThread.sourceChannel);
+    activeThread.client.channels.forEach((item) => pushUnique(item.channel));
+    return channels;
+  }, [activeThread]);
+
   const activeDraft = activeThread ? (draftsByThreadId[activeThread.id] ?? '') : '';
   const activeReplyChannel = activeThread
-    ? (replyChannelByThreadId[activeThread.id] ?? activeThread.sourceChannel)
+    ? (activeReplyChannels.includes(replyChannelByThreadId[activeThread.id] as InboxChannel)
+      ? (replyChannelByThreadId[activeThread.id] as InboxChannel)
+      : (activeReplyChannels[0] ?? 'telegram'))
     : 'telegram';
 
   const handleSelectThread = (threadId: string) => {
@@ -610,6 +633,38 @@ export default function UnifiedInboxTab() {
       setSendError(message);
     } finally {
       setSendingThreadId(null);
+    }
+  };
+
+  const handleAcceptCourse = async () => {
+    if (!activeThread || activeThread.sourceChannel !== 'courses') return;
+    if (!activeThread.courseEvent || activeThread.courseEvent.accepted) return;
+
+    setSendError(null);
+    setAcceptingThreadId(activeThread.id);
+    try {
+      const response = await unifiedInboxApi.acceptCourse({ thread_id: activeThread.id });
+      setThreads((prev) =>
+        prev.map((thread) => {
+          if (thread.id !== activeThread.id) return thread;
+          const nextMessages = response.message ? [...thread.messages, response.message] : thread.messages;
+          return {
+            ...thread,
+            status: 'closed',
+            serviceLevel: 'normal',
+            courseEvent: thread.courseEvent ? { ...thread.courseEvent, accepted: true } : thread.courseEvent,
+            lastMessagePreview: response.message?.text || thread.lastMessagePreview,
+            lastMessageAtLabel: response.message?.createdAtLabel || thread.lastMessageAtLabel,
+            lastMessageSort: response.message?.createdAtSort || thread.lastMessageSort,
+            messages: nextMessages,
+          };
+        }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось принять урок.';
+      setSendError(message);
+    } finally {
+      setAcceptingThreadId(null);
     }
   };
 
@@ -679,6 +734,11 @@ export default function UnifiedInboxTab() {
               {!sourceInfo.email.enabled && sourceInfo.email.reason ? (
                 <span className="text-muted-foreground"> · {sourceInfo.email.reason}</span>
               ) : null}
+            </div>
+          )}
+          {sourceInfo?.courses && (
+            <div className="rounded-md border bg-white px-3 py-1.5 text-xs">
+              Курсы: <span className="font-semibold">{sourceInfo.courses.thread_count}</span>
             </div>
           )}
         </div>
@@ -905,6 +965,21 @@ export default function UnifiedInboxTab() {
                   <Button type="button" size="sm" variant="outline" onClick={() => handleUpdateStatus('closed')}>
                     Закрыть
                   </Button>
+                  {activeThread.sourceChannel === 'courses' && activeThread.courseEvent && !activeThread.courseEvent.accepted ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => { void handleAcceptCourse(); }}
+                      disabled={acceptingThreadId === activeThread.id}
+                    >
+                      {acceptingThreadId === activeThread.id ? 'Принимаем...' : 'Принять'}
+                    </Button>
+                  ) : null}
+                  {activeThread.sourceChannel === 'courses' && activeThread.courseEvent?.curator_url ? (
+                    <Button asChild type="button" size="sm" variant="outline">
+                      <Link href={activeThread.courseEvent.curator_url}>Открыть урок</Link>
+                    </Button>
+                  ) : null}
                 </div>
               </div>
 
@@ -968,11 +1043,14 @@ export default function UnifiedInboxTab() {
                       className={cn(selectClassName, 'w-full')}
                       disabled={sendingThreadId === activeThread.id}
                     >
-                      {activeThread.client.channels.map((item) => (
-                        <option key={`${activeThread.id}-${item.channel}-${item.handle}`} value={item.channel}>
-                          {CHANNEL_META[item.channel].label} ({item.handle})
-                        </option>
-                      ))}
+                      {activeReplyChannels.map((channel) => {
+                        const handle = activeThread.client.channels.find((item) => item.channel === channel)?.handle;
+                        return (
+                          <option key={`${activeThread.id}-${channel}`} value={channel}>
+                            {CHANNEL_META[channel].label}{handle ? ` (${handle})` : ''}
+                          </option>
+                        );
+                      })}
                     </select>
 
                     <div className="rounded-md border bg-slate-50 px-3 py-2 text-xs text-slate-600">

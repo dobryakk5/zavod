@@ -156,13 +156,13 @@ export default function PublicProductPage() {
         const delivery = statusResponse?.delivery || null;
         if (paymentStatus === 'succeeded' && statusResponse?.paid) {
           const successMessage = delivery?.ready && delivery.url
-            ? 'Оплата прошла успешно. Доступ к покупке активирован.'
-            : (delivery?.message || 'Оплата прошла успешно. Доступ к покупке активирован.');
+            ? 'Оплата прошла успешно. Доступ к курсу активирован.'
+            : (delivery?.message || 'Оплата прошла успешно. Доступ к курсу активирован.');
           setPurchaseSuccessModalMessage(successMessage);
           setPurchaseSuccessModalOpen(true);
           if (delivery?.ready && delivery.url) {
             setPurchaseDeliveryLink(delivery.url);
-            setPurchaseDeliveryTitle((delivery.document_title || '').trim() || 'Открыть покупку');
+            setPurchaseDeliveryTitle((delivery.course_title || delivery.document_title || '').trim() || 'Открыть курс');
           } else {
             setPurchaseDeliveryLink(null);
             setPurchaseDeliveryTitle(null);
@@ -484,16 +484,16 @@ export default function PublicProductPage() {
             <div className="text-sm text-gray-600">
               Подтверждение отправлено в ваш основной мессенджер (Telegram или VK).
             </div>
-            {purchaseDeliveryLink && (
-              <a
-                href={purchaseDeliveryLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent"
-              >
-                {purchaseDeliveryTitle || 'Открыть покупку'}
-              </a>
-            )}
+          {purchaseDeliveryLink && (
+            <a
+              href={purchaseDeliveryLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent"
+            >
+              {purchaseDeliveryTitle || 'Открыть курс'}
+            </a>
+          )}
             <div>
               <button
                 type="button"

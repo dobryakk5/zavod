@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import secrets
 import uuid
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
 
 import requests
 from django.conf import settings
-from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
 from rest_framework import status
@@ -22,10 +20,16 @@ from core.models import (
     Client,
     ClientProduct,
     ContactProductPurchase,
-    KbDocumentShare,
+    ProductCourseComment,
+    ProductCourseEvent,
+    ProductCourse,
+    ProductCourseLesson,
+    ProductCourseModule,
+    ProductCourseProgress,
     MapAvailabilityEvent,
     UserSocialAccount,
     UserTenantBinding,
+    UserTenantRole,
     YooKassaPayment,
 )
 from core.services.contact_service_packages import (
@@ -51,6 +55,20 @@ PAYMENT_PROVIDER_TBANK = YooKassaPayment.PROVIDER_TBANK
 SUPPORTED_PAYMENT_PROVIDERS = {PAYMENT_PROVIDER_YOOKASSA, PAYMENT_PROVIDER_TBANK}
 TBANK_SUCCESS_STATUSES = {"CONFIRMED"}
 TBANK_FAILED_STATUSES = {"REJECTED", "CANCELLED", "DEADLINE_EXPIRED"}
+
+
+def _safe_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _infer_video_provider(*, youtube_video_id, rutube_video_id, vk_owner_id, vk_video_id) -> str | None:
+    if _safe_text(youtube_video_id):
+        return "youtube"
+    if _safe_text(rutube_video_id):
+        return "rutube"
+    if _safe_text(vk_owner_id) and _safe_text(vk_video_id):
+        return "vk"
+    return None
 
 
 def _resolve_public_payment_provider(raw_value: object) -> str:
@@ -122,9 +140,9 @@ def _tbank_request(endpoint: str, payload: dict, *, terminal_key: str, secret_ke
     return result
 
 
-def _parse_digital_product_plan_code(plan_code: object) -> tuple[int | None, int | None, int | None]:
+def _parse_course_product_plan_code(plan_code: object) -> tuple[int | None, int | None, int | None]:
     raw = str(plan_code or "").strip()
-    if not raw.startswith("digital_product:"):
+    if not raw.startswith("course_product:"):
         return None, None, None
 
     chunks = raw.split(":")
@@ -244,36 +262,16 @@ def _build_client_page_return_url(client_id: int) -> str:
     return f"{base_url}{path}" if base_url else path
 
 
-def _build_kb_share_url(token: str) -> str:
+def _build_client_page_course_url(client_id: int, product_id: int) -> str:
     base_url = str(getattr(settings, "SITE_BASE_URL", "") or "").rstrip("/")
-    path = f"/kb/share/{token}"
+    path = f"/c/{client_id}/products/{product_id}/course"
     return f"{base_url}{path}" if base_url else path
 
 
-def _issue_share_token() -> str:
-    return secrets.token_hex(16)
-
-
-def _get_or_create_active_share(document_id: int) -> KbDocumentShare:
-    existing = (
-        KbDocumentShare.objects
-        .filter(document_id=document_id, is_active=True)
-        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
-        .order_by("-created_at")
-        .first()
-    )
-    if existing:
-        return existing
-
-    token = _issue_share_token()
-    while KbDocumentShare.objects.filter(share_token=token).exists():
-        token = _issue_share_token()
-    return KbDocumentShare.objects.create(
-        document_id=document_id,
-        share_token=token,
-        permission="view",
-        is_active=True,
-    )
+def _build_curator_course_module_url(product_id: int, module_id: int) -> str:
+    base_url = str(getattr(settings, "SITE_BASE_URL", "") or "").rstrip("/")
+    path = f"/product/{product_id}/course/{module_id}"
+    return f"{base_url}{path}" if base_url else path
 
 
 def _parse_payment_timestamp(value: object) -> datetime:
@@ -354,21 +352,145 @@ def _resolve_request_contact_id_for_client(request, client_id: int) -> int | Non
     return _resolve_bound_contact_id_for_client(user, client_id)
 
 
-def _build_digital_product_delivery_payload(client: Client, product: ClientProduct | None) -> dict[str, object]:
-    document = getattr(product, "digital_product_document", None)
-    if document and document.workspace_id == client.id and not getattr(document, "is_archived", False):
-        share = _get_or_create_active_share(document.id)
+def _has_tenant_course_access(request, client_id: int) -> bool:
+    user = _authenticate_cookie_user_optional(request)
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    return UserTenantRole.objects.filter(
+        user=user,
+        client_id=client_id,
+        role__in=("owner", "editor", "viewer"),
+    ).exists()
+
+
+def _build_course_delivery_payload(client: Client, product: ClientProduct | None) -> dict[str, object]:
+    if not product:
+        return {
+            "ready": False,
+            "missing_course": True,
+            "message": "Курс для продукта не найден.",
+        }
+
+    course = (
+        ProductCourse.objects
+        .filter(owner_id=client.id, product_id=product.id)
+        .only("id", "title", "is_published")
+        .first()
+    )
+    if course and course.is_published:
         return {
             "ready": True,
-            "document_id": document.id,
-            "document_title": document.title,
-            "url": _build_kb_share_url(share.share_token),
+            "course_id": course.id,
+            "course_title": course.title,
+            "url": _build_client_page_course_url(client.id, product.id),
         }
     return {
         "ready": False,
-        "missing_product_page": True,
-        "message": "Покажите информацию об оплате владельцу портала",
+        "missing_course": True,
+        "message": "Курс пока не опубликован. Свяжитесь с владельцем портала.",
     }
+
+
+def _has_paid_product_access(client_id: int, contact_id: int | None, product_id: int) -> bool:
+    if contact_id is None or contact_id <= 0:
+        return False
+    return ContactProductPurchase.objects.filter(
+        client_id=client_id,
+        contact_id=int(contact_id),
+        product_id=product_id,
+    ).exists()
+
+
+def _is_module_locked(module: ProductCourseModule, has_paid_access: bool, now: datetime) -> bool:
+    if not has_paid_access:
+        return True
+    if module.unlock_at and module.unlock_at > now:
+        return True
+    return False
+
+
+def _normalize_module_unlock_condition(module: ProductCourseModule) -> str:
+    allowed = {
+        ProductCourseModule.LESSON_UNLOCK_AFTER_STUDENT_COMPLETE,
+        ProductCourseModule.LESSON_UNLOCK_AFTER_CURATOR_COMPLETE,
+        ProductCourseModule.LESSON_UNLOCK_AFTER_TIMER,
+    }
+    raw = str(getattr(module, "lesson_unlock_condition", "") or "").strip()
+    if raw in allowed:
+        return raw
+    return ProductCourseModule.LESSON_UNLOCK_AFTER_STUDENT_COMPLETE
+
+
+def _to_non_negative_int(value: object) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed >= 0 else 0
+
+
+def _module_unlock_delay_delta(module: ProductCourseModule) -> timedelta:
+    return timedelta(
+        days=_to_non_negative_int(getattr(module, "unlock_delay_days", 0)),
+        hours=_to_non_negative_int(getattr(module, "unlock_delay_hours", 0)),
+        minutes=_to_non_negative_int(getattr(module, "unlock_delay_minutes", 0)),
+    )
+
+
+def _is_lesson_sequence_locked(
+    *,
+    lesson: ProductCourseLesson,
+    module: ProductCourseModule,
+    ordered_lessons: list[ProductCourseLesson],
+    progress_by_lesson_id: dict[int, ProductCourseProgress],
+    now: datetime,
+) -> bool:
+    if bool(getattr(module, "open_lessons_immediately", False)):
+        return False
+    if not ordered_lessons:
+        return False
+
+    lesson_ids = [int(item.id) for item in ordered_lessons]
+    try:
+        lesson_index = lesson_ids.index(int(lesson.id))
+    except ValueError:
+        return False
+
+    if lesson_index <= 0:
+        return False
+
+    previous_lesson = ordered_lessons[lesson_index - 1]
+    previous_progress = progress_by_lesson_id.get(int(previous_lesson.id))
+    condition = _normalize_module_unlock_condition(module)
+    if condition == ProductCourseModule.LESSON_UNLOCK_AFTER_CURATOR_COMPLETE:
+        return bool(previous_progress is None or previous_progress.curator_completed_at is None)
+    if condition == ProductCourseModule.LESSON_UNLOCK_AFTER_TIMER:
+        if previous_progress is None:
+            return True
+        unlock_time = previous_progress.completed_at + _module_unlock_delay_delta(module)
+        return unlock_time > now
+    return previous_progress is None
+
+
+def _is_lesson_locked(
+    lesson: ProductCourseLesson,
+    module: ProductCourseModule,
+    *,
+    has_paid_access: bool,
+    now: datetime,
+    sequence_locked: bool = False,
+) -> bool:
+    if module.unlock_at and module.unlock_at > now:
+        return True
+    if lesson.unlock_at and lesson.unlock_at > now:
+        return True
+    if sequence_locked:
+        return True
+    if lesson.is_preview:
+        return False
+    if not has_paid_access:
+        return True
+    return False
 
 
 def _record_contact_product_purchase(
@@ -382,7 +504,7 @@ def _record_contact_product_purchase(
         return None, False
 
     metadata = payment_payload.get("metadata") or {}
-    if str(metadata.get("payment_kind") or "") != "digital_product":
+    if str(metadata.get("payment_kind") or "") != "course_product":
         return None, False
     if str(metadata.get("client_id") or "") != str(client.id):
         return None, False
@@ -612,7 +734,6 @@ class PublicClientPageView(APIView):
                 "name",
                 "status",
                 "short_description",
-                "digital_product_document_id",
                 "packages",
                 "structure",
                 "created_at",
@@ -620,6 +741,17 @@ class PublicClientPageView(APIView):
             )
             .order_by("-updated_at")
         )
+        product_ids = [int(item["id"]) for item in products]
+        course_map = {
+            int(item["product_id"]): bool(item["is_published"])
+            for item in ProductCourse.objects
+            .filter(owner_id=client_id, product_id__in=product_ids)
+            .values("product_id", "is_published")
+        }
+        for item in products:
+            product_id = int(item["id"])
+            item["has_course"] = product_id in course_map
+            item["course_published"] = bool(course_map.get(product_id, False))
 
         availability_events = list(
             MapAvailabilityEvent.objects
@@ -657,6 +789,691 @@ class PublicClientPageView(APIView):
                 "events": [],
             }
         )
+
+
+class PublicClientPageProductCourseView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def get(self, request, client_id: int, product_id: int):
+        client = Client.objects.filter(id=client_id).first()
+        if not client:
+            raise Http404("Клиент не найден")
+
+        product = (
+            ClientProduct.objects
+            .filter(owner_id=client_id, id=product_id, status=ClientProduct.STATUS_ACTIVE)
+            .first()
+        )
+        if not product:
+            raise Http404("Продукт не найден")
+
+        course = (
+            ProductCourse.objects
+            .filter(owner_id=client_id, product_id=product_id, is_published=True)
+            .first()
+        )
+        if not course:
+            raise Http404("Курс не найден")
+
+        modules = list(
+            ProductCourseModule.objects.filter(course_id=course.id).order_by("position", "id")
+        )
+        module_ids = [int(item.id) for item in modules]
+        lessons = list(
+            ProductCourseLesson.objects.filter(module_id__in=module_ids).order_by("position", "id")
+            if module_ids
+            else []
+        )
+        lessons_by_module: dict[int, list[ProductCourseLesson]] = {}
+        for lesson in lessons:
+            lessons_by_module.setdefault(int(lesson.module_id), []).append(lesson)
+
+        is_tenant_user = _has_tenant_course_access(request, client_id)
+        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        if not is_tenant_user and (contact_id is None or contact_id <= 0):
+            return Response(
+                {"detail": "Для доступа к курсу войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        has_paid_access = bool(is_tenant_user or _has_paid_product_access(client_id, contact_id, product_id))
+        lesson_ids = [int(item.id) for item in lessons]
+        progress_by_lesson_id: dict[int, ProductCourseProgress] = {}
+        if contact_id and lesson_ids:
+            progress_items = list(
+                ProductCourseProgress.objects
+                .filter(owner_id=client_id, contact_id=contact_id, lesson_id__in=lesson_ids)
+                .order_by("-completed_at", "-id")
+            )
+            for item in progress_items:
+                lesson_key = int(item.lesson_id)
+                if lesson_key not in progress_by_lesson_id:
+                    progress_by_lesson_id[lesson_key] = item
+        completed_lesson_ids = set(progress_by_lesson_id.keys())
+
+        now = timezone.now()
+        modules_payload: list[dict[str, object]] = []
+        for module in modules:
+            module_lessons = lessons_by_module.get(int(module.id), [])
+            lessons_payload: list[dict[str, object]] = []
+            module_locked = True
+            for lesson in module_lessons:
+                sequence_locked = _is_lesson_sequence_locked(
+                    lesson=lesson,
+                    module=module,
+                    ordered_lessons=module_lessons,
+                    progress_by_lesson_id=progress_by_lesson_id,
+                    now=now,
+                ) if not is_tenant_user else False
+                is_locked = False if is_tenant_user else _is_lesson_locked(
+                    lesson,
+                    module,
+                    has_paid_access=has_paid_access,
+                    now=now,
+                    sequence_locked=sequence_locked,
+                )
+                if not is_locked:
+                    module_locked = False
+                lessons_payload.append(
+                    {
+                        "id": lesson.id,
+                        "module_id": lesson.module_id,
+                        "title": lesson.title,
+                        "position": lesson.position,
+                        "is_preview": lesson.is_preview,
+                        "unlock_at": lesson.unlock_at,
+                        "is_locked": is_locked,
+                        "is_completed": int(lesson.id) in completed_lesson_ids,
+                        "video_provider": _infer_video_provider(
+                            youtube_video_id=lesson.youtube_video_id,
+                            rutube_video_id=lesson.rutube_video_id,
+                            vk_owner_id=lesson.vk_owner_id,
+                            vk_video_id=lesson.vk_video_id,
+                        ),
+                        "youtube_video_id": lesson.youtube_video_id,
+                        "rutube_video_id": lesson.rutube_video_id,
+                        "vk_owner_id": lesson.vk_owner_id,
+                        "vk_video_id": lesson.vk_video_id,
+                    }
+                )
+
+            if not module_lessons:
+                module_locked = False if is_tenant_user else _is_module_locked(module, has_paid_access, now)
+
+            modules_payload.append(
+                {
+                    "id": module.id,
+                    "course_id": module.course_id,
+                    "title": module.title,
+                    "cover_url": module.cover_url,
+                    "position": module.position,
+                    "unlock_at": module.unlock_at,
+                    "open_lessons_immediately": bool(getattr(module, "open_lessons_immediately", False)),
+                    "lesson_unlock_condition": _normalize_module_unlock_condition(module),
+                    "unlock_delay_days": _to_non_negative_int(getattr(module, "unlock_delay_days", 0)),
+                    "unlock_delay_hours": _to_non_negative_int(getattr(module, "unlock_delay_hours", 0)),
+                    "unlock_delay_minutes": _to_non_negative_int(getattr(module, "unlock_delay_minutes", 0)),
+                    "is_locked": module_locked,
+                    "lessons": lessons_payload,
+                }
+            )
+
+        total_lessons = len(lessons)
+        completed_lessons = len(completed_lesson_ids)
+        progress_percent = round((completed_lessons / total_lessons * 100) if total_lessons else 0, 1)
+        return Response(
+            {
+                "course": {
+                    "id": course.id,
+                    "owner_id": course.owner_id,
+                    "product_id": course.product_id,
+                    "title": course.title,
+                    "description": course.description,
+                    "cover_url": course.cover_url,
+                    "is_published": course.is_published,
+                    "lessons_count": total_lessons,
+                    "progress": {
+                        "completed_lessons": completed_lessons,
+                        "total_lessons": total_lessons,
+                        "percent": progress_percent,
+                    },
+                    "modules": modules_payload,
+                },
+                "access": {
+                    "is_tenant_user": is_tenant_user,
+                    "is_contact_bound": bool(contact_id and contact_id > 0),
+                    "is_paid": has_paid_access,
+                },
+            }
+        )
+
+
+class PublicClientPageProductCourseLessonView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def get(self, request, client_id: int, product_id: int, lesson_id: int):
+        client = Client.objects.filter(id=client_id).first()
+        if not client:
+            raise Http404("Клиент не найден")
+
+        product = (
+            ClientProduct.objects
+            .filter(owner_id=client_id, id=product_id, status=ClientProduct.STATUS_ACTIVE)
+            .first()
+        )
+        if not product:
+            raise Http404("Продукт не найден")
+
+        course = (
+            ProductCourse.objects
+            .filter(owner_id=client_id, product_id=product_id, is_published=True)
+            .first()
+        )
+        if not course:
+            raise Http404("Курс не найден")
+
+        lesson = (
+            ProductCourseLesson.objects
+            .select_related("module")
+            .filter(id=lesson_id, module__course_id=course.id)
+            .first()
+        )
+        if not lesson:
+            raise Http404("Урок не найден")
+
+        is_tenant_user = _has_tenant_course_access(request, client_id)
+        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        if not is_tenant_user and (contact_id is None or contact_id <= 0):
+            return Response(
+                {"detail": "Для доступа к уроку войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        has_paid_access = bool(is_tenant_user or _has_paid_product_access(client_id, contact_id, product_id))
+        now = timezone.now()
+        module_lessons = list(
+            ProductCourseLesson.objects
+            .filter(module_id=lesson.module_id)
+            .order_by("position", "id")
+        )
+        module_lesson_ids = [int(item.id) for item in module_lessons]
+        progress_by_lesson_id: dict[int, ProductCourseProgress] = {}
+        if contact_id and module_lesson_ids:
+            progress_items = list(
+                ProductCourseProgress.objects
+                .filter(owner_id=client_id, contact_id=contact_id, lesson_id__in=module_lesson_ids)
+                .order_by("-completed_at", "-id")
+            )
+            for item in progress_items:
+                lesson_key = int(item.lesson_id)
+                if lesson_key not in progress_by_lesson_id:
+                    progress_by_lesson_id[lesson_key] = item
+
+        sequence_locked = _is_lesson_sequence_locked(
+            lesson=lesson,
+            module=lesson.module,
+            ordered_lessons=module_lessons,
+            progress_by_lesson_id=progress_by_lesson_id,
+            now=now,
+        ) if not is_tenant_user else False
+        is_locked = False if is_tenant_user else _is_lesson_locked(
+            lesson,
+            lesson.module,
+            has_paid_access=has_paid_access,
+            now=now,
+            sequence_locked=sequence_locked,
+        )
+        if is_locked:
+            return Response({"detail": "Lesson is locked", "is_locked": True}, status=status.HTTP_403_FORBIDDEN)
+
+        is_completed = bool(
+            contact_id
+            and ProductCourseProgress.objects.filter(
+                owner_id=client_id,
+                contact_id=contact_id,
+                lesson_id=lesson.id,
+            ).exists()
+        )
+
+        return Response(
+            {
+                "id": lesson.id,
+                "title": lesson.title,
+                "content": lesson.content,
+                "position": lesson.position,
+                "is_preview": lesson.is_preview,
+                "unlock_at": lesson.unlock_at,
+                "is_locked": False,
+                "is_completed": is_completed,
+                "video_provider": _infer_video_provider(
+                    youtube_video_id=lesson.youtube_video_id,
+                    rutube_video_id=lesson.rutube_video_id,
+                    vk_owner_id=lesson.vk_owner_id,
+                    vk_video_id=lesson.vk_video_id,
+                ),
+                "youtube_video_id": lesson.youtube_video_id,
+                "rutube_video_id": lesson.rutube_video_id,
+                "vk_owner_id": lesson.vk_owner_id,
+                "vk_video_id": lesson.vk_video_id,
+                "vk_hash": lesson.vk_hash,
+                "module": {
+                    "id": lesson.module_id,
+                    "title": lesson.module.title,
+                    "course": {
+                        "id": course.id,
+                        "product_id": product.id,
+                        "title": course.title,
+                    },
+                },
+            }
+        )
+
+
+class PublicClientPageProductCourseLessonCompleteView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def post(self, request, client_id: int, product_id: int, lesson_id: int):
+        client = Client.objects.filter(id=client_id).first()
+        if not client:
+            raise Http404("Клиент не найден")
+
+        product = (
+            ClientProduct.objects
+            .filter(owner_id=client_id, id=product_id, status=ClientProduct.STATUS_ACTIVE)
+            .only("id")
+            .first()
+        )
+        if not product:
+            raise Http404("Продукт не найден")
+
+        course = (
+            ProductCourse.objects
+            .filter(owner_id=client_id, product_id=product_id, is_published=True)
+            .first()
+        )
+        if not course:
+            raise Http404("Курс не найден")
+
+        lesson = (
+            ProductCourseLesson.objects
+            .select_related("module")
+            .filter(id=lesson_id, module__course_id=course.id)
+            .first()
+        )
+        if not lesson:
+            raise Http404("Урок не найден")
+
+        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        if contact_id is None or contact_id <= 0:
+            return Response(
+                {"detail": "Для доступа к урокам войдите как контакт через Telegram или VK."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        has_paid_access = _has_paid_product_access(client_id, contact_id, product_id)
+        now = timezone.now()
+        if _is_lesson_locked(lesson, lesson.module, has_paid_access=has_paid_access, now=now):
+            return Response({"detail": "Lesson is locked"}, status=status.HTTP_403_FORBIDDEN)
+
+        progress, created = ProductCourseProgress.objects.get_or_create(
+            owner_id=client_id,
+            contact_id=int(contact_id),
+            lesson_id=lesson.id,
+        )
+        if created:
+            ProductCourseEvent.objects.create(
+                owner_id=client_id,
+                contact_id=int(contact_id),
+                product_id=product.id,
+                course_id=course.id,
+                module_id=lesson.module_id,
+                lesson_id=lesson.id,
+                progress_id=progress.id,
+                event_type=ProductCourseEvent.EVENT_LESSON_COMPLETED,
+                actor_role=ProductCourseEvent.ACTOR_STUDENT,
+            )
+        return Response({"ok": True})
+
+
+class PublicClientPageProductCourseLessonCommentsView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def _resolve_lesson_context(self, *, client_id: int, product_id: int, lesson_id: int):
+        client = Client.objects.filter(id=client_id).first()
+        if not client:
+            raise Http404("Клиент не найден")
+
+        product = (
+            ClientProduct.objects
+            .filter(owner_id=client_id, id=product_id, status=ClientProduct.STATUS_ACTIVE)
+            .first()
+        )
+        if not product:
+            raise Http404("Продукт не найден")
+
+        course = (
+            ProductCourse.objects
+            .filter(owner_id=client_id, product_id=product_id, is_published=True)
+            .first()
+        )
+        if not course:
+            raise Http404("Курс не найден")
+
+        lesson = (
+            ProductCourseLesson.objects
+            .select_related("module")
+            .filter(id=lesson_id, module__course_id=course.id)
+            .first()
+        )
+        if not lesson:
+            raise Http404("Урок не найден")
+        return client, product, course, lesson
+
+    @staticmethod
+    def _parse_positive_int(value: object) -> int | None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _resolve_actor(self, request, client_id: int) -> tuple[bool, int | None]:
+        is_tenant_user = _has_tenant_course_access(request, client_id)
+        contact_id = self._parse_positive_int(_resolve_request_contact_id_for_client(request, client_id))
+        return is_tenant_user, contact_id
+
+    def _ensure_contact_can_access_lesson(
+        self,
+        *,
+        client_id: int,
+        product_id: int,
+        lesson: ProductCourseLesson,
+        contact_id: int,
+    ) -> Response | None:
+        has_paid_access = _has_paid_product_access(client_id, contact_id, product_id)
+        now = timezone.now()
+        module_lessons = list(
+            ProductCourseLesson.objects
+            .filter(module_id=lesson.module_id)
+            .order_by("position", "id")
+        )
+        module_lesson_ids = [int(item.id) for item in module_lessons]
+        progress_by_lesson_id: dict[int, ProductCourseProgress] = {}
+        if module_lesson_ids:
+            progress_items = list(
+                ProductCourseProgress.objects
+                .filter(owner_id=client_id, contact_id=int(contact_id), lesson_id__in=module_lesson_ids)
+                .order_by("-completed_at", "-id")
+            )
+            for item in progress_items:
+                lesson_key = int(item.lesson_id)
+                if lesson_key not in progress_by_lesson_id:
+                    progress_by_lesson_id[lesson_key] = item
+        sequence_locked = _is_lesson_sequence_locked(
+            lesson=lesson,
+            module=lesson.module,
+            ordered_lessons=module_lessons,
+            progress_by_lesson_id=progress_by_lesson_id,
+            now=now,
+        )
+        if _is_lesson_locked(
+            lesson,
+            lesson.module,
+            has_paid_access=has_paid_access,
+            now=now,
+            sequence_locked=sequence_locked,
+        ):
+            return Response({"detail": "Lesson is locked", "is_locked": True}, status=status.HTTP_403_FORBIDDEN)
+        return None
+
+    @staticmethod
+    def _can_delete_comment(
+        comment: ProductCourseComment,
+        *,
+        is_tenant_user: bool,
+        actor_contact_id: int | None,
+    ) -> bool:
+        if is_tenant_user:
+            return True
+        if actor_contact_id is None:
+            return False
+        return (
+            int(comment.contact_id) == int(actor_contact_id)
+            and comment.author_role == ProductCourseComment.AUTHOR_STUDENT
+        )
+
+    @staticmethod
+    def _serialize_comment_item(
+        comment: ProductCourseComment,
+        *,
+        is_tenant_user: bool,
+        actor_contact_id: int | None,
+    ) -> dict[str, object]:
+        if comment.author_role == ProductCourseComment.AUTHOR_STUDENT:
+            author_name = "Ученик"
+        elif comment.author_role == ProductCourseComment.AUTHOR_CURATOR:
+            author_name = "Куратор"
+        else:
+            author_name = "Система"
+        return {
+            "id": int(comment.id),
+            "contact_id": int(comment.contact_id),
+            "author_role": _safe_text(comment.author_role),
+            "author_user_id": int(comment.author_user_id) if comment.author_user_id else None,
+            "author_name": author_name,
+            "channel": _safe_text(comment.channel) or ProductCourseComment.CHANNEL_COURSES,
+            "message_text": _safe_text(comment.message_text),
+            "metadata": comment.metadata if isinstance(comment.metadata, dict) else {},
+            "created_at": comment.created_at,
+            "can_delete": PublicClientPageProductCourseLessonCommentsView._can_delete_comment(
+                comment,
+                is_tenant_user=is_tenant_user,
+                actor_contact_id=actor_contact_id,
+            ),
+        }
+
+    def get(self, request, client_id: int, product_id: int, lesson_id: int):
+        _, product, course, lesson = self._resolve_lesson_context(
+            client_id=client_id,
+            product_id=product_id,
+            lesson_id=lesson_id,
+        )
+        is_tenant_user, actor_contact_id = self._resolve_actor(request, client_id)
+        if not is_tenant_user and actor_contact_id is None:
+            return Response(
+                {"detail": "Для доступа к комментариям войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not is_tenant_user and actor_contact_id is not None:
+            locked_response = self._ensure_contact_can_access_lesson(
+                client_id=client_id,
+                product_id=product_id,
+                lesson=lesson,
+                contact_id=actor_contact_id,
+            )
+            if locked_response is not None:
+                return locked_response
+
+        requested_contact_id = None
+        if is_tenant_user:
+            requested_contact_id = self._parse_positive_int(request.query_params.get("contact_id"))
+
+        comments_qs = ProductCourseComment.objects.filter(
+            owner_id=client_id,
+            product_id=product.id,
+            course_id=course.id,
+            module_id=lesson.module_id,
+            lesson_id=lesson.id,
+        )
+        if is_tenant_user and requested_contact_id is not None:
+            comments_qs = comments_qs.filter(contact_id=requested_contact_id)
+        if not is_tenant_user and actor_contact_id is not None:
+            comments_qs = comments_qs.filter(contact_id=int(actor_contact_id))
+
+        comments = list(comments_qs.order_by("created_at", "id"))
+        return Response(
+            {
+                "lesson_id": int(lesson.id),
+                "contact_id": int(actor_contact_id) if actor_contact_id is not None else None,
+                "is_tenant_user": bool(is_tenant_user),
+                "comments": [
+                    self._serialize_comment_item(
+                        item,
+                        is_tenant_user=is_tenant_user,
+                        actor_contact_id=actor_contact_id,
+                    )
+                    for item in comments
+                ],
+            }
+        )
+
+    def post(self, request, client_id: int, product_id: int, lesson_id: int):
+        _, product, course, lesson = self._resolve_lesson_context(
+            client_id=client_id,
+            product_id=product_id,
+            lesson_id=lesson_id,
+        )
+        is_tenant_user, actor_contact_id = self._resolve_actor(request, client_id)
+        if not is_tenant_user and actor_contact_id is None:
+            return Response(
+                {"detail": "Для отправки комментария войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        message_text = _safe_text(request.data.get("message_text") or request.data.get("text"))
+        if not message_text:
+            return Response({"detail": "message_text is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not is_tenant_user and actor_contact_id is not None:
+            locked_response = self._ensure_contact_can_access_lesson(
+                client_id=client_id,
+                product_id=product_id,
+                lesson=lesson,
+                contact_id=actor_contact_id,
+            )
+            if locked_response is not None:
+                return locked_response
+
+        target_contact_id: int | None = None
+        if is_tenant_user:
+            target_contact_id = self._parse_positive_int(
+                request.data.get("contact_id") or request.query_params.get("contact_id")
+            )
+            if target_contact_id is None:
+                existing_contact_ids = list(
+                    ProductCourseComment.objects
+                    .filter(
+                        owner_id=client_id,
+                        product_id=product.id,
+                        course_id=course.id,
+                        module_id=lesson.module_id,
+                        lesson_id=lesson.id,
+                    )
+                    .values_list("contact_id", flat=True)
+                    .distinct()[:2]
+                )
+                if len(existing_contact_ids) == 1 and int(existing_contact_ids[0]) > 0:
+                    target_contact_id = int(existing_contact_ids[0])
+            if target_contact_id is None and actor_contact_id is not None:
+                target_contact_id = int(actor_contact_id)
+            if target_contact_id is None:
+                return Response(
+                    {"detail": "Для комментария куратора укажите contact_id."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            target_contact_id = int(actor_contact_id) if actor_contact_id is not None else None
+            if target_contact_id is None:
+                return Response(
+                    {"detail": "Не удалось определить контакт для комментария."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        comment = ProductCourseComment.objects.create(
+            owner_id=client_id,
+            contact_id=int(target_contact_id),
+            product_id=product.id,
+            course_id=course.id,
+            module_id=lesson.module_id,
+            lesson_id=lesson.id,
+            author_role=(
+                ProductCourseComment.AUTHOR_CURATOR
+                if is_tenant_user
+                else ProductCourseComment.AUTHOR_STUDENT
+            ),
+            author_user_id=request.user.id if (is_tenant_user and getattr(request.user, "is_authenticated", False)) else None,
+            channel=ProductCourseComment.CHANNEL_COURSES,
+            message_text=message_text,
+            metadata={
+                "course_title": _safe_text(course.title),
+                "lesson_title": _safe_text(lesson.title),
+            },
+        )
+        return Response(
+            {
+                "ok": True,
+                "comment": self._serialize_comment_item(
+                    comment,
+                    is_tenant_user=is_tenant_user,
+                    actor_contact_id=actor_contact_id,
+                ),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, client_id: int, product_id: int, lesson_id: int):
+        _, product, course, lesson = self._resolve_lesson_context(
+            client_id=client_id,
+            product_id=product_id,
+            lesson_id=lesson_id,
+        )
+        is_tenant_user, actor_contact_id = self._resolve_actor(request, client_id)
+        if not is_tenant_user and actor_contact_id is None:
+            return Response(
+                {"detail": "Для удаления комментария войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        comment_id = self._parse_positive_int(request.query_params.get("comment_id") or request.data.get("comment_id"))
+        if comment_id is None:
+            return Response(
+                {"detail": "comment_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        comment = (
+            ProductCourseComment.objects
+            .filter(
+                id=int(comment_id),
+                owner_id=client_id,
+                product_id=product.id,
+                course_id=course.id,
+                module_id=lesson.module_id,
+                lesson_id=lesson.id,
+            )
+            .first()
+        )
+        if comment is None:
+            return Response({"detail": "Комментарий не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+        can_delete = self._can_delete_comment(
+            comment,
+            is_tenant_user=is_tenant_user,
+            actor_contact_id=actor_contact_id,
+        )
+        if not can_delete:
+            return Response(
+                {"detail": "Недостаточно прав для удаления этого комментария."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        comment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class PublicClientPageTasksView(APIView):
@@ -748,7 +1565,7 @@ class PublicClientPageBuyProductView(APIView):
 
         return_url = str(request.data.get("return_url") or "").strip() or _build_client_page_return_url(client_id)
         metadata_payload: dict[str, str] = {
-            "payment_kind": "digital_product",
+            "payment_kind": "course_product",
             "client_id": str(client.id),
             "client_slug": str(client.slug),
             "product_id": str(product.id),
@@ -767,9 +1584,9 @@ class PublicClientPageBuyProductView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         metadata_payload["contact_id"] = str(bound_contact_id)
-        plan_code = f"digital_product:{product.id}:contact:{bound_contact_id}"
+        plan_code = f"course_product:{product.id}:contact:{bound_contact_id}"
         if resolved_package_index is not None:
-            plan_code = f"digital_product:{product.id}:package:{resolved_package_index}:contact:{bound_contact_id}"
+            plan_code = f"course_product:{product.id}:package:{resolved_package_index}:contact:{bound_contact_id}"
 
         if provider == PAYMENT_PROVIDER_TBANK:
             terminal_key, secret_key = _get_tbank_credentials(client)
@@ -963,11 +1780,11 @@ class PublicClientPagePaymentStatusView(APIView):
             except (InvalidOperation, TypeError, ValueError):
                 amount_value = f"{yk_payment.amount:.2f}" if yk_payment.amount is not None else None
 
-            parsed_product_id, parsed_contact_id, parsed_package_index = _parse_digital_product_plan_code(yk_payment.plan_code)
+            parsed_product_id, parsed_contact_id, parsed_package_index = _parse_course_product_plan_code(yk_payment.plan_code)
             product_id = parsed_product_id
             metadata_contact_id = parsed_contact_id
             metadata = {
-                "payment_kind": "digital_product",
+                "payment_kind": "course_product",
                 "client_id": str(client.id),
                 "product_id": str(product_id) if product_id is not None else "",
                 "contact_id": str(metadata_contact_id) if metadata_contact_id is not None else "",
@@ -1005,7 +1822,7 @@ class PublicClientPagePaymentStatusView(APIView):
             metadata = payment_payload.get("metadata") or {}
             if str(metadata.get("client_id") or "") != str(client.id):
                 return Response({"detail": "Платеж не найден."}, status=status.HTTP_404_NOT_FOUND)
-            if str(metadata.get("payment_kind") or "") != "digital_product":
+            if str(metadata.get("payment_kind") or "") != "course_product":
                 return Response({"detail": "Платеж не найден."}, status=status.HTTP_404_NOT_FOUND)
 
             payment_status = str(payment_payload.get("status") or YooKassaPayment.STATUS_PENDING)
@@ -1062,13 +1879,12 @@ class PublicClientPagePaymentStatusView(APIView):
 
             product = (
                 ClientProduct.objects
-                .select_related("digital_product_document")
                 .filter(owner_id=client_id, id=product_id)
                 .first()
                 if product_id is not None
                 else None
             )
-            result["delivery"] = _build_digital_product_delivery_payload(client, product)
+            result["delivery"] = _build_course_delivery_payload(client, product)
             if purchase_was_new_payment:
                 contact_id_for_notification: int | None = None
                 if purchase is not None and getattr(purchase, "contact_id", None) is not None:
@@ -1117,7 +1933,6 @@ class PublicClientPagePurchasesView(APIView):
             int(product.id): product
             for product in (
                 ClientProduct.objects
-                .select_related("digital_product_document")
                 .filter(owner_id=client.id, id__in=[item.product_id for item in purchases])
             )
         }
@@ -1132,7 +1947,7 @@ class PublicClientPagePurchasesView(APIView):
             )
             selected_package_index: int | None = None
             if purchase.last_payment_id and purchase.last_payment:
-                parsed_product_id, _, parsed_package_index = _parse_digital_product_plan_code(purchase.last_payment.plan_code)
+                parsed_product_id, _, parsed_package_index = _parse_course_product_plan_code(purchase.last_payment.plan_code)
                 if parsed_product_id in (None, int(purchase.product_id)):
                     selected_package_index = parsed_package_index
             if selected_package_index is None:
@@ -1148,7 +1963,7 @@ class PublicClientPagePurchasesView(APIView):
                     "currency": purchase.currency or "RUB",
                     "payment_id": purchase.last_payment.payment_id if purchase.last_payment_id else None,
                     "package": package_payload,
-                    "delivery": _build_digital_product_delivery_payload(client, product),
+                    "delivery": _build_course_delivery_payload(client, product),
                     "service_package": build_service_package_payload(purchase),
                 }
             )

@@ -20,7 +20,9 @@ export type PublicProductPaymentStatusResponse = {
     ready?: boolean;
     url?: string;
     document_title?: string;
+    course_title?: string;
     message?: string;
+    missing_course?: boolean;
   } | null;
 };
 

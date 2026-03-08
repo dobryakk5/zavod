@@ -135,10 +135,10 @@ type PublicProductPaymentStatusResponse = {
   delivery?: {
     ready?: boolean;
     url?: string;
-    document_id?: number;
-    document_title?: string;
+    course_id?: number;
+    course_title?: string;
     message?: string;
-    missing_product_page?: boolean;
+    missing_course?: boolean;
   } | null;
 };
 
@@ -159,10 +159,10 @@ type ContactPurchaseListItem = {
   delivery?: {
     ready?: boolean;
     url?: string;
-    document_id?: number;
-    document_title?: string;
+    course_id?: number;
+    course_title?: string;
     message?: string;
-    missing_product_page?: boolean;
+    missing_course?: boolean;
   } | null;
   service_package?: {
     enabled?: boolean;
@@ -1048,11 +1048,11 @@ export default function ContactClientPage() {
 
       if (paymentStatus === 'succeeded' && statusResponse?.paid) {
         const successMessage = delivery?.ready && delivery.url
-          ? 'Оплата прошла успешно. Ссылка на продукт доступна ниже.'
+          ? 'Оплата прошла успешно. Ссылка на курс доступна ниже.'
           : (delivery?.message || 'Оплата прошла успешно.');
         if (delivery?.ready && delivery.url) {
           setPurchaseDeliveryLink(delivery.url);
-          setPurchaseDeliveryTitle((delivery.document_title || '').trim() || 'Открыть продукт');
+          setPurchaseDeliveryTitle((delivery.course_title || '').trim() || 'Открыть курс');
         } else {
           setPurchaseDeliveryLink(null);
           setPurchaseDeliveryTitle(null);
@@ -1838,7 +1838,7 @@ export default function ContactClientPage() {
                   rel="noopener noreferrer"
                   className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent"
                 >
-                  {purchaseDeliveryTitle || 'Открыть цифровой продукт'}
+                  {purchaseDeliveryTitle || 'Открыть курс'}
                 </a>
               )}
             </div>
@@ -1926,7 +1926,7 @@ export default function ContactClientPage() {
                           rel="noopener noreferrer"
                           className="shrink-0 rounded-lg border px-3 py-1.5 text-sm hover:bg-accent"
                         >
-                          {(delivery?.document_title || '').trim() || 'Открыть продукт'}
+                          {(delivery?.course_title || '').trim() || 'Открыть курс'}
                         </a>
                       )}
                     </div>
@@ -2222,7 +2222,7 @@ export default function ContactClientPage() {
               rel="noopener noreferrer"
               className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent"
             >
-              {purchaseDeliveryTitle || 'Открыть цифровой продукт'}
+              {purchaseDeliveryTitle || 'Открыть курс'}
             </a>
           )}
           <div>

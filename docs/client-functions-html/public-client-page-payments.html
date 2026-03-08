@@ -53,7 +53,7 @@
 <a class="nav-link nav-link-group" href="block-product-packaging.html">Блок 3. Упаковка продукта</a>
 </summary>
 <div class="nav-sublist">
-<a class="nav-link nav-link-sub" href="products-mindmap.html">Продукты, продажи и mind map</a>
+<a class="nav-link nav-link-sub" href="products-mindmap.html">Продукты, обучающие курсы, продажи и mind map</a>
 </div>
 </details>
 <details class="nav-group" name="nav-blocks">
@@ -86,6 +86,8 @@
 <ul class="plain-list">
 <li>Публичная страница клиента: `/c/[client_id]`</li>
 <li>Редактор публичной страницы клиента: `/c/[client_id]/edit`</li>
+<li>Курс продукта: `/c/[client_id]/products/[product_id]/course`</li>
+<li>Урок курса: `/c/[client_id]/products/[product_id]/course/lessons/[lesson_id]`</li>
 <li>Список мероприятий: `/c/[client_id]/events`</li>
 <li>Карточка мероприятия: `/c/[client_id]/events/[event_id]`</li>
 <li>Конструктор квиза: `/c/[client_id]/quiz/edit`</li>
@@ -96,6 +98,8 @@
 <div class="route-badges">
 <code>/c/[client_id]</code>
 <code>/c/[client_id]/edit</code>
+<code>/c/[client_id]/products/[product_id]/course</code>
+<code>/c/[client_id]/products/[product_id]/course/lessons/[lesson_id]</code>
 <code>/c/[client_id]/events</code>
 <code>/c/[client_id]/events/[event_id]</code>
 <code>/c/[client_id]/quiz/edit</code>
@@ -110,7 +114,7 @@
 <a href="#sec-1">1. Публичная страница клиента (`/c/[client_id]`)</a>
 <a href="#sec-2">2. Авторизация контакта на публичной странице</a>
 <a href="#sec-3">3. Запись на встречу и перенос</a>
-<a href="#sec-4">4. Покупка продукта и выдача цифрового материала</a>
+<a href="#sec-4">4. Покупка продукта и доступ к обучающему курсу</a>
 <a href="#sec-5">5. Список покупок клиента</a>
 <a href="#sec-6">6. Реферальная программа</a>
 <a href="#sec-7">7. Страница мероприятий (`/c/[client_id]/events` и `/c/[client_id]/events/[event_id]`)</a>
@@ -154,7 +158,7 @@
 </article>
 <article class="function-card">
   <h4>Блок списка покупок</h4>
-  <p><span class="label">Простыми словами:</span> Показывает оплаченные продукты и статус выдачи цифровых материалов.</p>
+  <p><span class="label">Простыми словами:</span> Показывает оплаченные продукты и статус доступа к обучающим курсам.</p>
   <p><span class="label">Зачем это нужно:</span> Клиенту не нужно писать менеджеру, чтобы найти доступы.</p>
   <p class="example-line"><span class="label">Пример из жизни:</span> Например, менеджер открывает карточку клиента и сразу видит: встречи, оплаты, заметки и важные теги.</p>
 </article>
@@ -227,8 +231,8 @@
   </div>
 </section>
 <section id="sec-4" class="content-section">
-  <h2>4. Покупка продукта и выдача цифрового материала</h2>
-  <p class="section-intro">Публичная страница поддерживает покупку продукта и выдачу цифрового контента после оплаты.</p>
+  <h2>4. Покупка продукта и доступ к обучающему курсу</h2>
+  <p class="section-intro">Публичная страница поддерживает покупку продукта и открытие LMS-курса после оплаты.</p>
   <div class="function-grid">
 <article class="function-card">
   <h4>Инициация покупки</h4>
@@ -256,14 +260,14 @@
   <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
 </article>
 <article class="function-card">
-  <h4>Выдача цифрового продукта</h4>
-  <p><span class="label">Простыми словами:</span> После успешной оплаты показывается ссылка на цифровой материал (если готова выдача).</p>
-  <p><span class="label">Зачем это нужно:</span> Клиент получает доступ сразу после оплаты.</p>
+  <h4>Открытие обучающего курса</h4>
+  <p><span class="label">Простыми словами:</span> После успешной оплаты клиент получает ссылку «Открыть курс».</p>
+  <p><span class="label">Зачем это нужно:</span> Доступ к LMS появляется сразу после подтверждения оплаты.</p>
   <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
 </article>
 <article class="function-card">
-  <h4>Сообщение о задержке выдачи</h4>
-  <p><span class="label">Простыми словами:</span> Если выдача ещё не готова, сервис показывает понятное сообщение вместо «пустого» состояния.</p>
+  <h4>Сообщение о задержке доступа</h4>
+  <p><span class="label">Простыми словами:</span> Если доступ ещё не выдан, сервис показывает понятное сообщение вместо «пустого» состояния.</p>
   <p><span class="label">Зачем это нужно:</span> Снижает количество вопросов в поддержку.</p>
   <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент заходит по ссылке, оплачивает продукт и сразу получает доступ к материалу.</p>
 </article>
@@ -286,9 +290,9 @@
   <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиенту отправили ссылку на оплату в Telegram, он оплатил, а вы сразу видите статус в системе.</p>
 </article>
 <article class="function-card">
-  <h4>Ссылка на выданный материал</h4>
-  <p><span class="label">Простыми словами:</span> Если по покупке есть цифровая выдача, ссылка показывается в списке.</p>
-  <p><span class="label">Зачем это нужно:</span> Повторный доступ к материалам в любой момент.</p>
+  <h4>Ссылка «Открыть курс»</h4>
+  <p><span class="label">Простыми словами:</span> Если по покупке есть доступ к курсу, кнопка открытия показывается в списке.</p>
+  <p><span class="label">Зачем это нужно:</span> Повторный доступ к обучению в любой момент.</p>
   <p class="example-line"><span class="label">Пример из жизни:</span> Например, клиент заходит по ссылке, оплачивает продукт и сразу получает доступ к материалу.</p>
 </article>
   </div>
