@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useParams } from 'next/navigation';
 import {
   closestCenter,
@@ -72,7 +72,7 @@ export default function ProductCourseOverviewPage() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  const loadCourse = async () => {
+  const loadCourse = useCallback(async () => {
     if (!Number.isFinite(productId) || productId <= 0) {
       setError('Некорректный product id');
       setLoading(false);
@@ -95,11 +95,11 @@ export default function ProductCourseOverviewPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [productId]);
 
   useEffect(() => {
     void loadCourse();
-  }, [productId]);
+  }, [loadCourse]);
 
   const saveCourse = async () => {
     if (!Number.isFinite(productId) || productId <= 0) return;

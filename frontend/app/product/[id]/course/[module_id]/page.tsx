@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useParams } from 'next/navigation';
 import {
   closestCenter,
@@ -217,7 +217,7 @@ export default function ProductCourseModulePage() {
     [course, moduleId],
   );
 
-  const loadCourse = async () => {
+  const loadCourse = useCallback(async () => {
     if (!Number.isFinite(productId) || productId <= 0 || !Number.isFinite(moduleId) || moduleId <= 0) {
       setError('Некорректный URL модуля.');
       setLoading(false);
@@ -241,11 +241,11 @@ export default function ProductCourseModulePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [moduleId, productId]);
 
   useEffect(() => {
     void loadCourse();
-  }, [productId, moduleId]);
+  }, [loadCourse]);
 
   useEffect(() => {
     if (!selectedModule) {

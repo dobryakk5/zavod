@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { generateHTML } from '@tiptap/html';
 
@@ -71,7 +71,7 @@ export default function PublicProductCourseLessonPage() {
     return `${basePath}?contact_id=${requestedCommentContactId}`;
   }, [clientId, productId, lessonId, hasRequestedCommentContactId, requestedCommentContactId]);
 
-  const loadComments = async () => {
+  const loadComments = useCallback(async () => {
     try {
       const payload = await apiFetch<{ comments: CourseLessonComment[] }>(commentsEndpoint);
       setComments(Array.isArray(payload.comments) ? payload.comments : []);
@@ -86,9 +86,9 @@ export default function PublicProductCourseLessonPage() {
       }
       setComments([]);
     }
-  };
+  }, [commentsEndpoint]);
 
-  const loadLesson = async () => {
+  const loadLesson = useCallback(async () => {
     if (!Number.isFinite(clientId) || clientId <= 0 || !Number.isFinite(productId) || productId <= 0 || !Number.isFinite(lessonId) || lessonId <= 0) {
       setError('Некорректный URL урока.');
       setLoading(false);
@@ -120,11 +120,11 @@ export default function PublicProductCourseLessonPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [clientId, lessonId, loadComments, productId, router]);
 
   useEffect(() => {
     void loadLesson();
-  }, [clientId, productId, lessonId, router, commentsEndpoint]);
+  }, [loadLesson]);
 
   const completeLesson = async () => {
     if (!lesson || saving) return;
