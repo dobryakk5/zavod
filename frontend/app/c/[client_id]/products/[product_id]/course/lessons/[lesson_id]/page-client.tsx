@@ -13,7 +13,7 @@ import {
   normalizeCourseLessonContent,
   normalizeTiptapDoc,
 } from '@/lib/courseLessonContent';
-import type { ProductCourseLesson } from '@/lib/types';
+import type { ProductCourse, ProductCourseLesson } from '@/lib/types';
 
 type RouteParams = { client_id: string; product_id: string; lesson_id: string };
 
@@ -40,6 +40,10 @@ type CourseLessonComment = {
   metadata?: Record<string, unknown>;
   created_at: string;
   can_delete?: boolean;
+};
+
+type PublicCourseOutlineResponse = {
+  course?: ProductCourse;
 };
 
 type PublicProductCourseLessonPageClientProps = {
@@ -69,6 +73,7 @@ export default function PublicProductCourseLessonPage({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lesson, setLesson] = useState<PublicLessonResponse | null>(null);
+  const [nextLessonId, setNextLessonId] = useState<number | null>(null);
   const [comments, setComments] = useState<CourseLessonComment[]>([]);
   const [commentDraft, setCommentDraft] = useState('');
   const [commentSaving, setCommentSaving] = useState(false);
@@ -101,9 +106,35 @@ export default function PublicProductCourseLessonPage({
     }
   }, [commentsEndpoint]);
 
+  const loadNextLessonId = useCallback(async (moduleId: number | null | undefined) => {
+    if (!moduleId || moduleId <= 0) {
+      setNextLessonId(null);
+      return;
+    }
+    try {
+      const payload = await apiFetch<PublicCourseOutlineResponse>(
+        `/public/client-page/${clientId}/products/${productId}/course/`
+      );
+      const module = payload.course?.modules?.find((item) => Number(item.id) === Number(moduleId));
+      if (!module || !Array.isArray(module.lessons) || module.lessons.length === 0) {
+        setNextLessonId(null);
+        return;
+      }
+      const currentIndex = module.lessons.findIndex((item) => Number(item.id) === lessonId);
+      if (currentIndex < 0 || currentIndex >= module.lessons.length - 1) {
+        setNextLessonId(null);
+        return;
+      }
+      setNextLessonId(Number(module.lessons[currentIndex + 1].id));
+    } catch {
+      setNextLessonId(null);
+    }
+  }, [clientId, productId, lessonId]);
+
   const loadLesson = useCallback(async () => {
     if (!Number.isFinite(clientId) || clientId <= 0 || !Number.isFinite(productId) || productId <= 0 || !Number.isFinite(lessonId) || lessonId <= 0) {
       setError('Некорректный URL урока.');
+      setNextLessonId(null);
       setLoading(false);
       return;
     }
@@ -115,7 +146,10 @@ export default function PublicProductCourseLessonPage({
         `/public/client-page/${clientId}/products/${productId}/course/lessons/${lessonId}/`
       );
       setLesson(payload);
-      await loadComments();
+      await Promise.all([
+        loadComments(),
+        loadNextLessonId(payload.module?.id ?? null),
+      ]);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         const nextPath = lessonPath;
@@ -129,11 +163,21 @@ export default function PublicProductCourseLessonPage({
       } else {
         setError('Не удалось загрузить урок.');
       }
+      setNextLessonId(null);
       setComments([]);
     } finally {
       setLoading(false);
     }
-  }, [clientId, lessonId, lessonPath, loadComments, productId, router]);
+  }, [clientId, lessonId, lessonPath, loadComments, loadNextLessonId, productId, router]);
+
+  const nextLessonPath = useMemo(
+    () => (nextLessonId && nextLessonId > 0 ? `${coursePath}/lessons/${nextLessonId}` : null),
+    [coursePath, nextLessonId]
+  );
+  const moduleLessonsPath = useMemo(
+    () => (lesson?.module?.id ? `${coursePath}?module_id=${lesson.module.id}` : coursePath),
+    [coursePath, lesson?.module?.id]
+  );
 
   useEffect(() => {
     void loadLesson();
@@ -353,13 +397,22 @@ export default function PublicProductCourseLessonPage({
         })}
       </div>
 
-      <div className="space-y-4 rounded-2xl border p-6">
-        <div className="flex justify-end">
-          <Button type="button" onClick={() => void completeLesson()} disabled={saving || lesson.is_completed}>
-            {lesson.is_completed ? 'Урок уже завершён' : saving ? 'Сохраняем...' : 'Отметить как завершённый'}
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" onClick={() => void completeLesson()} disabled={saving || lesson.is_completed}>
+          {lesson.is_completed ? 'Урок уже завершён' : saving ? 'Сохраняем...' : 'Отметить как завершённый'}
+        </Button>
+        {nextLessonPath ? (
+          <Button type="button" variant="outline" onClick={() => router.push(nextLessonPath)}>
+            Следующий урок
           </Button>
-        </div>
+        ) : (
+          <Button type="button" variant="outline" onClick={() => router.push(moduleLessonsPath)}>
+            К списку уроков
+          </Button>
+        )}
+      </div>
 
+      <div className="space-y-4 rounded-2xl border p-6">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Комментарии к уроку</h2>
           <div className="text-xs text-muted-foreground">{comments.length}</div>
