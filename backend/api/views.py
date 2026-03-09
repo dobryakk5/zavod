@@ -12,6 +12,7 @@ from .views_misc import (  # noqa: F401
     ArticleViewSet,
     ChannelAnalysisViewSet,
     ClientBookSemanticsView,
+    ClientCustomDomainVerifyView,
     ClientExpertBooksView,
     GenerationEventSummaryView,
     ClientInfoView,

@@ -7,23 +7,37 @@ type ProductsContentProps = {
   clientId: number;
   displayName: string;
   products: PublicProductRow[];
+  pathPrefix?: string;
   titleAs?: 'h1' | 'h2';
   showBackLink?: boolean;
   backHref?: string;
   backLabel?: string;
 };
 
+const normalizePathPrefix = (value: string | undefined): string => {
+  if (!value || value === '/') {
+    return '';
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized.startsWith('/') ? normalized.replace(/\/+$/, '') : `/${normalized.replace(/\/+$/, '')}`;
+};
+
 export default function ProductsContent({
   clientId,
   displayName,
   products,
+  pathPrefix,
   titleAs = 'h1',
   showBackLink = true,
   backHref,
   backLabel = 'На страницу клиента',
 }: ProductsContentProps) {
   const TitleTag = titleAs;
-  const resolvedBackHref = backHref || `/c/${clientId}`;
+  const normalizedPrefix = normalizePathPrefix(pathPrefix ?? `/c/${clientId}`);
+  const resolvedBackHref = backHref || (normalizedPrefix || '/');
 
   return (
     <div className="space-y-4">
@@ -46,7 +60,7 @@ export default function ProductsContent({
           {products.map((item) => (
             <Link
               key={item.id}
-              href={`/c/${clientId}/products/${item.id}`}
+              href={`${normalizedPrefix}/products/${item.id}`}
               className="block rounded-2xl border p-5 shadow-sm transition-colors hover:border-primary/50 hover:bg-accent/20"
             >
               <article>

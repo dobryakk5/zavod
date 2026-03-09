@@ -7,23 +7,37 @@ type EventsContentProps = {
   clientId: number;
   displayName: string;
   eventProducts: EventProductRow[];
+  pathPrefix?: string;
   titleAs?: 'h1' | 'h2';
   showBackLink?: boolean;
   backHref?: string;
   backLabel?: string;
 };
 
+const normalizePathPrefix = (value: string | undefined): string => {
+  if (!value || value === '/') {
+    return '';
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized.startsWith('/') ? normalized.replace(/\/+$/, '') : `/${normalized.replace(/\/+$/, '')}`;
+};
+
 export default function EventsContent({
   clientId,
   displayName,
   eventProducts,
+  pathPrefix,
   titleAs = 'h1',
   showBackLink = true,
   backHref,
   backLabel = 'На страницу клиента',
 }: EventsContentProps) {
   const TitleTag = titleAs;
-  const resolvedBackHref = backHref || `/c/${clientId}`;
+  const normalizedPrefix = normalizePathPrefix(pathPrefix ?? `/c/${clientId}`);
+  const resolvedBackHref = backHref || (normalizedPrefix || '/');
 
   return (
     <div className="space-y-4">
@@ -46,7 +60,7 @@ export default function EventsContent({
           {eventProducts.map((item) => (
             <Link
               key={item.id}
-              href={`/c/${clientId}/events/${item.id}`}
+              href={`${normalizedPrefix}/events/${item.id}`}
               className="block rounded-2xl border p-5 shadow-sm transition-colors hover:border-primary/50 hover:bg-accent/20"
             >
               <article>

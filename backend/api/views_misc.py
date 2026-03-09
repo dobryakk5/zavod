@@ -48,6 +48,7 @@ from .serializers import (
 )
 from .utils import enforce_generation_limit, get_active_client
 from .views_accounts import (
+    ClientCustomDomainVerifyView,
     ClientExpertBooksView,
     ClientBookSemanticsView,
     GenerationEventSummaryView,

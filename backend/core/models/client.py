@@ -52,6 +52,17 @@ class Client(models.Model):
     )
     slug = models.SlugField(unique=True)
     timezone = models.CharField(max_length=64, default="Europe/Moscow")
+    custom_domain = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        unique=True,
+        help_text="Свой домен клиента (например, Vasya.com)",
+    )
+    domain_verified = models.BooleanField(
+        default=False,
+        help_text="Домен подтвержден через DNS-проверку",
+    )
     preferred_channel = models.CharField(
         max_length=32,
         choices=CHANNEL_CHOICES,

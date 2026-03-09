@@ -8,6 +8,16 @@ import type {
   GenerationEventSummary,
 } from '../types';
 
+export type CustomDomainVerifyResponse = {
+  domain: string;
+  verified: boolean;
+  method: 'cname' | 'edge_ip' | 'none' | string;
+  expected_cname: string;
+  resolved_cname: string[];
+  resolved_ips: string[];
+  error?: string | null;
+};
+
 export const clientApi = {
   /**
    * Get current client info and user role
@@ -37,6 +47,14 @@ export const clientApi = {
     return apiFetch<ClientSettings>('/client/settings/', {
       method: 'PATCH',
       body: data,
+    });
+  },
+
+  verifyCustomDomain: async (domain?: string): Promise<CustomDomainVerifyResponse> => {
+    const body = domain !== undefined ? { domain } : {};
+    return apiFetch<CustomDomainVerifyResponse>('/client/custom-domain/verify/', {
+      method: 'POST',
+      body,
     });
   },
 

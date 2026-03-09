@@ -20,6 +20,7 @@ from core.models import (
     Client,
     ClientProduct,
     ContactProductPurchase,
+    MapContact,
     ProductCourseComment,
     ProductCourseEvent,
     ProductCourse,
@@ -37,6 +38,7 @@ from core.services.contact_service_packages import (
     grant_service_package_to_purchase,
 )
 from core.services.crm_workflow_dispatcher import CRMWorkflowDispatcher
+from core.services.custom_domain import CustomDomainValidationError, normalize_custom_domain
 from core.tasks.chains import _send_telegram_message, _send_vk_message
 
 from .authentication import CookieJWTAuthentication
@@ -352,6 +354,50 @@ def _resolve_request_contact_id_for_client(request, client_id: int) -> int | Non
     return _resolve_bound_contact_id_for_client(user, client_id)
 
 
+def _resolve_or_provision_request_contact_id_for_client(request, client_id: int) -> int | None:
+    bound_contact_id = _resolve_request_contact_id_for_client(request, client_id)
+    if bound_contact_id is not None and int(bound_contact_id) > 0:
+        return int(bound_contact_id)
+
+    user = _authenticate_cookie_user_optional(request)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+
+    provider_user_id = f"user:{int(user.id)}"
+    binding, _ = UserTenantBinding.objects.get_or_create(
+        tenant_id=client_id,
+        provider=UserTenantBinding.PROVIDER_CONTACT,
+        provider_user_id=provider_user_id,
+        defaults={
+            "contact_id": None,
+            "is_active": True,
+        },
+    )
+
+    existing_contact_id = int(binding.contact_id) if binding.contact_id is not None else None
+    if existing_contact_id is not None and existing_contact_id > 0:
+        if not bool(binding.is_active):
+            binding.is_active = True
+            binding.bound_at = timezone.now()
+            binding.save(update_fields=["is_active", "bound_at"])
+        return existing_contact_id
+
+    first_name = _safe_text(getattr(user, "first_name", ""))
+    last_name = _safe_text(getattr(user, "last_name", ""))
+    full_name = f"{first_name} {last_name}".strip()
+    contact_name = full_name or _safe_text(getattr(user, "username", "")) or _safe_text(getattr(user, "email", "")) or f"User {int(user.id)}"
+    email_value = _safe_text(getattr(user, "email", ""))
+    contact = MapContact.objects.create(
+        name=contact_name,
+        email=email_value,
+    )
+    binding.contact_id = int(contact.id)
+    binding.is_active = True
+    binding.bound_at = timezone.now()
+    binding.save(update_fields=["contact_id", "is_active", "bound_at"])
+    return int(contact.id)
+
+
 def _has_tenant_course_access(request, client_id: int) -> bool:
     user = _authenticate_cookie_user_optional(request)
     if not user or not getattr(user, "is_authenticated", False):
@@ -399,6 +445,19 @@ def _has_paid_product_access(client_id: int, contact_id: int | None, product_id:
         contact_id=int(contact_id),
         product_id=product_id,
     ).exists()
+
+
+def _ensure_contact_product_purchase_access(*, client: Client, product: ClientProduct, contact_id: int | None) -> None:
+    if contact_id is None or int(contact_id) <= 0:
+        return
+    ContactProductPurchase.objects.update_or_create(
+        client_id=int(client.id),
+        contact_id=int(contact_id),
+        product_id=int(product.id),
+        defaults={
+            "product_name": _safe_text(getattr(product, "name", "")),
+        },
+    )
 
 
 def _is_module_locked(module: ProductCourseModule, has_paid_access: bool, now: datetime) -> bool:
@@ -701,6 +760,88 @@ def _notify_contact_purchase_success(
     return False
 
 
+def _build_public_client_page_payload(client_id: int) -> dict | None:
+    client = (
+        Client.objects
+        .filter(id=client_id)
+        .values(
+            "id",
+            "name",
+            "brand_name",
+            "niche",
+            "product_service",
+            "timezone",
+            "client_page_config",
+            "client_page_content",
+        )
+        .first()
+    )
+    if not client:
+        return None
+
+    products = list(
+        ClientProduct.objects
+        .filter(owner_id=client_id)
+        .values(
+            "id",
+            "name",
+            "status",
+            "short_description",
+            "packages",
+            "structure",
+            "created_at",
+            "updated_at",
+        )
+        .order_by("-updated_at")
+    )
+    product_ids = [int(item["id"]) for item in products]
+    course_map = {
+        int(item["product_id"]): bool(item["is_published"])
+        for item in ProductCourse.objects
+        .filter(owner_id=client_id, product_id__in=product_ids)
+        .values("product_id", "is_published")
+    }
+    for item in products:
+        product_id = int(item["id"])
+        item["has_course"] = product_id in course_map
+        item["course_published"] = bool(course_map.get(product_id, False))
+
+    availability_events = list(
+        MapAvailabilityEvent.objects
+        .filter(tenant_id=client_id)
+        .values(
+            "id",
+            "tenant_id",
+            "start_time",
+            "duration_minutes",
+            "repeat_type",
+            "created_at",
+            "updated_at",
+        )
+        .order_by("-start_time")
+    )
+
+    return {
+        "client": {
+            "id": client["id"],
+            "name": client.get("name") or "",
+        },
+        "settings": {
+            "brand_name": client.get("brand_name") or "",
+            "niche": client.get("niche") or "",
+            "product_service": client.get("product_service") or "",
+            "timezone": client.get("timezone") or "Europe/Moscow",
+            "client_page_config": client.get("client_page_config") or {},
+            "client_page_content": client.get("client_page_content") or {},
+        },
+        "products": products,
+        "availability_events": availability_events,
+        # Public mode intentionally does not expose tenant CRM events.
+        # Frontend uses this endpoint for read-only rendering and gates booking by auth.
+        "events": [],
+    }
+
+
 class PublicClientPageView(APIView):
     """Public read-only data for /c/<client_id> page."""
 
@@ -708,87 +849,55 @@ class PublicClientPageView(APIView):
     authentication_classes: tuple = ()
 
     def get(self, request, client_id: int):
-        client = (
+        payload = _build_public_client_page_payload(client_id)
+        if payload is None:
+            raise Http404("Клиент не найден")
+        return Response(payload)
+
+class PublicClientPageByDomainView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def get(self, request):
+        raw_domain = request.query_params.get("domain")
+        if not raw_domain:
+            return Response({"detail": "Параметр domain обязателен."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            domain = normalize_custom_domain(raw_domain)
+        except CustomDomainValidationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        client_id = (
             Client.objects
-            .filter(id=client_id)
-            .values(
-                "id",
-                "name",
-                "brand_name",
-                "niche",
-                "product_service",
-                "timezone",
-                "client_page_config",
-                "client_page_content",
-            )
+            .filter(custom_domain=domain, domain_verified=True)
+            .values_list("id", flat=True)
             .first()
         )
-        if not client:
+        if not client_id:
+            raise Http404("Клиент с подтвержденным доменом не найден")
+
+        payload = _build_public_client_page_payload(int(client_id))
+        if payload is None:
             raise Http404("Клиент не найден")
+        return Response(payload)
 
-        products = list(
-            ClientProduct.objects
-            .filter(owner_id=client_id)
-            .values(
-                "id",
-                "name",
-                "status",
-                "short_description",
-                "packages",
-                "structure",
-                "created_at",
-                "updated_at",
-            )
-            .order_by("-updated_at")
-        )
-        product_ids = [int(item["id"]) for item in products]
-        course_map = {
-            int(item["product_id"]): bool(item["is_published"])
-            for item in ProductCourse.objects
-            .filter(owner_id=client_id, product_id__in=product_ids)
-            .values("product_id", "is_published")
-        }
-        for item in products:
-            product_id = int(item["id"])
-            item["has_course"] = product_id in course_map
-            item["course_published"] = bool(course_map.get(product_id, False))
 
-        availability_events = list(
-            MapAvailabilityEvent.objects
-            .filter(tenant_id=client_id)
-            .values(
-                "id",
-                "tenant_id",
-                "start_time",
-                "duration_minutes",
-                "repeat_type",
-                "created_at",
-                "updated_at",
-            )
-            .order_by("-start_time")
-        )
+class CaddyAskView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
 
-        return Response(
-            {
-                "client": {
-                    "id": client["id"],
-                    "name": client.get("name") or "",
-                },
-                "settings": {
-                    "brand_name": client.get("brand_name") or "",
-                    "niche": client.get("niche") or "",
-                    "product_service": client.get("product_service") or "",
-                    "timezone": client.get("timezone") or "Europe/Moscow",
-                    "client_page_config": client.get("client_page_config") or {},
-                    "client_page_content": client.get("client_page_content") or {},
-                },
-                "products": products,
-                "availability_events": availability_events,
-                # Public mode intentionally does not expose tenant CRM events.
-                # Frontend uses this endpoint for read-only rendering and gates booking by auth.
-                "events": [],
-            }
-        )
+    def get(self, request):
+        raw_domain = request.query_params.get("domain", "")
+        try:
+            domain = normalize_custom_domain(raw_domain)
+        except CustomDomainValidationError:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+
+        exists = Client.objects.filter(custom_domain=domain, domain_verified=True).exists()
+        if exists:
+            return Response(status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_403_FORBIDDEN)
 
 
 class PublicClientPageProductCourseView(APIView):
@@ -830,12 +939,14 @@ class PublicClientPageProductCourseView(APIView):
             lessons_by_module.setdefault(int(lesson.module_id), []).append(lesson)
 
         is_tenant_user = _has_tenant_course_access(request, client_id)
-        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        contact_id = _resolve_or_provision_request_contact_id_for_client(request, client_id)
         if not is_tenant_user and (contact_id is None or contact_id <= 0):
             return Response(
                 {"detail": "Для доступа к курсу войдите как владелец (tenant) или как контакт через Telegram/VK."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        if is_tenant_user:
+            _ensure_contact_product_purchase_access(client=client, product=product, contact_id=contact_id)
 
         has_paid_access = bool(is_tenant_user or _has_paid_product_access(client_id, contact_id, product_id))
         lesson_ids = [int(item.id) for item in lessons]
@@ -984,12 +1095,14 @@ class PublicClientPageProductCourseLessonView(APIView):
             raise Http404("Урок не найден")
 
         is_tenant_user = _has_tenant_course_access(request, client_id)
-        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        contact_id = _resolve_or_provision_request_contact_id_for_client(request, client_id)
         if not is_tenant_user and (contact_id is None or contact_id <= 0):
             return Response(
                 {"detail": "Для доступа к уроку войдите как владелец (tenant) или как контакт через Telegram/VK."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        if is_tenant_user:
+            _ensure_contact_product_purchase_access(client=client, product=product, contact_id=contact_id)
 
         has_paid_access = bool(is_tenant_user or _has_paid_product_access(client_id, contact_id, product_id))
         now = timezone.now()
@@ -1083,7 +1196,7 @@ class PublicClientPageProductCourseLessonCompleteView(APIView):
         product = (
             ClientProduct.objects
             .filter(owner_id=client_id, id=product_id, status=ClientProduct.STATUS_ACTIVE)
-            .only("id")
+            .only("id", "name")
             .first()
         )
         if not product:
@@ -1106,17 +1219,25 @@ class PublicClientPageProductCourseLessonCompleteView(APIView):
         if not lesson:
             raise Http404("Урок не найден")
 
-        contact_id = _resolve_request_contact_id_for_client(request, client_id)
-        if contact_id is None or contact_id <= 0:
+        is_tenant_user = _has_tenant_course_access(request, client_id)
+        contact_id = _resolve_or_provision_request_contact_id_for_client(request, client_id)
+        if not is_tenant_user and (contact_id is None or contact_id <= 0):
             return Response(
-                {"detail": "Для доступа к урокам войдите как контакт через Telegram или VK."},
+                {"detail": "Для доступа к урокам войдите как владелец (tenant) или как контакт через Telegram/VK."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-
-        has_paid_access = _has_paid_product_access(client_id, contact_id, product_id)
-        now = timezone.now()
-        if _is_lesson_locked(lesson, lesson.module, has_paid_access=has_paid_access, now=now):
-            return Response({"detail": "Lesson is locked"}, status=status.HTTP_403_FORBIDDEN)
+        if contact_id is None or int(contact_id) <= 0:
+            return Response(
+                {"detail": "Не удалось определить контакт для прогресса урока."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if is_tenant_user:
+            _ensure_contact_product_purchase_access(client=client, product=product, contact_id=contact_id)
+        else:
+            has_paid_access = _has_paid_product_access(client_id, contact_id, product_id)
+            now = timezone.now()
+            if _is_lesson_locked(lesson, lesson.module, has_paid_access=has_paid_access, now=now):
+                return Response({"detail": "Lesson is locked"}, status=status.HTTP_403_FORBIDDEN)
 
         progress, created = ProductCourseProgress.objects.get_or_create(
             owner_id=client_id,
@@ -1183,7 +1304,7 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
 
     def _resolve_actor(self, request, client_id: int) -> tuple[bool, int | None]:
         is_tenant_user = _has_tenant_course_access(request, client_id)
-        contact_id = self._parse_positive_int(_resolve_request_contact_id_for_client(request, client_id))
+        contact_id = self._parse_positive_int(_resolve_or_provision_request_contact_id_for_client(request, client_id))
         return is_tenant_user, contact_id
 
     def _ensure_contact_can_access_lesson(
@@ -1277,7 +1398,7 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
         }
 
     def get(self, request, client_id: int, product_id: int, lesson_id: int):
-        _, product, course, lesson = self._resolve_lesson_context(
+        client, product, course, lesson = self._resolve_lesson_context(
             client_id=client_id,
             product_id=product_id,
             lesson_id=lesson_id,
@@ -1288,6 +1409,8 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
                 {"detail": "Для доступа к комментариям войдите как владелец (tenant) или как контакт через Telegram/VK."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        if is_tenant_user:
+            _ensure_contact_product_purchase_access(client=client, product=product, contact_id=actor_contact_id)
 
         if not is_tenant_user and actor_contact_id is not None:
             locked_response = self._ensure_contact_can_access_lesson(
@@ -1333,7 +1456,7 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
         )
 
     def post(self, request, client_id: int, product_id: int, lesson_id: int):
-        _, product, course, lesson = self._resolve_lesson_context(
+        client, product, course, lesson = self._resolve_lesson_context(
             client_id=client_id,
             product_id=product_id,
             lesson_id=lesson_id,
@@ -1344,6 +1467,8 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
                 {"detail": "Для отправки комментария войдите как владелец (tenant) или как контакт через Telegram/VK."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        if is_tenant_user:
+            _ensure_contact_product_purchase_access(client=client, product=product, contact_id=actor_contact_id)
 
         message_text = _safe_text(request.data.get("message_text") or request.data.get("text"))
         if not message_text:
@@ -1427,7 +1552,7 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
         )
 
     def delete(self, request, client_id: int, product_id: int, lesson_id: int):
-        _, product, course, lesson = self._resolve_lesson_context(
+        client, product, course, lesson = self._resolve_lesson_context(
             client_id=client_id,
             product_id=product_id,
             lesson_id=lesson_id,
@@ -1438,6 +1563,8 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
                 {"detail": "Для удаления комментария войдите как владелец (tenant) или как контакт через Telegram/VK."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        if is_tenant_user:
+            _ensure_contact_product_purchase_access(client=client, product=product, contact_id=actor_contact_id)
 
         comment_id = self._parse_positive_int(request.query_params.get("comment_id") or request.data.get("comment_id"))
         if comment_id is None:

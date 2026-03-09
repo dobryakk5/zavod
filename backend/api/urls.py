@@ -5,6 +5,7 @@ from .views import (
     ArticleViewSet,
     ChannelAnalysisViewSet,
     ClientBookSemanticsView,
+    ClientCustomDomainVerifyView,
     ClientExpertBooksView,
     GenerationEventSummaryView,
     ClientInfoView,
@@ -137,6 +138,8 @@ from .views_quiz_builder import (
     QuizPublicSubmitView,
 )
 from .views_public_client_page import (
+    CaddyAskView,
+    PublicClientPageByDomainView,
     PublicClientPageBuyProductView,
     PublicClientPageProductCourseLessonCompleteView,
     PublicClientPageProductCourseLessonCommentsView,
@@ -226,6 +229,8 @@ urlpatterns = [
 
     # Client endpoints
     path('public/client-page/<int:client_id>/', PublicClientPageView.as_view(), name='public-client-page'),
+    path('public/client-page/by-domain/', PublicClientPageByDomainView.as_view(), name='public-client-page-by-domain'),
+    path('caddy-ask/', CaddyAskView.as_view(), name='caddy-ask'),
     path('public/client-page/<int:client_id>/tasks/', PublicClientPageTasksView.as_view(), name='public-client-page-tasks'),
     path('public/client-page/<int:client_id>/buy/', PublicClientPageBuyProductView.as_view(), name='public-client-page-buy'),
     path('public/client-page/<int:client_id>/payment-status/', PublicClientPagePaymentStatusView.as_view(), name='public-client-page-payment-status'),
@@ -254,6 +259,7 @@ urlpatterns = [
     path('client/summary/', ClientSummaryView.as_view(), name='client-summary'),
     path('client/generation-events/', GenerationEventSummaryView.as_view(), name='client-generation-events'),
     path('client/settings/', ClientSettingsView.as_view(), name='client-settings'),
+    path('client/custom-domain/verify/', ClientCustomDomainVerifyView.as_view(), name='client-custom-domain-verify'),
     path('client/channel', ClientChannelView.as_view(), name='client-channel'),
     path('client/unified-inbox/', UnifiedInboxThreadsView.as_view(), name='client-unified-inbox'),
     path('client/unified-inbox/reply/', UnifiedInboxReplyView.as_view(), name='client-unified-inbox-reply'),

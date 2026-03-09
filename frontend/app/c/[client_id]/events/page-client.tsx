@@ -1,0 +1,125 @@
+'use client';
+
+import Link from 'next/link';
+import { useParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { ApiError, apiFetch } from '@/lib/api';
+import type { ClientProduct } from '@/lib/types';
+import {
+  DEFAULT_TENANT_TIMEZONE,
+  normalizeTenantTimezone,
+} from '@/lib/timezone';
+import EventsContent from './content';
+import { buildEventProductRows } from './event-products';
+
+type PublicClientPageResponse = {
+  client?: {
+    id?: number;
+    name?: string;
+  };
+  settings?: {
+    brand_name?: string;
+    timezone?: string;
+  } | null;
+  products?: ClientProduct[];
+};
+
+type PublicEventsPageClientProps = {
+  resolvedClientId?: number;
+  useCustomDomainPaths?: boolean;
+};
+
+export default function PublicEventsPage({
+  resolvedClientId,
+  useCustomDomainPaths = false,
+}: PublicEventsPageClientProps = {}) {
+  const { client_id: rawClientId } = useParams<{ client_id?: string }>();
+  const pageClientId = resolvedClientId ?? Number(rawClientId);
+  const publicRootPath = useCustomDomainPaths ? '/' : `/c/${pageClientId}`;
+  const pathPrefix = useCustomDomainPaths ? '' : `/c/${pageClientId}`;
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [clientName, setClientName] = useState('');
+  const [brandName, setBrandName] = useState('');
+  const [products, setProducts] = useState<ClientProduct[]>([]);
+  const [timezone, setTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
+
+  useEffect(() => {
+    const loadPublicEventsPage = async () => {
+      if (!Number.isFinite(pageClientId) || pageClientId <= 0) {
+        setError('Некорректный идентификатор клиента.');
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await apiFetch<PublicClientPageResponse>(`/public/client-page/${pageClientId}/`);
+        setClientName(String(data?.client?.name ?? '').trim());
+        setBrandName(String(data?.settings?.brand_name ?? '').trim());
+        setTimezone(normalizeTenantTimezone(data?.settings?.timezone));
+        setProducts(Array.isArray(data?.products) ? data.products : []);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          setError('Страница мероприятий не найдена.');
+        } else {
+          setError('Не удалось загрузить мероприятия.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void loadPublicEventsPage();
+  }, [pageClientId]);
+
+  const rubFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat('ru-RU', {
+        style: 'currency',
+        currency: 'RUB',
+        maximumFractionDigits: 2,
+      }),
+    []
+  );
+
+  const eventProducts = useMemo(
+    () => buildEventProductRows(products, timezone, rubFormatter),
+    [products, rubFormatter, timezone]
+  );
+
+  const displayName = brandName || clientName || `Клиент #${pageClientId}`;
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-3xl p-6">
+        <div className="rounded-2xl border p-6 text-sm text-muted-foreground">Загрузка мероприятий...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-3xl p-6 space-y-4">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error}</div>
+        <Link href={publicRootPath} className="inline-flex rounded-lg border px-3 py-2 text-sm hover:bg-accent">
+          На страницу клиента
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-3xl p-6">
+      <EventsContent
+        clientId={pageClientId}
+        displayName={displayName}
+        eventProducts={eventProducts}
+        pathPrefix={pathPrefix}
+        backHref={publicRootPath}
+      />
+    </div>
+  );
+}

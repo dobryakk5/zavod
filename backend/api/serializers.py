@@ -68,6 +68,7 @@ from core.models import (
     CRMTaskHistory,
 )
 from core.services.product_type_templates import is_system_product_type_name
+from core.services.custom_domain import CustomDomainValidationError, normalize_custom_domain
 from core.telegram_client import normalize_telegram_channel_identifier
 from core.social_accounts import ensure_telegram_account_metadata
 from core.social_accounts import sync_client_default_telegram_account
@@ -983,6 +984,8 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "brand_name",
             "niche",
             "product_service",
+            "custom_domain",
+            "domain_verified",
             "client_page_config",
             "client_page_content",
             "timezone",
@@ -1005,7 +1008,12 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             "last_image_generation_at",
             "last_video_generation_at",
         ]
-        read_only_fields = ["slug", "last_image_generation_at", "last_video_generation_at"]  # slug is readonly
+        read_only_fields = [
+            "slug",
+            "domain_verified",
+            "last_image_generation_at",
+            "last_video_generation_at",
+        ]  # slug is readonly
 
     def get_rag_assistant_enabled(self, obj) -> bool:
         return bool(getattr(settings, "RAG_INDEXING_ENABLED", True))
@@ -1031,8 +1039,24 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
             return ""
         return normalize_telegram_channel_identifier(str(value))
 
+    def validate_custom_domain(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        if not candidate:
+            return None
+        try:
+            return normalize_custom_domain(candidate)
+        except CustomDomainValidationError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
     def update(self, instance, validated_data):
         channel_provided = "telegram_client_channel" in validated_data
+        if "custom_domain" in validated_data:
+            old_domain = (instance.custom_domain or "").strip().lower()
+            next_domain = (validated_data.get("custom_domain") or "").strip().lower()
+            if old_domain != next_domain:
+                validated_data["domain_verified"] = False
         updated_client = super().update(instance, validated_data)
         if channel_provided:
             sync_client_default_telegram_account(

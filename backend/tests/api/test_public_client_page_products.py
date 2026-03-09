@@ -13,12 +13,14 @@ from core.models import (
     Client,
     ClientProduct,
     ContactProductPurchase,
+    MapContact,
     ProductCourse,
     ProductCourseComment,
     ProductCourseEvent,
     ProductCourseLesson,
     ProductCourseModule,
     ProductCourseProgress,
+    UserTenantBinding,
     UserTenantRole,
     YooKassaPayment,
 )
@@ -962,3 +964,102 @@ class TestPublicClientPageCourseEndpoints:
         delete_curator = tenant_api_client.delete(f"{comments_url}?comment_id={curator_comment.id}")
         assert delete_curator.status_code == 204, delete_curator.content
         assert not ProductCourseComment.objects.filter(id__in=[student_comment.id, curator_comment.id]).exists()
+
+    def test_tenant_can_complete_paid_lesson_with_auto_contact_and_purchase(
+        self,
+        tenant_api_client,
+        tenant_user,
+        active_product,
+        published_course,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "api.views_public_client_page._resolve_request_contact_id_for_client",
+            lambda request, client_id: None,
+        )
+
+        complete_url = reverse(
+            "public-client-page-product-course-lesson-complete",
+            kwargs={
+                "client_id": active_product.owner_id,
+                "product_id": active_product.id,
+                "lesson_id": published_course["paid_lesson"].id,
+            },
+        )
+        response = tenant_api_client.post(complete_url, {}, format="json")
+
+        assert response.status_code == 200, response.content
+        binding = UserTenantBinding.objects.filter(
+            tenant_id=active_product.owner_id,
+            provider=UserTenantBinding.PROVIDER_CONTACT,
+            provider_user_id=f"user:{tenant_user.id}",
+            is_active=True,
+        ).first()
+        assert binding is not None
+        assert binding.contact_id is not None and int(binding.contact_id) > 0
+        assert MapContact.objects.filter(id=int(binding.contact_id)).exists()
+        assert ContactProductPurchase.objects.filter(
+            client_id=active_product.owner_id,
+            contact_id=int(binding.contact_id),
+            product_id=active_product.id,
+        ).exists()
+        assert ProductCourseProgress.objects.filter(
+            owner_id=active_product.owner_id,
+            contact_id=int(binding.contact_id),
+            lesson_id=published_course["paid_lesson"].id,
+        ).exists()
+
+    def test_authenticated_user_can_access_and_complete_preview_with_auto_contact(
+        self,
+        api_client,
+        active_product,
+        published_course,
+        monkeypatch,
+    ):
+        user = User.objects.create_user(email="student-preview@example.com", password="testpass123")
+        api_client.force_authenticate(user=user)
+        monkeypatch.setattr(
+            "api.views_public_client_page._resolve_request_contact_id_for_client",
+            lambda request, client_id: None,
+        )
+        monkeypatch.setattr(
+            "api.views_public_client_page._has_tenant_course_access",
+            lambda request, client_id: False,
+        )
+
+        overview_url = reverse(
+            "public-client-page-product-course",
+            kwargs={"client_id": active_product.owner_id, "product_id": active_product.id},
+        )
+        overview = api_client.get(overview_url)
+        assert overview.status_code == 200, overview.content
+        lessons = overview.json()["course"]["modules"][0]["lessons"]
+        assert lessons[0]["id"] == published_course["preview_lesson"].id
+        assert lessons[0]["is_locked"] is False
+        assert lessons[1]["id"] == published_course["paid_lesson"].id
+        assert lessons[1]["is_locked"] is True
+
+        complete_url = reverse(
+            "public-client-page-product-course-lesson-complete",
+            kwargs={
+                "client_id": active_product.owner_id,
+                "product_id": active_product.id,
+                "lesson_id": published_course["preview_lesson"].id,
+            },
+        )
+        response = api_client.post(complete_url, {}, format="json")
+        assert response.status_code == 200, response.content
+
+        binding = UserTenantBinding.objects.filter(
+            tenant_id=active_product.owner_id,
+            provider=UserTenantBinding.PROVIDER_CONTACT,
+            provider_user_id=f"user:{user.id}",
+            is_active=True,
+        ).first()
+        assert binding is not None
+        assert binding.contact_id is not None and int(binding.contact_id) > 0
+        assert ProductCourseProgress.objects.filter(
+            owner_id=active_product.owner_id,
+            contact_id=int(binding.contact_id),
+            lesson_id=published_course["preview_lesson"].id,
+        ).exists()

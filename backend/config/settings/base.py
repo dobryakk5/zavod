@@ -42,6 +42,7 @@ TBANK_API_URL = os.getenv("TBANK_API_URL", "https://securepay.tinkoff.ru/v2")
 TBANK_TERMINAL_KEY = os.getenv("TBANK_TERMINAL_KEY", "TinkoffBankTest")
 TBANK_SECRET_KEY = os.getenv("TBANK_SECRET_KEY", "TinkoffBankTest")
 SITE_BASE_URL = os.getenv("SITE_BASE_URL", "")
+CUSTOM_DOMAIN_CNAME_TARGET = os.getenv("CUSTOM_DOMAIN_CNAME_TARGET", "fibonatty.ru").strip().lower().rstrip(".")
 
 DEFAULT_ALLOWED_HOSTS = [
     "localhost",
@@ -55,6 +56,10 @@ DEFAULT_ALLOWED_HOSTS = [
 
 def _parse_hosts(hosts_value: str) -> list[str]:
     return [host.strip() for host in hosts_value.split(",") if host.strip()]
+
+
+def _parse_csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 def _hosts_to_origins(hosts: list[str]) -> list[str]:
     origins: list[str] = []
@@ -81,6 +86,8 @@ if env_allowed_hosts_raw:
 else:
     ALLOWED_HOSTS = DEFAULT_ALLOWED_HOSTS
     _env_allowed_hosts_list = []
+
+CUSTOM_DOMAIN_EDGE_IPS = _parse_csv(os.getenv("CUSTOM_DOMAIN_EDGE_IPS", ""))
 
 INSTALLED_APPS = [
     # Django

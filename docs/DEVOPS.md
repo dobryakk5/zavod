@@ -2,7 +2,7 @@
 
 redis-server /opt/homebrew/etc/redis.conf
 # celery -A config worker -l info
-celery -A config worker -l info -Q celery --concurrency=5
+celery -A config worker -l info -Q celery --concurrency=1
 
 celery -A config beat -l info
 python manage.py runserver

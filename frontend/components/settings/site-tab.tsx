@@ -7,6 +7,7 @@ import { Copy, ExternalLink } from 'lucide-react';
 import { clientApi } from '@/lib/api/client';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { type ClientProduct } from '@/lib/types';
 import {
@@ -44,6 +45,20 @@ const copyTextToClipboard = async (value: string): Promise<void> => {
 };
 
 const EVENT_PRODUCT_TYPE_KEYS = new Set(['мероприятие', 'event']);
+const CUSTOM_DOMAIN_CNAME_TARGET = 'fibonatty.ru';
+
+const normalizeCustomDomainInput = (value: string): string => {
+  const raw = value.trim().toLowerCase();
+  if (!raw) {
+    return '';
+  }
+  try {
+    const parsed = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    return parsed.hostname.trim().toLowerCase().replace(/\.$/, '');
+  } catch {
+    return raw.replace(/^https?:\/\//, '').split('/')[0]?.split(':')[0]?.trim().replace(/\.$/, '') ?? '';
+  }
+};
 
 type ParsedProductEventDate = {
   date: Date;
@@ -168,6 +183,13 @@ export function SiteTab() {
   const [products, setProducts] = useState<ClientProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingError, setLoadingError] = useState<string | null>(null);
+  const [customDomainInput, setCustomDomainInput] = useState('');
+  const [customDomainValue, setCustomDomainValue] = useState('');
+  const [domainVerified, setDomainVerified] = useState(false);
+  const [domainStatusMessage, setDomainStatusMessage] = useState<string | null>(null);
+  const [savingDomain, setSavingDomain] = useState(false);
+  const [verifyingDomain, setVerifyingDomain] = useState(false);
+  const [browserOrigin, setBrowserOrigin] = useState('');
 
   const activeSitePage = searchParams.get('sitePage') ?? '';
   const isEventsPage = activeSitePage === 'events';
@@ -201,6 +223,11 @@ export function SiteTab() {
         setClientId(info.client.id);
         setTimezone(normalizeTenantTimezone(settings.timezone));
         setProducts(productsData);
+        const normalizedDomain = normalizeCustomDomainInput(String(settings.custom_domain ?? ''));
+        setCustomDomainInput(normalizedDomain);
+        setCustomDomainValue(normalizedDomain);
+        setDomainVerified(Boolean(settings.domain_verified) && Boolean(normalizedDomain));
+        setDomainStatusMessage(null);
       } catch {
         setClientId(null);
         setLoadingError('Не удалось загрузить данные страницы.');
@@ -211,48 +238,70 @@ export function SiteTab() {
     void loadClientInfo();
   }, []);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setBrowserOrigin(window.location.origin);
+    }
+  }, []);
+
   const publicPagePath = useMemo(() => (clientId ? `/c/${clientId}` : ''), [clientId]);
-  const publicPageEditorPath = useMemo(() => (publicPagePath ? `${publicPagePath}/edit` : ''), [publicPagePath]);
-  const quizEditorPath = useMemo(() => (publicPagePath ? `${publicPagePath}/quiz/edit` : ''), [publicPagePath]);
-  const publicEventsPath = useMemo(() => (publicPagePath ? `${publicPagePath}/events` : ''), [publicPagePath]);
-  const publicProductsPath = useMemo(() => (publicPagePath ? `${publicPagePath}/products` : ''), [publicPagePath]);
-  const publicTasksPath = useMemo(() => (publicPagePath ? `${publicPagePath}/tasks` : ''), [publicPagePath]);
-  const publicPageShareUrl = useMemo(() => {
-    if (!publicPagePath) {
+  const customDomainEnabled = Boolean(customDomainValue) && domainVerified;
+  const publicRouteBasePath = useMemo(() => {
+    if (customDomainEnabled) {
       return '';
     }
-    if (typeof window === 'undefined') {
-      return publicPagePath;
+    return publicPagePath;
+  }, [customDomainEnabled, publicPagePath]);
+  const publicPageEditorPath = useMemo(() => (publicPagePath ? `${publicPagePath}/edit` : ''), [publicPagePath]);
+  const quizEditorPath = useMemo(() => (publicPagePath ? `${publicPagePath}/quiz/edit` : ''), [publicPagePath]);
+  const publicEventsPath = useMemo(
+    () => (publicRouteBasePath ? `${publicRouteBasePath}/events` : '/events'),
+    [publicRouteBasePath]
+  );
+  const publicProductsPath = useMemo(
+    () => (publicRouteBasePath ? `${publicRouteBasePath}/products` : '/products'),
+    [publicRouteBasePath]
+  );
+  const publicTasksPath = useMemo(
+    () => (publicRouteBasePath ? `${publicRouteBasePath}/tasks` : '/tasks'),
+    [publicRouteBasePath]
+  );
+  const publicPageShareUrl = useMemo(() => {
+    if (customDomainEnabled && customDomainValue) {
+      return `https://${customDomainValue}`;
     }
-    return `${window.location.origin}${publicPagePath}`;
-  }, [publicPagePath]);
+    if (!publicRouteBasePath) {
+      return '';
+    }
+    return browserOrigin ? `${browserOrigin}${publicRouteBasePath}` : publicRouteBasePath;
+  }, [browserOrigin, customDomainEnabled, customDomainValue, publicRouteBasePath]);
   const publicEventsShareUrl = useMemo(() => {
+    if (customDomainEnabled && customDomainValue) {
+      return `https://${customDomainValue}/events`;
+    }
     if (!publicEventsPath) {
       return '';
     }
-    if (typeof window === 'undefined') {
-      return publicEventsPath;
-    }
-    return `${window.location.origin}${publicEventsPath}`;
-  }, [publicEventsPath]);
+    return browserOrigin ? `${browserOrigin}${publicEventsPath}` : publicEventsPath;
+  }, [browserOrigin, customDomainEnabled, customDomainValue, publicEventsPath]);
   const publicProductsShareUrl = useMemo(() => {
+    if (customDomainEnabled && customDomainValue) {
+      return `https://${customDomainValue}/products`;
+    }
     if (!publicProductsPath) {
       return '';
     }
-    if (typeof window === 'undefined') {
-      return publicProductsPath;
-    }
-    return `${window.location.origin}${publicProductsPath}`;
-  }, [publicProductsPath]);
+    return browserOrigin ? `${browserOrigin}${publicProductsPath}` : publicProductsPath;
+  }, [browserOrigin, customDomainEnabled, customDomainValue, publicProductsPath]);
   const publicTasksShareUrl = useMemo(() => {
+    if (customDomainEnabled && customDomainValue) {
+      return `https://${customDomainValue}/tasks`;
+    }
     if (!publicTasksPath) {
       return '';
     }
-    if (typeof window === 'undefined') {
-      return publicTasksPath;
-    }
-    return `${window.location.origin}${publicTasksPath}`;
-  }, [publicTasksPath]);
+    return browserOrigin ? `${browserOrigin}${publicTasksPath}` : publicTasksPath;
+  }, [browserOrigin, customDomainEnabled, customDomainValue, publicTasksPath]);
 
   const handleCopyPublicPageLink = useCallback(async () => {
     if (!publicPageShareUrl) {
@@ -306,6 +355,62 @@ export function SiteTab() {
     }
   }, [publicTasksShareUrl]);
 
+  const handleSaveCustomDomain = useCallback(async () => {
+    const normalizedDomain = normalizeCustomDomainInput(customDomainInput);
+    setSavingDomain(true);
+    setDomainStatusMessage(null);
+    try {
+      const payload = await clientApi.updateSettings({
+        custom_domain: normalizedDomain || null,
+      });
+      const savedDomain = normalizeCustomDomainInput(String(payload.custom_domain ?? ''));
+      setCustomDomainInput(savedDomain);
+      setCustomDomainValue(savedDomain);
+      setDomainVerified(Boolean(payload.domain_verified) && Boolean(savedDomain));
+      setDomainStatusMessage(
+        savedDomain
+          ? 'Домен сохранен. Нажмите «Проверить подключение» после настройки DNS.'
+          : 'Свой домен очищен.'
+      );
+      toast.success(savedDomain ? 'Домен сохранен' : 'Свой домен очищен');
+    } catch {
+      toast.error('Не удалось сохранить свой домен');
+    } finally {
+      setSavingDomain(false);
+    }
+  }, [customDomainInput]);
+
+  const handleVerifyCustomDomain = useCallback(async () => {
+    const normalizedDomain = normalizeCustomDomainInput(customDomainInput || customDomainValue);
+    if (!normalizedDomain) {
+      toast.error('Укажите домен для проверки');
+      return;
+    }
+
+    setVerifyingDomain(true);
+    setDomainStatusMessage(null);
+    try {
+      const result = await clientApi.verifyCustomDomain(normalizedDomain);
+      setCustomDomainInput(result.domain);
+      setCustomDomainValue(result.domain);
+      setDomainVerified(Boolean(result.verified));
+      if (result.verified) {
+        const viaMethod = result.method === 'cname' ? 'CNAME' : 'A/AAAA';
+        const message = `Домен подтвержден (${viaMethod}).`;
+        setDomainStatusMessage(message);
+        toast.success(message);
+      } else {
+        const message = result.error || 'Домен пока не подтвержден. Проверьте DNS и повторите проверку.';
+        setDomainStatusMessage(message);
+        toast.error('Домен не подтвержден');
+      }
+    } catch {
+      toast.error('Не удалось проверить домен');
+    } finally {
+      setVerifyingDomain(false);
+    }
+  }, [customDomainInput, customDomainValue]);
+
   const rubFormatter = useMemo(
     () =>
       new Intl.NumberFormat('ru-RU', {
@@ -353,17 +458,22 @@ export function SiteTab() {
       .filter((product) => !isEventProductType(product))
       .map((product) => {
         const minPackagePrice = resolveMinPackagePrice(product);
+        const publicPath = customDomainEnabled && customDomainValue
+          ? `https://${customDomainValue}/products/${product.id}`
+          : clientId
+            ? `/c/${clientId}/products/${product.id}`
+            : '';
         return {
           id: product.id,
           productName: (product.name || '').trim() || `Продукт #${product.id}`,
           typeLabel: (product.product_type_name || product.product_type?.name || '').trim() || 'Без типа',
           shortDescription: (product.short_description || '').trim(),
           priceLabel: minPackagePrice !== null ? `от ${rubFormatter.format(minPackagePrice)}` : '',
-          publicPath: clientId ? `/c/${clientId}/products/${product.id}` : '',
+          publicPath,
         };
       })
       .sort((a, b) => a.productName.localeCompare(b.productName, 'ru'));
-  }, [clientId, products, rubFormatter]);
+  }, [clientId, customDomainEnabled, customDomainValue, products, rubFormatter]);
 
   if (isEventsPage) {
     return (
@@ -376,9 +486,9 @@ export function SiteTab() {
             </p>
           </div>
           <div className="flex items-center gap-1">
-            {publicEventsPath && (
+            {publicEventsShareUrl && (
               <a
-                href={publicEventsPath}
+                href={publicEventsShareUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-input bg-background text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -443,9 +553,9 @@ export function SiteTab() {
             </p>
           </div>
           <div className="flex items-center gap-1">
-            {publicProductsPath && (
+            {publicProductsShareUrl && (
               <a
-                href={publicProductsPath}
+                href={publicProductsShareUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-input bg-background text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -510,9 +620,9 @@ export function SiteTab() {
             </p>
           </div>
           <div className="flex items-center gap-1">
-            {publicTasksPath && (
+            {publicTasksShareUrl && (
               <a
-                href={publicTasksPath}
+                href={publicTasksShareUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-input bg-background text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -543,6 +653,43 @@ export function SiteTab() {
           Управление публичной страницей клиента и квизом.
         </p>
       </div>
+      <div className="space-y-3 rounded-md border p-3">
+        <div>
+          <h3 className="text-sm font-semibold">Свой домен</h3>
+          <p className="text-xs text-muted-foreground">
+            Укажите домен и добавьте DNS запись CNAME: <span className="font-mono">www</span>{' -> '}
+            <span className="font-mono">{CUSTOM_DOMAIN_CNAME_TARGET}</span>
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            value={customDomainInput}
+            onChange={(event) => setCustomDomainInput(event.target.value)}
+            placeholder="example.com или www.example.com"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+          <Button type="button" variant="outline" onClick={() => void handleSaveCustomDomain()} disabled={savingDomain}>
+            {savingDomain ? 'Сохраняем...' : 'Сохранить'}
+          </Button>
+          <Button type="button" onClick={() => void handleVerifyCustomDomain()} disabled={verifyingDomain}>
+            {verifyingDomain ? 'Проверяем...' : 'Проверить подключение'}
+          </Button>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {!customDomainValue
+            ? 'Домен не задан.'
+            : domainVerified
+              ? `Домен подтвержден: ${customDomainValue}`
+              : `Домен ожидает верификацию: ${customDomainValue}`}
+        </div>
+        {domainStatusMessage && (
+          <div className={`text-xs ${domainVerified ? 'text-green-700' : 'text-amber-700'}`}>
+            {domainStatusMessage}
+          </div>
+        )}
+      </div>
       <div className="space-y-2 text-sm">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-muted-foreground">1.</span>
@@ -553,16 +700,16 @@ export function SiteTab() {
           ) : (
             <span className="text-muted-foreground">Одностраничный сайт</span>
           )}
-          {publicPagePath ? (
+          {publicPageShareUrl ? (
             <>
               <span className="text-muted-foreground">·</span>
               <a
-                href={publicPagePath}
+                href={publicPageShareUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-blue-600 hover:underline"
               >
-                {publicPagePath}
+                {publicPageShareUrl}
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
               <Button
@@ -595,16 +742,16 @@ export function SiteTab() {
           <Link href={buildSiteUrl('events')} className="text-blue-600 hover:underline">
             Мероприятия
           </Link>
-          {publicEventsPath && (
+          {publicEventsShareUrl && (
             <>
               <span className="text-muted-foreground">·</span>
               <a
-                href={publicEventsPath}
+                href={publicEventsShareUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-blue-600 hover:underline"
               >
-                {publicEventsPath}
+                {publicEventsShareUrl}
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
               <Button
@@ -628,16 +775,16 @@ export function SiteTab() {
           <Link href={buildSiteUrl('products')} className="text-blue-600 hover:underline">
             Продукты
           </Link>
-          {publicProductsPath && (
+          {publicProductsShareUrl && (
             <>
               <span className="text-muted-foreground">·</span>
               <a
-                href={publicProductsPath}
+                href={publicProductsShareUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-blue-600 hover:underline"
               >
-                {publicProductsPath}
+                {publicProductsShareUrl}
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
               <Button
@@ -661,16 +808,16 @@ export function SiteTab() {
           <Link href={buildSiteUrl('tasks')} className="text-blue-600 hover:underline">
             Задания
           </Link>
-          {publicTasksPath && (
+          {publicTasksShareUrl && (
             <>
               <span className="text-muted-foreground">·</span>
               <a
-                href={publicTasksPath}
+                href={publicTasksShareUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-blue-600 hover:underline"
               >
-                {publicTasksPath}
+                {publicTasksShareUrl}
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
               <Button

@@ -5,6 +5,7 @@ import re
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Count, F
+from django.db import IntegrityError
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -21,7 +22,12 @@ from core.generation_events import (
 )
 from django.db import transaction
 
-from core.models import GenerationEvent, Post, Schedule, SemanticGroup
+from core.models import Client, GenerationEvent, Post, Schedule, SemanticGroup
+from core.services.custom_domain import (
+    CustomDomainValidationError,
+    normalize_custom_domain,
+    verify_custom_domain_dns,
+)
 
 from .authentication import CookieJWTAuthentication
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
@@ -513,6 +519,61 @@ class ClientSettingsView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+
+class ClientCustomDomainVerifyView(APIView):
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request):
+        client = get_active_client(request.user)
+        requested_domain_raw = request.data.get("domain")
+
+        try:
+            if requested_domain_raw is None:
+                if not client.custom_domain:
+                    return Response(
+                        {"detail": "Сначала укажите свой домен в настройках."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                domain = normalize_custom_domain(client.custom_domain)
+            else:
+                domain = normalize_custom_domain(requested_domain_raw)
+        except CustomDomainValidationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        duplicate_exists = Client.objects.filter(custom_domain=domain).exclude(id=client.id).exists()
+        if duplicate_exists:
+            return Response(
+                {"detail": "Этот домен уже используется другим клиентом."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        verification = verify_custom_domain_dns(
+            domain,
+            expected_cname_target=getattr(settings, "CUSTOM_DOMAIN_CNAME_TARGET", "fibonatty.ru"),
+            edge_ips=getattr(settings, "CUSTOM_DOMAIN_EDGE_IPS", []),
+        )
+
+        client.custom_domain = domain
+        client.domain_verified = bool(verification.verified)
+        try:
+            client.save(update_fields=["custom_domain", "domain_verified"])
+        except IntegrityError:
+            return Response(
+                {"detail": "Этот домен уже используется другим клиентом."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        response_payload = {
+            "domain": domain,
+            "verified": bool(verification.verified),
+            "method": verification.method,
+            "expected_cname": verification.expected_cname,
+            "resolved_cname": verification.resolved_cname,
+            "resolved_ips": verification.resolved_ips,
+            "error": verification.error,
+        }
+        return Response(response_payload, status=status.HTTP_200_OK)
 
 
 class ClientExpertBooksView(APIView):

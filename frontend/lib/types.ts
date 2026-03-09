@@ -680,6 +680,8 @@ export interface ClientSettings {
   brand_name?: string;
   niche?: string;
   product_service?: string;
+  custom_domain?: string | null;
+  domain_verified?: boolean;
   client_page_config?: Record<string, unknown>;
   client_page_content?: Record<string, unknown>;
   timezone?: string;
