@@ -1144,36 +1144,6 @@ export default function ClientPageEditor() {
 
   useEffect(() => { void loadEditorData(); }, [loadEditorData]);
 
-  useEffect(() => {
-    if (loading || saving || currentPageIndex < 0) {
-      return;
-    }
-
-    const snapshot = getEditorSnapshot();
-    if (
-      !snapshot
-      || snapshot === lastSavedSnapshotRef.current
-      || snapshot === lastAttemptedSnapshotRef.current
-    ) {
-      return;
-    }
-
-    if (autosaveTimeoutRef.current) {
-      clearTimeout(autosaveTimeoutRef.current);
-    }
-
-    autosaveTimeoutRef.current = setTimeout(() => {
-      void saveTemplate();
-    }, 900);
-
-    return () => {
-      if (autosaveTimeoutRef.current) {
-        clearTimeout(autosaveTimeoutRef.current);
-        autosaveTimeoutRef.current = null;
-      }
-    };
-  }, [currentPageIndex, getEditorSnapshot, loading, saving]);
-
   // ── Actions ───────────────────────────────────────────────
 
   const reorderByIndices = <T,>(source: T[], indices: number[], fallback: () => T): T[] => {
@@ -1250,7 +1220,7 @@ export default function ClientPageEditor() {
     setSelectedBlockId(null);
   }, []);
 
-  const saveTemplate = async () => {
+  const saveTemplate = useCallback(async () => {
     if (autosaveTimeoutRef.current) {
       clearTimeout(autosaveTimeoutRef.current);
       autosaveTimeoutRef.current = null;
@@ -1387,7 +1357,52 @@ export default function ClientPageEditor() {
       if (err instanceof ApiError && err.status === 401) { router.push('/login'); return; }
       setError('Не удалось сохранить.');
     } finally { setSaving(false); }
-  };
+  }, [
+    canvasBlockInstances,
+    config,
+    currentPageIndex,
+    getEditorSnapshot,
+    isHomePage,
+    localData,
+    pageClientId,
+    pageId,
+    pageMetaDescription,
+    pageOgImage,
+    pageSlug,
+    pageTitle,
+    router,
+    sitePages,
+  ]);
+
+  useEffect(() => {
+    if (loading || saving || currentPageIndex < 0) {
+      return;
+    }
+
+    const snapshot = getEditorSnapshot();
+    if (
+      !snapshot
+      || snapshot === lastSavedSnapshotRef.current
+      || snapshot === lastAttemptedSnapshotRef.current
+    ) {
+      return;
+    }
+
+    if (autosaveTimeoutRef.current) {
+      clearTimeout(autosaveTimeoutRef.current);
+    }
+
+    autosaveTimeoutRef.current = setTimeout(() => {
+      void saveTemplate();
+    }, 900);
+
+    return () => {
+      if (autosaveTimeoutRef.current) {
+        clearTimeout(autosaveTimeoutRef.current);
+        autosaveTimeoutRef.current = null;
+      }
+    };
+  }, [currentPageIndex, getEditorSnapshot, loading, saveTemplate, saving]);
 
   const insertTemplateField = (token: string) => {
     editorRef.current?.chain().focus().insertContent(token).run();
