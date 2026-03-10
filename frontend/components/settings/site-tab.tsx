@@ -695,10 +695,10 @@ export function SiteTab() {
           <span className="text-muted-foreground">1.</span>
           {publicPageEditorPath ? (
             <Link href={publicPageEditorPath} className="text-blue-600 hover:underline">
-              Одностраничный сайт
+              Страницы сайта
             </Link>
           ) : (
-            <span className="text-muted-foreground">Одностраничный сайт</span>
+            <span className="text-muted-foreground">Страницы сайта</span>
           )}
           {publicPageShareUrl ? (
             <>

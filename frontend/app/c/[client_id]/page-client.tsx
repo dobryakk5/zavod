@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { generateHTML } from '@tiptap/html';
 import {
@@ -35,6 +36,11 @@ import {
   resolveClientPageVideoSource,
   type ClientPageBlockKey,
 } from '@/lib/client-page-template';
+import {
+  buildSitePagePublicPath,
+  findClientSitePageBySlug,
+  normalizeClientSitePagesConfig,
+} from '@/lib/client-site-pages';
 import {
   Dialog,
   DialogContent,
@@ -666,19 +672,22 @@ const toPlannedMeeting = (event: Event, timezone: string): PlannedMeeting | null
 type ContactClientPageClientProps = {
   resolvedClientId?: number;
   useCustomDomainPaths?: boolean;
+  pageSlug?: string;
 };
 
 export default function ContactClientPage({
   resolvedClientId,
   useCustomDomainPaths = false,
+  pageSlug,
 }: ContactClientPageClientProps = {}) {
-  const { client_id: rawClientId } = useParams<{ client_id?: string }>();
+  const { client_id: rawClientId, page_slug: rawPageSlug } = useParams<{ client_id?: string; page_slug?: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const pageClientId = resolvedClientId ?? Number(rawClientId);
+  const resolvedPageSlug = typeof pageSlug === 'string' ? pageSlug : rawPageSlug;
+  const currentPublicPath = buildSitePagePublicPath(pageClientId, resolvedPageSlug || '', useCustomDomainPaths);
   const publicPathPrefix = useCustomDomainPaths ? '' : `/c/${pageClientId}`;
-  const publicRootPath = useCustomDomainPaths ? '/' : `/c/${pageClientId}`;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -823,13 +832,22 @@ export default function ContactClientPage({
     }
   }, [rescheduleMeetingId, selectedMeetingForReschedule]);
 
+  const sitePages = useMemo(
+    () => normalizeClientSitePagesConfig(settings?.client_page_config).site_pages,
+    [settings?.client_page_config],
+  );
+  const activeSitePage = useMemo(
+    () => findClientSitePageBySlug(sitePages, resolvedPageSlug),
+    [resolvedPageSlug, sitePages],
+  );
+
   useEffect(() => {
-    const title = (settings?.brand_name || activeClientName || '').trim();
+    const title = (activeSitePage?.title || settings?.brand_name || activeClientName || '').trim();
     if (!title || typeof document === 'undefined') {
       return;
     }
     document.title = title;
-  }, [activeClientName, settings?.brand_name]);
+  }, [activeClientName, activeSitePage?.title, settings?.brand_name]);
 
   useEffect(() => {
     const loadPage = async () => {
@@ -1335,7 +1353,7 @@ export default function ContactClientPage({
     try {
       const returnUrl = typeof window !== 'undefined'
         ? `${window.location.origin}${window.location.pathname}`
-        : publicRootPath;
+        : currentPublicPath;
       const response = await apiFetch<PublicBuyProductResponse>(`/public/client-page/${pageClientId}/buy/`, {
         method: 'POST',
         body: {
@@ -1484,7 +1502,16 @@ export default function ContactClientPage({
   const displayName = (settings?.brand_name || activeClientName || '').trim() || 'Клиент';
   const niche = (settings?.niche || '').trim() || 'Ниша не указана';
   const isRescheduleMode = selectedMeetingForReschedule !== null;
-  const pageTemplateConfig = normalizeClientPageTemplateConfig(settings?.client_page_config);
+  if (!activeSitePage) {
+    return (
+      <div className="mx-auto max-w-3xl p-6">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">
+          Страница сайта не найдена.
+        </div>
+      </div>
+    );
+  }
+  const pageTemplateConfig = normalizeClientPageTemplateConfig(activeSitePage.template_config);
   const selectedTemplateProduct = (() => {
     const selectedProductId = pageTemplateConfig.selected_product_id;
     if (selectedProductId) {
@@ -1503,7 +1530,6 @@ export default function ContactClientPage({
     product_price: selectedTemplateProductPriceLabel,
     product_service: (settings?.product_service || '').trim(),
   };
-  const legacyCustomContent = normalizeTiptapJson(settings?.client_page_content);
   const heroConfig = pageTemplateConfig.hero;
   const heroTitle = replaceTemplateTokens(heroConfig.title, templateValues);
   const heroSubtitle = replaceTemplateTokens(heroConfig.subtitle, templateValues);
@@ -1544,7 +1570,7 @@ export default function ContactClientPage({
   const textBlocksHtml = (() => {
     const source = pageTemplateConfig.extra_blocks.text_blocks.length > 0
       ? pageTemplateConfig.extra_blocks.text_blocks.map((item) => normalizeTiptapJson(item)).filter(Boolean)
-      : (legacyCustomContent ? [legacyCustomContent] : []);
+      : [];
     return source.map((item) => {
       if (!item) {
         return '';
@@ -1586,6 +1612,12 @@ export default function ContactClientPage({
   const textRenderCount = isBlockEnabled('custom_content')
     ? Math.max(textBlocksHtml.length, blockOrderMap.custom_content?.length || 0, 1)
     : 0;
+  const navigationItems = sitePages.map((page, index) => ({
+    id: page.id,
+    title: page.title.trim() || (index === 0 ? 'Главная' : 'Страница'),
+    href: buildSitePagePublicPath(pageClientId, page.slug, useCustomDomainPaths),
+    isActive: page.id === activeSitePage.id,
+  }));
   const canUseContactFeatures = bookingContactId !== null;
   const isClientPreviewMode = hasTenantSession && !canUseContactFeatures;
   const isPublicPreviewMode = !hasTenantSession && !canUseContactFeatures;
@@ -1605,7 +1637,7 @@ export default function ContactClientPage({
           <div>
             <button
               type="button"
-              onClick={() => router.push(`/login?next=${encodeURIComponent(publicRootPath)}&tenant_id=${pageClientId}`)}
+              onClick={() => router.push(`/login?next=${encodeURIComponent(currentPublicPath)}&tenant_id=${pageClientId}`)}
               className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm hover:bg-amber-100"
             >
               Войти
@@ -1615,6 +1647,26 @@ export default function ContactClientPage({
       )}
 
       <div className={`${(isPublicPreviewMode || isClientPreviewMode) ? 'mt-6 ' : ''}flex flex-col gap-6`}>
+        {navigationItems.length > 0 && (
+          <nav className="rounded-2xl border bg-white p-3 shadow-sm">
+            <div className="flex flex-wrap gap-2">
+              {navigationItems.map((item) => (
+                <Link
+                  key={item.id}
+                  href={item.href}
+                  className={`rounded-xl px-4 py-2 text-sm transition-colors ${
+                    item.isActive
+                      ? 'bg-slate-900 text-white'
+                      : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {item.title}
+                </Link>
+              ))}
+            </div>
+          </nav>
+        )}
+
         {isBlockEnabled('hero') && (
           <div style={{ order: getBlockOrder('hero') }}>
             <div className="overflow-hidden rounded-2xl border shadow-sm">

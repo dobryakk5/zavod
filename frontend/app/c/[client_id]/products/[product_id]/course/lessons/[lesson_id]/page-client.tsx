@@ -115,17 +115,17 @@ export default function PublicProductCourseLessonPage({
       const payload = await apiFetch<PublicCourseOutlineResponse>(
         `/public/client-page/${clientId}/products/${productId}/course/`
       );
-      const module = payload.course?.modules?.find((item) => Number(item.id) === Number(moduleId));
-      if (!module || !Array.isArray(module.lessons) || module.lessons.length === 0) {
+      const courseModule = payload.course?.modules?.find((item) => Number(item.id) === Number(moduleId));
+      if (!courseModule || !Array.isArray(courseModule.lessons) || courseModule.lessons.length === 0) {
         setNextLessonId(null);
         return;
       }
-      const currentIndex = module.lessons.findIndex((item) => Number(item.id) === lessonId);
-      if (currentIndex < 0 || currentIndex >= module.lessons.length - 1) {
+      const currentIndex = courseModule.lessons.findIndex((item) => Number(item.id) === lessonId);
+      if (currentIndex < 0 || currentIndex >= courseModule.lessons.length - 1) {
         setNextLessonId(null);
         return;
       }
-      setNextLessonId(Number(module.lessons[currentIndex + 1].id));
+      setNextLessonId(Number(courseModule.lessons[currentIndex + 1].id));
     } catch {
       setNextLessonId(null);
     }
