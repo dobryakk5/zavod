@@ -4,6 +4,7 @@ import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { TelegramAuth } from '@/components/auth/TelegramAuth';
 import { VKAuth } from '@/components/auth/VKAuth';
+import { DEFAULT_AUTH_REDIRECT } from '@/lib/routes';
 
 export default function LoginPage() {
   return (
@@ -28,7 +29,7 @@ function LoginPageContent() {
   const [telegramOpen, setTelegramOpen] = useState(false);
   const [vkOpen, setVkOpen] = useState(false);
   const nextParam = (searchParams.get('next') || '').trim();
-  const redirectTo = nextParam.startsWith('/') ? nextParam : '/welcome';
+  const redirectTo = nextParam.startsWith('/') ? nextParam : DEFAULT_AUTH_REDIRECT;
   const tenantIdParam = Number(searchParams.get('tenant_id') || 0);
   const contactTenantId = Number.isFinite(tenantIdParam) && tenantIdParam > 0 ? tenantIdParam : null;
   const isContactLoginMode = contactTenantId !== null;

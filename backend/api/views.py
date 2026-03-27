@@ -107,9 +107,33 @@ from .views_vk_auth import VkAuthUrlView, VkAuthView  # noqa: F401
 from .views_vk_messages import VkMessageCallbackView  # noqa: F401
 from .views_social_accounts import SocialAccountsView, LinkVkView, LinkTelegramView, UnlinkView, ResolveConflictView  # noqa: F401
 from .views_messaging import ClientChannelView  # noqa: F401
+from .views_team import (  # noqa: F401
+    ActiveClientView,
+    ClientTeamInvitationDetailView,
+    ClientTeamInvitationsView,
+    ClientTeamMemberDetailView,
+    ClientTeamView,
+)
 from .views_unified_inbox import (  # noqa: F401
     EmailInboxWebhookView,
     UnifiedInboxCourseAcceptView,
     UnifiedInboxReplyView,
     UnifiedInboxThreadsView,
+)
+from .views_coaching import (  # noqa: F401
+    CoachClientsView,
+    CoachStatsView,
+    CoachingContactDetailView,
+    CoachingOnboardingView,
+    ContactCompetenciesView,
+    ContactGoalDetailView,
+    ContactGoalStepsView,
+    ContactGoalStepDetailView,
+    ContactGoalsEditView,
+    ContactGoalsView,
+    ContactMilestonesView,
+    ContactSessionsView,
+    ContactStepsView,
+    ContactTaskDetailView,
+    ContactTasksView,
 )

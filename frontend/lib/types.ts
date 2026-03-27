@@ -730,6 +730,57 @@ export interface ClientInfo {
     last_video_generation_at?: string | null;
   };
   role: UserRole;
+  active_client_id: number;
+  memberships: ClientMembership[];
+}
+
+export interface ClientMembership {
+  client: {
+    id: number;
+    name: string;
+    slug: string;
+  };
+  role: UserRole;
+}
+
+export interface TeamProviderAccount {
+  provider: 'telegram' | 'vk' | string;
+  handle?: string | null;
+  display_name: string;
+}
+
+export interface TeamMember {
+  user_id: number;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  provider_accounts: TeamProviderAccount[];
+  invited_by?: string | null;
+  joined_via_invite_id?: number | null;
+}
+
+export interface PendingTeamInvite {
+  id: number;
+  provider: 'telegram' | 'vk' | string;
+  account_handle_raw: string;
+  account_handle_normalized: string;
+  role: UserRole | 'editor';
+  status: 'pending' | 'accepted' | 'revoked' | string;
+  invited_by_name: string;
+  created_at: string;
+}
+
+export interface TeamOverview {
+  members: TeamMember[];
+  pending_invites: PendingTeamInvite[];
+  limit: number;
+  used_slots: number;
+}
+
+export interface CreateTeamInvitationResponse {
+  status: 'pending_created' | 'existing_pending' | 'already_member';
+  message: string;
+  invite_id?: number | null;
 }
 
 export interface ClientSummary {

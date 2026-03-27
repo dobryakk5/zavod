@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { TelegramAuthButton } from './TelegramAuthButton';
 import { Button } from '@/components/ui/button';
+import { DEFAULT_AUTH_REDIRECT } from '@/lib/routes';
 
 interface TelegramUser {
   telegramId: string;
@@ -70,7 +71,7 @@ export function TelegramAuth({ open, onClose, redirectTo, tenantId }: TelegramAu
     return true;
   }, []);
 
-  const resolvedRedirectTo = redirectTo && redirectTo.startsWith('/') ? redirectTo : '/welcome';
+  const resolvedRedirectTo = redirectTo && redirectTo.startsWith('/') ? redirectTo : DEFAULT_AUTH_REDIRECT;
 
   const checkAuth = useCallback(async () => {
     if (!ensureApiConfigured()) {

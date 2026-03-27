@@ -5,7 +5,8 @@ from core.models import (
     Client, ChannelAnalysis, ProjectChannelAnalysisRun, ProjectChannelPostStat,
     WebsiteScan, CompetitorSite, WebsiteScanPage, WebsiteScanPageContent,
     WeeklySourceReport, WeeklySourceBatch, WeeklySalesPlan, WeeklyContentStrategy,
-    UserTenantRole, VkIntegration, SocialAccount, Connection, PostJob, Post,
+    ProjectTeamInvite, UserActiveClientPreference, UserTenantRole, VkIntegration,
+    SocialAccount, Connection, PostJob, Post,
     PostImage, PostVideo, VeoVideoExport, Schedule, Topic, TrendItem, Story,
     Article, ArticleBlock, ArticleBlockPromptTemplate, Articles, PostType,
     PostTone, ContentTemplate, SEOKeywordSet, ProjectSemanticSet, SemanticGroup,
@@ -118,6 +119,29 @@ class UserTenantRoleAdmin(admin.ModelAdmin):
     list_display = ['user', 'client', 'role']
     list_filter = ['role', 'client']
     search_fields = ['user__username', 'user__email', 'client__name']
+
+
+@admin.register(UserActiveClientPreference)
+class UserActiveClientPreferenceAdmin(admin.ModelAdmin):
+    list_display = ['user', 'client', 'updated_at']
+    list_filter = ['client']
+    search_fields = ['user__username', 'user__email', 'client__name']
+    readonly_fields = ['updated_at']
+
+
+@admin.register(ProjectTeamInvite)
+class ProjectTeamInviteAdmin(admin.ModelAdmin):
+    list_display = ['client', 'provider', 'account_handle_normalized', 'status', 'role', 'invited_by', 'accepted_user', 'created_at']
+    list_filter = ['status', 'provider', 'role', 'client']
+    search_fields = [
+        'client__name',
+        'client__slug',
+        'account_handle_raw',
+        'account_handle_normalized',
+        'invited_by__username',
+        'accepted_user__username',
+    ]
+    readonly_fields = ['created_at', 'accepted_at', 'revoked_at']
 
 
 @admin.register(ChannelAnalysis)

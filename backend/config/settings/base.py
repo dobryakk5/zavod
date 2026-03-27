@@ -294,6 +294,10 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "DEFAULT_THROTTLE_RATES": {
+        "team_invitation_minute": "10/min",
+        "team_invitation_day": "100/day",
+    },
 }
 
 SIMPLE_JWT = {
@@ -356,6 +360,7 @@ EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
 EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False") == "True"
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "support@fibonatty.ru")
+TEAM_MAX_COLLABORATORS = int(os.getenv("TEAM_MAX_COLLABORATORS", "20"))
 
 LOGGING = {
     "version": 1,

@@ -11,14 +11,24 @@ import { VkIntegrationsPanel } from '@/components/settings/vk-integrations-panel
 import { PaymentTab } from '@/components/settings/payment-tab';
 import { KnowledgeBaseTab } from '@/components/settings/knowledge-base-tab';
 import { SiteTab } from '@/components/settings/site-tab';
+import { TeamManagement } from '@/components/settings/team-management';
 import { RagChatWidget } from '@/components/settings/rag-chat-widget';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useRole } from '@/lib/hooks';
 
 export default function SettingsPageClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { role } = useRole();
+  const isOwner = role === 'owner';
   const tabParam = searchParams.get('tab') ?? 'client';
-  const availableTabs = useMemo(() => new Set(['client', 'social', 'site', 'payment', 'kb']), []);
+  const availableTabs = useMemo(() => {
+    const tabs = ['client', 'social', 'site', 'payment', 'kb'];
+    if (isOwner) {
+      tabs.push('team');
+    }
+    return new Set(tabs);
+  }, [isOwner]);
   const [activeTab, setActiveTab] = useState(() => (availableTabs.has(tabParam) ? tabParam : 'client'));
 
   useEffect(() => {
@@ -47,6 +57,7 @@ export default function SettingsPageClient() {
       <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
         <TabsList>
           <TabsTrigger value="client">Настройки клиента</TabsTrigger>
+          {isOwner ? <TabsTrigger value="team">Команда</TabsTrigger> : null}
           <TabsTrigger value="social">Социальные аккаунты</TabsTrigger>
           <TabsTrigger value="site">Сайт</TabsTrigger>
           <TabsTrigger value="payment">Оплата</TabsTrigger>
@@ -58,6 +69,14 @@ export default function SettingsPageClient() {
             <ClientSettingsForm />
           </div>
         </TabsContent>
+
+        {isOwner ? (
+          <TabsContent value="team" className="space-y-6">
+            <div className="max-w-4xl">
+              <TeamManagement />
+            </div>
+          </TabsContent>
+        ) : null}
 
         <TabsContent value="social" className="space-y-6">
           <div className="max-w-2xl">

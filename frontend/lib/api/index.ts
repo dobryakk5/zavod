@@ -25,3 +25,4 @@ export * from './operatorTasks';
 export * from './mapTags';
 export * from './mapContacts';
 export * from './knowledgeBase';
+export * from './coaching';

@@ -160,7 +160,7 @@ describe('TelegramAuth', () => {
 
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/welcome');
+      expect(testState.push).toHaveBeenCalledWith('/dashboard');
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -261,7 +261,7 @@ describe('TelegramAuth', () => {
     const logoutButton = await screen.findByRole('button', { name: 'Выйти' });
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/welcome');
+      expect(testState.push).toHaveBeenCalledWith('/dashboard');
     });
 
     onClose.mockClear();
@@ -311,7 +311,7 @@ describe('TelegramAuth', () => {
 
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/welcome');
+      expect(testState.push).toHaveBeenCalledWith('/dashboard');
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(

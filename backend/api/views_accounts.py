@@ -28,12 +28,13 @@ from core.services.custom_domain import (
     normalize_custom_domain,
     verify_custom_domain_dns,
 )
+from core.services.team_invites import accept_pending_team_invites
 
 from .authentication import CookieJWTAuthentication
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .social_avatar_storage import persist_social_avatar
 from .serializers import ClientSettingsSerializer, ClientSummarySerializer
-from .utils import enforce_generation_limit, get_active_client
+from .utils import build_client_info_payload, enforce_generation_limit, get_active_client
 
 User = get_user_model()
 
@@ -269,8 +270,10 @@ class TelegramAuthView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # For first-time users in regular login flow, create client tenant as before.
-        if user_created and tenant_id_hint is None:
+        accepted_invites = accept_pending_team_invites(user)
+
+        # For first-time users in regular login flow, create client tenant only when no team access exists.
+        if user_created and tenant_id_hint is None and not accepted_invites:
             client_slug = telegram_id_str
             client, _ = Client.objects.get_or_create(
                 slug=client_slug,
@@ -431,26 +434,7 @@ class ClientInfoView(APIView):
     """Get current client info and user role"""
 
     def get(self, request, *args, **kwargs):
-        from core.models import UserTenantRole
-
-        client = get_active_client(request.user)
-
-        # Get user's role for this client
-        role_obj = UserTenantRole.objects.filter(
-            user=request.user, client=client
-        ).first()
-        role = role_obj.role if role_obj else 'viewer'
-
-        return Response({
-            'client': {
-                'id': client.id,
-                'name': client.name,
-                'slug': client.slug,
-                'last_image_generation_at': client.last_image_generation_at,
-                'last_video_generation_at': client.last_video_generation_at,
-            },
-            'role': role,
-        })
+        return Response(build_client_info_payload(request.user))
 
 
 class ClientSummaryView(APIView):

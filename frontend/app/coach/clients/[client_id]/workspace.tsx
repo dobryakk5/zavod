@@ -1,0 +1,876 @@
+'use client';
+
+import type { ReactNode } from 'react';
+import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import {
+  coachingApi,
+  coachingApiExt,
+  type CoachingClient,
+  type CoachingCompetency,
+  type CoachMilestone,
+  type CoachSession,
+  type CoachTask,
+} from '@/lib/api/coaching';
+import CoachClientSessionPage from './page-client';
+
+type Tab = 'overview' | 'session' | 'history' | 'edit';
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'overview', label: 'Обзор' },
+  { id: 'session', label: 'Сессия' },
+  { id: 'history', label: 'История' },
+  { id: 'edit', label: 'Редактор' },
+];
+
+const COMPETENCY_COLOR_PALETTE = ['#1D9E75', '#7F77DD', '#378ADD', '#EF9F27', '#D96C75', '#5E8C61'];
+
+type SideData = {
+  client: CoachingClient | null;
+  competencies: CoachingCompetency[];
+  milestones: CoachMilestone[];
+  sessions: CoachSession[];
+  tasks: CoachTask[];
+};
+
+export default function CoachClientWorkspace({ clientId }: { clientId: number }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get('tab') as Tab | null;
+  const activeTab = TABS.some((tab) => tab.id === rawTab) ? rawTab : 'overview';
+
+  const [sideData, setSideData] = useState<SideData>({
+    client: null,
+    competencies: [],
+    milestones: [],
+    sessions: [],
+    tasks: [],
+  });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+
+    const fetchAll = async () => {
+      const [client, competencies, milestones, sessions, tasks] = await Promise.all([
+        coachingApi.getCoachClient(clientId).catch(() => null),
+        coachingApi.getCoachClientCompetencies(clientId).catch(() => []),
+        coachingApi.getCoachClientMilestones(clientId).catch(() => []),
+        coachingApi.getCoachClientSessions(clientId).catch(() => []),
+        coachingApiExt.getCoachClientTasks(clientId).catch(() => []),
+      ]);
+
+      if (!active) {
+        return;
+      }
+
+      setSideData({ client, competencies, milestones, sessions, tasks });
+      setLoading(false);
+    };
+
+    void fetchAll();
+    return () => {
+      active = false;
+    };
+  }, [clientId]);
+
+  function switchTab(tab: Tab) {
+    router.replace(`/coach/clients/${clientId}?tab=${tab}`, { scroll: false });
+  }
+
+  if (loading) {
+    return <WorkspaceSkeleton />;
+  }
+
+  const { client, competencies, milestones, sessions, tasks } = sideData;
+
+  return (
+    <div className="flex min-h-screen flex-col bg-[#f5f4f0]">
+      <div className="flex items-center gap-3 border-b border-[#e0ddd6] bg-white px-5 py-2.5">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e1f5ee] text-[12px] font-medium text-[#0f6e56]">
+          {client?.initials ?? '—'}
+        </div>
+        <div>
+          <p className="text-[14px] font-medium text-[#1a1a18]">{client?.name ?? 'Клиент'}</p>
+          <p className="text-[11px] text-[#73726c]">
+            {client?.sessionsCount ?? 0} сессий · {client?.focus ?? ''}
+          </p>
+        </div>
+
+        <div className="ml-6 flex gap-0.5 rounded-lg bg-[#f1efe8] p-0.5">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => switchTab(tab.id)}
+              className={`rounded-md px-4 py-1.5 text-[12px] transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-white font-medium text-[#1a1a18] shadow-sm'
+                  : 'text-[#73726c] hover:text-[#1a1a18]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="ml-auto flex gap-2">
+          <Link
+            href="/dashboard"
+            className="rounded-lg border border-[#e0ddd6] px-3 py-1.5 text-[11px] text-[#73726c] hover:bg-[#f5f4f0]"
+          >
+            Назад к dashboard
+          </Link>
+        </div>
+      </div>
+
+      <div className="flex-1">
+        {activeTab === 'overview' ? (
+          <OverviewTab
+            client={client}
+            competencies={competencies}
+            milestones={milestones}
+            sessions={sessions}
+            tasks={tasks}
+            onTaskComplete={async (taskId) => {
+              await coachingApiExt.completeCoachTask(taskId);
+              setSideData((prev) => ({
+                ...prev,
+                tasks: prev.tasks.map((task) => (
+                  task.id === taskId
+                    ? { ...task, status: 'done', doneAt: new Date().toISOString() }
+                    : task
+                )),
+              }));
+            }}
+          />
+        ) : null}
+
+        {activeTab === 'session' ? <CoachClientSessionPage clientId={clientId} /> : null}
+
+        {activeTab === 'history' ? (
+          <HistoryTab milestones={milestones} sessions={sessions} />
+        ) : null}
+
+        {activeTab === 'edit' ? (
+          <EditTab
+            client={client}
+            competencies={competencies}
+            clientId={clientId}
+            onSave={async (updated) => {
+              const result = await coachingApiExt.saveCoachClientCompetencies(clientId, updated);
+              const milestones = await coachingApi.getCoachClientMilestones(clientId).catch(() => null);
+              setSideData((prev) => ({
+                ...prev,
+                competencies: result,
+                milestones: milestones ?? prev.milestones,
+              }));
+            }}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function OverviewTab({
+  client,
+  competencies,
+  milestones,
+  sessions,
+  tasks,
+  onTaskComplete,
+}: {
+  client: CoachingClient | null;
+  competencies: CoachingCompetency[];
+  milestones: CoachMilestone[];
+  sessions: CoachSession[];
+  tasks: CoachTask[];
+  onTaskComplete: (taskId: string) => Promise<void>;
+}) {
+  const [completing, setCompleting] = useState<string | null>(null);
+
+  const avgProgress = client?.avgProgress ?? 0;
+  const doneCount = tasks.filter((task) => task.status === 'done').length;
+  const latestSession = sessions[0] ?? null;
+
+  async function handleComplete(taskId: string) {
+    setCompleting(taskId);
+    try {
+      await onTaskComplete(taskId);
+    } finally {
+      setCompleting(null);
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-[1200px] space-y-5 p-5">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard value={`${avgProgress}%`} label="средний прогресс" />
+        <StatCard value={`${doneCount} / ${tasks.length}`} label="заданий на неделе" />
+        <StatCard value={milestones.length} label="milestone" accent />
+        <StatCard
+          value={client?.nextSession ? formatShortDate(client.nextSession) : '—'}
+          label="след. сессия"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-5">
+        <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4 xl:col-span-3">
+          <SectionTitle>Компетенции</SectionTitle>
+          {competencies.length === 0 ? (
+            <Empty>Компетенции пока не заполнены</Empty>
+          ) : (
+            <>
+              <div className="mb-4 grid grid-cols-1 gap-x-6 gap-y-2 md:grid-cols-2">
+                {competencies.map((competency) => (
+                  <div key={competency.id}>
+                    <div className="mb-1 flex justify-between text-[11px]">
+                      <span className="text-[#1a1a18]">{competency.name}</span>
+                      <span
+                        className="font-medium"
+                        style={{ color: competency.color || '#1D9E75' }}
+                      >
+                        {competency.score}%
+                      </span>
+                    </div>
+                    <div className="h-[3px] overflow-hidden rounded-full bg-[#f1efe8]">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${competency.score}%`,
+                          background: competency.color || '#1D9E75',
+                        }}
+                      />
+                    </div>
+                  </div>
+              ))}
+              </div>
+              <RadarChart competencies={competencies} />
+            </>
+          )}
+        </div>
+
+        <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4 xl:col-span-2">
+          <SectionTitle>Задания на неделе</SectionTitle>
+          {tasks.length === 0 ? (
+            <Empty>Заданий пока нет</Empty>
+          ) : (
+            <div className="space-y-0.5">
+              {tasks.map((task) => {
+                const done = task.status === 'done';
+
+                return (
+                  <button
+                    key={task.id}
+                    type="button"
+                    disabled={done || completing === task.id}
+                    onClick={() => void handleComplete(task.id)}
+                    className="flex w-full items-start gap-2 border-b border-[#f1efe8] py-2 text-left last:border-0 disabled:cursor-default"
+                  >
+                    <div
+                      className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border transition-colors ${
+                        done
+                          ? 'border-[#1D9E75] bg-[#1D9E75]'
+                          : 'border-[#d3d1c7] hover:border-[#b4b2a9]'
+                      }`}
+                    >
+                      {done ? (
+                        <svg width="7" height="7" viewBox="0 0 10 10" aria-hidden="true">
+                          <path
+                            d="M2 5l2.5 2.5L8 3"
+                            stroke="white"
+                            strokeWidth="1.5"
+                            fill="none"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      ) : null}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className={`truncate text-[11px] ${
+                          done ? 'text-[#73726c] line-through' : 'text-[#1a1a18]'
+                        }`}
+                      >
+                        {task.text}
+                      </p>
+                      <p className="text-[10px] text-[#73726c]">{task.goalTitle}</p>
+                    </div>
+                    {!done && task.dueDate ? (
+                      <span className="mt-0.5 shrink-0 rounded-full bg-[rgba(186,117,23,0.1)] px-1.5 py-0.5 text-[10px] text-[#633806]">
+                        {formatShortDate(task.dueDate)}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
+          <SectionTitle>Последние milestones</SectionTitle>
+          {milestones.length === 0 ? (
+            <Empty>Milestones появятся после сессий</Empty>
+          ) : (
+            <div className="space-y-4">
+              {milestones.slice(0, 4).map((milestone) => (
+                <MilestoneRow key={milestone.id} milestone={milestone} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
+          <SectionTitle>Последняя сессия</SectionTitle>
+          {latestSession ? (
+            <div className="rounded-[6px] bg-[#f5f4f0] p-3">
+              <p className="mb-1 text-[10px] text-[#73726c]">
+                Сессия #{latestSession.number} · {formatDate(latestSession.date)}
+              </p>
+              <p className="text-[12px] leading-relaxed text-[#1a1a18]">
+                {latestSession.notes || 'Без описания'}
+              </p>
+              {latestSession.coachNotes ? (
+                <p className="mt-1 text-[11px] text-[#73726c]">{latestSession.coachNotes}</p>
+              ) : null}
+            </div>
+          ) : (
+            <Empty>Сессий пока нет</Empty>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryTab({
+  milestones,
+  sessions,
+}: {
+  milestones: CoachMilestone[];
+  sessions: CoachSession[];
+}) {
+  return (
+    <div className="mx-auto max-w-[800px] space-y-5 p-5">
+      <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
+        <SectionTitle>Все milestones</SectionTitle>
+        {milestones.length === 0 ? (
+          <Empty>Milestone появятся после сессий</Empty>
+        ) : (
+          <div className="space-y-4">
+            {milestones.map((milestone) => (
+              <MilestoneRow key={milestone.id} milestone={milestone} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
+        <SectionTitle>Сессии</SectionTitle>
+        {sessions.length === 0 ? (
+          <Empty>Сессий пока нет</Empty>
+        ) : (
+          <div className="space-y-2">
+            {sessions.map((session) => (
+              <div key={session.id} className="rounded-[6px] bg-[#f5f4f0] p-3">
+                <p className="mb-1 text-[10px] text-[#73726c]">
+                  Сессия #{session.number} · {formatDate(session.date)}
+                </p>
+                <p className="text-[12px] leading-relaxed text-[#1a1a18]">
+                  {session.notes || 'Без описания'}
+                </p>
+                {session.coachNotes ? (
+                  <p className="mt-1 text-[11px] text-[#73726c]">{session.coachNotes}</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EditTab({
+  client,
+  competencies,
+  clientId,
+  onSave,
+}: {
+  client: CoachingClient | null;
+  competencies: CoachingCompetency[];
+  clientId: number;
+  onSave: (updated: CoachingCompetency[]) => Promise<void>;
+}) {
+  const [localComps, setLocalComps] = useState<CoachingCompetency[]>(competencies);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [newCompetencyName, setNewCompetencyName] = useState('');
+  const [addError, setAddError] = useState<string | null>(null);
+  const hasSyncedCompetencies = useRef(false);
+
+  useEffect(() => {
+    if (!hasSyncedCompetencies.current) {
+      hasSyncedCompetencies.current = true;
+      return;
+    }
+    setLocalComps(competencies);
+  }, [competencies]);
+
+  function update(id: string, field: 'score' | 'startScore', value: number) {
+    setSaved(false);
+    setLocalComps((prev) => prev.map((comp) => (
+      comp.id === id ? { ...comp, [field]: value } : comp
+    )));
+  }
+
+  function remove(id: string) {
+    setSaved(false);
+    setLocalComps((prev) => prev.filter((comp) => comp.id !== id));
+  }
+
+  function handleAddCompetency() {
+    const name = newCompetencyName.trim();
+    if (!name) {
+      setAddError('Введите название компетенции.');
+      return;
+    }
+
+    const normalizedName = name.toLocaleLowerCase('ru-RU');
+    if (localComps.some((comp) => comp.name.trim().toLocaleLowerCase('ru-RU') === normalizedName)) {
+      setAddError('Такая компетенция уже есть в списке.');
+      return;
+    }
+
+    setSaved(false);
+    setLocalComps((prev) => [
+      ...prev,
+      {
+        id: createCompetencyId(name),
+        name,
+        score: 0,
+        startScore: 0,
+        color: getNextCompetencyColor(prev),
+      },
+    ]);
+    setNewCompetencyName('');
+    setAddError(null);
+    setAdding(false);
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await onSave(localComps);
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-[800px] space-y-4 p-5">
+      <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
+        <SectionTitle>Намерение клиента</SectionTitle>
+        <div className="rounded-[6px] border-l-[3px] border-[#7F77DD] bg-[#f5f4f0] px-3 py-2.5">
+          <p className="text-[12px] leading-relaxed text-[#1a1a18]">
+            {client?.intention?.trim() || client?.focus || 'Намерение не заполнено'}
+          </p>
+        </div>
+        <p className="mt-2 text-[10px] text-[#73726c]">Редактируется при онбординге клиента</p>
+      </div>
+
+      <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <SectionTitle className="mb-0">Компетенции</SectionTitle>
+            <button
+              type="button"
+              onClick={() => {
+                setAdding((prev) => !prev);
+                setNewCompetencyName('');
+                setAddError(null);
+              }}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-[#d7d2c7] text-[15px] leading-none text-[#4f4b45] transition-colors hover:bg-[#f5f4f0]"
+              aria-label="Добавить компетенцию"
+              title="Добавить компетенцию"
+            >
+              +
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={saving}
+            className="rounded-[6px] bg-[#1D9E75] px-3 py-[5px] text-[11px] text-[#E1F5EE] disabled:opacity-60"
+          >
+            {saving ? 'Сохраняем...' : saved ? '✓ Сохранено' : 'Сохранить'}
+          </button>
+        </div>
+
+        {adding ? (
+          <div className="mb-4 rounded-[6px] bg-[#f5f4f0] p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="block flex-1">
+                <span className="mb-1 block text-[10px] text-[#73726c]">Новая компетенция</span>
+                <input
+                  type="text"
+                  value={newCompetencyName}
+                  onChange={(event) => {
+                    setNewCompetencyName(event.target.value);
+                    if (addError) {
+                      setAddError(null);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      handleAddCompetency();
+                    }
+                  }}
+                  placeholder="Например, Эмпатия"
+                  className="w-full rounded-[6px] border border-[#d7d2c7] bg-white px-3 py-2 text-[12px] text-[#1a1a18] outline-none transition-colors placeholder:text-[#9a978f] focus:border-[#1D9E75]"
+                />
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddCompetency}
+                  className="rounded-[6px] bg-[#1D9E75] px-3 py-2 text-[11px] text-[#E1F5EE]"
+                >
+                  Добавить
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdding(false);
+                    setNewCompetencyName('');
+                    setAddError(null);
+                  }}
+                  className="rounded-[6px] border border-[#d7d2c7] px-3 py-2 text-[11px] text-[#4f4b45]"
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+            {addError ? (
+              <p className="mt-2 text-[11px] text-[#b14d43]">{addError}</p>
+            ) : (
+              <p className="mt-2 text-[10px] text-[#73726c]">
+                После добавления скорректируйте стартовый и текущий уровень, затем сохраните изменения.
+              </p>
+            )}
+          </div>
+        ) : null}
+
+        {localComps.length === 0 ? (
+          <Empty>Компетенций пока нет</Empty>
+        ) : (
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            {localComps.map((comp) => {
+              const delta = comp.score - comp.startScore;
+
+              return (
+                <div key={comp.id}>
+                  <div className="mb-2 flex items-center gap-2">
+                    <div
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ background: comp.color || '#1D9E75' }}
+                    />
+                    <p className="text-[13px] font-medium text-[#1a1a18]">{comp.name}</p>
+                    <div className="ml-auto flex items-center gap-2">
+                      {delta > 0 ? (
+                        <span className="text-[11px] font-medium text-[#1D9E75]">
+                          +{delta}%
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => remove(comp.id)}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[#d7d2c7] text-[14px] leading-none text-[#7b766d] transition-colors hover:bg-[#f5f4f0]"
+                        aria-label={`Убрать компетенцию ${comp.name}`}
+                        title={`Убрать компетенцию ${comp.name}`}
+                      >
+                        -
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div>
+                      <p className="mb-1 text-[10px] text-[#73726c]">Старт (онбординг)</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={comp.startScore}
+                          onChange={(event) => update(comp.id, 'startScore', Number(event.target.value))}
+                          className="flex-1 accent-[#9ca3af]"
+                        />
+                        <span className="w-8 text-right text-[11px] text-[#73726c]">
+                          {comp.startScore}%
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="mb-1 text-[10px] text-[#73726c]">Сейчас</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={comp.score}
+                          onChange={(event) => update(comp.id, 'score', Number(event.target.value))}
+                          className="flex-1 accent-[#1D9E75]"
+                          style={{ accentColor: comp.color || '#1D9E75' }}
+                        />
+                        <span
+                          className="w-8 text-right text-[11px] font-medium"
+                          style={{ color: comp.color || '#1D9E75' }}
+                        >
+                          {comp.score}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-[#f1efe8]">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${comp.score}%`, background: comp.color || '#1D9E75' }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <p className="text-center text-[11px] text-[#73726c]">
+        Для редактирования целей, шагов и весов компетенций:{' '}
+        <Link href={`/coach/clients/${clientId}?tab=session`} className="text-[#185fa5] hover:underline">
+          вкладка Сессия
+        </Link>
+      </p>
+    </div>
+  );
+}
+
+function SectionTitle({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <p className={['text-[11px] font-medium uppercase tracking-[0.4px] text-[#73726c]', className ?? 'mb-3'].join(' ')}>
+      {children}
+    </p>
+  );
+}
+
+function StatCard({
+  value,
+  label,
+  accent,
+}: {
+  value: string | number;
+  label: string;
+  accent?: boolean;
+}) {
+  return (
+    <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
+      <p className={`text-[22px] font-medium ${accent ? 'text-[#EF9F27]' : 'text-[#1a1a18]'}`}>
+        {value}
+      </p>
+      <p className="mt-1 text-[11px] text-[#73726c]">{label}</p>
+    </div>
+  );
+}
+
+function MilestoneRow({ milestone }: { milestone: CoachMilestone }) {
+  return (
+    <div className="flex gap-3">
+      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[rgba(186,117,23,0.1)] text-[11px] text-[#633806]">
+        ★
+      </div>
+      <div>
+        <p className="text-[12px] leading-relaxed text-[#1a1a18]">{milestone.text}</p>
+        {milestone.note ? (
+          <span className="mt-1 inline-block rounded-full bg-[rgba(186,117,23,0.1)] px-2 py-0.5 text-[10px] text-[#633806]">
+            {milestone.note}
+          </span>
+        ) : null}
+        <p className="mt-0.5 text-[10px] text-[#73726c]">{formatDate(milestone.createdAt)}</p>
+      </div>
+    </div>
+  );
+}
+
+function Empty({ children }: { children: ReactNode }) {
+  return <p className="text-[12px] text-[#73726c]">{children}</p>;
+}
+
+function WorkspaceSkeleton() {
+  return (
+    <div className="min-h-screen animate-pulse bg-[#f5f4f0]">
+      <div className="h-12 border-b border-[#e0ddd6] bg-white" />
+      <div className="mx-auto max-w-[1200px] space-y-4 p-5">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {[1, 2, 3, 4].map((item) => (
+            <div key={item} className="h-20 rounded-[8px] bg-[#ece7dd]" />
+          ))}
+        </div>
+        <div className="h-64 rounded-[8px] bg-[#ece7dd]" />
+      </div>
+    </div>
+  );
+}
+
+function RadarChart({ competencies }: { competencies: CoachingCompetency[] }) {
+  const width = 260;
+  const height = 200;
+  const cx = width / 2;
+  const cy = height / 2 + 6;
+  const radius = Math.min(width, height) / 2 - 34;
+  const gridLevels = 10;
+  const count = competencies.length;
+
+  if (count === 0) {
+    return null;
+  }
+
+  const angle = (index: number) => ((Math.PI * 2 * index) / count) - Math.PI / 2;
+  const point = (index: number, value: number) => {
+    const r = radius * (value / 100);
+    return {
+      x: cx + Math.cos(angle(index)) * r,
+      y: cy + Math.sin(angle(index)) * r,
+    };
+  };
+  const pointsToString = (values: number[]) => values.map((value, index) => {
+    const { x, y } = point(index, value);
+    return `${x},${y}`;
+  }).join(' ');
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="mx-auto mt-2 block overflow-visible"
+      aria-label="Радар компетенций"
+    >
+      {Array.from({ length: gridLevels }, (_, index) => {
+        const level = index + 1;
+        return (
+          <polygon
+            key={`ring-${level}`}
+            points={pointsToString(Array(count).fill((level / gridLevels) * 100))}
+            fill="none"
+            stroke="#ddd7cb"
+            strokeWidth={level === gridLevels || level === gridLevels / 2 ? 0.9 : 0.55}
+          />
+        );
+      })}
+
+      {competencies.map((_, index) => {
+        const outer = point(index, 100);
+        return (
+          <line
+            key={`axis-${index}`}
+            x1={cx}
+            y1={cy}
+            x2={outer.x}
+            y2={outer.y}
+            stroke="#d2cbbb"
+            strokeWidth="0.7"
+          />
+        );
+      })}
+
+      <polygon
+        points={pointsToString(competencies.map((comp) => comp.startScore))}
+        fill="none"
+        stroke="rgba(60,60,60,0.18)"
+        strokeWidth="1.1"
+        strokeDasharray="4 3"
+      />
+      <polygon
+        points={pointsToString(competencies.map((comp) => comp.score))}
+        fill="rgba(29,158,117,0.12)"
+        stroke="#1D9E75"
+        strokeWidth="1.6"
+      />
+
+      {competencies.map((comp, index) => {
+        const labelPoint = point(index, 118);
+        return (
+          <text
+            key={`label-${comp.id}`}
+            x={labelPoint.x}
+            y={labelPoint.y}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize="9"
+            fill="#8a887f"
+          >
+            {comp.name}
+          </text>
+        );
+      })}
+    </svg>
+  );
+}
+
+function formatDate(iso: string) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(date);
+}
+
+function formatShortDate(iso: string) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return '—';
+  }
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+  }).format(date);
+}
+
+function createCompetencyId(name: string) {
+  const normalized = name
+    .trim()
+    .toLocaleLowerCase('ru-RU')
+    .replace(/[^a-zа-яё0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '');
+  const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10);
+  return normalized ? `${normalized}-${suffix}` : `competency-${suffix}`;
+}
+
+function getNextCompetencyColor(competencies: CoachingCompetency[]) {
+  const used = new Set(
+    competencies
+      .map((item) => item.color)
+      .filter((value): value is string => Boolean(value)),
+  );
+  return COMPETENCY_COLOR_PALETTE.find((color) => !used.has(color)) ?? COMPETENCY_COLOR_PALETTE[competencies.length % COMPETENCY_COLOR_PALETTE.length];
+}

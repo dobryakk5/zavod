@@ -6,6 +6,8 @@ import type {
   BookSemanticsResponse,
   ExpertBooksResponse,
   GenerationEventSummary,
+  TeamOverview,
+  CreateTeamInvitationResponse,
 } from '../types';
 
 export type CustomDomainVerifyResponse = {
@@ -24,6 +26,13 @@ export const clientApi = {
    */
   info: async (): Promise<ClientInfo> => {
     return apiFetch<ClientInfo>('/client/info/');
+  },
+
+  setActiveClient: async (clientId: number): Promise<ClientInfo> => {
+    return apiFetch<ClientInfo>('/client/active/', {
+      method: 'POST',
+      body: { client_id: clientId },
+    });
   },
 
   /**
@@ -91,5 +100,31 @@ export const clientApi = {
    */
   generationEventsSummary: async (): Promise<GenerationEventSummary> => {
     return apiFetch<GenerationEventSummary>('/client/generation-events/');
+  },
+
+  getTeam: async (): Promise<TeamOverview> => {
+    return apiFetch<TeamOverview>('/client/team/');
+  },
+
+  createTeamInvitation: async (payload: {
+    provider: 'telegram' | 'vk';
+    account_handle: string;
+  }): Promise<CreateTeamInvitationResponse> => {
+    return apiFetch<CreateTeamInvitationResponse>('/client/team/invitations/', {
+      method: 'POST',
+      body: payload,
+    });
+  },
+
+  revokeTeamInvitation: async (inviteId: number): Promise<void> => {
+    return apiFetch<void>(`/client/team/invitations/${inviteId}/`, {
+      method: 'DELETE',
+    });
+  },
+
+  removeTeamMember: async (userId: number): Promise<void> => {
+    return apiFetch<void>(`/client/team/members/${userId}/`, {
+      method: 'DELETE',
+    });
   },
 };

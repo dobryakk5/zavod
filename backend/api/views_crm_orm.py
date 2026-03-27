@@ -61,7 +61,12 @@ crm_workflow_dispatcher = CRMWorkflowDispatcher()
 def _tenant_contact_ids_queryset(tenant_id: int):
     return (
         UserTenantBinding.objects
-        .filter(tenant_id=tenant_id, contact_id__isnull=False, contact_id__gt=0)
+        .filter(
+            tenant_id=tenant_id,
+            provider=UserTenantBinding.PROVIDER_CONTACT,
+            contact_id__isnull=False,
+            contact_id__gt=0,
+        )
         .values_list("contact_id", flat=True)
     )
 

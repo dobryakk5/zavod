@@ -129,3 +129,30 @@ def test_crm_contact_delete_detaches_current_tenant_and_keeps_shared_contact():
     deleted = api_t2.delete(f"/api/crm/contacts/{int(shared.id)}/")
     assert deleted.status_code == 204, deleted.content
     assert not MapContact.objects.filter(id=shared.id).exists()
+
+
+@pytest.mark.django_db
+def test_crm_contacts_ignore_social_bindings_without_contact_binding():
+    user = User.objects.create_user(email="tenant-social@example.com", password="testpass123")
+    tenant = Client.objects.create(name="Tenant Social", slug="tenant-social")
+    UserTenantRole.objects.create(user=user, client=tenant, role="owner")
+
+    coach_like_contact = MapContact.objects.create(name="Coach Platform User")
+    real_contact = MapContact.objects.create(name="Real Coaching Client")
+
+    UserTenantBinding.objects.create(
+        tenant=tenant,
+        provider=UserTenantBinding.PROVIDER_TELEGRAM,
+        provider_user_id="telegram-coach-user",
+        contact_id=int(coach_like_contact.id),
+        is_active=True,
+    )
+    _bind_contact_to_tenant(tenant=tenant, contact=real_contact, marker="real-client")
+
+    api_client = _auth_client(user)
+    response = api_client.get("/api/crm/contacts/")
+
+    assert response.status_code == 200, response.content
+    ids = {int(item["id"]) for item in response.json()}
+    assert int(real_contact.id) in ids
+    assert int(coach_like_contact.id) not in ids

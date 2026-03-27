@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import Client, MapContact, UserSocialAccount, UserTenantBinding, UserTenantRole
+from core.services.team_invites import accept_pending_team_invites
 from core.services.telegram_user_service import TelegramUserService
 
 from .authentication import CookieJWTAuthentication
@@ -111,8 +112,6 @@ def _get_or_create_user_and_client(
     profile: dict,
     vk_user_id: int | str,
     email: str | None,
-    *,
-    create_client_tenant: bool = True,
 ):
     first_name = (profile.get("first_name") or "").strip()
     last_name = (profile.get("last_name") or "").strip()
@@ -139,21 +138,7 @@ def _get_or_create_user_and_client(
         if changed:
             user.save(update_fields=["first_name", "last_name"])
 
-    if create_client_tenant:
-        client_slug = str(vk_user_id)
-        client, _ = Client.objects.get_or_create(
-            slug=client_slug,
-            defaults={
-                "name": f"{first_name} {last_name}".strip() or username or f"User {vk_user_id}",
-            },
-        )
-        UserTenantRole.objects.get_or_create(
-            user=user,
-            client=client,
-            defaults={"role": "owner"},
-        )
-
-    return user
+    return user, user_created
 
 
 def _find_user_by_vk_provider_id(vk_user_id: int | str):
@@ -369,12 +354,12 @@ class VkAuthView(APIView):
         )
 
         user = _find_user_by_vk_provider_id(vk_user_id)
+        user_created = False
         if user is None:
-            user = _get_or_create_user_and_client(
+            user, user_created = _get_or_create_user_and_client(
                 profile=profile,
                 vk_user_id=vk_user_id,
                 email=email,
-                create_client_tenant=(tenant_id_hint is None),
             )
 
         linked, error = _link_vk_to_user(
@@ -420,6 +405,26 @@ class VkAuthView(APIView):
                 )
             except ValueError as exc:
                 return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        accepted_invites = accept_pending_team_invites(user)
+
+        if user_created and tenant_id_hint is None and not accepted_invites:
+            client_slug = str(vk_user_id)
+            client, _ = Client.objects.get_or_create(
+                slug=client_slug,
+                defaults={
+                    "name": (
+                        f"{(profile.get('first_name') or '').strip()} {(profile.get('last_name') or '').strip()}".strip()
+                        or (profile.get("screen_name") or "").strip()
+                        or f"User {vk_user_id}"
+                    ),
+                },
+            )
+            UserTenantRole.objects.get_or_create(
+                user=user,
+                client=client,
+                defaults={"role": "owner"},
+            )
 
         binding = (
             UserTenantBinding.objects.filter(

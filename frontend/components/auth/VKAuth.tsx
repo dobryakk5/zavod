@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
+import { DEFAULT_AUTH_REDIRECT } from '@/lib/routes';
 
 interface VkUser {
   vkId: string;
@@ -83,7 +84,7 @@ export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
     }
     return true;
   }, []);
-  const resolvedRedirectTo = redirectTo && redirectTo.startsWith('/') ? redirectTo : '/welcome';
+  const resolvedRedirectTo = redirectTo && redirectTo.startsWith('/') ? redirectTo : DEFAULT_AUTH_REDIRECT;
 
   const exchangeCode = useCallback(
     async (code: string, state: string, deviceId: string) => {

@@ -48,6 +48,27 @@ class IsTenantOwnerOrEditor(BasePermission):
             return False
 
 
+class IsTenantOwner(BasePermission):
+    """
+    Permission check: user must have 'owner' role for the active client.
+    Used for team management actions.
+    """
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        try:
+            client = get_active_client(request.user)
+            role = UserTenantRole.objects.filter(
+                user=request.user,
+                client=client,
+            ).first()
+            return bool(role and role.role == "owner")
+        except Exception:
+            return False
+
+
 class CanGenerateVideo(BasePermission):
     """
     Permission check: video generation is only available in DEBUG mode or for 'zavod' client.

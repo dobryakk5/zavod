@@ -4,6 +4,7 @@ from typing import List
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 
 class Client(models.Model):
@@ -422,3 +423,84 @@ class UserTenantRole(models.Model):
 
     def __str__(self):
         return f"{self.user} @ {self.client} ({self.role})"
+
+
+class UserActiveClientPreference(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="active_client_preference",
+    )
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="active_user_preferences",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user} -> {self.client or 'none'}"
+
+
+class ProjectTeamInvite(models.Model):
+    class Provider(models.TextChoices):
+        TELEGRAM = "telegram", "Telegram"
+        VK = "vk", "VK"
+
+    class Role(models.TextChoices):
+        EDITOR = "editor", "Editor"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        REVOKED = "revoked", "Revoked"
+
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        related_name="team_invites",
+    )
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="created_team_invites",
+    )
+    accepted_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="accepted_team_invites",
+    )
+    provider = models.CharField(max_length=32, choices=Provider.choices)
+    account_handle_raw = models.CharField(max_length=255)
+    account_handle_normalized = models.CharField(max_length=255)
+    role = models.CharField(max_length=20, choices=Role.choices, default=Role.EDITOR)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = (
+            models.Index(
+                fields=("provider", "account_handle_normalized"),
+                name="idx_team_invite_prov_handle",
+            ),
+            models.Index(fields=("client", "status"), name="idx_team_invite_client_status"),
+        )
+        constraints = (
+            models.UniqueConstraint(
+                fields=("client", "provider", "account_handle_normalized"),
+                condition=Q(status="pending"),
+                name="uniq_team_invite_pending_handle",
+            ),
+        )
+
+    def __str__(self):
+        return (
+            f"{self.client} invite {self.provider}:{self.account_handle_normalized} "
+            f"({self.status})"
+        )

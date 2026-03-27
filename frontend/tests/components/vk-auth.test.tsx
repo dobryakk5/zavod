@@ -107,7 +107,7 @@ describe('VKAuth', () => {
     });
     expect(sessionStorage.getItem('vk_auth_state')).toBe('vk-state-1');
     expect(sessionStorage.getItem('vk_auth_mode')).toBe('login');
-    expect(sessionStorage.getItem('vk_auth_redirect_to')).toBe('/welcome');
+    expect(sessionStorage.getItem('vk_auth_redirect_to')).toBe('/dashboard');
   });
 
   it('handles popup error message and clears auth state', async () => {
@@ -207,7 +207,7 @@ describe('VKAuth', () => {
     const logoutButton = await screen.findByRole('button', { name: 'Выйти' });
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/welcome');
+      expect(testState.push).toHaveBeenCalledWith('/dashboard');
     });
 
     onClose.mockClear();

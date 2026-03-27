@@ -15,12 +15,13 @@ from ._mixins import TaskStatusMixin
 
 # --- Core entities ---
 from .payments import ContactProductPurchase, ContactProductServiceUsage, PaymentPlan, YooKassaPayment
-from .client import Client, UserTenantRole
+from .client import Client, ProjectTeamInvite, UserActiveClientPreference, UserTenantRole
 
 # --- CRM ---
 from .crm import ClientCategory, CRMClient, Event, EventType, Payment, Note
 from .amocrm import AmoCRMAccount, AmoCRMContactMapping, AmoCRMLogEntry
 from .bitrix24 import Bitrix24Account, Bitrix24ContactMapping, Bitrix24LogEntry, Bitrix24WebhookEvent
+from .coaching import ContactCoachingProfile
 
 # --- Integrations ---
 from .integrations import VkIntegration, SocialAccount, Connection, UserSocialAccount
@@ -132,6 +133,8 @@ __all__ = [
     "TaskStatusMixin",
     # Client
     "Client",
+    "ProjectTeamInvite",
+    "UserActiveClientPreference",
     "UserTenantRole",
     # Payments
     "PaymentPlan",
@@ -152,6 +155,7 @@ __all__ = [
     "Bitrix24ContactMapping",
     "Bitrix24LogEntry",
     "Bitrix24WebhookEvent",
+    "ContactCoachingProfile",
     # Integrations
     "VkIntegration",
     "SocialAccount",

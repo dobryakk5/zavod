@@ -22,6 +22,7 @@ from core.models import (
     ChainCondition,
     ChainEdge,
     ChainNode,
+    ProjectTeamInvite,
     ProductType,
     ContentTemplate,
     Connection,
@@ -280,6 +281,57 @@ class ClientSummarySerializer(serializers.Serializer):
     posts_scheduled = serializers.IntegerField()
     posts_published = serializers.IntegerField()
     by_platform = PlatformCountSerializer(many=True)
+
+
+class TeamClientSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Client
+        fields = ["id", "name", "slug"]
+        read_only_fields = fields
+
+
+class TeamMembershipSerializer(serializers.Serializer):
+    client = TeamClientSerializer()
+    role = serializers.CharField()
+
+
+class TeamMemberSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    username = serializers.CharField()
+    display_name = serializers.CharField()
+    role = serializers.CharField()
+    provider_accounts = serializers.ListField(child=serializers.DictField(), read_only=True)
+    invited_by = serializers.CharField(allow_null=True, required=False)
+    joined_via_invite_id = serializers.IntegerField(allow_null=True, required=False)
+
+
+class PendingTeamInviteSerializer(serializers.ModelSerializer):
+    invited_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProjectTeamInvite
+        fields = [
+            "id",
+            "provider",
+            "account_handle_raw",
+            "account_handle_normalized",
+            "role",
+            "status",
+            "invited_by_name",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_invited_by_name(self, obj: ProjectTeamInvite) -> str:
+        full_name = obj.invited_by.get_full_name()
+        return full_name or obj.invited_by.get_username()
+
+
+class TeamOverviewSerializer(serializers.Serializer):
+    members = TeamMemberSerializer(many=True)
+    pending_invites = PendingTeamInviteSerializer(many=True)
+    limit = serializers.IntegerField()
+    used_slots = serializers.IntegerField()
 
 
 # ============================================================================

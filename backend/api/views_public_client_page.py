@@ -19,6 +19,7 @@ from core.models import (
     CRMTask,
     Client,
     ClientProduct,
+    ContactCoachingProfile,
     ContactProductPurchase,
     MapContact,
     ProductCourseComment,
@@ -352,6 +353,41 @@ def _resolve_bound_contact_id_for_client(user, client_id: int) -> int | None:
 def _resolve_request_contact_id_for_client(request, client_id: int) -> int | None:
     user = _authenticate_cookie_user_optional(request)
     return _resolve_bound_contact_id_for_client(user, client_id)
+
+
+def _public_goal_step_sort_key(step: dict) -> tuple[int, str, str]:
+    due_date = str(step.get("dueDate") or "")
+    done_at = str(step.get("doneAt") or "")
+    return (1 if step.get("done") else 0, due_date or "9999", done_at or "9999")
+
+
+def _serialize_public_goal_steps(profile: ContactCoachingProfile, *, done: bool | None = None) -> list[dict]:
+    items: list[dict] = []
+    for goal in profile.goals or []:
+        if not isinstance(goal, dict):
+            continue
+        goal_id = str(goal.get("id") or "")
+        goal_title = str(goal.get("title") or "")
+        for step in goal.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            payload = {
+                "id": str(step.get("id") or ""),
+                "text": str(step.get("text") or ""),
+                "done": bool(step.get("done")),
+                "isMilestone": bool(step.get("isMilestone")),
+                "milestoneNote": str(step.get("milestoneNote") or ""),
+                "doneAt": str(step.get("doneAt") or "").strip() or None,
+                "dueDate": str(step.get("dueDate") or "").strip() or None,
+                "goalId": goal_id,
+                "goalTitle": str(step.get("goalTitle") or goal_title),
+                "clientId": int(profile.contact_id),
+            }
+            if done is not None and bool(payload["done"]) is not done:
+                continue
+            items.append(payload)
+    items.sort(key=_public_goal_step_sort_key)
+    return items
 
 
 def _resolve_or_provision_request_contact_id_for_client(request, client_id: int) -> int | None:
@@ -1642,6 +1678,111 @@ class PublicClientPageTasksView(APIView):
                 "items": items,
             }
         )
+
+
+class PublicClientPageStepsView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def get(self, request, client_id: int):
+        client_exists = Client.objects.filter(id=client_id).exists()
+        if not client_exists:
+            raise Http404("Клиент не найден")
+
+        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        if contact_id is None or contact_id <= 0:
+            return Response(
+                {"detail": "Для просмотра заданий войдите как контакт через Telegram или VK."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        raw_done = str(request.query_params.get("done") or "").strip().lower()
+        done: bool | None = None
+        if raw_done in {"1", "true", "yes"}:
+            done = True
+        elif raw_done in {"0", "false", "no"}:
+            done = False
+
+        profile = ContactCoachingProfile.objects.filter(tenant_id=client_id, contact_id=int(contact_id)).first()
+        items = _serialize_public_goal_steps(profile, done=done) if profile else []
+        return Response(
+            {
+                "contact_id": int(contact_id),
+                "items": items,
+            }
+        )
+
+
+class PublicClientPageStepDetailView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def patch(self, request, client_id: int, step_id: str):
+        client_exists = Client.objects.filter(id=client_id).exists()
+        if not client_exists:
+            raise Http404("Клиент не найден")
+
+        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        if contact_id is None or contact_id <= 0:
+            return Response(
+                {"detail": "Для просмотра заданий войдите как контакт через Telegram или VK."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if "done" not in request.data:
+            return Response({"detail": "Поле done обязательно."}, status=status.HTTP_400_BAD_REQUEST)
+
+        raw_done = request.data.get("done")
+        if isinstance(raw_done, bool):
+            done = raw_done
+        elif str(raw_done).strip().lower() in {"1", "true", "yes"}:
+            done = True
+        elif str(raw_done).strip().lower() in {"0", "false", "no"}:
+            done = False
+        else:
+            return Response({"detail": "Некорректный done."}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = ContactCoachingProfile.objects.filter(tenant_id=client_id, contact_id=int(contact_id)).first()
+        if profile is None:
+            return Response({"detail": "Шаг не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+        goals = list(profile.goals or [])
+        matched_payload: dict | None = None
+        step_found = False
+        for goal_index, goal in enumerate(goals):
+            if not isinstance(goal, dict):
+                continue
+            steps = list(goal.get("steps") or [])
+            for step_index, step in enumerate(steps):
+                if not isinstance(step, dict) or str(step.get("id") or "") != step_id:
+                    continue
+                next_step = {**step, "done": done, "doneAt": timezone.now().isoformat() if done else ""}
+                steps[step_index] = next_step
+                next_goal = {**goal, "steps": steps}
+                goals[goal_index] = next_goal
+                matched_payload = {
+                    "id": str(next_step.get("id") or ""),
+                    "text": str(next_step.get("text") or ""),
+                    "done": bool(next_step.get("done")),
+                    "isMilestone": bool(next_step.get("isMilestone")),
+                    "milestoneNote": str(next_step.get("milestoneNote") or ""),
+                    "doneAt": str(next_step.get("doneAt") or "").strip() or None,
+                    "dueDate": str(next_step.get("dueDate") or "").strip() or None,
+                    "goalId": str(next_goal.get("id") or ""),
+                    "goalTitle": str(next_step.get("goalTitle") or next_goal.get("title") or ""),
+                    "clientId": int(profile.contact_id),
+                }
+                step_found = True
+                break
+            if step_found:
+                break
+
+        if not step_found or matched_payload is None:
+            return Response({"detail": "Шаг не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+        profile.goals = goals
+        profile.save()
+        return Response(matched_payload)
 
 
 class PublicClientPageBuyProductView(APIView):

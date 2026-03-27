@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import Client, UserSocialAccount, UserTenantRole  # Client used in resolution
+from core.services.team_invites import accept_pending_team_invites
 
 from .authentication import CookieJWTAuthentication
 from .social_avatar_storage import persist_social_avatar
@@ -447,6 +448,8 @@ class LinkVkView(APIView):
                 )
             return Response({"error": error}, status=status.HTTP_409_CONFLICT)
 
+        accept_pending_team_invites(user)
+
         display_name = (
             f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip()
             or profile.get("screen_name", "")
@@ -511,6 +514,8 @@ class LinkTelegramView(APIView):
                     extra_data=extra_data,
                 )
             return Response({"error": error}, status=status.HTTP_409_CONFLICT)
+
+        accept_pending_team_invites(user)
 
         return Response(
             {

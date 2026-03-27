@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { DEFAULT_AUTH_REDIRECT } from '@/lib/routes';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
 const VK_REDIRECT_URI =
@@ -61,7 +62,7 @@ function VkCallbackContent() {
         return '/settings?tab=social&linked=vk';
       }
       const redirectTo = (sessionStorage.getItem(VK_AUTH_REDIRECT_KEY) || '').trim();
-      return redirectTo.startsWith('/') ? redirectTo : '/welcome';
+      return redirectTo.startsWith('/') ? redirectTo : DEFAULT_AUTH_REDIRECT;
     };
 
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));

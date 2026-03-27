@@ -13,6 +13,7 @@ class TelegramUserService:
         self.client_model = client_model
         self.provider_telegram = getattr(UserTenantBinding, "PROVIDER_TELEGRAM", "telegram")
         self.provider_vk = getattr(UserTenantBinding, "PROVIDER_VK", "vk")
+        self.provider_contact = getattr(UserTenantBinding, "PROVIDER_CONTACT", "contact")
 
     def _map_schema(self) -> str:
         schema = os.getenv("MAP_SCHEMA", "map").strip()
@@ -89,6 +90,12 @@ class TelegramUserService:
                 telegram_username=telegram_username,
             )
 
+        if contact_id is not None:
+            self._ensure_contact_binding(
+                tenant=tenant,
+                contact_id=int(contact_id),
+            )
+
         if created:
             status = "newly_bound"
         else:
@@ -107,6 +114,33 @@ class TelegramUserService:
             status = "already_bound"
 
         return {"status": status, "binding": binding}
+
+    def _ensure_contact_binding(self, *, tenant: Client, contact_id: int) -> None:
+        provider_user_id = f"contact:{int(contact_id)}"
+        binding, created = self.binding_model.objects.get_or_create(
+            tenant=tenant,
+            provider=self.provider_contact,
+            provider_user_id=provider_user_id,
+            defaults={
+                "contact_id": int(contact_id),
+                "is_active": True,
+                "bound_at": timezone.now(),
+            },
+        )
+        if created:
+            return
+
+        update_fields: list[str] = []
+        if binding.contact_id != int(contact_id):
+            binding.contact_id = int(contact_id)
+            update_fields.append("contact_id")
+        if not binding.is_active:
+            binding.is_active = True
+            update_fields.append("is_active")
+        binding.bound_at = timezone.now()
+        update_fields.append("bound_at")
+        if update_fields:
+            binding.save(update_fields=update_fields)
 
     def bind_user_to_tenant(
         self,
