@@ -38,6 +38,7 @@ class CoachingGoalStepUpdateSerializer(serializers.Serializer):
     text = serializers.CharField(max_length=500, allow_blank=True, required=False)
     dueDate = serializers.CharField(allow_blank=True, required=False)
     done = serializers.BooleanField(required=False)
+    isMilestone = serializers.BooleanField(required=False)
 
 
 class CoachingGoalEditSerializer(serializers.Serializer):

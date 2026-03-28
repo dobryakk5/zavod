@@ -880,6 +880,8 @@ class ContactGoalStepDetailView(APIView):
                 next_step["text"] = serializer.validated_data["text"]
             if "dueDate" in serializer.validated_data:
                 next_step["dueDate"] = serializer.validated_data["dueDate"]
+            if "isMilestone" in serializer.validated_data:
+                next_step["isMilestone"] = bool(serializer.validated_data["isMilestone"])
             if "done" in serializer.validated_data:
                 done = bool(serializer.validated_data["done"])
                 next_step["done"] = done

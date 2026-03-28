@@ -16,6 +16,7 @@ type CoachClientSessionPageProps = {
   clientId: number;
   onSessionsChange?: (sessions: CoachSession[]) => void;
   onMilestonesChange?: (milestones: CoachMilestone[]) => void;
+  onGoalsChange?: (goals: CoachGoalTreeNode[]) => void;
 };
 
 type WorkspaceData = {
@@ -46,6 +47,7 @@ export default function CoachClientSessionPage({
   clientId,
   onSessionsChange,
   onMilestonesChange,
+  onGoalsChange,
 }: CoachClientSessionPageProps) {
   const newStepDueDateInputRef = useRef<HTMLInputElement | null>(null);
   const lastSavedSessionRef = useRef<{ sessionId: string | null; notes: string; coachNotes: string }>({
@@ -157,6 +159,12 @@ export default function CoachClientSessionPage({
       onMilestonesChange?.(data.milestones);
     }
   }, [data.milestones, loading, onMilestonesChange]);
+
+  useEffect(() => {
+    if (!loading) {
+      onGoalsChange?.(data.goals);
+    }
+  }, [data.goals, loading, onGoalsChange]);
 
   const visibleGoals = useMemo(
     () => data.goals.filter((goal) => goal.horizon === selectedHorizon),
@@ -401,7 +409,7 @@ export default function CoachClientSessionPage({
     try {
       const step = await coachingApi.addCoachGoalStep(selectedGoal.id, {
         text: newStepText.trim(),
-        dueDate: newStepDueDate || null,
+        dueDate: newStepDueDate || '',
       });
       setData((current) => ({
         ...current,
@@ -478,6 +486,23 @@ export default function CoachClientSessionPage({
       setActionMessage('Шаг удалён.');
     } catch {
       setActionMessage('Не удалось удалить шаг.');
+    } finally {
+      setSavingStepId(null);
+    }
+  };
+
+  const handleToggleStepMilestone = async (stepId: string, isMilestone: boolean) => {
+    if (!selectedGoal) return;
+
+    setSavingStepId(stepId);
+    try {
+      const response = await coachingApi.updateCoachGoalStep(selectedGoal.id, stepId, { isMilestone });
+      setData((current) => ({
+        ...current,
+        goals: current.goals.map((goal) => (goal.id === selectedGoal.id ? { ...goal, steps: response.steps } : goal)),
+      }));
+    } catch {
+      setActionMessage('Не удалось обновить веху шага.');
     } finally {
       setSavingStepId(null);
     }
@@ -726,6 +751,43 @@ export default function CoachClientSessionPage({
                                           >
                                             Отмена
                                           </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => void handleDeleteStep(step.id)}
+                                            disabled={savingStepId === step.id}
+                                            className="rounded-[6px] border border-red-200 px-2.5 py-1.5 text-red-700 transition-colors hover:bg-red-50 hover:text-red-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                            aria-label={`Удалить шаг ${step.text}`}
+                                            title="Удалить шаг"
+                                          >
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                              <path
+                                                d="M4 7h16"
+                                                stroke="currentColor"
+                                                strokeWidth="1.7"
+                                                strokeLinecap="round"
+                                              />
+                                              <path
+                                                d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"
+                                                stroke="currentColor"
+                                                strokeWidth="1.7"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                              />
+                                              <path
+                                                d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9L17 7"
+                                                stroke="currentColor"
+                                                strokeWidth="1.7"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                              />
+                                              <path
+                                                d="M10 11v5M14 11v5"
+                                                stroke="currentColor"
+                                                strokeWidth="1.7"
+                                                strokeLinecap="round"
+                                              />
+                                            </svg>
+                                          </button>
                                         </div>
                                       </div>
                                     ) : (
@@ -744,19 +806,32 @@ export default function CoachClientSessionPage({
                                       {formatShortDate(step.dueDate)}
                                     </div>
                                   ) : null}
-                                  {!isEditing && step.isMilestone ? <div className="mt-[3px] h-2 w-2 shrink-0 rounded-full bg-[#EF9F27]" /> : null}
 
                                   {!isEditing ? (
                                     <div className="flex shrink-0 items-center gap-1">
                                       <button
                                         type="button"
+                                        onClick={() => void handleToggleStepMilestone(step.id, !step.isMilestone)}
+                                        disabled={savingStepId === step.id}
+                                        className={`flex h-[27px] w-[27px] items-center justify-center rounded-[6px] border text-[13px] leading-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                          step.isMilestone
+                                            ? 'border-[#EF9F27] bg-[rgba(186,117,23,0.08)] text-[#BA7517]'
+                                            : 'border-[#d7d2c7] text-[#b4b2a9] hover:bg-[#f5f4f0]'
+                                        }`}
+                                        aria-label={step.isMilestone ? `Убрать веху у шага ${step.text}` : `Сделать шаг вехой ${step.text}`}
+                                        title={step.isMilestone ? 'Убрать веху' : 'Отметить как веху'}
+                                      >
+                                        ★
+                                      </button>
+                                      <button
+                                        type="button"
                                         onClick={() => handleStartStepEdit(step)}
                                         disabled={savingStepId === step.id}
-                                        className="rounded-[6px] border border-[#d7d2c7] px-2 py-1 text-[10px] text-[#73726c] disabled:cursor-not-allowed disabled:opacity-60"
+                                        className="flex h-[27px] w-[27px] items-center justify-center rounded-[6px] border border-[#d7d2c7] text-[#73726c] disabled:cursor-not-allowed disabled:opacity-60"
                                         aria-label={`Редактировать шаг ${step.text}`}
                                         title="Редактировать шаг"
                                       >
-                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                           <path
                                             d="M4 20h4l10-10-4-4L4 16v4Z"
                                             stroke="currentColor"
@@ -770,43 +845,6 @@ export default function CoachClientSessionPage({
                                             strokeWidth="1.7"
                                             strokeLinecap="round"
                                             strokeLinejoin="round"
-                                          />
-                                        </svg>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleDeleteStep(step.id)}
-                                        disabled={savingStepId === step.id}
-                                        className="rounded-[6px] border border-[#ead3d3] px-2 py-1 text-[#9b4a4a] disabled:cursor-not-allowed disabled:opacity-60"
-                                        aria-label={`Удалить шаг ${step.text}`}
-                                        title="Удалить шаг"
-                                      >
-                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                          <path
-                                            d="M4 7h16"
-                                            stroke="currentColor"
-                                            strokeWidth="1.7"
-                                            strokeLinecap="round"
-                                          />
-                                          <path
-                                            d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"
-                                            stroke="currentColor"
-                                            strokeWidth="1.7"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                          />
-                                          <path
-                                            d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9L17 7"
-                                            stroke="currentColor"
-                                            strokeWidth="1.7"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                          />
-                                          <path
-                                            d="M10 11v5M14 11v5"
-                                            stroke="currentColor"
-                                            strokeWidth="1.7"
-                                            strokeLinecap="round"
                                           />
                                         </svg>
                                       </button>

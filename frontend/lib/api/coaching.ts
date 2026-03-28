@@ -195,7 +195,7 @@ export const coachingApi = {
   updateCoachGoalStep: async (
     goalId: string,
     stepId: string,
-    payload: { done?: boolean; text?: string; dueDate?: string | null },
+    payload: { done?: boolean; text?: string; dueDate?: string | null; isMilestone?: boolean },
   ): Promise<{ id: string; steps: CoachGoalStep[] }> => {
     const response = await apiFetch<{ id: string; steps: CoachGoalStep[] }>(`/goals/${goalId}/steps/${stepId}/`, {
       method: 'PATCH',

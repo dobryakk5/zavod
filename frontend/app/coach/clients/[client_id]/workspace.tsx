@@ -106,11 +106,22 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
     ));
   }, []);
 
+  const handleGoalsChange = useCallback((goals: CoachGoalTreeNode[]) => {
+    setSideData((prev) => (
+      prev.goals === goals
+        ? prev
+        : {
+            ...prev,
+            goals,
+          }
+    ));
+  }, []);
+
   if (loading) {
     return <WorkspaceSkeleton />;
   }
 
-  const { client, competencies, goals, milestones, sessions, tasks } = sideData;
+  const { client, competencies, goals, milestones, sessions } = sideData;
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f5f4f0]">
@@ -157,17 +168,17 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
           <OverviewTab
             client={client}
             competencies={competencies}
+            goals={goals}
             milestones={milestones}
             sessions={sessions}
-            tasks={tasks}
-            onTaskComplete={async (taskId) => {
-              await coachingApiExt.completeCoachTask(taskId);
+            onStepComplete={async (goalId, stepId) => {
+              const response = await coachingApi.updateCoachGoalStep(goalId, stepId, { done: true });
               setSideData((prev) => ({
                 ...prev,
-                tasks: prev.tasks.map((task) => (
-                  task.id === taskId
-                    ? { ...task, status: 'done', doneAt: new Date().toISOString() }
-                    : task
+                goals: prev.goals.map((goal) => (
+                  goal.id === goalId
+                    ? { ...goal, steps: response.steps }
+                    : goal
                 )),
               }));
             }}
@@ -179,6 +190,7 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
             clientId={clientId}
             onSessionsChange={handleSessionsChange}
             onMilestonesChange={handleMilestonesChange}
+            onGoalsChange={handleGoalsChange}
           />
         ) : null}
 
@@ -222,28 +234,42 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
 function OverviewTab({
   client,
   competencies,
+  goals,
   milestones,
   sessions,
-  tasks,
-  onTaskComplete,
+  onStepComplete,
 }: {
   client: CoachingClient | null;
   competencies: CoachingCompetency[];
+  goals: CoachGoalTreeNode[];
   milestones: CoachMilestone[];
   sessions: CoachSession[];
-  tasks: CoachTask[];
-  onTaskComplete: (taskId: string) => Promise<void>;
+  onStepComplete: (goalId: string, stepId: string) => Promise<void>;
 }) {
   const [completing, setCompleting] = useState<string | null>(null);
 
+  const allSteps = goals.flatMap((goal) => (
+    goal.steps.map((step) => ({
+      ...step,
+      goalId: goal.id,
+      goalTitle: step.goalTitle || goal.title,
+    }))
+  ));
+  const openSteps = allSteps
+    .filter((step) => !step.done)
+    .sort((left, right) => {
+      const leftDue = left.dueDate || '9999-12-31';
+      const rightDue = right.dueDate || '9999-12-31';
+      return leftDue.localeCompare(rightDue) || (left.goalTitle || '').localeCompare(right.goalTitle || '');
+    });
+  const doneCount = allSteps.filter((step) => step.done).length;
   const avgProgress = client?.avgProgress ?? 0;
-  const doneCount = tasks.filter((task) => task.status === 'done').length;
   const latestSession = sessions.find((session) => session.status !== 'draft') ?? null;
 
-  async function handleComplete(taskId: string) {
-    setCompleting(taskId);
+  async function handleComplete(goalId: string, stepId: string) {
+    setCompleting(stepId);
     try {
-      await onTaskComplete(taskId);
+      await onStepComplete(goalId, stepId);
     } finally {
       setCompleting(null);
     }
@@ -253,7 +279,7 @@ function OverviewTab({
     <div className="mx-auto max-w-[1200px] space-y-5 p-5">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatCard value={`${avgProgress}%`} label="средний прогресс" />
-        <StatCard value={`${doneCount} / ${tasks.length}`} label="заданий на неделе" />
+        <StatCard value={`${doneCount} / ${allSteps.length}`} label="шагов выполнено" />
         <StatCard value={milestones.length} label="вехи" accent />
         <StatCard
           value={client?.nextSession ? formatShortDate(client.nextSession) : '—'}
@@ -280,15 +306,7 @@ function OverviewTab({
                         {competency.score}%
                       </span>
                     </div>
-                    <div className="h-[3px] overflow-hidden rounded-full bg-[#f1efe8]">
-                      <div
-                        className="h-full rounded-full"
-                        style={{
-                          width: `${competency.score}%`,
-                          background: competency.color || '#1D9E75',
-                        }}
-                      />
-                    </div>
+                    <CompetencyProgressBar competency={competency} />
                   </div>
               ))}
               </div>
@@ -299,53 +317,31 @@ function OverviewTab({
 
         <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4 xl:col-span-2">
           <SectionTitle>Задания на неделе</SectionTitle>
-          {tasks.length === 0 ? (
+          {openSteps.length === 0 ? (
             <Empty>Заданий пока нет</Empty>
           ) : (
             <div className="space-y-0.5">
-              {tasks.map((task) => {
-                const done = task.status === 'done';
-
+              {openSteps.map((step) => {
                 return (
                   <button
-                    key={task.id}
+                    key={step.id}
                     type="button"
-                    disabled={done || completing === task.id}
-                    onClick={() => void handleComplete(task.id)}
+                    disabled={completing === step.id}
+                    onClick={() => step.goalId ? void handleComplete(step.goalId, step.id) : undefined}
                     className="flex w-full items-start gap-2 border-b border-[#f1efe8] py-2 text-left last:border-0 disabled:cursor-default"
                   >
                     <div
-                      className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border transition-colors ${
-                        done
-                          ? 'border-[#1D9E75] bg-[#1D9E75]'
-                          : 'border-[#d3d1c7] hover:border-[#b4b2a9]'
-                      }`}
+                      className="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border border-[#d3d1c7] transition-colors hover:border-[#b4b2a9]"
                     >
-                      {done ? (
-                        <svg width="7" height="7" viewBox="0 0 10 10" aria-hidden="true">
-                          <path
-                            d="M2 5l2.5 2.5L8 3"
-                            stroke="white"
-                            strokeWidth="1.5"
-                            fill="none"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                      ) : null}
+                      {completing === step.id ? <span className="text-[9px] text-[#73726c]">…</span> : null}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p
-                        className={`truncate text-[11px] ${
-                          done ? 'text-[#73726c] line-through' : 'text-[#1a1a18]'
-                        }`}
-                      >
-                        {task.text}
-                      </p>
-                      <p className="text-[10px] text-[#73726c]">{task.goalTitle}</p>
+                      <p className="truncate text-[11px] text-[#1a1a18]">{step.text}</p>
+                      <p className="text-[10px] text-[#73726c]">{step.goalTitle}</p>
                     </div>
-                    {!done && task.dueDate ? (
+                    {step.dueDate ? (
                       <span className="mt-0.5 shrink-0 rounded-full bg-[rgba(186,117,23,0.1)] px-1.5 py-0.5 text-[10px] text-[#633806]">
-                        {formatShortDate(task.dueDate)}
+                        {formatShortDate(step.dueDate)}
                       </span>
                     ) : null}
                   </button>
@@ -389,6 +385,48 @@ function OverviewTab({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function CompetencyProgressBar({ competency }: { competency: CoachingCompetency }) {
+  const color = competency.color || '#1D9E75';
+  const startScore = clampPercent(competency.startScore);
+  const currentScore = clampPercent(competency.score);
+  const solidWidth = Math.min(startScore, currentScore);
+  const progressWidth = Math.max(currentScore - solidWidth, 0);
+  const hasSolidPart = solidWidth > 0;
+
+  return (
+    <div className="relative h-[6px] overflow-hidden rounded-full bg-[#f1efe8]">
+      {solidWidth > 0 ? (
+        <div
+          className="absolute inset-y-0 left-0 rounded-full"
+          style={{
+            width: `${solidWidth}%`,
+            background: color,
+          }}
+        />
+      ) : null}
+      {progressWidth > 0 ? (
+        <div
+          className="absolute inset-y-0 bg-white"
+          style={{
+            left: hasSolidPart ? `calc(${solidWidth}% - 2px)` : `${solidWidth}%`,
+            width: hasSolidPart ? `calc(${progressWidth}% + 2px)` : `${progressWidth}%`,
+            borderTop: `1px solid ${color}`,
+            borderRight: `1px solid ${color}`,
+            borderBottom: `1px solid ${color}`,
+          }}
+        >
+          {hasSolidPart ? (
+            <div
+              className="absolute inset-y-0 left-0 w-px"
+              style={{ background: color }}
+            />
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1275,6 +1313,10 @@ function rebalanceGoalCompetencies(competencies: CoachingCompetency[]) {
     competencyName: competency.name,
     weight,
   }));
+}
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 }
 
 function formatDate(iso: string) {
