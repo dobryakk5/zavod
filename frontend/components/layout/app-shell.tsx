@@ -151,7 +151,9 @@ function formatProviderName(provider?: string | null) {
   return provider ? provider : 'Неизвестный сервис';
 }
 
-function formatAccountHandle(account?: LoggedUserModalData['accounts'][number]) {
+type LinkedSocialAccount = NonNullable<LoggedUserModalData['accounts']>[number];
+
+function formatAccountHandle(account?: LinkedSocialAccount) {
   const username = account?.extra_data?.username?.trim();
   if (username) {
     return `@${username.replace(/^@+/, '')}`;
