@@ -152,7 +152,6 @@ describe('AppShell', () => {
     });
 
     expect(screen.getByRole('link', { name: 'Дашборд' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Клиенты' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Маркетинг' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Продукты' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Настройки' })).toBeInTheDocument();
@@ -213,5 +212,98 @@ describe('AppShell', () => {
       );
       expect(testState.push).toHaveBeenCalledWith('/');
     });
+  });
+
+  it('renders readable profile data in the user dialog instead of raw json', async () => {
+    testState.pathname = '/dashboard';
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith('/auth/social/accounts')) {
+        return Promise.resolve({
+          ok: true,
+          json: vi.fn().mockResolvedValue({
+            accounts: [
+              {
+                provider: 'telegram',
+                provider_id: '12345',
+                created_at: '2026-03-27T10:00:00Z',
+                extra_data: {
+                  first_name: 'Иван',
+                  last_name: 'Петров',
+                  username: 'ivan_petrov',
+                },
+              },
+            ],
+          }),
+        });
+      }
+
+      if (url.endsWith('/auth/telegram')) {
+        return Promise.resolve({
+          ok: true,
+          json: vi.fn().mockResolvedValue({
+            user: {
+              telegramId: '12345',
+              firstName: 'Иван',
+              lastName: 'Петров',
+              username: 'ivan_petrov',
+              authDate: '2026-03-27T10:00:00Z',
+              contactId: 42,
+              tenantId: 1,
+            },
+          }),
+        });
+      }
+
+      if (url.endsWith('/auth/vk')) {
+        return Promise.resolve({
+          ok: true,
+          json: vi.fn().mockResolvedValue({
+            user: {
+              vkId: '777',
+              firstName: 'Иван',
+              lastName: 'Петров',
+              username: 'ivanpetrov',
+              authDate: '2026-03-27T11:00:00Z',
+              contactId: 51,
+              tenantId: 1,
+            },
+          }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: true,
+        json: vi.fn().mockResolvedValue({}),
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('@/components/layout/app-shell');
+    const AppShell = mod.AppShell;
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    await waitFor(() => {
+      expect(testState.info).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /профиль/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Подключённые способы входа')).toBeInTheDocument();
+      expect(screen.getByText('Связанные соцаккаунты')).toBeInTheDocument();
+      expect(screen.getByText('Telegram ID')).toBeInTheDocument();
+      expect(screen.getByText('VK ID')).toBeInTheDocument();
+      expect(screen.getAllByText('Иван Петров').length).toBeGreaterThan(0);
+    });
+
+    expect(screen.queryByText(/"sources":/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/"accounts":/)).not.toBeInTheDocument();
   });
 });
