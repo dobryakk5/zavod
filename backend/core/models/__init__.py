@@ -28,6 +28,7 @@ from .integrations import VkIntegration, SocialAccount, Connection, UserSocialAc
 
 # --- Messaging / Inbox ---
 from .inbox import InboxEmailMessage, InboxReplyMessage
+from .email_auth_token import EmailAuthToken
 
 # --- Content ---
 from .story import Topic, TrendItem, Story
@@ -163,6 +164,7 @@ __all__ = [
     "UserSocialAccount",
     "InboxEmailMessage",
     "InboxReplyMessage",
+    "EmailAuthToken",
     # Story / Topics
     "Topic",
     "TrendItem",

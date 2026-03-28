@@ -42,6 +42,8 @@ from .views import (
     GoogleCompetitorsMarkView,
     GoogleCompetitorsCachedView,
     TelegramAuthView,
+    EmailMagicLinkSendView,
+    EmailMagicLinkVerifyView,
     VkAuthUrlView,
     VkAuthView,
     VkMessageCallbackView,
@@ -238,6 +240,8 @@ urlpatterns = [
 
     # Authentication endpoints
     path('auth/telegram', TelegramAuthView.as_view(), name='telegram-auth'),
+    path('auth/email/send-magic-link', EmailMagicLinkSendView.as_view(), name='email-magic-link-send'),
+    path('auth/email/verify-magic-link', EmailMagicLinkVerifyView.as_view(), name='email-magic-link-verify'),
     path('auth/vk', VkAuthView.as_view(), name='vk-auth'),
     path('auth/vk/url', VkAuthUrlView.as_view(), name='vk-auth-url'),
     path('auth/vk/messages/callback', VkMessageCallbackView.as_view(), name='vk-messages-callback'),

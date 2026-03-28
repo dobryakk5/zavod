@@ -4,6 +4,7 @@ import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { TelegramAuth } from '@/components/auth/TelegramAuth';
 import { VKAuth } from '@/components/auth/VKAuth';
+import { EmailAuth } from '@/components/auth/EmailAuth';
 import { DEFAULT_AUTH_REDIRECT } from '@/lib/routes';
 
 export default function LoginPage() {
@@ -28,6 +29,7 @@ function LoginPageContent() {
   const searchParams = useSearchParams();
   const [telegramOpen, setTelegramOpen] = useState(false);
   const [vkOpen, setVkOpen] = useState(false);
+  const [emailOpen, setEmailOpen] = useState(false);
   const nextParam = (searchParams.get('next') || '').trim();
   const redirectTo = nextParam.startsWith('/') ? nextParam : DEFAULT_AUTH_REDIRECT;
   const tenantIdParam = Number(searchParams.get('tenant_id') || 0);
@@ -84,6 +86,28 @@ function LoginPageContent() {
               <path d="M9 18l6-6-6-6" />
             </svg>
           </button>
+
+          {!isContactLoginMode && (
+            <button
+              type="button"
+              onClick={() => setEmailOpen(true)}
+              className="flex w-full items-center gap-4 rounded-xl border bg-background px-4 py-3 text-left transition hover:bg-muted/50"
+            >
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                  <polyline points="22,6 12,13 2,6" />
+                </svg>
+              </span>
+              <span className="flex-1">
+                <span className="block text-sm font-medium">Войти по email</span>
+                <span className="block text-xs text-muted-foreground">Ссылка для входа придёт на почту</span>
+              </span>
+              <svg className="h-4 w-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </button>
+          )}
         </div>
 
         <p className="pt-2 text-xs text-muted-foreground">
@@ -106,6 +130,11 @@ function LoginPageContent() {
         onClose={() => setVkOpen(false)}
         redirectTo={redirectTo}
         tenantId={contactTenantId}
+      />
+      <EmailAuth
+        open={emailOpen}
+        onClose={() => setEmailOpen(false)}
+        redirectTo={redirectTo}
       />
     </div>
   );

@@ -41,6 +41,7 @@ vi.mock('@/lib/api/crm', () => ({
 describe('DashboardPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-03-28T12:00:00.000Z').getTime());
     testState.getCoachStats.mockResolvedValue({
       activeClients: 1,
       completedTasks: 2,
@@ -69,6 +70,7 @@ describe('DashboardPage', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     cleanup();
   });
 
@@ -83,5 +85,43 @@ describe('DashboardPage', () => {
     });
 
     expect(screen.getByRole('link', { name: 'Добавить клиента' })).toHaveAttribute('href', '/clients/new');
+  });
+
+  it('shows recent new clients summary for clients created in the last 30 days', async () => {
+    const mod = await import('@/app/dashboard/page');
+    const DashboardPage = mod.default;
+
+    render(<DashboardPage />);
+
+    expect(await screen.findByText('+1 новый клиент за 30 дней')).toBeInTheDocument();
+  });
+
+  it('hides new clients summary when there are no recent clients', async () => {
+    testState.getCoachClients.mockResolvedValue([
+      {
+        id: '46',
+        name: 'Анна Иванова',
+        initials: 'АИ',
+        focus: 'Уверенность',
+        intention: '',
+        sessionsCount: 2,
+        avgProgress: 30,
+        nextSession: null,
+        clientStatus: null,
+        coachId: '1',
+        createdAt: '2026-02-01T10:00:00.000Z',
+      },
+    ]);
+
+    const mod = await import('@/app/dashboard/page');
+    const DashboardPage = mod.default;
+
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(testState.getCoachClients).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByText(/нов(ый|ых) клиент/)).not.toBeInTheDocument();
   });
 });

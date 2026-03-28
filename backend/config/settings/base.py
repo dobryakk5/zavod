@@ -360,6 +360,7 @@ EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
 EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False") == "True"
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "support@fibonatty.ru")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 TEAM_MAX_COLLABORATORS = int(os.getenv("TEAM_MAX_COLLABORATORS", "20"))
 
 LOGGING = {

@@ -42,6 +42,21 @@ function formatDealStageLabel(stage: Deal['stage']) {
   return 'Новый клиент';
 }
 
+function formatNewClientsSummary(count: number) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+
+  if (mod10 === 1 && mod100 !== 11) {
+    return `+${count} новый клиент за 30 дней`;
+  }
+
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `+${count} новых клиента за 30 дней`;
+  }
+
+  return `+${count} новых клиентов за 30 дней`;
+}
+
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData>(EMPTY_DATA);
   const [selectedCoachClientId, setSelectedCoachClientId] = useState<string | null>(null);
@@ -136,6 +151,15 @@ export default function DashboardPage() {
   const visibleClients = useMemo(() => data.coachClients.slice(0, 4), [data.coachClients]);
   const selectedCoachClient = visibleClients.find((client) => client.id === selectedCoachClientId) ?? visibleClients[0] ?? null;
   const progressItems = useMemo(() => getProgressItems(data.coachCompetencies), [data.coachCompetencies]);
+  const newClientsSummary = useMemo(() => {
+    const threshold = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const count = data.coachClients.filter((client) => {
+      const createdAt = new Date(client.createdAt).getTime();
+      return Number.isFinite(createdAt) && createdAt >= threshold;
+    }).length;
+
+    return count > 0 ? formatNewClientsSummary(count) : undefined;
+  }, [data.coachClients]);
   const dashboardTasks = useMemo(
     () => getDashboardTasks(data.contacts, data.deals, data.events),
     [data.contacts, data.deals, data.events],
@@ -154,8 +178,7 @@ export default function DashboardPage() {
       ) : null}
 
       <div className="mx-auto flex max-w-6xl flex-col gap-[14px]">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h1 className="text-[16px] font-medium leading-none">Добрый день, Анна 👋</h1>
+        <div className="flex justify-end">
           <span className="inline-flex w-fit rounded-full bg-[#eaf3de] px-[7px] py-[2px] text-[10px] font-medium leading-none text-[#3b6d11]">
             {data.coachStats?.sessionsToday ?? 0} {pluralizeSessions(data.coachStats?.sessionsToday ?? 0)} сегодня
           </span>
@@ -165,7 +188,7 @@ export default function DashboardPage() {
           <StatCard
             label="Активных клиентов"
             value={String(data.coachStats?.activeClients ?? visibleClients.length)}
-            sub="+2 в этом месяце"
+            sub={newClientsSummary}
           />
           <StatCard
             label="Выполнено заданий"
@@ -248,12 +271,12 @@ export default function DashboardPage() {
   );
 }
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className={`${PANEL_CLASS} min-h-[80px] px-[14px] py-3`}>
       <div className="mb-1 text-[11px] text-[#73726c]">{label}</div>
       <div className="text-[22px] font-medium leading-none text-[#1a1a18]">{value}</div>
-      <div className="mt-1 text-[11px] text-[#73726c]">{sub}</div>
+      {sub ? <div className="mt-1 text-[11px] text-[#73726c]">{sub}</div> : null}
     </div>
   );
 }
