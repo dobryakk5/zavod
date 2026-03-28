@@ -134,7 +134,7 @@ function VkCallbackContent() {
         if (response.ok && success) {
           const successRoute = resolveSuccessRoute();
           clearState();
-          router.replace(successRoute);
+          window.location.replace(successRoute);
           return;
         }
         setStatusText(payload?.error || text || 'Ошибка авторизации');

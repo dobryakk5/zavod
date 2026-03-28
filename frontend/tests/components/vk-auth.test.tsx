@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const testState = vi.hoisted(() => ({
   push: vi.fn(),
   router: { push: vi.fn() },
+  replaceLocation: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -40,6 +41,10 @@ describe('VKAuth', () => {
     vi.clearAllMocks();
     testState.router.push = testState.push;
     vi.stubGlobal('fetch', vi.fn());
+    Object.defineProperty(window, 'location', {
+      value: { replace: testState.replaceLocation, href: '', origin: 'https://frontend.example.com' },
+      writable: true,
+    });
     process.env.NEXT_PUBLIC_API_URL = 'https://api.example.com';
     process.env.NEXT_PUBLIC_VK_AUTH_REDIRECT_URI = 'https://frontend.example.com/auth/vk/callback';
     sessionStorage.clear();
@@ -176,7 +181,7 @@ describe('VKAuth', () => {
     });
 
     expect(onClose).not.toHaveBeenCalled();
-    expect(testState.push).not.toHaveBeenCalled();
+    expect(testState.replaceLocation).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Войти через ВКонтакте' })).toBeInTheDocument();
     expect(screen.getByText(/После авторизации произойдет вход в кабинет/i)).toBeInTheDocument();
   });
@@ -207,11 +212,12 @@ describe('VKAuth', () => {
     const logoutButton = await screen.findByRole('button', { name: 'Выйти' });
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/dashboard');
+      expect(testState.replaceLocation).toHaveBeenCalledWith('/dashboard');
     });
 
     onClose.mockClear();
     testState.push.mockClear();
+    testState.replaceLocation.mockClear();
 
     fireEvent.click(logoutButton);
 
@@ -327,7 +333,7 @@ describe('VKAuth', () => {
 
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/vk-dashboard');
+      expect(testState.replaceLocation).toHaveBeenCalledWith('/vk-dashboard');
     });
 
     expect(popup.close).toHaveBeenCalledTimes(1);

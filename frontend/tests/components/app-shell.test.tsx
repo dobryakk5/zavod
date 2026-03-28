@@ -179,6 +179,23 @@ describe('AppShell', () => {
     expect(testState.info).not.toHaveBeenCalled();
   });
 
+  it('bypasses shell for email verify route', async () => {
+    testState.pathname = '/auth/email/verify';
+
+    const mod = await import('@/components/layout/app-shell');
+    const AppShell = mod.AppShell;
+
+    render(
+      <AppShell>
+        <div>verify content</div>
+      </AppShell>
+    );
+
+    expect(screen.getByText('verify content')).toBeInTheDocument();
+    expect(screen.queryByText('Маркетинг')).not.toBeInTheDocument();
+    expect(testState.info).not.toHaveBeenCalled();
+  });
+
   it('logs out through the current auth endpoint', async () => {
     testState.pathname = '/dashboard';
     const fetchMock = vi.fn().mockResolvedValue({

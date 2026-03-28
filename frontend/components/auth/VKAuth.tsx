@@ -85,6 +85,9 @@ export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
     return true;
   }, []);
   const resolvedRedirectTo = redirectTo && redirectTo.startsWith('/') ? redirectTo : DEFAULT_AUTH_REDIRECT;
+  const redirectAfterAuth = useCallback((path: string) => {
+    window.location.replace(path);
+  }, []);
 
   const exchangeCode = useCallback(
     async (code: string, state: string, deviceId: string) => {
@@ -125,7 +128,7 @@ export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
           sessionStorage.removeItem('vk_auth_mode');
           sessionStorage.removeItem(VK_AUTH_REDIRECT_KEY);
           onClose();
-          router.push(resolvedRedirectTo);
+          redirectAfterAuth(resolvedRedirectTo);
         } else {
           setStatus({ type: 'error', text: resolveErrorMessage(payload, text, 'Ошибка авторизации VK') });
         }
@@ -135,7 +138,7 @@ export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
         setLoading(false);
       }
     },
-    [ensureApiConfigured, onClose, resolvedRedirectTo, router, tenantId]
+    [ensureApiConfigured, onClose, redirectAfterAuth, resolvedRedirectTo, tenantId]
   );
 
   const checkAuth = useCallback(async () => {
@@ -161,18 +164,18 @@ export function VKAuth({ open, onClose, redirectTo, tenantId }: VKAuthProps) {
           if (isBoundToRequestedTenant) {
             setUser(payload.user);
             onClose();
-            router.push(resolvedRedirectTo);
+            redirectAfterAuth(resolvedRedirectTo);
           }
           return;
         }
         setUser(payload.user);
         onClose();
-        router.push(resolvedRedirectTo);
+        redirectAfterAuth(resolvedRedirectTo);
       }
     } catch {
       // no-op
     }
-  }, [ensureApiConfigured, onClose, resolvedRedirectTo, router, tenantId]);
+  }, [ensureApiConfigured, onClose, redirectAfterAuth, resolvedRedirectTo, tenantId]);
 
   useEffect(() => {
     if (open) {

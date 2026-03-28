@@ -51,7 +51,8 @@ function EmailVerifyContent() {
           setStatusText('Вход выполнен. Перенаправляем...');
           const redirectTo = (sessionStorage.getItem(EMAIL_AUTH_REDIRECT_KEY) || '').trim();
           sessionStorage.removeItem(EMAIL_AUTH_REDIRECT_KEY);
-          router.replace(redirectTo.startsWith('/') ? redirectTo : DEFAULT_AUTH_REDIRECT);
+          const nextUrl = redirectTo.startsWith('/') ? redirectTo : DEFAULT_AUTH_REDIRECT;
+          window.location.replace(nextUrl);
           return;
         }
 

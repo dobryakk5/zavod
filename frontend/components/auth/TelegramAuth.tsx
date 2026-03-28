@@ -72,6 +72,9 @@ export function TelegramAuth({ open, onClose, redirectTo, tenantId }: TelegramAu
   }, []);
 
   const resolvedRedirectTo = redirectTo && redirectTo.startsWith('/') ? redirectTo : DEFAULT_AUTH_REDIRECT;
+  const redirectAfterAuth = useCallback((path: string) => {
+    window.location.replace(path);
+  }, []);
 
   const checkAuth = useCallback(async () => {
     if (!ensureApiConfigured()) {
@@ -96,19 +99,19 @@ export function TelegramAuth({ open, onClose, redirectTo, tenantId }: TelegramAu
             if (isBoundToRequestedTenant) {
               setUser(payload.user);
               onClose();
-              router.push(resolvedRedirectTo);
+              redirectAfterAuth(resolvedRedirectTo);
             }
             return;
           }
           setUser(payload.user);
           onClose();
-          router.push(resolvedRedirectTo);
+          redirectAfterAuth(resolvedRedirectTo);
         }
       }
     } catch (error) {
       console.error('Error checking auth:', error);
     }
-  }, [ensureApiConfigured, onClose, resolvedRedirectTo, router, tenantId]);
+  }, [ensureApiConfigured, onClose, redirectAfterAuth, resolvedRedirectTo, tenantId]);
 
   useEffect(() => {
     if (open) {
@@ -147,7 +150,7 @@ export function TelegramAuth({ open, onClose, redirectTo, tenantId }: TelegramAu
         setUser(payload.user);
         setStatus({ type: 'success', text: 'Успешная авторизация!' });
         onClose();
-        router.push(resolvedRedirectTo);
+        redirectAfterAuth(resolvedRedirectTo);
       } else {
         setStatus({ type: 'error', text: resolveErrorMessage(payload, text, 'Ошибка авторизации') });
       }
@@ -204,7 +207,7 @@ export function TelegramAuth({ open, onClose, redirectTo, tenantId }: TelegramAu
         setUser(payload.user);
         setStatus({ type: 'success', text: 'Dev режим активирован!' });
         onClose();
-        router.push(resolvedRedirectTo);
+        redirectAfterAuth(resolvedRedirectTo);
       } else {
         setStatus({ type: 'error', text: resolveErrorMessage(payload, text, 'Ошибка dev авторизации') });
       }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const testState = vi.hoisted(() => ({
   push: vi.fn(),
   router: { push: vi.fn() },
+  replaceLocation: vi.fn(),
   widgetPayload: {
     id: 777,
     first_name: 'Widget',
@@ -63,6 +64,10 @@ describe('TelegramAuth', () => {
     vi.clearAllMocks();
     testState.router.push = testState.push;
     vi.stubGlobal('fetch', vi.fn());
+    Object.defineProperty(window, 'location', {
+      value: { replace: testState.replaceLocation },
+      writable: true,
+    });
     process.env.NEXT_PUBLIC_API_URL = 'https://api.example.com';
     process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME = 'solarlab_bot';
     delete process.env.NEXT_PUBLIC_DEV_MODE;
@@ -123,7 +128,7 @@ describe('TelegramAuth', () => {
 
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/dashboard');
+      expect(testState.replaceLocation).toHaveBeenCalledWith('/dashboard');
     });
 
     expect(fetchMock).toHaveBeenCalledWith('https://api.example.com/auth/telegram', {
@@ -160,7 +165,7 @@ describe('TelegramAuth', () => {
 
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/dashboard');
+      expect(testState.replaceLocation).toHaveBeenCalledWith('/dashboard');
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -200,7 +205,7 @@ describe('TelegramAuth', () => {
 
     expect(await screen.findByText('Неверная подпись Telegram')).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
-    expect(testState.push).not.toHaveBeenCalled();
+    expect(testState.replaceLocation).not.toHaveBeenCalled();
   });
 
   it('does not redirect when authenticated user is bound to another tenant', async () => {
@@ -230,7 +235,7 @@ describe('TelegramAuth', () => {
     });
 
     expect(onClose).not.toHaveBeenCalled();
-    expect(testState.push).not.toHaveBeenCalled();
+    expect(testState.replaceLocation).not.toHaveBeenCalled();
     expect(screen.getByTestId('mock-telegram-auth-button')).toBeInTheDocument();
     expect(screen.getByText(/После авторизации произойдет вход в кабинет/i)).toBeInTheDocument();
   });
@@ -261,11 +266,12 @@ describe('TelegramAuth', () => {
     const logoutButton = await screen.findByRole('button', { name: 'Выйти' });
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/dashboard');
+      expect(testState.replaceLocation).toHaveBeenCalledWith('/dashboard');
     });
 
     onClose.mockClear();
     testState.push.mockClear();
+    testState.replaceLocation.mockClear();
 
     fireEvent.click(logoutButton);
 
@@ -311,7 +317,7 @@ describe('TelegramAuth', () => {
 
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(testState.push).toHaveBeenCalledWith('/dashboard');
+      expect(testState.replaceLocation).toHaveBeenCalledWith('/dashboard');
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(

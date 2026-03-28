@@ -51,6 +51,7 @@ export function isAppShellPublicRoute(pathname: string): boolean {
     pathname === '/'
     || pathname.startsWith('/features')
     || pathname.startsWith('/login')
+    || pathname.startsWith('/auth/')
     || pathname.startsWith('/kb/share')
     || pathname.startsWith('/quiz/')
     || (pathname.startsWith('/c/') && !isClientPageEditorRoute)
