@@ -22,6 +22,10 @@ def normalize_email_address(value: str) -> str:
 
 
 def build_frontend_url(request) -> str:
+    frontend_url = str(getattr(settings, "PUBLIC_FRONTEND_BASE_URL", "") or "").strip().rstrip("/")
+    if frontend_url:
+        return frontend_url
+
     frontend_url = str(getattr(settings, "FRONTEND_URL", "") or "").strip().rstrip("/")
     if frontend_url:
         return frontend_url
