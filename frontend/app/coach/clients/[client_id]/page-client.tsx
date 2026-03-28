@@ -14,6 +14,8 @@ import {
 
 type CoachClientSessionPageProps = {
   clientId: number;
+  onSessionsChange?: (sessions: CoachSession[]) => void;
+  onMilestonesChange?: (milestones: CoachMilestone[]) => void;
 };
 
 type WorkspaceData = {
@@ -40,8 +42,17 @@ const HORIZONS = [
   { key: 'month', label: 'Месяц' },
 ] as const;
 
-export default function CoachClientSessionPage({ clientId }: CoachClientSessionPageProps) {
+export default function CoachClientSessionPage({
+  clientId,
+  onSessionsChange,
+  onMilestonesChange,
+}: CoachClientSessionPageProps) {
   const newStepDueDateInputRef = useRef<HTMLInputElement | null>(null);
+  const lastSavedSessionRef = useRef<{ sessionId: string | null; notes: string; coachNotes: string }>({
+    sessionId: null,
+    notes: '',
+    coachNotes: '',
+  });
   const [data, setData] = useState<WorkspaceData>({
     client: null,
     competencies: [],
@@ -55,12 +66,19 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
   const [nextTask, setNextTask] = useState('');
   const [newStepText, setNewStepText] = useState('');
   const [newStepDueDate, setNewStepDueDate] = useState('');
+  const [quickGoalTitle, setQuickGoalTitle] = useState('');
+  const [addingQuickGoal, setAddingQuickGoal] = useState(false);
   const [milestoneText, setMilestoneText] = useState('');
   const [milestoneNote, setMilestoneNote] = useState('');
   const [milestoneOpen, setMilestoneOpen] = useState(false);
   const [draftProgress, setDraftProgress] = useState(0);
+  const [editingStepId, setEditingStepId] = useState<string | null>(null);
+  const [editingStepText, setEditingStepText] = useState('');
+  const [editingStepDueDate, setEditingStepDueDate] = useState('');
   const [loading, setLoading] = useState(true);
   const [savingSession, setSavingSession] = useState(false);
+  const [startingSession, setStartingSession] = useState(false);
+  const [finishingSession, setFinishingSession] = useState(false);
   const [savingMilestone, setSavingMilestone] = useState(false);
   const [savingProgress, setSavingProgress] = useState(false);
   const [savingStepId, setSavingStepId] = useState<string | null>(null);
@@ -90,7 +108,7 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
       const nextCompetencies = competenciesResult.status === 'fulfilled' ? competenciesResult.value : [];
       const nextGoals = goalsResult.status === 'fulfilled' ? goalsResult.value : [];
       const nextMilestones = milestonesResult.status === 'fulfilled' ? milestonesResult.value : [];
-      const nextSessions = sessionsResult.status === 'fulfilled' ? sessionsResult.value : [];
+      const nextSessions = sessionsResult.status === 'fulfilled' ? sortCoachSessions(sessionsResult.value) : [];
 
       setData({
         client: nextClient,
@@ -99,10 +117,6 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
         milestones: nextMilestones,
         sessions: nextSessions,
       });
-
-      const latestSession = nextSessions[0];
-      setSessionNotes(latestSession?.notes ?? '');
-      setNextTask(latestSession?.coachNotes ?? '');
 
       const firstGoal = nextGoals.find((goal) => goal.horizon === 'quarter') ?? nextGoals[0] ?? null;
       if (firstGoal) {
@@ -131,6 +145,18 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
       isActive = false;
     };
   }, [clientId]);
+
+  useEffect(() => {
+    if (!loading) {
+      onSessionsChange?.(data.sessions);
+    }
+  }, [data.sessions, loading, onSessionsChange]);
+
+  useEffect(() => {
+    if (!loading) {
+      onMilestonesChange?.(data.milestones);
+    }
+  }, [data.milestones, loading, onMilestonesChange]);
 
   const visibleGoals = useMemo(
     () => data.goals.filter((goal) => goal.horizon === selectedHorizon),
@@ -169,7 +195,27 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
     return () => window.clearTimeout(timeoutId);
   }, [actionMessage]);
 
+  const activeSession = useMemo(
+    () => data.sessions.find((session) => session.status === 'draft') ?? null,
+    [data.sessions],
+  );
+
+  const completedSessions = useMemo(
+    () => data.sessions.filter((session) => session.status !== 'draft'),
+    [data.sessions],
+  );
+
+  const lastCompletedSession = completedSessions[0] ?? null;
+
+  const nextSessionNumber = useMemo(() => {
+    if (data.sessions.length === 0) return 1;
+    return Math.max(...data.sessions.map((session) => session.number)) + 1;
+  }, [data.sessions]);
+
+  const currentSessionNumber = activeSession?.number ?? nextSessionNumber;
+
   useEffect(() => {
+    if (!activeSession) return undefined;
     if (!selectedGoal) return undefined;
     if (draftProgress === selectedGoal.progress) return undefined;
 
@@ -190,7 +236,7 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
     }, 450);
 
     return () => window.clearTimeout(timeoutId);
-  }, [draftProgress, selectedGoal]);
+  }, [activeSession, draftProgress, selectedGoal]);
 
   const timelineItems = useMemo(() => {
     if (!selectedGoal) return [];
@@ -228,12 +274,108 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
     );
   }, [data.milestones, data.sessions, selectedGoal]);
 
-  const draftSessionNumber = useMemo(() => {
-    if (data.sessions.length === 0) return 1;
-    return Math.max(...data.sessions.map((session) => session.number)) + 1;
-  }, [data.sessions]);
+  useEffect(() => {
+    if (!activeSession) {
+      setSessionNotes('');
+      setNextTask('');
+      lastSavedSessionRef.current = { sessionId: null, notes: '', coachNotes: '' };
+      return;
+    }
+
+    const notes = activeSession.notes ?? '';
+    const coachNotes = activeSession.coachNotes ?? '';
+    setSessionNotes(notes);
+    setNextTask(coachNotes);
+    lastSavedSessionRef.current = {
+      sessionId: activeSession.id,
+      notes,
+      coachNotes,
+    };
+  }, [activeSession?.id]);
+
+  useEffect(() => {
+    if (!activeSession) {
+      setMilestoneOpen(false);
+    }
+  }, [activeSession]);
+
+  useEffect(() => {
+    if (!selectedGoal) {
+      setEditingStepId(null);
+      setEditingStepText('');
+      setEditingStepDueDate('');
+      return;
+    }
+    if (editingStepId && !selectedGoal.steps.some((step) => step.id === editingStepId)) {
+      setEditingStepId(null);
+      setEditingStepText('');
+      setEditingStepDueDate('');
+    }
+  }, [editingStepId, selectedGoal]);
 
   const intentionText = data.client?.intention?.trim() || data.client?.focus || 'Намерение пока не заполнено';
+
+  const upsertSession = (session: CoachSession) => {
+    setData((current) => ({
+      ...current,
+      sessions: sortCoachSessions([
+        session,
+        ...current.sessions.filter((item) => item.id !== session.id),
+      ]),
+    }));
+  };
+
+  const persistActiveSession = async (options?: { status?: 'draft' | 'done'; force?: boolean }) => {
+    if (!activeSession) return null;
+
+    const payload = {
+      notes: sessionNotes,
+      coachNotes: nextTask,
+      ...(options?.status ? { status: options.status } : {}),
+    };
+    const lastSaved = lastSavedSessionRef.current;
+    const hasContentChanges = (
+      lastSaved.sessionId !== activeSession.id
+      || lastSaved.notes !== payload.notes
+      || lastSaved.coachNotes !== payload.coachNotes
+    );
+
+    if (!hasContentChanges && !options?.status && !options?.force) {
+      return activeSession;
+    }
+
+    setSavingSession(true);
+    try {
+      const updated = await coachingApi.updateCoachSession(activeSession.id, payload);
+      lastSavedSessionRef.current = {
+        sessionId: updated.id,
+        notes: updated.notes ?? '',
+        coachNotes: updated.coachNotes ?? '',
+      };
+      upsertSession(updated);
+      return updated;
+    } catch {
+      setActionMessage(options?.status === 'done' ? 'Не удалось завершить сессию.' : 'Не удалось сохранить заметки сессии.');
+      return null;
+    } finally {
+      setSavingSession(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!activeSession) return undefined;
+
+    const lastSaved = lastSavedSessionRef.current;
+    if (lastSaved.sessionId === activeSession.id && lastSaved.notes === sessionNotes && lastSaved.coachNotes === nextTask) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void persistActiveSession();
+    }, 1600);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [activeSession?.id, sessionNotes, nextTask]);
 
   const handleToggleStep = async (stepId: string, done: boolean) => {
     if (!selectedGoal) return;
@@ -277,30 +419,138 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
     }
   };
 
+  const handleStartStepEdit = (step: CoachGoalTreeNode['steps'][number]) => {
+    setEditingStepId(step.id);
+    setEditingStepText(step.text);
+    setEditingStepDueDate(step.dueDate ?? '');
+  };
+
+  const handleCancelStepEdit = () => {
+    setEditingStepId(null);
+    setEditingStepText('');
+    setEditingStepDueDate('');
+  };
+
+  const handleSaveStepEdit = async (stepId: string) => {
+    if (!selectedGoal) return;
+    const text = editingStepText.trim();
+    if (!text) {
+      setActionMessage('Введите текст шага.');
+      return;
+    }
+
+    setSavingStepId(stepId);
+    try {
+      const response = await coachingApi.updateCoachGoalStep(selectedGoal.id, stepId, {
+        text,
+        dueDate: editingStepDueDate || '',
+      });
+      setData((current) => ({
+        ...current,
+        goals: current.goals.map((goal) => (goal.id === selectedGoal.id ? { ...goal, steps: response.steps } : goal)),
+      }));
+      handleCancelStepEdit();
+      setActionMessage('Шаг обновлён.');
+    } catch {
+      setActionMessage('Не удалось обновить шаг.');
+    } finally {
+      setSavingStepId(null);
+    }
+  };
+
+  const handleDeleteStep = async (stepId: string) => {
+    if (!selectedGoal) return;
+
+    setSavingStepId(stepId);
+    try {
+      await coachingApi.deleteCoachGoalStep(selectedGoal.id, stepId);
+      setData((current) => ({
+        ...current,
+        goals: current.goals.map((goal) => (
+          goal.id === selectedGoal.id
+            ? { ...goal, steps: goal.steps.filter((step) => step.id !== stepId) }
+            : goal
+        )),
+      }));
+      if (editingStepId === stepId) {
+        handleCancelStepEdit();
+      }
+      setActionMessage('Шаг удалён.');
+    } catch {
+      setActionMessage('Не удалось удалить шаг.');
+    } finally {
+      setSavingStepId(null);
+    }
+  };
+
+  const handleAddQuickGoal = async () => {
+    const title = quickGoalTitle.trim();
+    if (!title) return;
+
+    setAddingQuickGoal(true);
+    try {
+      const nextGoals = await coachingApi.replaceCoachClientGoals(clientId, [
+        ...data.goals,
+        createMinimalGoal(title, selectedHorizon),
+      ]);
+      setData((current) => ({
+        ...current,
+        goals: nextGoals,
+      }));
+      const createdGoal = nextGoals.find((goal) => (
+        goal.title === title
+        && goal.horizon === selectedHorizon
+        && goal.steps.length === 0
+        && goal.progress === 0
+      ));
+      if (createdGoal) {
+        setSelectedGoalId(createdGoal.id);
+      }
+      setQuickGoalTitle('');
+      setActionMessage('Цель добавлена. Компетенции можно привязать позже в редакторе.');
+    } catch {
+      setActionMessage('Не удалось добавить цель.');
+    } finally {
+      setAddingQuickGoal(false);
+    }
+  };
+
   const handleOpenDueDatePicker = () => {
     newStepDueDateInputRef.current?.showPicker?.();
     newStepDueDateInputRef.current?.click();
   };
 
-  const handleSaveSession = async () => {
-    setSavingSession(true);
+  const handleStartSession = async () => {
+    setStartingSession(true);
     try {
       const session = await coachingApi.createCoachSession(clientId, {
         date: new Date().toISOString(),
-        notes: sessionNotes.trim(),
-        coachNotes: nextTask.trim(),
       });
-      setData((current) => ({ ...current, sessions: [session, ...current.sessions] }));
-      setActionMessage(`Сессия ${session.number} сохранена.`);
+      upsertSession(session);
+      setActionMessage(`Сессия ${session.number} начата.`);
     } catch {
-      setActionMessage('Не удалось сохранить сессию.');
+      setActionMessage('Не удалось начать сессию.');
     } finally {
-      setSavingSession(false);
+      setStartingSession(false);
+    }
+  };
+
+  const handleFinishSession = async () => {
+    if (!activeSession) return;
+
+    setFinishingSession(true);
+    try {
+      const session = await persistActiveSession({ status: 'done', force: true });
+      if (session) {
+        setActionMessage(`Сессия ${session.number} завершена.`);
+      }
+    } finally {
+      setFinishingSession(false);
     }
   };
 
   const handleSaveMilestone = async () => {
-    if (!selectedGoal || !milestoneText.trim()) return;
+    if (!selectedGoal || !activeSession || !milestoneText.trim()) return;
 
     setSavingMilestone(true);
     try {
@@ -313,9 +563,9 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
       setMilestoneText('');
       setMilestoneNote('');
       setMilestoneOpen(false);
-      setActionMessage('Milestone добавлен.');
+      setActionMessage('Веха добавлена.');
     } catch {
-      setActionMessage('Не удалось создать milestone.');
+      setActionMessage('Не удалось создать веху.');
     } finally {
       setSavingMilestone(false);
     }
@@ -340,7 +590,7 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
               </Link>
             </div>
             <div className="ml-auto rounded-full bg-[#e6f1fb] px-[7px] py-[2px] text-[10px] text-[#185fa5]">
-              Сессия {draftSessionNumber}
+              {activeSession ? `Сессия ${currentSessionNumber} · черновик` : `Следующая сессия ${currentSessionNumber}`}
             </div>
           </div>
 
@@ -403,46 +653,169 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
 
                       {isActive ? (
                         <div className="ml-6 mt-1 flex flex-col gap-1">
-                          {goal.steps.map((step) => (
-                            <button
-                              key={step.id}
-                              type="button"
-                              onClick={() => void handleToggleStep(step.id, !step.done)}
-                              disabled={savingStepId === step.id}
-                              className="flex items-center gap-2 rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[10px] py-[7px] text-left transition-colors hover:border-[#b4b2a9] disabled:cursor-wait"
-                            >
+                          {goal.steps.map((step) => {
+                            const isEditing = editingStepId === step.id;
+                            return (
                               <div
-                                className={`flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[0.5px] ${
-                                  step.done ? 'border-transparent bg-[#e1f5ee]' : 'border-[#d3d1c7]'
-                                }`}
+                                key={step.id}
+                                className="rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[10px] py-[7px]"
                               >
-                                {step.done ? (
-                                  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-                                    <path
-                                      d="M2 5l2.5 2.5L8 3"
-                                      stroke="#0f6e56"
-                                      strokeWidth="1.5"
-                                      fill="none"
-                                      strokeLinecap="round"
-                                    />
-                                  </svg>
-                                ) : null}
-                              </div>
-                              <div
-                                className={`flex-1 text-[11px] ${
-                                  step.done ? 'text-[#73726c] opacity-60 line-through' : 'text-[#73726c]'
-                                }`}
-                              >
-                                {step.text}
-                              </div>
-                              {step.dueDate && !step.done ? (
-                                <div className="shrink-0 rounded-full bg-[rgba(186,117,23,0.1)] px-[6px] py-[1px] text-[10px] text-[#633806]">
-                                  {formatShortDate(step.dueDate)}
+                                <div className="flex items-start gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleToggleStep(step.id, !step.done)}
+                                    disabled={savingStepId === step.id}
+                                    className="mt-[1px] flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[0.5px] border-[#d3d1c7] disabled:cursor-not-allowed disabled:opacity-70"
+                                  >
+                                    <div
+                                      className={`flex h-[14px] w-[14px] items-center justify-center rounded-[3px] ${
+                                        step.done ? 'border-transparent bg-[#e1f5ee]' : ''
+                                      }`}
+                                    >
+                                      {step.done ? (
+                                        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                                          <path
+                                            d="M2 5l2.5 2.5L8 3"
+                                            stroke="#0f6e56"
+                                            strokeWidth="1.5"
+                                            fill="none"
+                                            strokeLinecap="round"
+                                          />
+                                        </svg>
+                                      ) : null}
+                                    </div>
+                                  </button>
+
+                                  <div className="min-w-0 flex-1">
+                                    {isEditing ? (
+                                      <div className="space-y-2">
+                                        <input
+                                          value={editingStepText}
+                                          onChange={(event) => setEditingStepText(event.target.value)}
+                                          onKeyDown={(event) => {
+                                            if (event.key === 'Enter' && editingStepText.trim()) {
+                                              event.preventDefault();
+                                              void handleSaveStepEdit(step.id);
+                                            }
+                                            if (event.key === 'Escape') {
+                                              handleCancelStepEdit();
+                                            }
+                                          }}
+                                          className="w-full rounded-[6px] border border-[#d7d2c7] bg-white px-2.5 py-1.5 text-[11px] text-[#1a1a18] outline-none focus:border-[#185fa5]"
+                                        />
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <input
+                                            type="date"
+                                            value={editingStepDueDate}
+                                            onChange={(event) => setEditingStepDueDate(event.target.value)}
+                                            className="rounded-[6px] border border-[#d7d2c7] bg-white px-2.5 py-1.5 text-[11px] text-[#4f4b45] outline-none focus:border-[#185fa5]"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => void handleSaveStepEdit(step.id)}
+                                            disabled={savingStepId === step.id || !editingStepText.trim()}
+                                            className="rounded-[6px] bg-[#1D9E75] px-2.5 py-1.5 text-[10px] text-[#E1F5EE] disabled:cursor-not-allowed disabled:opacity-60"
+                                          >
+                                            Сохранить
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={handleCancelStepEdit}
+                                            disabled={savingStepId === step.id}
+                                            className="rounded-[6px] border border-[#d7d2c7] px-2.5 py-1.5 text-[10px] text-[#73726c] disabled:cursor-not-allowed disabled:opacity-60"
+                                          >
+                                            Отмена
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div
+                                        className={`text-[11px] ${
+                                          step.done ? 'text-[#73726c] opacity-60 line-through' : 'text-[#73726c]'
+                                        }`}
+                                      >
+                                        {step.text}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {!isEditing && step.dueDate && !step.done ? (
+                                    <div className="shrink-0 rounded-full bg-[rgba(186,117,23,0.1)] px-[6px] py-[1px] text-[10px] text-[#633806]">
+                                      {formatShortDate(step.dueDate)}
+                                    </div>
+                                  ) : null}
+                                  {!isEditing && step.isMilestone ? <div className="mt-[3px] h-2 w-2 shrink-0 rounded-full bg-[#EF9F27]" /> : null}
+
+                                  {!isEditing ? (
+                                    <div className="flex shrink-0 items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleStartStepEdit(step)}
+                                        disabled={savingStepId === step.id}
+                                        className="rounded-[6px] border border-[#d7d2c7] px-2 py-1 text-[10px] text-[#73726c] disabled:cursor-not-allowed disabled:opacity-60"
+                                        aria-label={`Редактировать шаг ${step.text}`}
+                                        title="Редактировать шаг"
+                                      >
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                          <path
+                                            d="M4 20h4l10-10-4-4L4 16v4Z"
+                                            stroke="currentColor"
+                                            strokeWidth="1.7"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                          <path
+                                            d="M12 6l4 4"
+                                            stroke="currentColor"
+                                            strokeWidth="1.7"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                        </svg>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleDeleteStep(step.id)}
+                                        disabled={savingStepId === step.id}
+                                        className="rounded-[6px] border border-[#ead3d3] px-2 py-1 text-[#9b4a4a] disabled:cursor-not-allowed disabled:opacity-60"
+                                        aria-label={`Удалить шаг ${step.text}`}
+                                        title="Удалить шаг"
+                                      >
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                          <path
+                                            d="M4 7h16"
+                                            stroke="currentColor"
+                                            strokeWidth="1.7"
+                                            strokeLinecap="round"
+                                          />
+                                          <path
+                                            d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"
+                                            stroke="currentColor"
+                                            strokeWidth="1.7"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                          <path
+                                            d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9L17 7"
+                                            stroke="currentColor"
+                                            strokeWidth="1.7"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                          <path
+                                            d="M10 11v5M14 11v5"
+                                            stroke="currentColor"
+                                            strokeWidth="1.7"
+                                            strokeLinecap="round"
+                                          />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  ) : null}
                                 </div>
-                              ) : null}
-                              {step.isMilestone ? <div className="h-2 w-2 shrink-0 rounded-full bg-[#EF9F27]" /> : null}
-                            </button>
-                          ))}
+                              </div>
+                            );
+                          })}
 
                           <div className="flex flex-col gap-1.5">
                             <div className="flex gap-2">
@@ -454,6 +827,7 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
                                     void handleAddStep();
                                   }
                                 }}
+                                disabled={false}
                                 placeholder="Введите новый шаг"
                                 className="min-w-0 flex-1 rounded-[6px] border-[0.5px] border-dashed border-[#e0ddd6] bg-white px-[10px] py-[6px] text-[11px] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
                               />
@@ -505,10 +879,52 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
                 })}
               </div>
             ) : (
-              <div className="rounded-[8px] border-[0.5px] border-dashed border-[#e0ddd6] bg-white px-3 py-4 text-[12px] text-[#73726c]">
-                Для горизонта «{getHorizonLabel(selectedHorizon)}» пока нет целей.
+              <div className="rounded-[8px] border-[0.5px] border-dashed border-[#e0ddd6] bg-white px-3 py-4">
+                <div className="text-[12px] text-[#73726c]">
+                  Для горизонта «{getHorizonLabel(selectedHorizon)}» пока нет целей.
+                </div>
+                <Link
+                  href={`/coach/clients/${clientId}?tab=edit`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 inline-flex rounded-[6px] bg-[#185fa5] px-3 py-2 text-[11px] text-white transition-opacity hover:opacity-90"
+                >
+                  + Добавить цели к кварталу →
+                </Link>
+                <div className="mt-1 text-[10px] text-[#73726c]">Откроется редактор в новой вкладке.</div>
               </div>
             )}
+
+            <div className="mt-3 rounded-[8px] bg-[#f5f4f0] p-3">
+              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.4px] text-[#73726c]">
+                Быстрое добавление цели
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={quickGoalTitle}
+                  onChange={(event) => setQuickGoalTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && quickGoalTitle.trim()) {
+                      event.preventDefault();
+                      void handleAddQuickGoal();
+                    }
+                  }}
+                  placeholder="Только название цели"
+                  className="min-w-0 flex-1 rounded-[6px] border border-[#d7d2c7] bg-white px-3 py-2 text-[12px] text-[#1a1a18] outline-none placeholder:text-[#9a978f] focus:border-[#185fa5]"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleAddQuickGoal()}
+                  disabled={addingQuickGoal || !quickGoalTitle.trim()}
+                  className="rounded-[6px] border border-[#d7d2c7] px-3 py-2 text-[11px] text-[#4f4b45] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {addingQuickGoal ? '...' : 'Добавить'}
+                </button>
+              </div>
+              <div className="mt-2 text-[10px] text-[#73726c]">
+                Компетенции и точную структуру можно привязать позже в редакторе.
+              </div>
+            </div>
           </div>
         </div>
 
@@ -519,18 +935,30 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
               <button
                 type="button"
                 onClick={() => setMilestoneOpen((current) => !current)}
-                className="rounded-[6px] border-[0.5px] border-[#EF9F27] bg-[rgba(186,117,23,0.06)] px-3 py-[5px] text-[11px] text-[#633806] transition-colors hover:bg-[rgba(186,117,23,0.12)]"
+                disabled={!activeSession}
+                className="rounded-[6px] border-[0.5px] border-[#EF9F27] bg-[rgba(186,117,23,0.06)] px-3 py-[5px] text-[11px] text-[#633806] transition-colors hover:bg-[rgba(186,117,23,0.12)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                ★ Milestone
+                ★ Веха
               </button>
-              <button
-                type="button"
-                onClick={() => void handleSaveSession()}
-                disabled={savingSession}
-                className="rounded-[6px] bg-[#1D9E75] px-3 py-[5px] text-[11px] text-[#E1F5EE] transition-opacity disabled:cursor-wait disabled:opacity-70"
-              >
-                {savingSession ? 'Сохраняю...' : 'Сохранить сессию'}
-              </button>
+              {activeSession ? (
+                <button
+                  type="button"
+                  onClick={() => void handleFinishSession()}
+                  disabled={finishingSession || savingSession}
+                  className="rounded-[6px] bg-[#1D9E75] px-3 py-[5px] text-[11px] text-[#E1F5EE] transition-opacity disabled:cursor-wait disabled:opacity-70"
+                >
+                  {finishingSession ? 'Завершаю...' : 'Завершить сессию'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void handleStartSession()}
+                  disabled={startingSession}
+                  className="rounded-[6px] bg-[#1D9E75] px-3 py-[5px] text-[11px] text-[#E1F5EE] transition-opacity disabled:cursor-wait disabled:opacity-70"
+                >
+                  {startingSession ? 'Создаю...' : `Начать сессию #${currentSessionNumber}`}
+                </button>
+              )}
             </div>
           </div>
 
@@ -563,21 +991,21 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
               </div>
 
               <div className={`${PANEL_CLASS} p-[14px]`}>
-                <div className="mb-2 text-[11px] font-medium text-[#73726c]">История и milestones</div>
+                <div className="mb-2 text-[11px] font-medium text-[#73726c]">История и вехи</div>
 
                 {milestoneOpen ? (
                   <div className="mb-3 rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] p-3">
                     <input
                       value={milestoneText}
                       onChange={(event) => setMilestoneText(event.target.value)}
-                      placeholder="Что стало milestone по этой цели?"
+                      placeholder="Что стало вехой по этой цели?"
                       className="mb-2 w-full rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[10px] py-2 text-[12px] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
                     />
                     <textarea
                       value={milestoneNote}
                       onChange={(event) => setMilestoneNote(event.target.value)}
                       rows={2}
-                      placeholder="Короткая заметка к milestone"
+                      placeholder="Короткая заметка к вехе"
                       className="w-full rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[10px] py-2 text-[12px] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
                     />
                     <div className="mt-2 flex gap-2">
@@ -587,7 +1015,7 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
                         disabled={savingMilestone || !milestoneText.trim() || !selectedGoal}
                         className="rounded-[6px] bg-[#1D9E75] px-3 py-[5px] text-[11px] text-[#E1F5EE] disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {savingMilestone ? 'Сохраняю...' : 'Сохранить milestone'}
+                        {savingMilestone ? 'Сохраняю...' : 'Сохранить веху'}
                       </button>
                       <button
                         type="button"
@@ -618,7 +1046,7 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
                         <div className="text-[12px] leading-[1.4] text-[#1a1a18]">{item.text}</div>
                         {item.kind === 'milestone' && item.note ? (
                           <div className="mt-[2px] inline-block rounded-full bg-[rgba(186,117,23,0.12)] px-[6px] py-[1px] text-[10px] text-[#633806]">
-                            ★ Milestone - {item.note}
+                            ★ Веха - {item.note}
                           </div>
                         ) : null}
                         {item.kind === 'session' && item.note ? (
@@ -633,24 +1061,60 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
               </div>
 
               <div className={`${PANEL_CLASS} p-[14px]`}>
-                <div className="mb-2 text-[11px] font-medium text-[#73726c]">Заметки сессии {draftSessionNumber}</div>
-                <textarea
-                  value={sessionNotes}
-                  onChange={(event) => setSessionNotes(event.target.value)}
-                  rows={4}
-                  placeholder="Что происходит сегодня по этой цели? Инсайты, сопротивление, движение..."
-                  className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] px-[10px] py-2 text-[12px] leading-[1.5] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
-                />
-                <div className="mt-[10px]">
-                  <div className="mb-2 text-[11px] font-medium text-[#73726c]">Задание до следующей сессии</div>
-                  <textarea
-                    value={nextTask}
-                    onChange={(event) => setNextTask(event.target.value)}
-                    rows={2}
-                    placeholder="Конкретное действие до следующей встречи..."
-                    className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] px-[10px] py-2 text-[12px] leading-[1.5] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
-                  />
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="text-[11px] font-medium text-[#73726c]">Заметки сессии {currentSessionNumber}</div>
+                  {activeSession ? (
+                    <div className="text-[10px] text-[#73726c]">
+                      {savingSession ? 'Автосохранение...' : 'Автосохранение включено'}
+                    </div>
+                  ) : null}
                 </div>
+
+                {!activeSession ? (
+                  <div className="space-y-3">
+                    <div className="rounded-[8px] border-[0.5px] border-dashed border-[#d7d2c7] bg-[#f5f4f0] px-3 py-3 text-[12px] text-[#73726c]">
+                      Активной сессии нет. Нажмите «Начать сессию #{currentSessionNumber}», чтобы открыть рабочее пространство и включить автосохранение.
+                    </div>
+                    <div className="rounded-[8px] bg-[#f5f4f0] p-3">
+                      <div className="mb-2 text-[11px] font-medium text-[#73726c]">
+                        {lastCompletedSession ? `Последняя завершённая сессия #${lastCompletedSession.number}` : 'Последняя завершённая сессия'}
+                      </div>
+                      <div className="text-[12px] leading-[1.6] text-[#1a1a18]">
+                        {lastCompletedSession?.notes || 'Заметок по завершённым сессиям пока нет.'}
+                      </div>
+                      <div className="mt-3 text-[11px] font-medium text-[#73726c]">Задание до следующей сессии</div>
+                      <div className="mt-1 text-[12px] leading-[1.6] text-[#1a1a18]">
+                        {lastCompletedSession?.coachNotes || 'Не задано.'}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <textarea
+                      value={sessionNotes}
+                      onChange={(event) => setSessionNotes(event.target.value)}
+                      onBlur={() => {
+                        void persistActiveSession({ force: true });
+                      }}
+                      rows={4}
+                      placeholder="Что происходит сегодня по этой цели? Инсайты, сопротивление, движение..."
+                      className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] px-[10px] py-2 text-[12px] leading-[1.5] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
+                    />
+                    <div className="mt-[10px]">
+                      <div className="mb-2 text-[11px] font-medium text-[#73726c]">Задание до следующей сессии</div>
+                      <textarea
+                        value={nextTask}
+                        onChange={(event) => setNextTask(event.target.value)}
+                        onBlur={() => {
+                          void persistActiveSession({ force: true });
+                        }}
+                        rows={2}
+                        placeholder="Конкретное действие до следующей встречи..."
+                        className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] px-[10px] py-2 text-[12px] leading-[1.5] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className={`${PANEL_CLASS} p-[14px]`}>
@@ -663,12 +1127,16 @@ export default function CoachClientSessionPage({ clientId }: CoachClientSessionP
                     value={draftProgress}
                     onChange={(event) => setDraftProgress(Number(event.target.value))}
                     className="flex-1 accent-[#1D9E75]"
-                    disabled={!selectedGoal}
+                    disabled={!selectedGoal || !activeSession}
                   />
                   <span className="min-w-[36px] text-[14px] font-medium">{draftProgress}%</span>
                 </div>
                 <div className="mt-[6px] text-[11px] text-[#73726c]">
-                  {savingProgress ? 'Обновляю прогресс...' : 'Изменение автоматически обновит прогресс цели и связанные компетенции.'}
+                  {!activeSession
+                    ? 'Прогресс редактируется только внутри активной сессии.'
+                    : savingProgress
+                      ? 'Обновляю прогресс...'
+                      : 'Изменение автоматически обновит прогресс цели и связанные компетенции.'}
                 </div>
               </div>
             </div>
@@ -748,6 +1216,32 @@ function getHorizonLabel(horizon: 'year' | 'quarter' | 'month') {
   if (horizon === 'year') return 'Год';
   if (horizon === 'month') return 'Месяц';
   return 'Квартал';
+}
+
+function sortCoachSessions(sessions: CoachSession[]) {
+  return [...sessions].sort((left, right) => {
+    if (left.status !== right.status) {
+      return left.status === 'draft' ? -1 : 1;
+    }
+    return new Date(right.date).getTime() - new Date(left.date).getTime();
+  });
+}
+
+function createMinimalGoal(title: string, horizon: 'year' | 'quarter' | 'month'): CoachGoalTreeNode {
+  const goalId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `goal-${Math.random().toString(36).slice(2, 10)}`;
+
+  return {
+    id: goalId,
+    title,
+    progress: 0,
+    horizon,
+    status: 'active',
+    competencyLinks: [],
+    steps: [],
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function formatShortDate(iso: string) {

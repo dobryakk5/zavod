@@ -377,10 +377,12 @@ export default function NewClientsEditor({ activeTab = 'clients' }: Props) {
 }
 
 // Формы для добавления новых элементов
-function NewClientForm({ clients, categories, onSave }: {
+export function NewClientForm({ clients, categories, onSave, submitLabel = 'Добавить клиента', helperText = 'Вставьте столбец из Excel — каждое имя станет отдельным тегом.' }: {
   clients: Client[],
   categories: Category[],
-  onSave: (clients: Client[]) => void
+  onSave: (clients: Client[]) => void,
+  submitLabel?: string,
+  helperText?: string,
 }) {
   const [nameInput, setNameInput] = useState('');
   const [nameChips, setNameChips] = useState<string[]>([]);
@@ -535,9 +537,7 @@ function NewClientForm({ clients, categories, onSave }: {
             className="min-w-[160px] flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-muted-foreground"
           />
         </div>
-        <p className="text-xs text-muted-foreground">
-          Вставьте столбец из Excel — каждое имя станет отдельным тегом.
-        </p>
+        <p className="text-xs text-muted-foreground">{helperText}</p>
         {nameError ? (
           <p className="text-xs text-red-500">{nameError}</p>
         ) : null}
@@ -629,7 +629,7 @@ function NewClientForm({ clients, categories, onSave }: {
       </div>
       
       <Button type="submit" className="w-full" disabled={isSubmitting}>
-        {isSubmitting ? 'Сохраняем...' : 'Добавить клиента'}
+        {isSubmitting ? 'Сохраняем...' : submitLabel}
       </Button>
     </form>
   );

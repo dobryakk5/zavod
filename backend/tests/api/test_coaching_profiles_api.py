@@ -435,6 +435,55 @@ def test_goals_edit_is_persisted_and_list_endpoint_resolves_competency_names(
 
 
 @pytest.mark.django_db
+def test_goal_step_patch_allows_editing_text_and_due_date(
+    coaching_api_client,
+    coaching_tenant,
+    coaching_contact,
+):
+    ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        goals=[
+            {
+                "id": "goal-1",
+                "title": "Наладить границы в работе",
+                "progress": 30,
+                "horizon": "quarter",
+                "status": "active",
+                "competencyLinks": [],
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "text": "Подготовить фразы для отказа",
+                        "done": False,
+                        "isMilestone": False,
+                        "milestoneNote": "",
+                        "doneAt": "",
+                        "dueDate": "2026-04-02",
+                    }
+                ],
+                "createdAt": "2026-03-01T10:00:00+03:00",
+            }
+        ],
+    )
+
+    response = coaching_api_client.patch(
+        reverse("api:coaching-goal-step-detail", args=["goal-1", "step-1"]),
+        {"text": "Потренировать короткие ответы", "dueDate": "2026-04-08"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.content
+    payload = response.json()
+    assert payload["steps"][0]["text"] == "Потренировать короткие ответы"
+    assert payload["steps"][0]["dueDate"] == "2026-04-08"
+
+    profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
+    assert profile.goals[0]["steps"][0]["text"] == "Потренировать короткие ответы"
+    assert profile.goals[0]["steps"][0]["dueDate"] == "2026-04-08"
+
+
+@pytest.mark.django_db
 def test_goal_progress_patch_updates_goal_and_related_competencies(coaching_api_client, coaching_tenant, coaching_contact):
     profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
@@ -521,6 +570,136 @@ def test_contact_detail_returns_profile_summary(coaching_api_client, coaching_te
     assert payload["intention"] == "Перестать откладывать сложные разговоры"
     assert payload["sessionsCount"] == 1
     assert payload["avgProgress"] == 60
+
+
+@pytest.mark.django_db
+def test_contact_detail_patch_updates_intention_without_touching_other_profile_fields(
+    coaching_api_client,
+    coaching_tenant,
+    coaching_contact,
+):
+    profile = ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        intention="Старое намерение",
+        wheel=[{"id": "energy", "score": 6}],
+        competencies=[
+            {"id": "c1", "name": "Эмпатия", "score": 55, "startScore": 35, "color": "#1D9E75"},
+        ],
+    )
+
+    response = coaching_api_client.patch(
+        reverse("api:coaching-contact-detail", args=[coaching_contact.id]),
+        {"intention": "Новое намерение клиента"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.content
+    payload = response.json()
+    assert payload["intention"] == "Новое намерение клиента"
+
+    profile.refresh_from_db()
+    assert profile.intention == "Новое намерение клиента"
+    assert profile.wheel == [{"id": "energy", "score": 6}]
+    assert profile.competencies == [
+        {"id": "c1", "name": "Эмпатия", "score": 55, "startScore": 35, "color": "#1D9E75"},
+    ]
+
+
+@pytest.mark.django_db
+def test_create_session_creates_single_draft_and_does_not_increment_completed_count(
+    coaching_api_client,
+    coaching_tenant,
+    coaching_contact,
+):
+    ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        sessions=[
+            {
+                "id": "sess-done-1",
+                "clientId": int(coaching_contact.id),
+                "number": 1,
+                "date": "2026-03-20T12:00:00+03:00",
+                "notes": "Разобрали конфликт",
+                "coachNotes": "Договориться о границах",
+            }
+        ],
+    )
+
+    response = coaching_api_client.post(
+        reverse("api:coaching-contact-sessions", args=[coaching_contact.id]),
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 201, response.content
+    payload = response.json()
+    assert payload["number"] == 2
+    assert payload["status"] == "draft"
+
+    second_response = coaching_api_client.post(
+        reverse("api:coaching-contact-sessions", args=[coaching_contact.id]),
+        {},
+        format="json",
+    )
+    assert second_response.status_code == 200, second_response.content
+    assert second_response.json()["id"] == payload["id"]
+
+    profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
+    assert len(profile.sessions) == 2
+    assert profile.sessions[0]["status"] == "draft"
+
+    detail_response = coaching_api_client.get(reverse("api:coaching-contact-detail", args=[coaching_contact.id]))
+    assert detail_response.status_code == 200, detail_response.content
+    assert detail_response.json()["sessionsCount"] == 1
+
+
+@pytest.mark.django_db
+def test_session_patch_updates_draft_and_allows_finishing(
+    coaching_api_client,
+    coaching_tenant,
+    coaching_contact,
+):
+    ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        sessions=[
+            {
+                "id": "sess-draft-1",
+                "clientId": int(coaching_contact.id),
+                "number": 3,
+                "date": "2026-03-28T12:00:00+03:00",
+                "notes": "",
+                "coachNotes": "",
+                "status": "draft",
+            }
+        ],
+    )
+
+    response = coaching_api_client.patch(
+        reverse("api:coaching-session-detail", args=["sess-draft-1"]),
+        {
+            "notes": "Разобрали сложный разговор с руководителем",
+            "coachNotes": "Подготовить три формулировки к следующей встрече",
+            "status": "done",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 200, response.content
+    payload = response.json()
+    assert payload["notes"] == "Разобрали сложный разговор с руководителем"
+    assert payload["coachNotes"] == "Подготовить три формулировки к следующей встрече"
+    assert payload["status"] == "done"
+
+    profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
+    assert profile.sessions[0]["status"] == "done"
+    assert profile.sessions[0]["notes"] == "Разобрали сложный разговор с руководителем"
+
+    list_response = coaching_api_client.get(reverse("api:coaching-contact-sessions", args=[coaching_contact.id]))
+    assert list_response.status_code == 200, list_response.content
+    assert list_response.json()[0]["status"] == "done"
 
 
 @pytest.mark.django_db

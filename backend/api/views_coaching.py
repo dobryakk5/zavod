@@ -15,11 +15,14 @@ from core.models import ContactCoachingProfile, MapContact, UserTenantBinding
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers_coaching import (
     CoachingCompetencySerializer,
+    CoachingContactUpdateSerializer,
     CoachingGoalEditSerializer,
     CoachingGoalStepCreateSerializer,
+    CoachingGoalStepUpdateSerializer,
     CoachingMilestoneCreateSerializer,
     CoachingOnboardingSerializer,
     CoachingSessionCreateSerializer,
+    CoachingSessionUpdateSerializer,
 )
 from .utils import get_active_client
 
@@ -95,6 +98,8 @@ def _goal_focus(profile: ContactCoachingProfile) -> str:
         return str(first_goal.get("title") or "")
     competencies = profile.competencies if isinstance(profile.competencies, list) else []
     first_comp = next((comp for comp in competencies if isinstance(comp, dict) and comp.get("name")), None)
+    if not isinstance(first_comp, dict):
+        return ""
     return str(first_comp.get("name") or "")
 
 
@@ -104,6 +109,44 @@ def _profile_avg_progress(profile: ContactCoachingProfile) -> int:
         return 0
     total = sum(int(goal.get("progress") or 0) for goal in goals)
     return round(total / len(goals))
+
+
+def _session_status_value(session: dict) -> str:
+    status_value = str(session.get("status") or "").strip().lower()
+    if status_value in {"draft", "done"}:
+        return status_value
+    return "done"
+
+
+def _serialize_session(profile: ContactCoachingProfile, session: dict) -> dict:
+    return {
+        "id": str(session.get("id") or ""),
+        "clientId": int(session.get("clientId") or profile.contact_id),
+        "number": int(session.get("number") or 1),
+        "date": str(session.get("date") or timezone.now().isoformat()),
+        "notes": str(session.get("notes") or ""),
+        "coachNotes": str(session.get("coachNotes") or ""),
+        "status": _session_status_value(session),
+    }
+
+
+def _sort_sessions(items: list[dict]) -> list[dict]:
+    drafts = [item for item in items if str(item.get("status") or "") == "draft"]
+    done = [item for item in items if str(item.get("status") or "") != "draft"]
+    drafts.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+    done.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+    return [*drafts, *done]
+
+
+def _profile_sessions(profile: ContactCoachingProfile, *, include_drafts: bool = True) -> list[dict]:
+    sessions = [
+        _serialize_session(profile, item)
+        for item in (profile.sessions or [])
+        if isinstance(item, dict)
+    ]
+    if not include_drafts:
+        sessions = [item for item in sessions if item["status"] != "draft"]
+    return _sort_sessions(sessions)
 
 
 def _profile_completed_tasks_last_30_days(profile: ContactCoachingProfile, today) -> int:
@@ -127,9 +170,7 @@ def _profile_completed_tasks_last_30_days(profile: ContactCoachingProfile, today
 def _profile_next_session(profile: ContactCoachingProfile) -> str | None:
     now = timezone.now()
     future_dates = []
-    for session in profile.sessions or []:
-        if not isinstance(session, dict):
-            continue
+    for session in _profile_sessions(profile, include_drafts=False):
         dt = _parse_moment(str(session.get("date") or ""))
         if dt is not None and dt >= now:
             future_dates.append(dt)
@@ -147,7 +188,7 @@ def _profile_items(profile: ContactCoachingProfile, field_name: str) -> list[dic
 
 def _profile_next_session_moment(profile: ContactCoachingProfile, now: datetime) -> datetime | None:
     future_dates = []
-    for session in _profile_items(profile, "sessions"):
+    for session in _profile_sessions(profile, include_drafts=False):
         moment = _parse_moment(str(session.get("date") or ""))
         if moment is not None and moment >= now:
             future_dates.append(moment)
@@ -158,7 +199,7 @@ def _profile_next_session_moment(profile: ContactCoachingProfile, now: datetime)
 
 def _profile_last_session_moment(profile: ContactCoachingProfile, now: datetime) -> datetime | None:
     past_dates = []
-    for session in _profile_items(profile, "sessions"):
+    for session in _profile_sessions(profile, include_drafts=False):
         moment = _parse_moment(str(session.get("date") or ""))
         if moment is not None and moment <= now:
             past_dates.append(moment)
@@ -244,7 +285,7 @@ def _client_status(profile: ContactCoachingProfile) -> dict | None:
             "at": None,
         }
 
-    sessions_count = len(_profile_items(profile, "sessions"))
+    sessions_count = len(_profile_sessions(profile, include_drafts=False))
     if sessions_count <= 2:
         return {
             "kind": "new",
@@ -273,7 +314,7 @@ def _serialize_contact(contact: MapContact, tenant_id: int, profile: ContactCoac
         "initials": _contact_initials(contact.name),
         "focus": _goal_focus(profile),
         "intention": str(profile.intention or ""),
-        "sessionsCount": len(profile.sessions or []),
+        "sessionsCount": len(_profile_sessions(profile, include_drafts=False)),
         "avgProgress": _profile_avg_progress(profile),
         "nextSession": _profile_next_session(profile),
         "clientStatus": _client_status(profile),
@@ -569,9 +610,7 @@ class CoachStatsView(APIView):
                 if isinstance(goal, dict):
                     all_goals.append(int(goal.get("progress") or 0))
             completed_tasks += _profile_completed_tasks_last_30_days(profile, today)
-            for session in profile.sessions or []:
-                if not isinstance(session, dict):
-                    continue
+            for session in _profile_sessions(profile, include_drafts=False):
                 moment = _parse_moment(str(session.get("date") or ""))
                 if moment is not None and timezone.localdate(moment) == today:
                     sessions_today += 1
@@ -607,7 +646,10 @@ class CoachClientsView(APIView):
 
 
 class CoachingContactDetailView(APIView):
-    permission_classes = [IsTenantMember]
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsTenantMember()]
+        return [IsTenantOwnerOrEditor()]
 
     def get(self, request, contact_id: int):
         tenant = get_active_client(request.user)
@@ -615,6 +657,20 @@ class CoachingContactDetailView(APIView):
         if contact is None:
             return Response({"error": "Контакт не найден"}, status=status.HTTP_404_NOT_FOUND)
         profile = _get_profile(int(tenant.id), contact_id)
+        return Response(_serialize_contact(contact, int(tenant.id), profile))
+
+    def patch(self, request, contact_id: int):
+        tenant = get_active_client(request.user)
+        contact = _tenant_contact_or_none(int(tenant.id), contact_id)
+        if contact is None:
+            return Response({"error": "Контакт не найден"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = CoachingContactUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        profile = _get_or_create_profile(int(tenant.id), contact_id)
+        profile.intention = serializer.validated_data.get("intention") or ""
+        profile.save(update_fields=["intention"])
         return Response(_serialize_contact(contact, int(tenant.id), profile))
 
 
@@ -805,17 +861,10 @@ class ContactGoalStepDetailView(APIView):
         if profile is None or goal_index is None:
             return Response({"error": "Цель не найдена"}, status=status.HTTP_404_NOT_FOUND)
 
-        if "done" not in request.data:
-            return Response({"error": "Поле done обязательно"}, status=status.HTTP_400_BAD_REQUEST)
-        raw_done = request.data.get("done")
-        if isinstance(raw_done, bool):
-            done = raw_done
-        elif str(raw_done).strip().lower() in {"1", "true", "yes"}:
-            done = True
-        elif str(raw_done).strip().lower() in {"0", "false", "no"}:
-            done = False
-        else:
-            return Response({"error": "Некорректный done"}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = CoachingGoalStepUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not serializer.validated_data:
+            return Response({"error": "Нет данных для обновления"}, status=status.HTTP_400_BAD_REQUEST)
 
         goals = list(profile.goals or [])
         goal = deepcopy(goals[goal_index])
@@ -826,8 +875,15 @@ class ContactGoalStepDetailView(APIView):
                 continue
             if str(step.get("id") or "") != step_id:
                 continue
-            next_step = {**step, "done": done}
-            next_step["doneAt"] = timezone.now().isoformat() if done else ""
+            next_step = {**step}
+            if "text" in serializer.validated_data:
+                next_step["text"] = serializer.validated_data["text"]
+            if "dueDate" in serializer.validated_data:
+                next_step["dueDate"] = serializer.validated_data["dueDate"]
+            if "done" in serializer.validated_data:
+                done = bool(serializer.validated_data["done"])
+                next_step["done"] = done
+                next_step["doneAt"] = timezone.now().isoformat() if done else ""
             steps[index] = next_step
             step_found = True
             break
@@ -956,9 +1012,7 @@ class ContactSessionsView(APIView):
             return Response({"error": "Контакт не найден"}, status=status.HTTP_404_NOT_FOUND)
 
         profile = _get_or_create_profile(int(tenant.id), contact_id)
-        sessions = [item for item in (profile.sessions or []) if isinstance(item, dict)]
-        sessions.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
-        return Response(sessions)
+        return Response(_profile_sessions(profile))
 
     def post(self, request, contact_id: int):
         tenant = get_active_client(request.user)
@@ -971,6 +1025,13 @@ class ContactSessionsView(APIView):
 
         profile = _get_or_create_profile(int(tenant.id), contact_id)
         current_sessions = [item for item in (profile.sessions or []) if isinstance(item, dict)]
+        existing_draft = next(
+            (item for item in current_sessions if _session_status_value(item) == "draft"),
+            None,
+        )
+        if existing_draft is not None:
+            return Response(_serialize_session(profile, existing_draft))
+
         session = {
             "id": uuid4().hex,
             "clientId": contact_id,
@@ -978,10 +1039,49 @@ class ContactSessionsView(APIView):
             "date": serializer.validated_data.get("date") or timezone.now().isoformat(),
             "notes": serializer.validated_data.get("notes") or "",
             "coachNotes": serializer.validated_data.get("coachNotes") or "",
+            "status": "draft",
         }
         profile.sessions = [session, *current_sessions]
         profile.save()
-        return Response(session, status=status.HTTP_201_CREATED)
+        return Response(_serialize_session(profile, session), status=status.HTTP_201_CREATED)
+
+
+class ContactSessionDetailView(APIView):
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def patch(self, request, session_id: str):
+        tenant = get_active_client(request.user)
+        serializer = CoachingSessionUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        if not serializer.validated_data:
+            return Response({"error": "Нет полей для обновления"}, status=status.HTTP_400_BAD_REQUEST)
+
+        for profile in ContactCoachingProfile.objects.filter(tenant_id=int(tenant.id)).order_by("id"):
+            sessions = list(profile.sessions or [])
+            for index, session in enumerate(sessions):
+                if not isinstance(session, dict) or str(session.get("id") or "") != session_id:
+                    continue
+
+                next_session = deepcopy(session)
+                if "notes" in serializer.validated_data:
+                    next_session["notes"] = serializer.validated_data.get("notes") or ""
+                if "coachNotes" in serializer.validated_data:
+                    next_session["coachNotes"] = serializer.validated_data.get("coachNotes") or ""
+                if "status" in serializer.validated_data:
+                    next_session["status"] = serializer.validated_data["status"]
+                else:
+                    next_session["status"] = _session_status_value(next_session)
+
+                next_session["clientId"] = int(next_session.get("clientId") or profile.contact_id)
+                next_session["number"] = int(next_session.get("number") or index + 1)
+                next_session["date"] = str(next_session.get("date") or timezone.now().isoformat())
+                sessions[index] = next_session
+                profile.sessions = sessions
+                profile.save(update_fields=["sessions"])
+                return Response(_serialize_session(profile, next_session))
+
+        return Response({"error": "Сессия не найдена"}, status=status.HTTP_404_NOT_FOUND)
 
 
 class CoachingOnboardingView(APIView):

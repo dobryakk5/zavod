@@ -34,6 +34,12 @@ class CoachingGoalStepCreateSerializer(serializers.Serializer):
     dueDate = serializers.CharField(allow_blank=True, required=False, default="")
 
 
+class CoachingGoalStepUpdateSerializer(serializers.Serializer):
+    text = serializers.CharField(max_length=500, allow_blank=True, required=False)
+    dueDate = serializers.CharField(allow_blank=True, required=False)
+    done = serializers.BooleanField(required=False)
+
+
 class CoachingGoalEditSerializer(serializers.Serializer):
     id = serializers.CharField(max_length=128)
     title = serializers.CharField(max_length=255, allow_blank=True)
@@ -67,12 +73,23 @@ class CoachingSessionSerializer(serializers.Serializer):
     date = serializers.CharField()
     notes = serializers.CharField(allow_blank=True, required=False, default="")
     coachNotes = serializers.CharField(allow_blank=True, required=False, default="")
+    status = serializers.ChoiceField(choices=("draft", "done"), required=False, default="done")
 
 
 class CoachingSessionCreateSerializer(serializers.Serializer):
     date = serializers.CharField(required=False, allow_blank=True, default="")
     notes = serializers.CharField(required=False, allow_blank=True, default="")
     coachNotes = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class CoachingSessionUpdateSerializer(serializers.Serializer):
+    notes = serializers.CharField(required=False, allow_blank=True)
+    coachNotes = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.ChoiceField(choices=("draft", "done"), required=False)
+
+
+class CoachingContactUpdateSerializer(serializers.Serializer):
+    intention = serializers.CharField(required=True, allow_blank=True)
 
 
 class CoachingOnboardingSerializer(serializers.Serializer):

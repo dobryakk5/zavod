@@ -81,6 +81,7 @@ export type CoachSession = {
   date: string;
   notes: string;
   coachNotes: string;
+  status: 'draft' | 'done';
 };
 
 export const coachingApi = {
@@ -108,7 +109,7 @@ export const coachingApi = {
   replaceCoachClientGoals: async (clientId: number | string, goals: CoachGoalTreeNode[]): Promise<CoachGoalTreeNode[]> => {
     const response = await apiFetch<CoachGoalTreeNode[]>(`/clients/${clientId}/goals/edit/`, {
       method: 'PUT',
-      body: goals,
+      body: goals.map(serializeCoachGoal),
     });
     return response.map(normalizeCoachGoal);
   },
@@ -174,6 +175,16 @@ export const coachingApi = {
     });
   },
 
+  updateCoachSession: async (
+    sessionId: string,
+    payload: { notes?: string; coachNotes?: string; status?: 'draft' | 'done' },
+  ): Promise<CoachSession> => {
+    return apiFetch<CoachSession>(`/sessions/${sessionId}/`, {
+      method: 'PATCH',
+      body: payload,
+    });
+  },
+
   updateCoachGoal: async (goalId: string, payload: { progress: number }): Promise<{ id: string; progress: number }> => {
     return apiFetch<{ id: string; progress: number }>(`/goals/${goalId}/`, {
       method: 'PATCH',
@@ -184,19 +195,34 @@ export const coachingApi = {
   updateCoachGoalStep: async (
     goalId: string,
     stepId: string,
-    payload: { done: boolean },
+    payload: { done?: boolean; text?: string; dueDate?: string | null },
   ): Promise<{ id: string; steps: CoachGoalStep[] }> => {
-    return apiFetch<{ id: string; steps: CoachGoalStep[] }>(`/goals/${goalId}/steps/${stepId}/`, {
+    const response = await apiFetch<{ id: string; steps: CoachGoalStep[] }>(`/goals/${goalId}/steps/${stepId}/`, {
       method: 'PATCH',
       body: payload,
     });
+    return {
+      ...response,
+      steps: Array.isArray(response.steps)
+        ? response.steps.map((step) => ({
+            ...step,
+            doneAt: step.doneAt || null,
+            dueDate: step.dueDate || null,
+          }))
+        : [],
+    };
   },
 };
 
 function normalizeCoachGoal(goal: CoachGoalTreeNode): CoachGoalTreeNode {
   return {
     ...goal,
-    competencyLinks: Array.isArray(goal.competencyLinks) ? goal.competencyLinks : [],
+    competencyLinks: Array.isArray(goal.competencyLinks)
+      ? goal.competencyLinks.map((link) => ({
+          ...link,
+          weight: Number(link.weight || 0),
+        }))
+      : [],
     steps: Array.isArray(goal.steps)
       ? goal.steps.map((step) => ({
           ...step,
@@ -205,6 +231,31 @@ function normalizeCoachGoal(goal: CoachGoalTreeNode): CoachGoalTreeNode {
         }))
       : [],
     createdAt: goal.createdAt || new Date().toISOString(),
+  };
+}
+
+function serializeCoachGoal(goal: CoachGoalTreeNode): CoachGoalTreeNode {
+  return {
+    ...goal,
+    title: String(goal.title || ''),
+    createdAt: String(goal.createdAt || new Date().toISOString()),
+    competencyLinks: Array.isArray(goal.competencyLinks)
+      ? goal.competencyLinks.map((link) => ({
+          ...link,
+          weight: Number(((Number(link.weight || 0)) / 100).toFixed(4)),
+        }))
+      : [],
+    steps: Array.isArray(goal.steps)
+      ? goal.steps.map((step) => ({
+          ...step,
+          text: String(step.text || ''),
+          milestoneNote: String(step.milestoneNote || ''),
+          doneAt: String(step.doneAt || ''),
+          dueDate: String(step.dueDate || ''),
+          goalId: String(step.goalId || ''),
+          goalTitle: String(step.goalTitle || goal.title || ''),
+        }))
+      : [],
   };
 }
 
@@ -224,6 +275,16 @@ export type CoachTask = {
 Object.assign(coachingApi, {
   getCoachClientTasks: async (clientId: number | string): Promise<CoachTask[]> => {
     return apiFetch<CoachTask[]>(`/clients/${clientId}/tasks/`);
+  },
+
+  updateCoachClient: async (
+    clientId: number | string,
+    payload: { intention: string },
+  ): Promise<CoachingClient> => {
+    return apiFetch<CoachingClient>(`/clients/${clientId}/`, {
+      method: 'PATCH',
+      body: payload,
+    });
   },
 
   completeCoachTask: async (taskId: string): Promise<CoachTask> => {
@@ -246,6 +307,7 @@ Object.assign(coachingApi, {
 
 export type CoachingApiExtended = typeof coachingApi & {
   getCoachClientTasks(clientId: number | string): Promise<CoachTask[]>;
+  updateCoachClient(clientId: number | string, payload: { intention: string }): Promise<CoachingClient>;
   completeCoachTask(taskId: string): Promise<CoachTask>;
   saveCoachClientCompetencies(clientId: number | string, competencies: CoachingCompetency[]): Promise<CoachingCompetency[]>;
 };

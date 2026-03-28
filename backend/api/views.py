@@ -131,6 +131,7 @@ from .views_coaching import (  # noqa: F401
     ContactGoalStepDetailView,
     ContactGoalsEditView,
     ContactGoalsView,
+    ContactSessionDetailView,
     ContactMilestonesView,
     ContactSessionsView,
     ContactStepsView,

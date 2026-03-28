@@ -2,11 +2,12 @@
 
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   coachingApi,
   coachingApiExt,
+  type CoachGoalTreeNode,
   type CoachingClient,
   type CoachingCompetency,
   type CoachMilestone,
@@ -29,6 +30,7 @@ const COMPETENCY_COLOR_PALETTE = ['#1D9E75', '#7F77DD', '#378ADD', '#EF9F27', '#
 type SideData = {
   client: CoachingClient | null;
   competencies: CoachingCompetency[];
+  goals: CoachGoalTreeNode[];
   milestones: CoachMilestone[];
   sessions: CoachSession[];
   tasks: CoachTask[];
@@ -43,6 +45,7 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
   const [sideData, setSideData] = useState<SideData>({
     client: null,
     competencies: [],
+    goals: [],
     milestones: [],
     sessions: [],
     tasks: [],
@@ -54,9 +57,10 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
     setLoading(true);
 
     const fetchAll = async () => {
-      const [client, competencies, milestones, sessions, tasks] = await Promise.all([
+      const [client, competencies, goals, milestones, sessions, tasks] = await Promise.all([
         coachingApi.getCoachClient(clientId).catch(() => null),
         coachingApi.getCoachClientCompetencies(clientId).catch(() => []),
+        coachingApi.getCoachClientGoals(clientId).catch(() => []),
         coachingApi.getCoachClientMilestones(clientId).catch(() => []),
         coachingApi.getCoachClientSessions(clientId).catch(() => []),
         coachingApiExt.getCoachClientTasks(clientId).catch(() => []),
@@ -66,7 +70,7 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
         return;
       }
 
-      setSideData({ client, competencies, milestones, sessions, tasks });
+      setSideData({ client, competencies, goals, milestones, sessions, tasks });
       setLoading(false);
     };
 
@@ -80,11 +84,33 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
     router.replace(`/coach/clients/${clientId}?tab=${tab}`, { scroll: false });
   }
 
+  const handleSessionsChange = useCallback((sessions: CoachSession[]) => {
+    setSideData((prev) => (
+      prev.sessions === sessions
+        ? prev
+        : {
+            ...prev,
+            sessions,
+          }
+    ));
+  }, []);
+
+  const handleMilestonesChange = useCallback((milestones: CoachMilestone[]) => {
+    setSideData((prev) => (
+      prev.milestones === milestones
+        ? prev
+        : {
+            ...prev,
+            milestones,
+          }
+    ));
+  }, []);
+
   if (loading) {
     return <WorkspaceSkeleton />;
   }
 
-  const { client, competencies, milestones, sessions, tasks } = sideData;
+  const { client, competencies, goals, milestones, sessions, tasks } = sideData;
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f5f4f0]">
@@ -148,7 +174,13 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
           />
         ) : null}
 
-        {activeTab === 'session' ? <CoachClientSessionPage clientId={clientId} /> : null}
+        {activeTab === 'session' ? (
+          <CoachClientSessionPage
+            clientId={clientId}
+            onSessionsChange={handleSessionsChange}
+            onMilestonesChange={handleMilestonesChange}
+          />
+        ) : null}
 
         {activeTab === 'history' ? (
           <HistoryTab milestones={milestones} sessions={sessions} />
@@ -158,12 +190,24 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
           <EditTab
             client={client}
             competencies={competencies}
+            goals={goals}
             clientId={clientId}
-            onSave={async (updated) => {
-              const result = await coachingApiExt.saveCoachClientCompetencies(clientId, updated);
+            onSaveGoals={async (nextGoals) => {
+              const updatedGoals = await coachingApi.replaceCoachClientGoals(clientId, nextGoals);
+              setSideData((prev) => ({
+                ...prev,
+                goals: updatedGoals,
+              }));
+            }}
+            onSave={async ({ competencies: updated, intention }) => {
+              const [result, updatedClient] = await Promise.all([
+                coachingApiExt.saveCoachClientCompetencies(clientId, updated),
+                coachingApiExt.updateCoachClient(clientId, { intention }),
+              ]);
               const milestones = await coachingApi.getCoachClientMilestones(clientId).catch(() => null);
               setSideData((prev) => ({
                 ...prev,
+                client: updatedClient,
                 competencies: result,
                 milestones: milestones ?? prev.milestones,
               }));
@@ -194,7 +238,7 @@ function OverviewTab({
 
   const avgProgress = client?.avgProgress ?? 0;
   const doneCount = tasks.filter((task) => task.status === 'done').length;
-  const latestSession = sessions[0] ?? null;
+  const latestSession = sessions.find((session) => session.status !== 'draft') ?? null;
 
   async function handleComplete(taskId: string) {
     setCompleting(taskId);
@@ -210,7 +254,7 @@ function OverviewTab({
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatCard value={`${avgProgress}%`} label="средний прогресс" />
         <StatCard value={`${doneCount} / ${tasks.length}`} label="заданий на неделе" />
-        <StatCard value={milestones.length} label="milestone" accent />
+        <StatCard value={milestones.length} label="вехи" accent />
         <StatCard
           value={client?.nextSession ? formatShortDate(client.nextSession) : '—'}
           label="след. сессия"
@@ -314,9 +358,9 @@ function OverviewTab({
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
-          <SectionTitle>Последние milestones</SectionTitle>
+          <SectionTitle>Последние вехи</SectionTitle>
           {milestones.length === 0 ? (
-            <Empty>Milestones появятся после сессий</Empty>
+            <Empty>Вехи появятся после сессий</Empty>
           ) : (
             <div className="space-y-4">
               {milestones.slice(0, 4).map((milestone) => (
@@ -359,9 +403,9 @@ function HistoryTab({
   return (
     <div className="mx-auto max-w-[800px] space-y-5 p-5">
       <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
-        <SectionTitle>Все milestones</SectionTitle>
+        <SectionTitle>Все вехи</SectionTitle>
         {milestones.length === 0 ? (
-          <Empty>Milestone появятся после сессий</Empty>
+          <Empty>Вехи появятся после сессий</Empty>
         ) : (
           <div className="space-y-4">
             {milestones.map((milestone) => (
@@ -400,21 +444,44 @@ function HistoryTab({
 function EditTab({
   client,
   competencies,
+  goals,
   clientId,
+  onSaveGoals,
   onSave,
 }: {
   client: CoachingClient | null;
   competencies: CoachingCompetency[];
+  goals: CoachGoalTreeNode[];
   clientId: number;
-  onSave: (updated: CoachingCompetency[]) => Promise<void>;
+  onSaveGoals: (goals: CoachGoalTreeNode[]) => Promise<void>;
+  onSave: (payload: { competencies: CoachingCompetency[]; intention: string }) => Promise<void>;
 }) {
   const [localComps, setLocalComps] = useState<CoachingCompetency[]>(competencies);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [localGoals, setLocalGoals] = useState<CoachGoalTreeNode[]>(goals);
+  const [intention, setIntention] = useState(client?.intention ?? '');
+  const [profileSaveState, setProfileSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [goalSaveState, setGoalSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [adding, setAdding] = useState(false);
   const [newCompetencyName, setNewCompetencyName] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
+  const [newGoalTitle, setNewGoalTitle] = useState('');
+  const [newGoalHorizon, setNewGoalHorizon] = useState<'year' | 'quarter' | 'month'>('quarter');
+  const [newGoalCompetencyIds, setNewGoalCompetencyIds] = useState<string[]>([]);
+  const [goalError, setGoalError] = useState<string | null>(null);
   const hasSyncedCompetencies = useRef(false);
+  const hasSyncedGoals = useRef(false);
+  const goalSaveTimeoutRef = useRef<number | null>(null);
+  const profileSaveTimeoutRef = useRef<number | null>(null);
+  const onSaveGoalsRef = useRef(onSaveGoals);
+  const onSaveRef = useRef(onSave);
+
+  useEffect(() => {
+    onSaveGoalsRef.current = onSaveGoals;
+  }, [onSaveGoals]);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   useEffect(() => {
     if (!hasSyncedCompetencies.current) {
@@ -424,15 +491,109 @@ function EditTab({
     setLocalComps(competencies);
   }, [competencies]);
 
+  useEffect(() => {
+    if (!hasSyncedGoals.current) {
+      hasSyncedGoals.current = true;
+      return;
+    }
+    setLocalGoals(goals);
+  }, [goals]);
+
+  useEffect(() => {
+    setIntention(client?.intention ?? '');
+  }, [client?.id, client?.intention]);
+
+  useEffect(() => {
+    setNewGoalCompetencyIds((prev) => prev.filter((id) => localComps.some((comp) => comp.id === id)));
+  }, [localComps]);
+
+  useEffect(() => {
+    setLocalGoals((prev) => prev.map((goal) => syncGoalCompetencies(goal, localComps)));
+  }, [localComps]);
+
+  useEffect(() => {
+    const source = JSON.stringify({
+      intention: client?.intention ?? '',
+      competencies,
+    });
+    const draft = JSON.stringify({
+      intention,
+      competencies: localComps,
+    });
+
+    if (source === draft) {
+      setProfileSaveState('idle');
+      return undefined;
+    }
+
+    if (profileSaveTimeoutRef.current) {
+      window.clearTimeout(profileSaveTimeoutRef.current);
+    }
+
+    profileSaveTimeoutRef.current = window.setTimeout(async () => {
+      setProfileSaveState('saving');
+      try {
+        await onSaveRef.current({
+          competencies: localComps,
+          intention: intention.trim(),
+        });
+        setProfileSaveState('saved');
+        window.setTimeout(() => {
+          setProfileSaveState((current) => (current === 'saved' ? 'idle' : current));
+        }, 1600);
+      } catch {
+        setProfileSaveState('error');
+      }
+    }, 900);
+
+    return () => {
+      if (profileSaveTimeoutRef.current) {
+        window.clearTimeout(profileSaveTimeoutRef.current);
+      }
+    };
+  }, [client?.intention, competencies, intention, localComps]);
+
+  useEffect(() => {
+    const source = JSON.stringify(goals);
+    const draft = JSON.stringify(localGoals);
+    if (source === draft) {
+      setGoalSaveState('idle');
+      return undefined;
+    }
+
+    if (goalSaveTimeoutRef.current) {
+      window.clearTimeout(goalSaveTimeoutRef.current);
+    }
+
+    goalSaveTimeoutRef.current = window.setTimeout(async () => {
+      setGoalSaveState('saving');
+      try {
+        await onSaveGoalsRef.current(localGoals);
+        setGoalSaveState('saved');
+        window.setTimeout(() => {
+          setGoalSaveState((current) => (current === 'saved' ? 'idle' : current));
+        }, 1600);
+      } catch {
+        setGoalSaveState('error');
+      }
+    }, 900);
+
+    return () => {
+      if (goalSaveTimeoutRef.current) {
+        window.clearTimeout(goalSaveTimeoutRef.current);
+      }
+    };
+  }, [goals, localGoals]);
+
   function update(id: string, field: 'score' | 'startScore', value: number) {
-    setSaved(false);
+    setProfileSaveState('idle');
     setLocalComps((prev) => prev.map((comp) => (
       comp.id === id ? { ...comp, [field]: value } : comp
     )));
   }
 
   function remove(id: string) {
-    setSaved(false);
+    setProfileSaveState('idle');
     setLocalComps((prev) => prev.filter((comp) => comp.id !== id));
   }
 
@@ -449,7 +610,7 @@ function EditTab({
       return;
     }
 
-    setSaved(false);
+    setProfileSaveState('idle');
     setLocalComps((prev) => [
       ...prev,
       {
@@ -465,27 +626,237 @@ function EditTab({
     setAdding(false);
   }
 
-  async function handleSave() {
-    setSaving(true);
-    try {
-      await onSave(localComps);
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 2000);
-    } finally {
-      setSaving(false);
+  async function handleAddGoal() {
+    const title = newGoalTitle.trim();
+    if (!title) {
+      setGoalError('Введите название цели.');
+      return;
     }
+
+    setGoalSaveState('idle');
+    setLocalGoals((prev) => [
+      ...prev,
+      createCoachGoal({
+        title,
+        horizon: newGoalHorizon,
+        competencies: localComps.filter((comp) => newGoalCompetencyIds.includes(comp.id)),
+      }),
+    ]);
+    setNewGoalTitle('');
+    setNewGoalHorizon('quarter');
+    setNewGoalCompetencyIds([]);
+    setGoalError(null);
+  }
+
+  function toggleGoalCompetency(competencyId: string) {
+    setGoalError(null);
+    setNewGoalCompetencyIds((prev) => (
+      prev.includes(competencyId)
+        ? prev.filter((id) => id !== competencyId)
+        : [...prev, competencyId]
+    ));
+  }
+
+  function updateGoalTitle(goalId: string, title: string) {
+    setGoalSaveState('idle');
+    setLocalGoals((prev) => prev.map((goal) => (
+      goal.id === goalId ? { ...goal, title } : goal
+    )));
+  }
+
+  function updateGoalCompetencies(goalId: string, competencyId: string) {
+    setGoalSaveState('idle');
+    setLocalGoals((prev) => prev.map((goal) => (
+      goal.id === goalId ? toggleGoalCompetencyLink(goal, competencyId, localComps) : goal
+    )));
+  }
+
+  function removeGoal(goalId: string) {
+    setGoalSaveState('idle');
+    setLocalGoals((prev) => prev.filter((goal) => goal.id !== goalId));
   }
 
   return (
     <div className="mx-auto max-w-[800px] space-y-4 p-5">
       <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
         <SectionTitle>Намерение клиента</SectionTitle>
-        <div className="rounded-[6px] border-l-[3px] border-[#7F77DD] bg-[#f5f4f0] px-3 py-2.5">
-          <p className="text-[12px] leading-relaxed text-[#1a1a18]">
-            {client?.intention?.trim() || client?.focus || 'Намерение не заполнено'}
-          </p>
+        <input
+          type="text"
+          value={intention}
+          onChange={(event) => {
+            setProfileSaveState('idle');
+            setIntention(event.target.value);
+          }}
+          placeholder="Опишите, с каким намерением клиент пришёл в работу"
+          className="w-full rounded-[6px] border border-[#d7d2c7] bg-[#f5f4f0] px-3 py-3 text-[16px] leading-none text-[#1a1a18] outline-none transition-colors placeholder:text-[#9a978f] focus:border-[#7F77DD] focus:bg-white"
+        />
+        <p className="mt-2 text-[10px] text-[#73726c]">
+          {profileSaveState === 'saving'
+            ? 'Автосохранение...'
+            : profileSaveState === 'saved'
+              ? 'Сохранено'
+              : profileSaveState === 'error'
+                ? 'Не удалось сохранить'
+                : 'Автосохранение включено'}
+        </p>
+      </div>
+
+      <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <SectionTitle className="mb-0">Цели</SectionTitle>
+          <div className="text-[10px] text-[#73726c]">
+            {goalSaveState === 'saving'
+              ? 'Автосохранение...'
+              : goalSaveState === 'saved'
+                ? 'Сохранено'
+                : goalSaveState === 'error'
+                  ? 'Не удалось сохранить'
+                  : 'Автосохранение включено'}
+          </div>
         </div>
-        <p className="mt-2 text-[10px] text-[#73726c]">Редактируется при онбординге клиента</p>
+
+        {localGoals.length > 0 ? (
+          <div className="mb-4 space-y-2">
+            {localGoals.map((goal) => (
+              <div key={goal.id} className="rounded-[8px] border border-[#dce9e2] bg-[#eef8f3] px-3 py-3">
+                <div className="flex items-start gap-2">
+                  <input
+                    type="text"
+                    value={goal.title}
+                    onChange={(event) => updateGoalTitle(goal.id, event.target.value)}
+                    className="min-w-0 flex-1 rounded-[6px] border border-[#d7d2c7] bg-white px-3 py-2 text-[13px] font-medium text-[#1a1a18] outline-none transition-colors focus:border-[#185fa5]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeGoal(goal.id)}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#d7d2c7] text-[15px] leading-none text-[#7b766d] transition-colors hover:bg-white"
+                    aria-label={`Удалить цель ${goal.title}`}
+                    title={`Удалить цель ${goal.title}`}
+                  >
+                    -
+                  </button>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-[#73726c]">
+                    {goal.horizon === 'year' ? 'Год' : goal.horizon === 'month' ? 'Месяц' : 'Квартал'}
+                  </span>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-[#73726c]">
+                    {goal.progress}%
+                  </span>
+                </div>
+                {localComps.length > 0 ? (
+                  <div className="mt-3">
+                    <div className="mb-2 text-[10px] text-[#73726c]">Компетенции</div>
+                    <div className="flex flex-wrap gap-2">
+                      {localComps.map((competency) => {
+                        const selected = goal.competencyLinks.some((link) => link.competencyId === competency.id);
+                        return (
+                          <button
+                            key={`${goal.id}-${competency.id}`}
+                            type="button"
+                            onClick={() => updateGoalCompetencies(goal.id, competency.id)}
+                            className={`rounded-full border px-3 py-1.5 text-[11px] transition-colors ${
+                              selected
+                                ? 'border-[#1D9E75] bg-[rgba(29,158,117,0.1)] text-[#0f6e56]'
+                                : 'border-[#d7d2c7] bg-white text-[#4f4b45] hover:bg-[#f0ede6]'
+                            }`}
+                          >
+                            {competency.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[10px] text-[#73726c]">Сначала добавьте компетенции, затем можно связать их с целью.</p>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mb-4 rounded-[8px] border-[0.5px] border-dashed border-[#d7d2c7] bg-[#f5f4f0] px-3 py-3 text-[12px] text-[#73726c]">
+            Целей пока нет. Добавьте первые квартальные цели ниже.
+          </div>
+        )}
+
+        <div className="rounded-[8px] border border-[#e6dfd2] bg-[#f7f2e8] p-3">
+          <div className="mb-3 text-[11px] font-medium text-[#1a1a18]">Новая цель</div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_160px]">
+            <label className="block">
+              <span className="mb-1 block text-[10px] text-[#73726c]">Название</span>
+              <input
+                type="text"
+                value={newGoalTitle}
+                onChange={(event) => {
+                  setNewGoalTitle(event.target.value);
+                  if (goalError) {
+                    setGoalError(null);
+                  }
+                }}
+                placeholder="Например, спокойно обозначать границы в работе"
+                className="w-full rounded-[6px] border border-[#d7d2c7] bg-white px-3 py-2 text-[12px] text-[#1a1a18] outline-none transition-colors placeholder:text-[#9a978f] focus:border-[#1D9E75]"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[10px] text-[#73726c]">Горизонт</span>
+              <select
+                value={newGoalHorizon}
+                onChange={(event) => setNewGoalHorizon(event.target.value as 'year' | 'quarter' | 'month')}
+                className="w-full rounded-[6px] border border-[#d7d2c7] bg-white px-3 py-2 text-[12px] text-[#1a1a18] outline-none transition-colors focus:border-[#1D9E75]"
+              >
+                <option value="quarter">Квартал</option>
+                <option value="month">Месяц</option>
+                <option value="year">Год</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="mt-3">
+            <div className="mb-2 text-[10px] text-[#73726c]">Привязка к компетенциям</div>
+            {localComps.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {localComps.map((competency) => {
+                  const selected = newGoalCompetencyIds.includes(competency.id);
+                  return (
+                    <button
+                      key={competency.id}
+                      type="button"
+                      onClick={() => toggleGoalCompetency(competency.id)}
+                      className={`rounded-full border px-3 py-1.5 text-[11px] transition-colors ${
+                        selected
+                          ? 'border-[#1D9E75] bg-[rgba(29,158,117,0.1)] text-[#0f6e56]'
+                          : 'border-[#d7d2c7] bg-white text-[#4f4b45] hover:bg-[#f0ede6]'
+                      }`}
+                    >
+                      {competency.name}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-[11px] text-[#73726c]">Сначала добавьте компетенции, затем можно привязать их к цели.</p>
+            )}
+          </div>
+
+          {goalError ? (
+            <p className="mt-3 text-[11px] text-[#b14d43]">{goalError}</p>
+          ) : (
+            <p className="mt-3 text-[10px] text-[#73726c]">
+              Если выбрано несколько компетенций, вес между ними распределится поровну. Точные связи можно уточнить позже.
+            </p>
+          )}
+
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={() => void handleAddGoal()}
+              disabled={!newGoalTitle.trim()}
+              className="rounded-[6px] bg-[#185fa5] px-3 py-2 text-[11px] text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Добавить цель
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
@@ -506,14 +877,15 @@ function EditTab({
               +
             </button>
           </div>
-          <button
-            type="button"
-            onClick={() => void handleSave()}
-            disabled={saving}
-            className="rounded-[6px] bg-[#1D9E75] px-3 py-[5px] text-[11px] text-[#E1F5EE] disabled:opacity-60"
-          >
-            {saving ? 'Сохраняем...' : saved ? '✓ Сохранено' : 'Сохранить'}
-          </button>
+          <div className="text-[10px] text-[#73726c]">
+            {profileSaveState === 'saving'
+              ? 'Автосохранение...'
+              : profileSaveState === 'saved'
+                ? 'Сохранено'
+                : profileSaveState === 'error'
+                  ? 'Не удалось сохранить'
+                  : 'Автосохранение включено'}
+          </div>
         </div>
 
         {adding ? (
@@ -660,7 +1032,7 @@ function EditTab({
       </div>
 
       <p className="text-center text-[11px] text-[#73726c]">
-        Для редактирования целей, шагов и весов компетенций:{' '}
+        Во время встречи в сессии лучше работать только с шагами и прогрессом:{' '}
         <Link href={`/coach/clients/${clientId}?tab=session`} className="text-[#185fa5] hover:underline">
           вкладка Сессия
         </Link>
@@ -829,6 +1201,80 @@ function RadarChart({ competencies }: { competencies: CoachingCompetency[] }) {
       })}
     </svg>
   );
+}
+
+function createCoachGoal({
+  title,
+  horizon,
+  competencies,
+}: {
+  title: string;
+  horizon: 'year' | 'quarter' | 'month';
+  competencies: CoachingCompetency[];
+}): CoachGoalTreeNode {
+  const goalId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `goal-${Math.random().toString(36).slice(2, 10)}`;
+  const weight = competencies.length > 0 ? Number((100 / competencies.length).toFixed(2)) : 0;
+
+  return {
+    id: goalId,
+    title,
+    progress: 0,
+    horizon,
+    status: 'active',
+    competencyLinks: competencies.map((competency) => ({
+      competencyId: competency.id,
+      competencyName: competency.name,
+      weight,
+    })),
+    steps: [],
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function syncGoalCompetencies(goal: CoachGoalTreeNode, competencies: CoachingCompetency[]) {
+  const activeCompetencies = competencies.filter((competency) => (
+    goal.competencyLinks.some((link) => link.competencyId === competency.id)
+  ));
+  if (activeCompetencies.length === goal.competencyLinks.length && activeCompetencies.every((competency) => (
+    goal.competencyLinks.some((link) => link.competencyId === competency.id && link.competencyName === competency.name)
+  ))) {
+    return goal;
+  }
+
+  return {
+    ...goal,
+    competencyLinks: rebalanceGoalCompetencies(activeCompetencies),
+  };
+}
+
+function toggleGoalCompetencyLink(goal: CoachGoalTreeNode, competencyId: string, competencies: CoachingCompetency[]) {
+  const nextCompetencies = competencies.filter((competency) => {
+    const selected = goal.competencyLinks.some((link) => link.competencyId === competency.id);
+    if (competency.id === competencyId) {
+      return !selected;
+    }
+    return selected;
+  });
+
+  return {
+    ...goal,
+    competencyLinks: rebalanceGoalCompetencies(nextCompetencies),
+  };
+}
+
+function rebalanceGoalCompetencies(competencies: CoachingCompetency[]) {
+  if (competencies.length === 0) {
+    return [];
+  }
+
+  const weight = Number((100 / competencies.length).toFixed(2));
+  return competencies.map((competency) => ({
+    competencyId: competency.id,
+    competencyName: competency.name,
+    weight,
+  }));
 }
 
 function formatDate(iso: string) {

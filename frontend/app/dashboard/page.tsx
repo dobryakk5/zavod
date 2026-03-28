@@ -181,7 +181,16 @@ export default function DashboardPage() {
 
         <section className="grid gap-[14px] xl:grid-cols-2">
           <div className={`${PANEL_CLASS} p-[14px]`}>
-            <div className="mb-3 text-[13px] font-medium">Клиенты</div>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="text-[13px] font-medium">Клиенты</div>
+              <Link
+                href="/clients/new"
+                aria-label="Добавить клиента"
+                className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-[#d8d4ca] bg-white text-[16px] leading-none text-[#4f4b45] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
+              >
+                +
+              </Link>
+            </div>
             {visibleClients.length > 0 ? (
               <div>
                 {visibleClients.map((client, index) => (

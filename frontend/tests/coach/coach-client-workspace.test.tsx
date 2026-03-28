@@ -7,10 +7,13 @@ const testState = vi.hoisted(() => ({
   replace: vi.fn(),
   getCoachClient: vi.fn(),
   getCoachClientCompetencies: vi.fn(),
+  getCoachClientGoals: vi.fn(),
+  replaceCoachClientGoals: vi.fn(),
   getCoachClientMilestones: vi.fn(),
   getCoachClientSessions: vi.fn(),
   getCoachClientTasks: vi.fn(),
   saveCoachClientCompetencies: vi.fn(),
+  updateCoachClient: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -33,12 +36,15 @@ vi.mock('@/lib/api/coaching', () => ({
   coachingApi: {
     getCoachClient: (...args: unknown[]) => testState.getCoachClient(...args),
     getCoachClientCompetencies: (...args: unknown[]) => testState.getCoachClientCompetencies(...args),
+    getCoachClientGoals: (...args: unknown[]) => testState.getCoachClientGoals(...args),
+    replaceCoachClientGoals: (...args: unknown[]) => testState.replaceCoachClientGoals(...args),
     getCoachClientMilestones: (...args: unknown[]) => testState.getCoachClientMilestones(...args),
     getCoachClientSessions: (...args: unknown[]) => testState.getCoachClientSessions(...args),
   },
   coachingApiExt: {
     getCoachClientTasks: (...args: unknown[]) => testState.getCoachClientTasks(...args),
     saveCoachClientCompetencies: (...args: unknown[]) => testState.saveCoachClientCompetencies(...args),
+    updateCoachClient: (...args: unknown[]) => testState.updateCoachClient(...args),
   },
 }));
 
@@ -68,10 +74,25 @@ describe('CoachClientWorkspace', () => {
         color: '#1D9E75',
       },
     ]);
+    testState.getCoachClientGoals.mockResolvedValue([]);
+    testState.replaceCoachClientGoals.mockImplementation(async (_clientId: number, goals: unknown) => goals);
     testState.getCoachClientMilestones.mockResolvedValue([]);
     testState.getCoachClientSessions.mockResolvedValue([]);
     testState.getCoachClientTasks.mockResolvedValue([]);
     testState.saveCoachClientCompetencies.mockImplementation(async (_clientId: number, competencies: unknown) => competencies);
+    testState.updateCoachClient.mockImplementation(async (_clientId: number, payload: { intention: string }) => ({
+      id: '46',
+      name: 'Анна Иванова',
+      initials: 'АИ',
+      focus: 'Уверенность',
+      intention: payload.intention,
+      sessionsCount: 3,
+      avgProgress: 52,
+      nextSession: null,
+      clientStatus: null,
+      coachId: '7',
+      createdAt: '2026-03-01T10:00:00.000Z',
+    }));
   });
 
   afterEach(() => {
@@ -92,9 +113,7 @@ describe('CoachClientWorkspace', () => {
     fireEvent.change(await screen.findByPlaceholderText('Например, Эмпатия'), { target: { value: 'Эмпатия' } });
     fireEvent.click(screen.getByRole('button', { name: 'Добавить' }));
 
-    expect(screen.getByText('Эмпатия')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(screen.getAllByText('Эмпатия').length).toBeGreaterThan(0);
 
     await waitFor(() => {
       expect(testState.saveCoachClientCompetencies).toHaveBeenCalledWith(
@@ -159,8 +178,6 @@ describe('CoachClientWorkspace', () => {
     await waitFor(() => {
       expect(screen.queryByText('Эмпатия')).not.toBeInTheDocument();
     });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
 
     await waitFor(() => {
       expect(testState.saveCoachClientCompetencies).toHaveBeenCalledWith(
