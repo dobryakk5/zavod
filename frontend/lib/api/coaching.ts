@@ -84,6 +84,18 @@ export type CoachSession = {
   status: 'draft' | 'done';
 };
 
+export type PublicClientCoachingPortalResponse = {
+  client?: {
+    id?: number;
+    name?: string;
+    intention?: string;
+    focus?: string;
+  };
+  goals?: CoachGoalTreeNode[];
+  competencies?: CoachingCompetency[];
+  milestones?: CoachMilestone[];
+};
+
 export const coachingApi = {
   getCoachStats: async (): Promise<CoachStats> => {
     return apiFetch<CoachStats>('/coach/stats/');
@@ -163,6 +175,12 @@ export const coachingApi = {
 
   getCoachClientSessions: async (clientId: number | string): Promise<CoachSession[]> => {
     return apiFetch<CoachSession[]>(`/clients/${clientId}/sessions/`);
+  },
+
+  getClientCoachingPortal: async (
+    clientId: number | string,
+  ): Promise<PublicClientCoachingPortalResponse> => {
+    return apiFetch<PublicClientCoachingPortalResponse>(`/public/client-page/${clientId}/coaching/`);
   },
 
   createCoachSession: async (

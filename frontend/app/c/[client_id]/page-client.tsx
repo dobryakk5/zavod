@@ -1663,6 +1663,18 @@ export default function ContactClientPage({
                   {item.title}
                 </Link>
               ))}
+              <Link
+                href={useCustomDomainPaths ? '/coaching' : `/c/${pageClientId}/coaching`}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-100"
+              >
+                Мой прогресс
+              </Link>
+              <Link
+                href={useCustomDomainPaths ? '/tasks' : `/c/${pageClientId}/tasks`}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-100"
+              >
+                Задания
+              </Link>
             </div>
           </nav>
         )}

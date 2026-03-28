@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db import IntegrityError
+from django.db import IntegrityError, OperationalError, ProgrammingError
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny
@@ -15,6 +15,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from core.models import EmailAuthToken
 
 from .email_auth import (
+    EmailAuthStorageUnavailableError,
     build_magic_link_url,
     issue_email_auth_token,
     normalize_email_address,
@@ -61,11 +62,17 @@ class EmailMagicLinkSendView(APIView):
                 {"detail": "Слишком много запросов. Попробуйте через час."},
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
-        cache.set(rate_key, sends + 1, timeout=_RATE_LIMIT_WINDOW)
 
-        auth_token = issue_email_auth_token(email)
+        try:
+            auth_token = issue_email_auth_token(email)
+        except EmailAuthStorageUnavailableError:
+            return Response(
+                {"detail": "Вход по email временно недоступен. Нужно применить миграции на сервере."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         magic_url = build_magic_link_url(request, auth_token.token)
         send_email_login_link(email, magic_url)
+        cache.set(rate_key, sends + 1, timeout=_RATE_LIMIT_WINDOW)
 
         return Response({"detail": "Письмо отправлено."}, status=status.HTTP_200_OK)
 
@@ -88,6 +95,11 @@ class EmailMagicLinkVerifyView(APIView):
             return Response(
                 {"detail": "Ссылка недействительна."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        except (ProgrammingError, OperationalError):
+            return Response(
+                {"detail": "Вход по email временно недоступен. Нужно применить миграции на сервере."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
         if timezone.now() > auth_token.expires_at:

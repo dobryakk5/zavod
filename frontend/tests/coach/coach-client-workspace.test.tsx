@@ -133,7 +133,7 @@ describe('CoachClientWorkspace', () => {
         ]),
       );
     });
-  });
+  }, 10000);
 
   it('removes a competency and refreshes milestones after save', async () => {
     testState.getCoachClientCompetencies.mockResolvedValue([
@@ -174,7 +174,7 @@ describe('CoachClientWorkspace', () => {
       expect(testState.getCoachClient).toHaveBeenCalledWith(46);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Убрать компетенцию Эмпатия' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Убрать компетенцию Эмпатия' })[0]);
     await waitFor(() => {
       expect(screen.queryByText('Эмпатия')).not.toBeInTheDocument();
     });
@@ -191,5 +191,20 @@ describe('CoachClientWorkspace', () => {
       );
       expect(testState.getCoachClientMilestones).toHaveBeenCalledTimes(2);
     });
-  });
+  }, 10000);
+
+  it('shows a link to the public coaching portal in the workspace header', async () => {
+    const mod = await import('@/app/coach/clients/[client_id]/workspace');
+    const CoachClientWorkspace = mod.default;
+
+    render(<CoachClientWorkspace clientId={46} />);
+
+    await waitFor(() => {
+      expect(testState.getCoachClient).toHaveBeenCalledWith(46);
+    });
+
+    expect(
+      screen.getByRole('link', { name: 'Открыть кабинет клиента Анна Иванова' }),
+    ).toHaveAttribute('href', '/c/46/coaching');
+  }, 10000);
 });

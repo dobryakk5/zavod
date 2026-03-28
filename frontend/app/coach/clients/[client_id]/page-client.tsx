@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ExternalLink } from 'lucide-react';
 import { ApiError } from '@/lib/api';
 import {
   coachingApi,
@@ -614,6 +615,13 @@ export default function CoachClientSessionPage({
                 Назад к dashboard
               </Link>
             </div>
+            <Link
+              href={`/c/${clientId}/coaching`}
+              aria-label={`Открыть кабинет клиента ${data.client?.name ?? 'Клиент'}`}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
+            >
+              <ExternalLink className="h-3 w-3" />
+            </Link>
             <div className="ml-auto rounded-full bg-[#e6f1fb] px-[7px] py-[2px] text-[10px] text-[#185fa5]">
               {activeSession ? `Сессия ${currentSessionNumber} · черновик` : `Следующая сессия ${currentSessionNumber}`}
             </div>

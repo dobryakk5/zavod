@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { ExternalLink } from 'lucide-react';
 import {
   coachingApi,
   coachingApiExt,
@@ -154,6 +155,13 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
         </div>
 
         <div className="ml-auto flex gap-2">
+          <Link
+            href={`/c/${clientId}/coaching`}
+            aria-label={`Открыть кабинет клиента ${client?.name ?? 'Клиент'}`}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </Link>
           <Link
             href="/dashboard"
             className="rounded-lg border border-[#e0ddd6] px-3 py-1.5 text-[11px] text-[#73726c] hover:bg-[#f5f4f0]"

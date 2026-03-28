@@ -395,6 +395,7 @@ export function NewClientForm({ clients, categories, onSave, submitLabel = 'До
   const [status, setStatus] = useState<'active' | 'inactive' | 'archived'>('active');
   const [notes, setNotes] = useState('');
   const [parentId, setParentId] = useState<number | null>(null); // Добавлено поле для выбора родительского клиента
+  const parentSelectValue = parentId === null ? 'none' : String(parentId);
 
   useEffect(() => {
     if (categories.length === 0) {
@@ -585,14 +586,14 @@ export function NewClientForm({ clients, categories, onSave, submitLabel = 'До
       <div className="space-y-2">
         <Label htmlFor="parent">Родительский клиент (необязательно)</Label>
         <Select 
-          value={parentId?.toString() || ""} 
-          onValueChange={(val) => setParentId(val ? Number(val) : null)}
+          value={parentSelectValue}
+          onValueChange={(val) => setParentId(val === 'none' ? null : Number(val))}
         >
           <SelectTrigger>
             <SelectValue placeholder="Выберите родительский клиент" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">Без родителя</SelectItem>
+            <SelectItem value="none">Без родителя</SelectItem>
             {clients
               .filter(client => client.parent_id === null) // Только родительские клиенты
               .map((client) => (
