@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError } from '@/lib/api';
 import {
   coachingApi,
@@ -195,7 +195,7 @@ export default function CoachClientSessionPage({
       return;
     }
     setDraftProgress(selectedGoal.progress);
-  }, [selectedGoal?.id, selectedGoal?.progress]);
+  }, [selectedGoal]);
 
   useEffect(() => {
     if (!actionMessage) return undefined;
@@ -299,7 +299,7 @@ export default function CoachClientSessionPage({
       notes,
       coachNotes,
     };
-  }, [activeSession?.id]);
+  }, [activeSession]);
 
   useEffect(() => {
     if (!activeSession) {
@@ -323,7 +323,7 @@ export default function CoachClientSessionPage({
 
   const intentionText = data.client?.intention?.trim() || data.client?.focus || 'Намерение пока не заполнено';
 
-  const upsertSession = (session: CoachSession) => {
+  const upsertSession = useCallback((session: CoachSession) => {
     setData((current) => ({
       ...current,
       sessions: sortCoachSessions([
@@ -331,9 +331,9 @@ export default function CoachClientSessionPage({
         ...current.sessions.filter((item) => item.id !== session.id),
       ]),
     }));
-  };
+  }, []);
 
-  const persistActiveSession = async (options?: { status?: 'draft' | 'done'; force?: boolean }) => {
+  const persistActiveSession = useCallback(async (options?: { status?: 'draft' | 'done'; force?: boolean }) => {
     if (!activeSession) return null;
 
     const payload = {
@@ -368,7 +368,7 @@ export default function CoachClientSessionPage({
     } finally {
       setSavingSession(false);
     }
-  };
+  }, [activeSession, nextTask, sessionNotes, upsertSession]);
 
   useEffect(() => {
     if (!activeSession) return undefined;
@@ -383,7 +383,7 @@ export default function CoachClientSessionPage({
     }, 1600);
 
     return () => window.clearTimeout(timeoutId);
-  }, [activeSession?.id, sessionNotes, nextTask]);
+  }, [activeSession, sessionNotes, nextTask, persistActiveSession]);
 
   const handleToggleStep = async (stepId: string, done: boolean) => {
     if (!selectedGoal) return;
