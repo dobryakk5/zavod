@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-import secrets
-from datetime import timedelta
-
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
-from django.core.mail import send_mail
 from django.core.validators import validate_email
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny
@@ -19,29 +14,18 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import EmailAuthToken
 
+from .email_auth import (
+    build_magic_link_url,
+    issue_email_auth_token,
+    normalize_email_address,
+    send_email_login_link,
+)
 from .views_accounts import COOKIE_MAX_AGE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
 
 User = get_user_model()
 
-_MAGIC_LINK_TTL = 15 * 60
 _RATE_LIMIT_MAX = 3
 _RATE_LIMIT_WINDOW = 60 * 60
-
-
-def _normalize_email(value: str) -> str:
-    return str(value or "").strip().lower()
-
-
-def _build_frontend_url(request) -> str:
-    frontend_url = str(getattr(settings, "FRONTEND_URL", "") or "").strip().rstrip("/")
-    if frontend_url:
-        return frontend_url
-
-    origin = str(request.headers.get("Origin", "") or "").strip().rstrip("/")
-    if origin:
-        return origin
-
-    return request.build_absolute_uri("/").rstrip("/")
 
 
 def _generate_unique_username(email: str) -> str:
@@ -60,7 +44,7 @@ class EmailMagicLinkSendView(APIView):
     authentication_classes: tuple = ()
 
     def post(self, request):
-        email = _normalize_email(request.data.get("email"))
+        email = normalize_email_address(request.data.get("email"))
 
         try:
             validate_email(email)
@@ -79,26 +63,9 @@ class EmailMagicLinkSendView(APIView):
             )
         cache.set(rate_key, sends + 1, timeout=_RATE_LIMIT_WINDOW)
 
-        token = secrets.token_urlsafe(32)
-        expires_at = timezone.now() + timedelta(seconds=_MAGIC_LINK_TTL)
-
-        with transaction.atomic():
-            EmailAuthToken.objects.filter(email=email).delete()
-            EmailAuthToken.objects.create(email=email, token=token, expires_at=expires_at)
-
-        magic_url = f"{_build_frontend_url(request)}/auth/email/verify?token={token}"
-
-        send_mail(
-            subject="Вход в личный кабинет",
-            message=(
-                "Для входа перейдите по ссылке. Она действительна 15 минут:\n\n"
-                f"{magic_url}\n\n"
-                "Если вы не запрашивали вход, просто проигнорируйте это письмо."
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[email],
-            fail_silently=False,
-        )
+        auth_token = issue_email_auth_token(email)
+        magic_url = build_magic_link_url(request, auth_token.token)
+        send_email_login_link(email, magic_url)
 
         return Response({"detail": "Письмо отправлено."}, status=status.HTTP_200_OK)
 

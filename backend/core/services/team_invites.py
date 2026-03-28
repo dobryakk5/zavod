@@ -34,6 +34,10 @@ def normalize_account_handle(value: str) -> str:
     return normalized.lower()
 
 
+def normalize_email_address(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
 def get_team_capacity_snapshot(client: Client, *, exclude_pending_invite_id: int | None = None) -> TeamCapacitySnapshot:
     limit = int(getattr(settings, "TEAM_MAX_COLLABORATORS", 20) or 20)
     active_members = UserTenantRole.objects.filter(
@@ -137,6 +141,14 @@ def find_users_by_provider_handle(provider: str, normalized_handle: str):
 
 
 def get_matching_project_membership(client: Client, provider: str, normalized_handle: str) -> UserTenantRole | None:
+    if provider == ProjectTeamInvite.Provider.EMAIL:
+        return (
+            UserTenantRole.objects.select_related("user")
+            .filter(client=client, user__email__iexact=normalized_handle)
+            .order_by("id")
+            .first()
+        )
+
     users = find_users_by_provider_handle(provider, normalized_handle)
     if users.count() != 1:
         return None
@@ -150,12 +162,20 @@ def get_matching_project_membership(client: Client, provider: str, normalized_ha
 def accept_pending_team_invites(user) -> list[ProjectTeamInvite]:
     provider_handles = get_user_provider_handles(user)
     if not provider_handles:
-        return []
+        provider_handles = {}
 
     invite_match_query = Q()
     for provider, handles in provider_handles.items():
         if handles:
             invite_match_query |= Q(provider=provider, account_handle_normalized__in=sorted(handles))
+
+    normalized_email = normalize_email_address(getattr(user, "email", ""))
+    if normalized_email:
+        invite_match_query |= Q(
+            provider=ProjectTeamInvite.Provider.EMAIL,
+            account_handle_normalized=normalized_email,
+        )
+
     if not invite_match_query:
         return []
 

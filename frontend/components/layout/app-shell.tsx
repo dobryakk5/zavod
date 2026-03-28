@@ -7,8 +7,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Sheet, SheetClose, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { LayoutDashboard, Megaphone, Menu, Package2, Settings2 } from 'lucide-react';
-import { getAppShellRouteTitle, useAppShellState } from './use-app-shell-state';
+import { CheckCircle2, LayoutDashboard, Megaphone, Menu, Package2, Settings2, UserRound, XCircle } from 'lucide-react';
+import { getAppShellRouteTitle, type AuthProviderUser, type LoggedUserModalData, useAppShellState } from './use-app-shell-state';
 import { DASHBOARD_ROUTE, MARKETING_ROUTE } from '@/lib/routes';
 
 function UserAvatar({
@@ -109,6 +109,221 @@ function formatRoleLabel(role?: string | null) {
   if (role === 'editor') return 'Редактор';
   if (role === 'viewer') return 'Наблюдатель';
   return 'Участник команды';
+}
+
+function formatDateLabel(value?: string | null) {
+  if (!value) {
+    return 'Не указано';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat('ru-RU', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function formatDisplayName(profile?: AuthProviderUser | null) {
+  if (!profile) {
+    return 'Не подключено';
+  }
+
+  const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ').trim();
+  if (fullName) {
+    return fullName;
+  }
+
+  const username = profile.username?.trim().replace(/^@+/, '');
+  if (username) {
+    return `@${username}`;
+  }
+
+  return 'Без имени';
+}
+
+function formatProviderName(provider?: string | null) {
+  if (provider === 'telegram') return 'Telegram';
+  if (provider === 'vk') return 'ВКонтакте';
+  return provider ? provider : 'Неизвестный сервис';
+}
+
+function formatAccountHandle(account?: LoggedUserModalData['accounts'][number]) {
+  const username = account?.extra_data?.username?.trim();
+  if (username) {
+    return `@${username.replace(/^@+/, '')}`;
+  }
+
+  const screenName = account?.extra_data?.screen_name?.trim();
+  if (screenName) {
+    return `@${screenName.replace(/^@+/, '')}`;
+  }
+
+  return account?.provider_id?.trim() || 'Без идентификатора';
+}
+
+function ProviderStatusCard({
+  title,
+  profile,
+  idLabel,
+}: {
+  title: string;
+  profile?: AuthProviderUser | null;
+  idLabel: string;
+}) {
+  const connected = Boolean(profile);
+  const accountId = profile?.telegramId || profile?.vkId;
+  const username = profile?.username?.trim();
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-gray-950">{title}</div>
+          <div className="mt-1 text-sm text-gray-600">
+            {connected ? formatDisplayName(profile) : 'Аккаунт пока не подключён'}
+          </div>
+        </div>
+        <div
+          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
+            connected ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'
+          }`}
+        >
+          {connected ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+          {connected ? 'Подключён' : 'Не подключён'}
+        </div>
+      </div>
+
+      {connected ? (
+        <dl className="mt-4 space-y-2 text-sm">
+          <div className="flex items-start justify-between gap-4">
+            <dt className="text-gray-500">{idLabel}</dt>
+            <dd className="text-right text-gray-900">{accountId || 'Не указано'}</dd>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <dt className="text-gray-500">Логин</dt>
+            <dd className="text-right text-gray-900">{username ? `@${username.replace(/^@+/, '')}` : 'Не указан'}</dd>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <dt className="text-gray-500">Контакт в CRM</dt>
+            <dd className="text-right text-gray-900">{profile?.contactId ?? 'Не привязан'}</dd>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <dt className="text-gray-500">ID проекта</dt>
+            <dd className="text-right text-gray-900">{profile?.tenantId ?? 'Не указан'}</dd>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <dt className="text-gray-500">Дата авторизации</dt>
+            <dd className="text-right text-gray-900">{formatDateLabel(profile?.authDate)}</dd>
+          </div>
+        </dl>
+      ) : null}
+    </section>
+  );
+}
+
+function LinkedAccountsSection({ accounts }: { accounts: LoggedUserModalData['accounts'] }) {
+  if (!accounts?.length) {
+    return (
+      <section className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+        Связанных социальных аккаунтов пока нет.
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-3">
+      {accounts.map((account, index) => {
+        const displayName =
+          [account.extra_data?.first_name, account.extra_data?.last_name].filter(Boolean).join(' ').trim()
+          || account.extra_data?.email?.trim()
+          || formatAccountHandle(account);
+
+        return (
+          <div
+            key={`${account.provider || 'provider'}-${account.provider_id || index}`}
+            className="rounded-2xl border border-gray-200 bg-white p-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-gray-950">{formatProviderName(account.provider)}</div>
+                <div className="mt-1 text-sm text-gray-700">{displayName}</div>
+              </div>
+              <div className="rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600">
+                {formatAccountHandle(account)}
+              </div>
+            </div>
+            <div className="mt-3 text-xs text-gray-500">
+              Подключён: {formatDateLabel(account.created_at)}
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function UserProfileDialogContent({ data }: { data: LoggedUserModalData | null }) {
+  if (!data) {
+    return <div className="text-sm text-gray-600">Нет данных для отображения.</div>;
+  }
+
+  if (data.error) {
+    return (
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+        {data.error}
+      </div>
+    );
+  }
+
+  const primaryProfile = data.user?.primary ?? data.user?.telegram ?? data.user?.vk ?? null;
+  const primaryPhoto = primaryProfile?.photoUrl?.trim() || null;
+
+  return (
+    <div className="space-y-5 text-gray-900">
+      <section className="flex items-center gap-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
+        <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-white">
+          {primaryPhoto ? (
+            <Image
+              src={primaryPhoto}
+              alt="Фото профиля"
+              width={56}
+              height={56}
+              className="h-14 w-14 rounded-full object-cover"
+              unoptimized
+            />
+          ) : (
+            <UserRound className="h-6 w-6 text-gray-400" />
+          )}
+        </div>
+        <div className="min-w-0">
+          <div className="text-base font-semibold text-gray-950">{formatDisplayName(primaryProfile)}</div>
+          <div className="mt-1 text-sm text-gray-600">
+            {primaryProfile?.username ? `@${primaryProfile.username.replace(/^@+/, '')}` : 'Логин не указан'}
+          </div>
+          <div className="mt-1 text-xs text-gray-500">
+            Основной профиль для входа и связанных социальных аккаунтов
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-3 text-sm font-semibold text-gray-950">Подключённые способы входа</div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <ProviderStatusCard title="Telegram" profile={data.user?.telegram} idLabel="Telegram ID" />
+          <ProviderStatusCard title="ВКонтакте" profile={data.user?.vk} idLabel="VK ID" />
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-3 text-sm font-semibold text-gray-950">Связанные соцаккаунты</div>
+        <LinkedAccountsSection accounts={data.accounts} />
+      </section>
+    </div>
+  );
 }
 
 function NavigationLink({
@@ -359,20 +574,20 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       <Dialog open={userModalOpen} onOpenChange={setUserModalOpen}>
-        <DialogContent className="border-gray-200 bg-white text-gray-900 sm:max-w-2xl">
+        <DialogContent className="border-gray-200 !bg-white !text-gray-900 shadow-xl sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Данные авторизованного пользователя</DialogTitle>
+            <DialogTitle className="text-gray-950">Профиль и соцаккаунты</DialogTitle>
             <DialogDescription className="text-gray-600">
-              Telegram/VK auth profile и связанные социальные аккаунты.
+              Понятная сводка по входу через Telegram, VK и привязанным аккаунтам.
             </DialogDescription>
           </DialogHeader>
 
           {userModalLoading ? (
             <div className="text-sm text-gray-600">Загрузка...</div>
           ) : (
-            <pre className="max-h-[60vh] overflow-auto rounded-2xl bg-gray-50 p-4 text-xs leading-relaxed text-gray-700">
-              {JSON.stringify(loggedUserData, null, 2)}
-            </pre>
+            <div className="max-h-[60vh] overflow-auto pr-1">
+              <UserProfileDialogContent data={loggedUserData} />
+            </div>
           )}
         </DialogContent>
       </Dialog>

@@ -448,6 +448,7 @@ class ProjectTeamInvite(models.Model):
     class Provider(models.TextChoices):
         TELEGRAM = "telegram", "Telegram"
         VK = "vk", "VK"
+        EMAIL = "email", "Email"
 
     class Role(models.TextChoices):
         EDITOR = "editor", "Editor"

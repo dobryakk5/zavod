@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 const providerLabels: Record<string, string> = {
   telegram: 'Telegram',
   vk: 'VK',
+  email: 'Email',
 };
 
 function formatInviteDate(value: string) {
@@ -49,7 +50,7 @@ export function TeamManagement() {
   const [submitting, setSubmitting] = useState(false);
   const [busyMemberId, setBusyMemberId] = useState<number | null>(null);
   const [busyInviteId, setBusyInviteId] = useState<number | null>(null);
-  const [provider, setProvider] = useState<'telegram' | 'vk'>('telegram');
+  const [provider, setProvider] = useState<'telegram' | 'vk' | 'email'>('telegram');
   const [accountHandle, setAccountHandle] = useState('');
 
   const loadTeam = useCallback(async () => {
@@ -82,7 +83,7 @@ export function TeamManagement() {
   const handleInvite = async () => {
     const normalizedHandle = accountHandle.trim();
     if (!normalizedHandle) {
-      toast.error('Введите аккаунт для приглашения');
+      toast.error(provider === 'email' ? 'Введите email для приглашения' : 'Введите аккаунт для приглашения');
       return;
     }
 
@@ -163,7 +164,7 @@ export function TeamManagement() {
         <div className="mb-4">
           <h3 className="text-base font-semibold">Пригласить в команду</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Введите Telegram или VK аккаунт. Доступ выдастся, когда пользователь войдет этим аккаунтом.
+            Приглашайте по Telegram, VK или email. Для email отправим письмо со ссылкой на вход.
           </p>
           {team && <p className="mt-2 text-xs text-muted-foreground">{slotsText}</p>}
         </div>
@@ -171,24 +172,32 @@ export function TeamManagement() {
         <div className="grid gap-4 md:grid-cols-[180px_minmax(0,1fr)_auto]">
           <div className="space-y-2">
             <Label htmlFor="team-provider">Платформа</Label>
-            <Select value={provider} onValueChange={(value: 'telegram' | 'vk') => setProvider(value)}>
+            <Select value={provider} onValueChange={(value: 'telegram' | 'vk' | 'email') => setProvider(value)}>
               <SelectTrigger id="team-provider">
                 <SelectValue placeholder="Выберите платформу" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="telegram">Telegram</SelectItem>
                 <SelectItem value="vk">VK</SelectItem>
+                <SelectItem value="email">Email</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="team-account-handle">Аккаунт</Label>
+            <Label htmlFor="team-account-handle">{provider === 'email' ? 'Email' : 'Аккаунт'}</Label>
             <Input
               id="team-account-handle"
+              type={provider === 'email' ? 'email' : 'text'}
               value={accountHandle}
               onChange={(event) => setAccountHandle(event.target.value)}
-              placeholder={provider === 'telegram' ? '@username' : 'screen_name'}
+              placeholder={
+                provider === 'telegram'
+                  ? '@username'
+                  : provider === 'vk'
+                    ? 'screen_name'
+                    : 'user@example.com'
+              }
               disabled={submitting}
             />
           </div>

@@ -58,13 +58,46 @@ export function isAppShellPublicRoute(pathname: string): boolean {
 }
 
 type SocialAccount = {
+  provider?: string;
+  provider_id?: string;
+  created_at?: string;
   extra_data?: {
     photo_url?: string;
     photo_storage_url?: string;
     first_name?: string;
     username?: string;
     screen_name?: string;
+    last_name?: string;
+    email?: string;
   };
+};
+
+export type AuthProviderUser = {
+  telegramId?: string;
+  vkId?: string;
+  firstName?: string;
+  lastName?: string;
+  username?: string;
+  photoUrl?: string | null;
+  authDate?: string;
+  isDev?: boolean;
+  contactId?: number | null;
+  tenantId?: number | null;
+};
+
+export type LoggedUserModalData = {
+  error?: string;
+  sources?: {
+    social_accounts?: unknown;
+    telegram_auth?: unknown;
+    vk_auth?: unknown;
+  };
+  user?: {
+    primary?: AuthProviderUser | null;
+    telegram?: AuthProviderUser | null;
+    vk?: AuthProviderUser | null;
+  };
+  accounts?: SocialAccount[];
 };
 
 export function useAppShellState() {
@@ -75,7 +108,7 @@ export function useAppShellState() {
   const [avatarInitial, setAvatarInitial] = useState('U');
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [userModalLoading, setUserModalLoading] = useState(false);
-  const [loggedUserData, setLoggedUserData] = useState<Record<string, unknown> | null>(null);
+  const [loggedUserData, setLoggedUserData] = useState<LoggedUserModalData | null>(null);
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   const [clientInfoLoading, setClientInfoLoading] = useState(false);
   const [switchingClient, setSwitchingClient] = useState(false);

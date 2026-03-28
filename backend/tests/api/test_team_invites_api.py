@@ -5,6 +5,7 @@ import copy
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -116,6 +117,30 @@ def test_create_team_invitation_returns_pending_created(owner_client, project):
 
 
 @pytest.mark.django_db
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    FRONTEND_URL="https://frontend.example.com",
+)
+def test_create_email_team_invitation_sends_magic_link(owner_client, project):
+    response = owner_client.post(
+        reverse("api:client-team-invitations"),
+        {"provider": "email", "account_handle": "new-user@example.com"},
+        format="json",
+    )
+
+    assert response.status_code == 202, response.content
+    payload = response.json()
+    assert payload["status"] == "pending_created"
+    assert "email" in payload["message"].lower()
+
+    invite = ProjectTeamInvite.objects.get(client=project, provider=ProjectTeamInvite.Provider.EMAIL)
+    assert invite.account_handle_normalized == "new-user@example.com"
+    assert len(mail.outbox) == 1
+    assert mail.outbox[0].to == ["new-user@example.com"]
+    assert "https://frontend.example.com/auth/email/verify?token=" in mail.outbox[0].body
+
+
+@pytest.mark.django_db
 def test_create_team_invitation_returns_existing_pending(owner_client, project):
     ProjectTeamInvite.objects.create(
         client=project,
@@ -146,6 +171,21 @@ def test_create_team_invitation_returns_already_member_for_existing_handle(owner
     response = owner_client.post(
         reverse("api:client-team-invitations"),
         {"provider": "telegram", "account_handle": "@member_handle"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.content
+    assert response.json()["status"] == "already_member"
+
+
+@pytest.mark.django_db
+def test_create_email_team_invitation_returns_already_member_for_existing_email(owner_client, project):
+    user = User.objects.create_user(username="member-email", email="member@example.com", password="testpass123")
+    UserTenantRole.objects.create(user=user, client=project, role="editor")
+
+    response = owner_client.post(
+        reverse("api:client-team-invitations"),
+        {"provider": "email", "account_handle": "member@example.com"},
         format="json",
     )
 
@@ -212,6 +252,28 @@ def test_pending_invite_accepts_on_first_authenticated_request(project):
     assert response.status_code == 200, response.content
     assert response.json()["client"]["id"] == project.id
     invite = ProjectTeamInvite.objects.get(client=project, account_handle_normalized="first_login")
+    assert invite.status == ProjectTeamInvite.Status.ACCEPTED
+    assert UserTenantRole.objects.filter(user=invited, client=project, role="editor").exists()
+
+
+@pytest.mark.django_db
+def test_email_pending_invite_accepts_on_first_authenticated_request(project):
+    invited = User.objects.create_user(username="email-invited", email="email-invited@example.com", password="testpass123")
+    ProjectTeamInvite.objects.create(
+        client=project,
+        invited_by=project.usertenantrole_set.get(role="owner").user,
+        provider=ProjectTeamInvite.Provider.EMAIL,
+        account_handle_raw="email-invited@example.com",
+        account_handle_normalized="email-invited@example.com",
+        role=ProjectTeamInvite.Role.EDITOR,
+    )
+    client = _api_client_for(invited)
+
+    response = client.get(reverse("api:client-info"))
+
+    assert response.status_code == 200, response.content
+    assert response.json()["client"]["id"] == project.id
+    invite = ProjectTeamInvite.objects.get(client=project, account_handle_normalized="email-invited@example.com")
     assert invite.status == ProjectTeamInvite.Status.ACCEPTED
     assert UserTenantRole.objects.filter(user=invited, client=project, role="editor").exists()
 

@@ -107,7 +107,7 @@ export const clientApi = {
   },
 
   createTeamInvitation: async (payload: {
-    provider: 'telegram' | 'vk';
+    provider: 'telegram' | 'vk' | 'email';
     account_handle: string;
   }): Promise<CreateTeamInvitationResponse> => {
     return apiFetch<CreateTeamInvitationResponse>('/client/team/invitations/', {

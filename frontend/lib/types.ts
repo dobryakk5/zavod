@@ -744,7 +744,7 @@ export interface ClientMembership {
 }
 
 export interface TeamProviderAccount {
-  provider: 'telegram' | 'vk' | string;
+  provider: 'telegram' | 'vk' | 'email' | string;
   handle?: string | null;
   display_name: string;
 }
@@ -761,7 +761,7 @@ export interface TeamMember {
 
 export interface PendingTeamInvite {
   id: number;
-  provider: 'telegram' | 'vk' | string;
+  provider: 'telegram' | 'vk' | 'email' | string;
   account_handle_raw: string;
   account_handle_normalized: string;
   role: UserRole | 'editor';

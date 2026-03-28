@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import status
@@ -17,6 +19,7 @@ from core.services.team_invites import (
     sync_active_client_preference_after_membership_removal,
 )
 
+from .email_auth import build_magic_link_url, issue_email_auth_token, normalize_email_address, send_team_invite_email
 from .permissions import IsTenantOwner
 from .serializers import PendingTeamInviteSerializer, TeamOverviewSerializer
 from .throttles import TeamInvitationDayThrottle, TeamInvitationMinuteThrottle
@@ -133,13 +136,27 @@ class ClientTeamInvitationsView(APIView):
     def post(self, request):
         client = get_active_client(request.user)
         provider = str(request.data.get("provider") or "").strip().lower()
-        if provider not in {ProjectTeamInvite.Provider.TELEGRAM, ProjectTeamInvite.Provider.VK}:
+        if provider not in {
+            ProjectTeamInvite.Provider.TELEGRAM,
+            ProjectTeamInvite.Provider.VK,
+            ProjectTeamInvite.Provider.EMAIL,
+        }:
             return Response({"error": "Некорректный provider"}, status=status.HTTP_400_BAD_REQUEST)
 
         account_handle_raw = str(request.data.get("account_handle") or "").strip()
-        normalized_handle = normalize_account_handle(account_handle_raw)
+        if provider == ProjectTeamInvite.Provider.EMAIL:
+            normalized_handle = normalize_email_address(account_handle_raw)
+            try:
+                validate_email(normalized_handle)
+            except ValidationError:
+                return Response({"error": "Введите корректный email"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            normalized_handle = normalize_account_handle(account_handle_raw)
         if not normalized_handle:
-            return Response({"error": "Введите аккаунт"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Введите email" if provider == ProjectTeamInvite.Provider.EMAIL else "Введите аккаунт"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         existing_member = get_matching_project_membership(client, provider, normalized_handle)
         if existing_member is not None:
@@ -177,15 +194,26 @@ class ClientTeamInvitationsView(APIView):
             )
 
         try:
-            invite = ProjectTeamInvite.objects.create(
-                client=client,
-                invited_by=request.user,
-                provider=provider,
-                account_handle_raw=account_handle_raw,
-                account_handle_normalized=normalized_handle,
-                role=ProjectTeamInvite.Role.EDITOR,
-                status=ProjectTeamInvite.Status.PENDING,
-            )
+            with transaction.atomic():
+                invite = ProjectTeamInvite.objects.create(
+                    client=client,
+                    invited_by=request.user,
+                    provider=provider,
+                    account_handle_raw=account_handle_raw,
+                    account_handle_normalized=normalized_handle,
+                    role=ProjectTeamInvite.Role.EDITOR,
+                    status=ProjectTeamInvite.Status.PENDING,
+                )
+
+                if provider == ProjectTeamInvite.Provider.EMAIL:
+                    auth_token = issue_email_auth_token(normalized_handle)
+                    inviter_name = request.user.get_full_name() or request.user.get_username()
+                    send_team_invite_email(
+                        normalized_handle,
+                        build_magic_link_url(request, auth_token.token),
+                        project_name=client.name,
+                        inviter_name=inviter_name,
+                    )
         except IntegrityError:
             invite = ProjectTeamInvite.objects.filter(
                 client=client,
@@ -201,10 +229,15 @@ class ClientTeamInvitationsView(APIView):
                 }
             )
 
+        message = (
+            "Приглашение отправлено на email. Пользователь получит доступ после входа по ссылке из письма."
+            if provider == ProjectTeamInvite.Provider.EMAIL
+            else "Приглашение обработано. Когда пользователь войдёт подходящим аккаунтом, доступ будет доступен в проекте."
+        )
         return Response(
             {
                 "status": "pending_created",
-                "message": "Приглашение обработано. Когда пользователь войдёт подходящим аккаунтом, доступ будет доступен в проекте.",
+                "message": message,
                 "invite_id": invite.id,
             },
             status=status.HTTP_202_ACCEPTED,
