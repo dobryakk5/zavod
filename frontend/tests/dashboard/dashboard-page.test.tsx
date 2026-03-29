@@ -84,7 +84,7 @@ describe('DashboardPage', () => {
       expect(testState.getCoachClients).toHaveBeenCalled();
     });
 
-    expect(screen.getByRole('link', { name: 'Добавить клиента' })).toHaveAttribute('href', '/clients/new');
+    expect(screen.getByRole('link', { name: 'Добавить клиента' })).toHaveAttribute('href', '/clients/new?from=dashboard');
   });
 
   it('shows recent new clients summary for clients created in the last 30 days', async () => {

@@ -75,7 +75,7 @@ function ClientSwitcher({
   value?: string;
   loading: boolean;
   switching: boolean;
-  memberships: Array<{ client: { id: number; name: string } }>;
+  memberships: Array<{ client: { id: number; name: string }; displayName?: string }>;
   onChange: (value: string) => void;
 }) {
   return (
@@ -87,7 +87,7 @@ function ClientSwitcher({
         <SelectContent>
           {memberships.map((membership) => (
             <SelectItem key={membership.client.id} value={String(membership.client.id)}>
-              {membership.client.name}
+              {membership.displayName || membership.client.name}
             </SelectItem>
           ))}
         </SelectContent>
@@ -387,6 +387,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     userModalLoading,
     loggedUserData,
     clientInfo,
+    activeClientDisplayName,
     clientInfoLoading,
     switchingClient,
     openLoggedUserModal,
@@ -401,6 +402,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   const memberships = clientInfo?.memberships ?? [];
+  const switcherMemberships = memberships.map((membership) => (
+    membership.client.id === clientInfo?.active_client_id
+      ? { ...membership, displayName: activeClientDisplayName || membership.client.name }
+      : membership
+  ));
   const canSwitchClient = memberships.length > 1;
   const activeMembership = memberships.find((membership) => membership.client.id === clientInfo?.active_client_id) ?? memberships[0];
 
@@ -421,7 +427,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="px-3">
               <div className="text-[11px] uppercase tracking-[0.18em] text-[#948c84]">Активный проект</div>
               <div className="mt-2 text-[17px] font-semibold text-gray-950">
-                {clientInfo?.client.name || 'Загрузка проекта...'}
+                {activeClientDisplayName || clientInfo?.client.name || 'Загрузка проекта...'}
               </div>
               <div className="mt-1 text-sm text-[#746d66]">{formatRoleLabel(activeMembership?.role)}</div>
 
@@ -431,7 +437,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     value={clientInfo ? String(clientInfo.active_client_id) : undefined}
                     loading={clientInfoLoading}
                     switching={switchingClient}
-                    memberships={memberships}
+                    memberships={switcherMemberships}
                     onChange={(value) => void handleClientSwitch(value)}
                   />
                 </div>
@@ -503,7 +509,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       <div className="rounded-3xl border border-gray-200 bg-white px-4 py-4 shadow-sm">
                         <div className="text-xs uppercase tracking-[0.16em] text-gray-400">Активный проект</div>
                         <div className="mt-2 text-base font-semibold text-gray-950">
-                          {clientInfo?.client.name || 'Загрузка проекта...'}
+                          {activeClientDisplayName || clientInfo?.client.name || 'Загрузка проекта...'}
                         </div>
                         <div className="mt-1 text-sm text-gray-500">{formatRoleLabel(activeMembership?.role)}</div>
 
@@ -513,7 +519,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                               value={clientInfo ? String(clientInfo.active_client_id) : undefined}
                               loading={clientInfoLoading}
                               switching={switchingClient}
-                              memberships={memberships}
+                              memberships={switcherMemberships}
                               onChange={(value) => void handleClientSwitch(value)}
                             />
                           </div>

@@ -126,42 +126,47 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f5f4f0]">
-      <div className="flex items-center gap-3 border-b border-[#e0ddd6] bg-white px-5 py-2.5">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e1f5ee] text-[12px] font-medium text-[#0f6e56]">
-          {client?.initials ?? '—'}
-        </div>
-        <div>
-          <p className="text-[14px] font-medium text-[#1a1a18]">{client?.name ?? 'Клиент'}</p>
-          <p className="text-[11px] text-[#73726c]">
-            {client?.sessionsCount ?? 0} сессий · {client?.focus ?? ''}
-          </p>
-        </div>
-
-        <div className="ml-6 flex gap-0.5 rounded-lg bg-[#f1efe8] p-0.5">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => switchTab(tab.id)}
-              className={`rounded-md px-4 py-1.5 text-[12px] transition-colors ${
-                activeTab === tab.id
-                  ? 'bg-white font-medium text-[#1a1a18] shadow-sm'
-                  : 'text-[#73726c] hover:text-[#1a1a18]'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+      <div className="border-b border-[#e0ddd6] bg-white px-3 py-3 sm:px-5 sm:py-2.5">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e1f5ee] text-[12px] font-medium text-[#0f6e56]">
+            {client?.initials ?? '—'}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-[14px] font-medium text-[#1a1a18]">{client?.name ?? 'Клиент'}</p>
+            <p className="text-[11px] leading-4 text-[#73726c]">
+              {client?.sessionsCount ?? 0} сессий · {client?.focus ?? ''}
+            </p>
+          </div>
         </div>
 
-        <div className="ml-auto flex gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2 sm:flex-nowrap">
+          <div className="min-w-0 flex-1 overflow-x-auto pb-1">
+            <div className="flex w-max gap-0.5 rounded-lg bg-[#f1efe8] p-0.5">
+              {TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => switchTab(tab.id)}
+                  className={`rounded-md px-4 py-1.5 text-[12px] transition-colors ${
+                    activeTab === tab.id
+                      ? 'bg-white font-medium text-[#1a1a18] shadow-sm'
+                      : 'text-[#73726c] hover:text-[#1a1a18]'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <Link
             href={`/c/${clientId}/coaching`}
             aria-label={`Открыть кабинет клиента ${client?.name ?? 'Клиент'}`}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
           >
             <ExternalLink className="h-4 w-4" />
           </Link>
+
           <Link
             href="/dashboard"
             className="rounded-lg border border-[#e0ddd6] px-3 py-1.5 text-[11px] text-[#73726c] hover:bg-[#f5f4f0]"
@@ -284,7 +289,7 @@ function OverviewTab({
   }
 
   return (
-    <div className="mx-auto max-w-[1200px] space-y-5 p-5">
+    <div className="mx-auto max-w-[1200px] space-y-5 p-3 sm:p-5">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatCard value={`${avgProgress}%`} label="средний прогресс" />
         <StatCard value={`${doneCount} / ${allSteps.length}`} label="шагов выполнено" />
@@ -344,7 +349,7 @@ function OverviewTab({
                       {completing === step.id ? <span className="text-[9px] text-[#73726c]">…</span> : null}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[11px] text-[#1a1a18]">{step.text}</p>
+                      <p className="text-[11px] leading-4 text-[#1a1a18]">{step.text}</p>
                       <p className="text-[10px] text-[#73726c]">{step.goalTitle}</p>
                     </div>
                     {step.dueDate ? (
@@ -447,7 +452,7 @@ function HistoryTab({
   sessions: CoachSession[];
 }) {
   return (
-    <div className="mx-auto max-w-[800px] space-y-5 p-5">
+    <div className="mx-auto max-w-[800px] space-y-5 p-3 sm:p-5">
       <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
         <SectionTitle>Все вехи</SectionTitle>
         {milestones.length === 0 ? (
@@ -723,7 +728,7 @@ function EditTab({
   }
 
   return (
-    <div className="mx-auto max-w-[800px] space-y-4 p-5">
+    <div className="mx-auto max-w-[800px] space-y-4 p-3 sm:p-5">
       <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
         <SectionTitle>Намерение клиента</SectionTitle>
         <input
@@ -906,7 +911,7 @@ function EditTab({
       </div>
 
       <div className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white p-4">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
             <SectionTitle className="mb-0">Компетенции</SectionTitle>
             <button
@@ -1141,7 +1146,7 @@ function WorkspaceSkeleton() {
   return (
     <div className="min-h-screen animate-pulse bg-[#f5f4f0]">
       <div className="h-12 border-b border-[#e0ddd6] bg-white" />
-      <div className="mx-auto max-w-[1200px] space-y-4 p-5">
+      <div className="mx-auto max-w-[1200px] space-y-4 p-3 sm:p-5">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           {[1, 2, 3, 4].map((item) => (
             <div key={item} className="h-20 rounded-[8px] bg-[#ece7dd]" />

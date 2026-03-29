@@ -64,7 +64,7 @@ describe('NewClientForm', () => {
 
     render(<NewClientForm clients={[]} categories={[]} onSave={vi.fn()} />);
 
-    expect(screen.getByLabelText('Имя')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Имя/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Добавить клиента' })).toBeInTheDocument();
   });
 
@@ -75,7 +75,7 @@ describe('NewClientForm', () => {
 
     render(<NewClientForm clients={[]} categories={[]} onSave={onSave} submitLabel="Создать клиента" />);
 
-    fireEvent.change(screen.getByLabelText('Имя'), { target: { value: 'Анна Иванова' } });
+    fireEvent.change(screen.getByLabelText(/Имя/), { target: { value: 'Анна Иванова' } });
     fireEvent.click(screen.getByRole('button', { name: 'Создать клиента' }));
 
     await waitFor(() => {

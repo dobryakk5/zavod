@@ -13,6 +13,8 @@ const buildApiUrl = (path: string) => {
   return `${API_BASE_URL}${normalizedPath}`;
 };
 
+const VK_CLIENT_NAME_RE = /^vk_\d+$/i;
+
 export const APP_SHELL_NAV_ITEMS = [
   { href: DASHBOARD_ROUTE, label: 'Дашборд' },
   { href: MARKETING_ROUTE, label: 'Маркетинг' },
@@ -101,6 +103,24 @@ export type LoggedUserModalData = {
   accounts?: SocialAccount[];
 };
 
+function getVkDisplayName(accounts: SocialAccount[]): string | null {
+  const vkAccount = accounts.find((account) => account.provider === 'vk');
+  const firstName = (vkAccount?.extra_data?.first_name || '').trim();
+  const lastName = (vkAccount?.extra_data?.last_name || '').trim();
+  const screenName = (vkAccount?.extra_data?.screen_name || '').trim();
+  const username = (vkAccount?.extra_data?.username || '').trim().replace(/^@+/, '');
+  const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+
+  return fullName || screenName || username || null;
+}
+
+function getDisplayClientName(clientName: string | undefined, vkDisplayName: string | null): string | null {
+  const normalizedClientName = (clientName || '').trim();
+  if (!normalizedClientName) return null;
+  if (!VK_CLIENT_NAME_RE.test(normalizedClientName)) return normalizedClientName;
+  return vkDisplayName || normalizedClientName;
+}
+
 export function useAppShellState() {
   const pathname = usePathname();
   const router = useRouter();
@@ -113,6 +133,7 @@ export function useAppShellState() {
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   const [clientInfoLoading, setClientInfoLoading] = useState(false);
   const [switchingClient, setSwitchingClient] = useState(false);
+  const [vkDisplayName, setVkDisplayName] = useState<string | null>(null);
 
   const isPublicRoute = isAppShellPublicRoute(pathname);
 
@@ -178,6 +199,7 @@ export function useAppShellState() {
       setAvatarUrl(null);
       setAvatarInitial('U');
       setClientInfo(null);
+      setVkDisplayName(null);
       return;
     }
 
@@ -207,11 +229,13 @@ export function useAppShellState() {
         if (!cancelled) {
           setAvatarUrl(photoUrl ?? null);
           setAvatarInitial(initial);
+          setVkDisplayName(getVkDisplayName(accounts));
         }
       } catch {
         if (!cancelled) {
           setAvatarUrl(null);
           setAvatarInitial('U');
+          setVkDisplayName(null);
         }
       }
     };
@@ -272,6 +296,8 @@ export function useAppShellState() {
     }
   };
 
+  const activeClientDisplayName = getDisplayClientName(clientInfo?.client.name, vkDisplayName);
+
   return {
     pathname,
     isPublicRoute,
@@ -286,6 +312,7 @@ export function useAppShellState() {
     userModalLoading,
     loggedUserData,
     clientInfo,
+    activeClientDisplayName,
     clientInfoLoading,
     switchingClient,
     openLoggedUserModal,

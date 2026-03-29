@@ -6,10 +6,12 @@ const testState = vi.hoisted(() => ({
   push: vi.fn(),
   contactsList: vi.fn(),
   categoriesList: vi.fn(),
+  searchParams: new URLSearchParams(),
 }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: testState.push }),
+  useSearchParams: () => testState.searchParams,
 }));
 
 vi.mock('next/link', async () => {
@@ -41,6 +43,7 @@ describe('NewClientPage', () => {
     vi.clearAllMocks();
     testState.contactsList.mockResolvedValue([]);
     testState.categoriesList.mockResolvedValue([]);
+    testState.searchParams = new URLSearchParams();
   });
 
   afterEach(() => {
@@ -53,6 +56,8 @@ describe('NewClientPage', () => {
 
     render(<NewClientPage />);
 
+    expect(screen.getByText('Заполните имя, остальное - необязательно')).toBeInTheDocument();
+
     await waitFor(() => {
       expect(testState.contactsList).toHaveBeenCalled();
       expect(testState.categoriesList).toHaveBeenCalled();
@@ -61,5 +66,23 @@ describe('NewClientPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'SubmitMock' }));
 
     expect(testState.push).toHaveBeenCalledWith('/contact/123');
+  });
+
+  it('redirects to dashboard after creating a client opened from dashboard', async () => {
+    testState.searchParams = new URLSearchParams('from=dashboard');
+
+    const mod = await import('@/app/clients/new/page');
+    const NewClientPage = mod.default;
+
+    render(<NewClientPage />);
+
+    await waitFor(() => {
+      expect(testState.contactsList).toHaveBeenCalled();
+      expect(testState.categoriesList).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'SubmitMock' }));
+
+    expect(testState.push).toHaveBeenCalledWith('/dashboard');
   });
 });

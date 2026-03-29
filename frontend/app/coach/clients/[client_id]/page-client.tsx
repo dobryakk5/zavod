@@ -602,14 +602,14 @@ export default function CoachClientSessionPage({
   }
 
   return (
-    <div className="min-h-full bg-[#f5f4f0] p-4 text-[#1a1a18] sm:p-5">
-      <div className="mx-auto flex min-h-[calc(100vh-72px)] max-w-[1400px] flex-col rounded-[12px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] lg:flex-row">
+    <div className="min-h-full bg-[#f5f4f0] p-3 text-[#1a1a18] sm:p-5">
+      <div className="mx-auto flex min-h-[calc(100vh-72px)] max-w-[1400px] flex-col rounded-none border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] sm:rounded-[12px] lg:flex-row">
         <div className="w-full border-b-[0.5px] border-[#e0ddd6] bg-white lg:w-[340px] lg:border-b-0 lg:border-r-[0.5px]">
-          <div className="flex items-center gap-[10px] border-b-[0.5px] border-[#e0ddd6] px-4 py-[14px]">
+          <div className="flex flex-wrap items-start gap-[10px] border-b-[0.5px] border-[#e0ddd6] px-3 py-3 sm:px-4 sm:py-[14px]">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e1f5ee] text-[11px] font-medium text-[#0f6e56]">
               {data.client?.initials || getInitials(data.client?.name || 'Клиент')}
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="truncate text-[13px] font-medium">{data.client?.name || 'Клиент'}</div>
               <Link href="/dashboard" className="text-[11px] text-[#73726c] hover:text-[#185fa5]">
                 Назад к dashboard
@@ -622,7 +622,7 @@ export default function CoachClientSessionPage({
             >
               <ExternalLink className="h-3 w-3" />
             </Link>
-            <div className="ml-auto rounded-full bg-[#e6f1fb] px-[7px] py-[2px] text-[10px] text-[#185fa5]">
+            <div className="w-full rounded-full bg-[#e6f1fb] px-[7px] py-[2px] text-[10px] text-[#185fa5] sm:ml-auto sm:w-auto">
               {activeSession ? `Сессия ${currentSessionNumber} · черновик` : `Следующая сессия ${currentSessionNumber}`}
             </div>
           </div>
@@ -644,7 +644,7 @@ export default function CoachClientSessionPage({
             ))}
           </div>
 
-          <div className="max-h-[calc(100vh-190px)] overflow-y-auto p-3 lg:h-[calc(100vh-190px)]">
+          <div className="max-h-none overflow-visible p-3 lg:h-[calc(100vh-190px)] lg:max-h-[calc(100vh-190px)] lg:overflow-y-auto">
             {error ? (
               <div className="mb-3 rounded-[8px] border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
                 {error}
@@ -864,7 +864,7 @@ export default function CoachClientSessionPage({
                           })}
 
                           <div className="flex flex-col gap-1.5">
-                            <div className="flex gap-2">
+                            <div className="flex flex-col gap-2 sm:flex-row">
                               <input
                                 value={newStepText}
                                 onChange={(event) => setNewStepText(event.target.value)}
@@ -945,7 +945,7 @@ export default function CoachClientSessionPage({
               <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.4px] text-[#73726c]">
                 Быстрое добавление цели
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <input
                   value={quickGoalTitle}
                   onChange={(event) => setQuickGoalTitle(event.target.value)}
@@ -1054,7 +1054,7 @@ export default function CoachClientSessionPage({
                       placeholder="Короткая заметка к вехе"
                       className="w-full rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[10px] py-2 text-[12px] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
                     />
-                    <div className="mt-2 flex gap-2">
+                    <div className="mt-2 flex flex-wrap gap-2">
                       <button
                         type="button"
                         onClick={() => void handleSaveMilestone()}
@@ -1195,9 +1195,9 @@ export default function CoachClientSessionPage({
 
 function LoadingState() {
   return (
-    <div className="min-h-full bg-[#f5f4f0] p-4 sm:p-5">
-      <div className="mx-auto flex min-h-[calc(100vh-72px)] max-w-[1400px] animate-pulse rounded-[12px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0]">
-        <div className="w-[340px] border-r-[0.5px] border-[#e0ddd6] bg-white p-4">
+    <div className="min-h-full bg-[#f5f4f0] p-3 sm:p-5">
+      <div className="mx-auto flex min-h-[calc(100vh-72px)] max-w-[1400px] animate-pulse flex-col rounded-none border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] sm:rounded-[12px] lg:flex-row">
+        <div className="w-full border-b-[0.5px] border-[#e0ddd6] bg-white p-4 lg:w-[340px] lg:border-b-0 lg:border-r-[0.5px]">
           <div className="h-10 rounded-[8px] bg-[#ece7dd]" />
           <div className="mt-4 h-8 rounded-[8px] bg-[#ece7dd]" />
           <div className="mt-4 h-24 rounded-[8px] bg-[#ece7dd]" />

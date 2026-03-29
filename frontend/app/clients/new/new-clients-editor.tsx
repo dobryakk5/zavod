@@ -507,7 +507,9 @@ export function NewClientForm({ clients, categories, onSave, submitLabel = 'До
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="name-input">Имя</Label>
+        <Label htmlFor="name-input">
+          Имя <span aria-hidden="true" className="text-xs text-red-500">*</span>
+        </Label>
         <div
           className={`flex min-h-10 w-full flex-wrap items-center gap-2 rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 ${nameError ? 'border-red-500 focus-within:ring-red-500' : ''} max-h-32 overflow-y-auto`}
         >
@@ -534,6 +536,7 @@ export function NewClientForm({ clients, categories, onSave, submitLabel = 'До
             onKeyDown={handleNameKeyDown}
             onPaste={handlePasteNames}
             onBlur={handleNameBlur}
+            required={nameChips.length === 0}
             placeholder={nameChips.length === 0 ? 'Введите имя или вставьте столбец' : ''}
             className="min-w-[160px] flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-muted-foreground"
           />

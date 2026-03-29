@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeftIcon } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { crmCategoriesApi, crmContactsApi, type Category, type Contact } from '@/lib/api/crm';
@@ -10,10 +10,12 @@ import { NewClientForm } from './new-clients-editor';
 
 export default function NewClientPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [clients, setClients] = useState<Contact[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const openedFromDashboard = searchParams.get('from') === 'dashboard';
 
   useEffect(() => {
     let active = true;
@@ -71,7 +73,7 @@ export default function NewClientPage() {
           <CardHeader>
             <CardTitle>Карточка клиента</CardTitle>
             <CardDescription>
-              Заполните базовые поля. После сохранения откроется страница клиента.
+              Заполните имя, остальное - необязательно
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -88,6 +90,10 @@ export default function NewClientPage() {
                 onSave={(createdClients) => {
                   const createdClient = createdClients[0];
                   if (!createdClient) {
+                    return;
+                  }
+                  if (openedFromDashboard) {
+                    router.push('/dashboard');
                     return;
                   }
                   router.push(`/contact/${createdClient.id}`);
