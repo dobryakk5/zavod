@@ -322,9 +322,6 @@ def _resolve_bound_contact_id_for_client(user, client_id: int) -> int | None:
         )
         .values_list("provider", "provider_id")
     )
-    if not social_accounts:
-        return None
-
     candidates: list[UserTenantBinding] = []
     for provider, provider_id in social_accounts:
         if not provider_id:
@@ -343,11 +340,49 @@ def _resolve_bound_contact_id_for_client(user, client_id: int) -> int | None:
         if binding and binding.contact_id is not None:
             candidates.append(binding)
 
-    if not candidates:
+    if candidates:
+        candidates.sort(key=lambda item: (item.bound_at or timezone.now(), item.id or 0), reverse=True)
+        return int(candidates[0].contact_id) if candidates[0].contact_id is not None else None
+
+    normalized_email = _safe_text(getattr(user, "email", "")).lower()
+    if not normalized_email:
         return None
 
-    candidates.sort(key=lambda item: (item.bound_at or timezone.now(), item.id or 0), reverse=True)
-    return int(candidates[0].contact_id) if candidates[0].contact_id is not None else None
+    tenant_bindings = list(
+        UserTenantBinding.objects
+        .filter(
+            tenant_id=client_id,
+            is_active=True,
+            contact_id__isnull=False,
+        )
+        .order_by("-bound_at", "-id")
+    )
+    if not tenant_bindings:
+        return None
+
+    tenant_contact_ids = [
+        int(binding.contact_id)
+        for binding in tenant_bindings
+        if binding.contact_id is not None and int(binding.contact_id) > 0
+    ]
+    if not tenant_contact_ids:
+        return None
+
+    matching_contact_ids = set(
+        MapContact.objects
+        .filter(id__in=tenant_contact_ids, email__iexact=normalized_email)
+        .values_list("id", flat=True)
+    )
+    if not matching_contact_ids:
+        return None
+
+    for binding in tenant_bindings:
+        if binding.contact_id is None:
+            continue
+        contact_id = int(binding.contact_id)
+        if contact_id in matching_contact_ids:
+            return contact_id
+    return None
 
 
 def _resolve_request_contact_id_for_client(request, client_id: int) -> int | None:
@@ -387,6 +422,143 @@ def _serialize_public_goal_steps(profile: ContactCoachingProfile, *, done: bool 
                 continue
             items.append(payload)
     items.sort(key=_public_goal_step_sort_key)
+    return items
+
+
+def _public_coaching_focus(profile: ContactCoachingProfile | None) -> str:
+    if profile is None:
+        return ""
+
+    goals = profile.goals if isinstance(profile.goals, list) else []
+    active_goal = next(
+        (
+            goal
+            for goal in goals
+            if isinstance(goal, dict) and goal.get("status") == "active" and goal.get("title")
+        ),
+        None,
+    )
+    if isinstance(active_goal, dict):
+        return str(active_goal.get("title") or "")
+
+    first_goal = next(
+        (goal for goal in goals if isinstance(goal, dict) and goal.get("title")),
+        None,
+    )
+    if isinstance(first_goal, dict):
+        return str(first_goal.get("title") or "")
+
+    competencies = profile.competencies if isinstance(profile.competencies, list) else []
+    first_competency = next(
+        (item for item in competencies if isinstance(item, dict) and item.get("name")),
+        None,
+    )
+    if isinstance(first_competency, dict):
+        return str(first_competency.get("name") or "")
+    return ""
+
+
+def _serialize_public_coaching_competencies(profile: ContactCoachingProfile | None) -> list[dict]:
+    if profile is None or not isinstance(profile.competencies, list):
+        return []
+
+    items: list[dict] = []
+    for competency in profile.competencies:
+        if not isinstance(competency, dict):
+            continue
+        items.append(
+            {
+                "id": str(competency.get("id") or ""),
+                "name": str(competency.get("name") or ""),
+                "score": int(competency.get("score") or 0),
+                "startScore": int(competency.get("startScore") or 0),
+                "color": str(competency.get("color") or ""),
+            }
+        )
+    return items
+
+
+def _serialize_public_coaching_goals(profile: ContactCoachingProfile | None) -> list[dict]:
+    if profile is None or not isinstance(profile.goals, list):
+        return []
+
+    competencies_by_id = {
+        str(item.get("id") or ""): item
+        for item in (profile.competencies or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    items: list[dict] = []
+    for goal in profile.goals:
+        if not isinstance(goal, dict):
+            continue
+
+        competency_links: list[dict] = []
+        for link in goal.get("competencyLinks") or []:
+            if not isinstance(link, dict):
+                continue
+            competency_id = str(link.get("competencyId") or "")
+            competency = competencies_by_id.get(competency_id, {})
+            competency_links.append(
+                {
+                    "competencyId": competency_id,
+                    "competencyName": str(competency.get("name") or link.get("competencyName") or ""),
+                    "weight": float(link.get("weight") or 0),
+                }
+            )
+
+        steps: list[dict] = []
+        for step in goal.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            steps.append(
+                {
+                    "id": str(step.get("id") or ""),
+                    "text": str(step.get("text") or ""),
+                    "done": bool(step.get("done")),
+                    "isMilestone": bool(step.get("isMilestone")),
+                    "milestoneNote": str(step.get("milestoneNote") or ""),
+                    "doneAt": str(step.get("doneAt") or "").strip() or None,
+                    "dueDate": str(step.get("dueDate") or "").strip() or None,
+                    "goalId": str(step.get("goalId") or goal.get("id") or ""),
+                    "goalTitle": str(step.get("goalTitle") or goal.get("title") or ""),
+                }
+            )
+
+        items.append(
+            {
+                "id": str(goal.get("id") or ""),
+                "clientId": int(profile.contact_id),
+                "title": str(goal.get("title") or ""),
+                "progress": int(goal.get("progress") or 0),
+                "horizon": str(goal.get("horizon") or "quarter"),
+                "status": str(goal.get("status") or "active"),
+                "competencyLinks": competency_links,
+                "steps": steps,
+                "createdAt": str(goal.get("createdAt") or timezone.now().isoformat()),
+            }
+        )
+    return items
+
+
+def _serialize_public_coaching_milestones(profile: ContactCoachingProfile | None) -> list[dict]:
+    if profile is None or not isinstance(profile.milestones, list):
+        return []
+
+    items: list[dict] = []
+    for milestone in profile.milestones:
+        if not isinstance(milestone, dict):
+            continue
+        items.append(
+            {
+                "id": str(milestone.get("id") or ""),
+                "clientId": int(milestone.get("clientId") or profile.contact_id),
+                "goalId": str(milestone.get("goalId") or ""),
+                "text": str(milestone.get("text") or ""),
+                "note": str(milestone.get("note") or ""),
+                "createdAt": str(milestone.get("createdAt") or timezone.now().isoformat()),
+            }
+        )
+    items.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
     return items
 
 
@@ -796,7 +968,7 @@ def _notify_contact_purchase_success(
     return False
 
 
-def _build_public_client_page_payload(client_id: int) -> dict | None:
+def _build_public_client_page_payload(client_id: int, request=None) -> dict | None:
     client = (
         Client.objects
         .filter(id=client_id)
@@ -857,6 +1029,20 @@ def _build_public_client_page_payload(client_id: int) -> dict | None:
         .order_by("-start_time")
     )
 
+    request_contact_id = None
+    request_contact_name = ""
+    if request is not None:
+        resolved_contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        if resolved_contact_id is not None and int(resolved_contact_id) > 0:
+            request_contact_id = int(resolved_contact_id)
+            request_contact_name = str(
+                MapContact.objects
+                .filter(id=request_contact_id)
+                .values_list("name", flat=True)
+                .first()
+                or ""
+            )
+
     return {
         "client": {
             "id": client["id"],
@@ -872,6 +1058,8 @@ def _build_public_client_page_payload(client_id: int) -> dict | None:
         },
         "products": products,
         "availability_events": availability_events,
+        "request_contact_id": request_contact_id,
+        "request_contact_name": request_contact_name,
         # Public mode intentionally does not expose tenant CRM events.
         # Frontend uses this endpoint for read-only rendering and gates booking by auth.
         "events": [],
@@ -885,7 +1073,7 @@ class PublicClientPageView(APIView):
     authentication_classes: tuple = ()
 
     def get(self, request, client_id: int):
-        payload = _build_public_client_page_payload(client_id)
+        payload = _build_public_client_page_payload(client_id, request=request)
         if payload is None:
             raise Http404("Клиент не найден")
         return Response(payload)
@@ -913,7 +1101,7 @@ class PublicClientPageByDomainView(APIView):
         if not client_id:
             raise Http404("Клиент с подтвержденным доменом не найден")
 
-        payload = _build_public_client_page_payload(int(client_id))
+        payload = _build_public_client_page_payload(int(client_id), request=request)
         if payload is None:
             raise Http404("Клиент не найден")
         return Response(payload)
@@ -978,7 +1166,7 @@ class PublicClientPageProductCourseView(APIView):
         contact_id = _resolve_or_provision_request_contact_id_for_client(request, client_id)
         if not is_tenant_user and (contact_id is None or contact_id <= 0):
             return Response(
-                {"detail": "Для доступа к курсу войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                {"detail": "Для доступа к курсу войдите как владелец (tenant) или как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         if is_tenant_user:
@@ -1134,7 +1322,7 @@ class PublicClientPageProductCourseLessonView(APIView):
         contact_id = _resolve_or_provision_request_contact_id_for_client(request, client_id)
         if not is_tenant_user and (contact_id is None or contact_id <= 0):
             return Response(
-                {"detail": "Для доступа к уроку войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                {"detail": "Для доступа к уроку войдите как владелец (tenant) или как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         if is_tenant_user:
@@ -1259,7 +1447,7 @@ class PublicClientPageProductCourseLessonCompleteView(APIView):
         contact_id = _resolve_or_provision_request_contact_id_for_client(request, client_id)
         if not is_tenant_user and (contact_id is None or contact_id <= 0):
             return Response(
-                {"detail": "Для доступа к урокам войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                {"detail": "Для доступа к урокам войдите как владелец (tenant) или как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         if contact_id is None or int(contact_id) <= 0:
@@ -1442,7 +1630,7 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
         is_tenant_user, actor_contact_id = self._resolve_actor(request, client_id)
         if not is_tenant_user and actor_contact_id is None:
             return Response(
-                {"detail": "Для доступа к комментариям войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                {"detail": "Для доступа к комментариям войдите как владелец (tenant) или как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         if is_tenant_user:
@@ -1500,7 +1688,7 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
         is_tenant_user, actor_contact_id = self._resolve_actor(request, client_id)
         if not is_tenant_user and actor_contact_id is None:
             return Response(
-                {"detail": "Для отправки комментария войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                {"detail": "Для отправки комментария войдите как владелец (tenant) или как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         if is_tenant_user:
@@ -1596,7 +1784,7 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
         is_tenant_user, actor_contact_id = self._resolve_actor(request, client_id)
         if not is_tenant_user and actor_contact_id is None:
             return Response(
-                {"detail": "Для удаления комментария войдите как владелец (tenant) или как контакт через Telegram/VK."},
+                {"detail": "Для удаления комментария войдите как владелец (tenant) или как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         if is_tenant_user:
@@ -1651,7 +1839,7 @@ class PublicClientPageTasksView(APIView):
         contact_id = _resolve_request_contact_id_for_client(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
-                {"detail": "Для просмотра заданий войдите как контакт через Telegram или VK."},
+                {"detail": "Для просмотра заданий войдите как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -1692,7 +1880,7 @@ class PublicClientPageStepsView(APIView):
         contact_id = _resolve_request_contact_id_for_client(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
-                {"detail": "Для просмотра заданий войдите как контакт через Telegram или VK."},
+                {"detail": "Для просмотра заданий войдите как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -1713,6 +1901,40 @@ class PublicClientPageStepsView(APIView):
         )
 
 
+class PublicClientPageCoachingView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def get(self, request, client_id: int):
+        client_exists = Client.objects.filter(id=client_id).exists()
+        if not client_exists:
+            raise Http404("Клиент не найден")
+
+        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        if contact_id is None or contact_id <= 0:
+            return Response(
+                {"detail": "Для просмотра прогресса войдите как контакт через Telegram, VK или email."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        contact = MapContact.objects.filter(id=int(contact_id)).first()
+        profile = ContactCoachingProfile.objects.filter(tenant_id=client_id, contact_id=int(contact_id)).first()
+
+        return Response(
+            {
+                "client": {
+                    "id": int(contact_id),
+                    "name": str(contact.name or "") if contact else "",
+                    "intention": str(profile.intention or "") if profile else "",
+                    "focus": _public_coaching_focus(profile),
+                },
+                "goals": _serialize_public_coaching_goals(profile),
+                "competencies": _serialize_public_coaching_competencies(profile),
+                "milestones": _serialize_public_coaching_milestones(profile),
+            }
+        )
+
+
 class PublicClientPageStepDetailView(APIView):
     permission_classes = [AllowAny]
     authentication_classes: tuple = ()
@@ -1725,7 +1947,7 @@ class PublicClientPageStepDetailView(APIView):
         contact_id = _resolve_request_contact_id_for_client(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
-                {"detail": "Для просмотра заданий войдите как контакт через Telegram или VK."},
+                {"detail": "Для просмотра заданий войдите как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -1848,7 +2070,7 @@ class PublicClientPageBuyProductView(APIView):
         bound_contact_id = _resolve_request_contact_id_for_client(request, client_id)
         if bound_contact_id is None or bound_contact_id <= 0:
             return Response(
-                {"detail": "Для покупки войдите как контакт через Telegram или VK."},
+                {"detail": "Для покупки войдите как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         metadata_payload["contact_id"] = str(bound_contact_id)
@@ -2186,7 +2408,7 @@ class PublicClientPagePurchasesView(APIView):
         contact_id = _resolve_request_contact_id_for_client(request, client_id)
         if contact_id is None:
             return Response(
-                {"detail": "Войдите как контакт через Telegram или VK."},
+                {"detail": "Войдите как контакт через Telegram, VK или email."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 

@@ -61,7 +61,7 @@ export default function CoachingPortalPage({
         });
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
-          setError('Войдите через Telegram или VK, чтобы увидеть свой прогресс.');
+          setError('Войдите через Telegram, VK или email, чтобы увидеть свой прогресс.');
         } else if (err instanceof ApiError && err.status === 404) {
           setData({
             clientName: '',

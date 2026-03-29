@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { clientApi } from '@/lib/api/client';
 import { useRole } from '@/lib/hooks';
+import { getTimeZonesForSelect } from '@/lib/timezones';
 import { formatTenantOffsetLabel } from '@/lib/timezone';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -74,12 +75,7 @@ export function ClientTimezoneSetting() {
   const loadTimezoneOptions = async () => {
     setOptionsLoading(true);
     try {
-      const response = await fetch('/api/timezones', { cache: 'no-store' });
-      if (!response.ok) {
-        throw new Error(`Failed to load timezones: ${response.status}`);
-      }
-      const data = (await response.json()) as { timezones?: TimezoneOption[] };
-      setTimezoneOptionsState(Array.isArray(data.timezones) ? data.timezones : []);
+      setTimezoneOptionsState(getTimeZonesForSelect());
     } catch (error) {
       console.error(error);
       toast.error('Не удалось загрузить список часовых поясов');

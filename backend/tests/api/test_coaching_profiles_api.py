@@ -8,7 +8,17 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from core.models import Client, ContactCoachingProfile, MapContact, UserActiveClientPreference, UserSocialAccount, UserTenantBinding, UserTenantRole
+from core.models import (
+    Client,
+    CoachGroup,
+    CoachGroupTask,
+    ContactCoachingProfile,
+    MapContact,
+    UserActiveClientPreference,
+    UserSocialAccount,
+    UserTenantBinding,
+    UserTenantRole,
+)
 
 User = get_user_model()
 
@@ -290,6 +300,130 @@ def test_goal_step_create_persists_due_date(coaching_api_client, coaching_tenant
 
     profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
     assert profile.goals[0]["steps"][0]["dueDate"] == "2026-04-01"
+
+
+@pytest.mark.django_db
+def test_public_coaching_portal_returns_bound_contact_profile(
+    portal_api_client,
+    portal_user,
+    coaching_tenant,
+    coaching_contact,
+):
+    provider_id = f"telegram-{portal_user.id}"
+    UserSocialAccount.objects.create(
+        user=portal_user,
+        provider=UserSocialAccount.PROVIDER_TELEGRAM,
+        provider_id=provider_id,
+        extra_data={"username": "portal-user"},
+    )
+    UserTenantBinding.objects.create(
+        tenant=coaching_tenant,
+        provider=UserTenantBinding.PROVIDER_TELEGRAM,
+        provider_user_id=provider_id,
+        contact_id=int(coaching_contact.id),
+        is_active=True,
+    )
+    ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        intention="Строить границы спокойно и последовательно",
+        competencies=[
+            {"id": "c1", "name": "Говорение", "score": 55, "startScore": 25, "color": "#1D9E75"},
+        ],
+        goals=[
+            {
+                "id": "goal-1",
+                "title": "Наладить границы в работе",
+                "progress": 30,
+                "horizon": "quarter",
+                "status": "active",
+                "competencyLinks": [{"competencyId": "c1", "weight": 0.6}],
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "text": "Подготовить фразы для отказа",
+                        "done": False,
+                        "isMilestone": False,
+                        "milestoneNote": "",
+                        "doneAt": "",
+                        "dueDate": "2026-04-02",
+                    }
+                ],
+                "createdAt": "2026-03-01T10:00:00+03:00",
+            }
+        ],
+        milestones=[
+            {
+                "id": "ms-1",
+                "clientId": int(coaching_contact.id),
+                "goalId": "goal-1",
+                "text": "Первая уверенная граница",
+                "note": "",
+                "createdAt": "2026-03-10T10:00:00+03:00",
+            }
+        ],
+    )
+
+    response = portal_api_client.get(
+        reverse("api:public-client-page-coaching", args=[coaching_tenant.id]),
+    )
+
+    assert response.status_code == 200, response.content
+    payload = response.json()
+    assert payload["client"]["id"] == int(coaching_contact.id)
+    assert payload["client"]["name"] == "Анна Иванова"
+    assert payload["client"]["intention"] == "Строить границы спокойно и последовательно"
+    assert payload["client"]["focus"] == "Наладить границы в работе"
+    assert payload["competencies"][0]["name"] == "Говорение"
+    assert payload["goals"][0]["competencyLinks"][0]["competencyName"] == "Говорение"
+    assert payload["goals"][0]["steps"][0]["goalTitle"] == "Наладить границы в работе"
+    assert payload["milestones"][0]["text"] == "Первая уверенная граница"
+
+
+@pytest.mark.django_db
+def test_public_pages_resolve_contact_by_email_auth(
+    portal_api_client,
+    portal_user,
+    coaching_tenant,
+    coaching_contact,
+):
+    portal_user.email = "anna@example.com"
+    portal_user.save(update_fields=["email"])
+
+    ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        intention="Спокойно отстаивать границы",
+        goals=[
+            {
+                "id": "goal-1",
+                "title": "Наладить границы в работе",
+                "progress": 30,
+                "horizon": "quarter",
+                "status": "active",
+                "competencyLinks": [],
+                "steps": [],
+                "createdAt": "2026-03-01T10:00:00+03:00",
+            }
+        ],
+    )
+
+    page_response = portal_api_client.get(
+        reverse("api:public-client-page", args=[coaching_tenant.id]),
+    )
+    assert page_response.status_code == 200, page_response.content
+    page_payload = page_response.json()
+    assert page_payload["request_contact_id"] == int(coaching_contact.id)
+    assert page_payload["request_contact_name"] == "Анна Иванова"
+
+    coaching_response = portal_api_client.get(
+        reverse("api:public-client-page-coaching", args=[coaching_tenant.id]),
+    )
+    assert coaching_response.status_code == 200, coaching_response.content
+    coaching_payload = coaching_response.json()
+    assert coaching_payload["client"]["id"] == int(coaching_contact.id)
+    assert coaching_payload["client"]["name"] == "Анна Иванова"
+    assert coaching_payload["client"]["intention"] == "Спокойно отстаивать границы"
 
 
 @pytest.mark.django_db
@@ -946,3 +1080,154 @@ def test_coach_clients_returns_prioritized_client_statuses(
         "label": "24 дня без сессии",
         "at": (fixed_now - timedelta(days=24)).isoformat(),
     }
+
+
+@pytest.mark.django_db
+def test_coach_groups_can_be_created_and_listed(coaching_api_client):
+    create_response = coaching_api_client.post(
+        reverse("api:coach-groups"),
+        {"name": "Утренний поток"},
+        format="json",
+    )
+
+    assert create_response.status_code == 201, create_response.content
+    payload = create_response.json()
+    assert payload["name"] == "Утренний поток"
+    assert payload["memberCount"] == 0
+
+    list_response = coaching_api_client.get(reverse("api:coach-groups"))
+
+    assert list_response.status_code == 200, list_response.content
+    assert list_response.json() == [payload]
+
+
+@pytest.mark.django_db
+def test_coach_group_detail_returns_members_with_progress(
+    coaching_api_client,
+    coaching_tenant,
+    bind_contact_to_tenant,
+):
+    first_contact = bind_contact_to_tenant(MapContact.objects.create(name="Мария Петрова", email="maria@example.com"))
+    second_contact = bind_contact_to_tenant(MapContact.objects.create(name="Игорь Соколов", email="igor@example.com"))
+    group = CoachGroup.objects.create(tenant=coaching_tenant, name="Вечерняя группа")
+    group.members.create(contact_id=int(first_contact.id))
+    group.members.create(contact_id=int(second_contact.id))
+
+    ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(first_contact.id),
+        goals=[
+            {
+                "id": "goal-1",
+                "title": "Уверенность в переговорах",
+                "progress": 60,
+                "horizon": "quarter",
+                "status": "active",
+                "competencyLinks": [],
+                "steps": [],
+                "createdAt": "2026-03-01T10:00:00+03:00",
+            }
+        ],
+    )
+
+    response = coaching_api_client.get(reverse("api:coach-group-detail", args=[group.id]))
+
+    assert response.status_code == 200, response.content
+    payload = response.json()
+    assert payload["group"]["name"] == "Вечерняя группа"
+    assert [item["name"] for item in payload["members"]] == ["Мария Петрова", "Игорь Соколов"]
+    assert payload["members"][0]["focus"] == "Уверенность в переговорах"
+    assert payload["members"][0]["avgProgress"] == 60
+    assert payload["members"][1]["avgProgress"] == 0
+
+
+@pytest.mark.django_db
+def test_group_task_creates_steps_for_all_members_and_counts_completion(
+    coaching_api_client,
+    coaching_tenant,
+    bind_contact_to_tenant,
+):
+    first_contact = bind_contact_to_tenant(MapContact.objects.create(name="Полина Алексеева", email="polina@example.com"))
+    second_contact = bind_contact_to_tenant(MapContact.objects.create(name="Сергей Орлов", email="sergey@example.com"))
+    group = CoachGroup.objects.create(tenant=coaching_tenant, name="Практика границ")
+    group.members.create(contact_id=int(first_contact.id))
+    group.members.create(contact_id=int(second_contact.id))
+
+    response = coaching_api_client.post(
+        reverse("api:coach-group-tasks", args=[group.id]),
+        {"text": "Написать 3 спокойных отказа", "dueDate": "2026-04-05"},
+        format="json",
+    )
+
+    assert response.status_code == 201, response.content
+    payload = response.json()
+    assert payload["text"] == "Написать 3 спокойных отказа"
+    assert payload["dueDate"] == "2026-04-05"
+    assert payload["doneCount"] == 0
+    assert payload["totalCount"] == 2
+
+    first_profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=int(first_contact.id))
+    second_profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=int(second_contact.id))
+    first_goal = first_profile.goals[0]
+    second_goal = second_profile.goals[0]
+
+    assert first_goal["id"] == f"group-{group.id}"
+    assert first_goal["steps"][0]["dueDate"] == "2026-04-05"
+    assert second_goal["steps"][0]["goalId"] == f"group-{group.id}"
+
+    step_id = first_goal["steps"][0]["id"]
+    patch_response = coaching_api_client.patch(
+        reverse("api:coaching-goal-step-detail", args=[f"group-{group.id}", step_id]),
+        {"done": True},
+        format="json",
+    )
+
+    assert patch_response.status_code == 200, patch_response.content
+
+    detail_response = coaching_api_client.get(reverse("api:coach-group-detail", args=[group.id]))
+
+    assert detail_response.status_code == 200, detail_response.content
+    detail_payload = detail_response.json()
+    assert detail_payload["tasks"][0]["doneCount"] == 1
+    assert detail_payload["tasks"][0]["totalCount"] == 2
+
+
+@pytest.mark.django_db
+def test_removing_member_from_group_cleans_member_steps_and_task_refs(
+    coaching_api_client,
+    coaching_tenant,
+    bind_contact_to_tenant,
+):
+    first_contact = bind_contact_to_tenant(MapContact.objects.create(name="Елена Белова", email="elena@example.com"))
+    second_contact = bind_contact_to_tenant(MapContact.objects.create(name="Артем Крылов", email="artem@example.com"))
+    group = CoachGroup.objects.create(tenant=coaching_tenant, name="Разбор кейсов")
+    group.members.create(contact_id=int(first_contact.id))
+    group.members.create(contact_id=int(second_contact.id))
+
+    create_task_response = coaching_api_client.post(
+        reverse("api:coach-group-tasks", args=[group.id]),
+        {"text": "Описать конфликт и границы"},
+        format="json",
+    )
+
+    assert create_task_response.status_code == 201, create_task_response.content
+
+    remove_response = coaching_api_client.delete(
+        reverse("api:coach-group-member-detail", args=[group.id, second_contact.id]),
+    )
+
+    assert remove_response.status_code == 204, remove_response.content
+
+    second_profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=int(second_contact.id))
+    assert second_profile.goals == []
+
+    task = CoachGroupTask.objects.get(group=group)
+    assert len(task.step_refs) == 1
+    assert int(task.step_refs[0]["contactId"]) == int(first_contact.id)
+
+    detail_response = coaching_api_client.get(reverse("api:coach-group-detail", args=[group.id]))
+
+    assert detail_response.status_code == 200, detail_response.content
+    detail_payload = detail_response.json()
+    assert detail_payload["group"]["memberCount"] == 1
+    assert detail_payload["tasks"][0]["totalCount"] == 1

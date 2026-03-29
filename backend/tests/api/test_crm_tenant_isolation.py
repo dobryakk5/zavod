@@ -4,7 +4,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
-from core.models import Client, MapContact, UserTenantBinding, UserTenantRole
+from core.models import Client, MapCRMTag, MapContact, MapContactTag, UserTenantBinding, UserTenantRole
 
 
 User = get_user_model()
@@ -156,3 +156,35 @@ def test_crm_contacts_ignore_social_bindings_without_contact_binding():
     ids = {int(item["id"]) for item in response.json()}
     assert int(real_contact.id) in ids
     assert int(coach_like_contact.id) not in ids
+
+
+@pytest.mark.django_db
+def test_crm_contact_tags_post_creates_relation_and_reuses_it_for_description_updates():
+    user = User.objects.create_user(email="tenant-tags@example.com", password="testpass123")
+    tenant = Client.objects.create(name="Tenant Tags", slug="tenant-tags")
+    UserTenantRole.objects.create(user=user, client=tenant, role="owner")
+
+    contact = MapContact.objects.create(name="Tagged Contact")
+    tag = MapCRMTag.objects.create(type="goal", value="Свобода")
+    _bind_contact_to_tenant(tenant=tenant, contact=contact, marker="tags")
+
+    api_client = _auth_client(user)
+
+    created = api_client.post(
+        "/api/crm/contact-tags/",
+        {"contact_id": int(contact.id), "tag_id": int(tag.id)},
+        format="json",
+    )
+    assert created.status_code == 201, created.content
+    assert MapContactTag.objects.filter(contact_id=contact.id, tag_id=tag.id).count() == 1
+
+    updated = api_client.post(
+        "/api/crm/contact-tags/",
+        {"contact_id": int(contact.id), "tag_id": int(tag.id), "description": "Новая формулировка"},
+        format="json",
+    )
+    assert updated.status_code == 201, updated.content
+
+    relation = MapContactTag.objects.get(contact_id=contact.id, tag_id=tag.id)
+    assert relation.description == "Новая формулировка"
+    assert MapContactTag.objects.filter(contact_id=contact.id, tag_id=tag.id).count() == 1

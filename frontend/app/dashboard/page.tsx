@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { ExternalLink } from 'lucide-react';
+import { ArrowRight, ExternalLink } from 'lucide-react';
 import { coachingApi, type CoachStats, type CoachingClient, type CoachingCompetency } from '@/lib/api/coaching';
+import GroupsTab from './groups-tab';
 import { crmContactsApi, crmDealsApi, crmEventsApi, type Contact, type Deal, type Event } from '@/lib/api/crm';
 import type { CoachingClientStatus } from '@/lib/api/coaching';
 
@@ -60,6 +61,7 @@ function formatNewClientsSummary(count: number) {
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData>(EMPTY_DATA);
   const [selectedCoachClientId, setSelectedCoachClientId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'clients' | 'groups'>('clients');
   const [loading, setLoading] = useState(true);
   const [coachCompetenciesLoading, setCoachCompetenciesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -202,57 +204,79 @@ export default function DashboardPage() {
           />
         </section>
 
-        <section className="grid gap-[14px] xl:grid-cols-2">
-          <div className={`${PANEL_CLASS} p-[14px]`}>
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="text-[13px] font-medium">Клиенты</div>
-              <Link
-                href="/clients/new?from=dashboard"
-                aria-label="Добавить клиента"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#d8d4ca] bg-white text-[18px] leading-none text-[#4f4b45] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0] sm:h-6 sm:w-6 sm:text-[16px]"
+        <section className={`${PANEL_CLASS} overflow-hidden`}>
+          <div className="flex items-center border-b border-[#e0ddd6]">
+            {(['clients', 'groups'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`border-b-2 px-4 py-[10px] text-[12px] transition-colors ${
+                  activeTab === tab
+                    ? 'border-[#1a1a18] font-medium text-[#1a1a18]'
+                    : 'border-transparent text-[#73726c] hover:text-[#1a1a18]'
+                }`}
               >
-                +
-              </Link>
-            </div>
-            {visibleClients.length > 0 ? (
-              <div>
-                {visibleClients.map((client, index) => (
-                  <ClientRow
-                    key={client.id}
-                    client={client}
-                    index={index}
-                    selected={client.id === selectedCoachClient?.id}
-                    onSelect={() => setSelectedCoachClientId(client.id)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="text-sm text-[#73726c]">Нет клиентов для отображения.</div>
-            )}
+                {tab === 'clients' ? 'Клиенты' : 'Группы'}
+              </button>
+            ))}
+            <Link
+              href="/clients"
+              className="inline-flex items-center gap-1 px-2 py-[10px] text-[12px] font-medium text-[#2563eb] transition-colors hover:text-[#1d4ed8]"
+            >
+              <ArrowRight className="h-3 w-3" />
+              <span>CRM</span>
+            </Link>
           </div>
 
-          <div className={`${PANEL_CLASS} p-[14px]`}>
-            <div className="mb-3 text-[13px] font-medium leading-none">
-              {selectedCoachClient ? getProgressTitle(selectedCoachClient.name) : 'Прогресс клиента'}
-            </div>
-            {coachCompetenciesLoading ? (
-              <div className="text-sm text-[#73726c]">Обновляю компетенции клиента...</div>
-            ) : progressItems.length > 0 ? (
-              <div>
-                {progressItems.map((item) => (
-                  <ProgressRow key={item.id} item={item} />
-                ))}
-                {selectedCoachClient ? (
-                  <div className="mt-[10px] flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-[#73726c]">
-                    <span>Начало: {formatMonthYearCompact(selectedCoachClient.createdAt)}</span>
-                    <span>Сессий: {selectedCoachClient.sessionsCount}</span>
+          {activeTab === 'clients' ? (
+            <div className="grid gap-0 xl:grid-cols-2">
+              <div className="border-b border-[#e0ddd6] p-[14px] xl:border-b-0 xl:border-r">
+                {visibleClients.length > 0 ? (
+                  <div>
+                    {visibleClients.map((client, index) => (
+                      <ClientRow
+                        key={client.id}
+                        client={client}
+                        index={index}
+                        selected={client.id === selectedCoachClient?.id}
+                        onSelect={() => setSelectedCoachClientId(client.id)}
+                      />
+                    ))}
                   </div>
-                ) : null}
+                ) : (
+                  <div className="text-sm text-[#73726c]">Нет клиентов для отображения.</div>
+                )}
               </div>
-            ) : (
-              <div className="text-sm text-[#73726c]">Нет данных по компетенциям клиента.</div>
-            )}
-          </div>
+
+              <div className="p-[14px]">
+                <div className="mb-3 text-[13px] font-medium leading-none">
+                  {selectedCoachClient ? getProgressTitle(selectedCoachClient.name) : 'Прогресс клиента'}
+                </div>
+                {coachCompetenciesLoading ? (
+                  <div className="text-sm text-[#73726c]">Обновляю компетенции клиента...</div>
+                ) : progressItems.length > 0 ? (
+                  <div>
+                    {progressItems.map((item) => (
+                      <ProgressRow key={item.id} item={item} />
+                    ))}
+                    {selectedCoachClient ? (
+                      <div className="mt-[10px] flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-[#73726c]">
+                        <span>Начало: {formatMonthYearCompact(selectedCoachClient.createdAt)}</span>
+                        <span>Сессий: {selectedCoachClient.sessionsCount}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="text-sm text-[#73726c]">Нет данных по компетенциям клиента.</div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="p-[14px]">
+              <GroupsTab clients={data.coachClients} />
+            </div>
+          )}
         </section>
 
         <section className={`${PANEL_CLASS} p-[14px]`}>
@@ -315,10 +339,16 @@ function ClientRow({
         {client.initials || getInitials(client.name)}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex items-start gap-2">
-          <div className={`min-w-0 flex-1 truncate text-[12px] font-medium ${selected ? 'text-[#5c52e0]' : 'text-[#1a1a18]'}`}>
+        <div className="flex items-start gap-3">
+          <Link
+            href={`/coach/clients/${client.id}`}
+            onClick={(event) => event.stopPropagation()}
+            className={`min-w-0 shrink truncate text-[12px] font-medium transition-colors hover:text-[#5c52e0] ${
+              selected ? 'text-[#5c52e0]' : 'text-[#1a1a18]'
+            }`}
+          >
             {getShortClientName(client.name)}
-          </div>
+          </Link>
           <Link
             href={`/coach/clients/${client.id}`}
             aria-label={`Открыть страницу клиента ${client.name}`}

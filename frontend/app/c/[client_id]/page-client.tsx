@@ -119,6 +119,8 @@ type PublicClientPageResponse = {
   settings?: Partial<ClientSettings> | null;
   products?: ClientProduct[];
   availability_events?: AvailabilityEvent[];
+  request_contact_id?: number | null;
+  request_contact_name?: string | null;
   events?: Event[];
 };
 
@@ -947,8 +949,14 @@ export default function ContactClientPage({
           setAvailabilityEvents(Array.isArray(publicData?.availability_events) ? publicData.availability_events : []);
           setEvents(Array.isArray(publicData?.events) ? publicData.events : []);
           setTimezone(normalizeTenantTimezone(publicSettings?.timezone));
-          setBookingContactId(boundContactId);
-          setBookingContactName('');
+          const publicContactId = Number(publicData?.request_contact_id || 0);
+          const resolvedContactId = boundContactId ?? (Number.isFinite(publicContactId) && publicContactId > 0 ? publicContactId : null);
+          setBookingContactId(resolvedContactId);
+          setBookingContactName(
+            resolvedContactId
+              ? String(publicData?.request_contact_name || '').trim()
+              : '',
+          );
         }
       } catch (loadError) {
         setError('Не удалось загрузить страницу клиента.');
@@ -1014,7 +1022,7 @@ export default function ContactClientPage({
       } catch (referralLoadError) {
         if (referralLoadError instanceof ApiError && referralLoadError.status === 401) {
           setReferralInvitations([]);
-          setReferralError('Войдите как контакт через Telegram или VK, чтобы использовать партнёрскую программу.');
+          setReferralError('Войдите как контакт через Telegram, VK или email, чтобы использовать партнёрскую программу.');
           return;
         }
         setReferralInvitations([]);
@@ -1044,7 +1052,7 @@ export default function ContactClientPage({
       });
       if (response.status === 401) {
         setPurchases([]);
-        setPurchasesError('Войдите как контакт через Telegram или VK, чтобы видеть список покупок.');
+        setPurchasesError('Войдите как контакт через Telegram, VK или email, чтобы видеть список покупок.');
         return;
       }
       if (!response.ok) {
@@ -1161,7 +1169,7 @@ export default function ContactClientPage({
     }
 
     if (!bookingContactId) {
-      setBookingError('Для записи войдите как контакт через Telegram или VK.');
+      setBookingError('Для записи войдите как контакт через Telegram, VK или email.');
       return;
     }
 
@@ -1236,7 +1244,7 @@ export default function ContactClientPage({
       }
     } catch (bookError) {
       if (bookError instanceof ApiError && bookError.status === 401) {
-        setBookingError('Для записи войдите как контакт через Telegram или VK.');
+        setBookingError('Для записи войдите как контакт через Telegram, VK или email.');
         return;
       }
       setBookingError(
@@ -1293,7 +1301,7 @@ export default function ContactClientPage({
 
     try {
       if (!bookingContactId) {
-        setInviterCodeError('Для применения кода войдите как контакт через Telegram или VK.');
+        setInviterCodeError('Для применения кода войдите как контакт через Telegram, VK или email.');
         setInviterCodeMessage(null);
         return;
       }
@@ -1311,7 +1319,7 @@ export default function ContactClientPage({
       setInviterCodeInput('');
     } catch (applyError) {
       if (applyError instanceof ApiError && applyError.status === 401) {
-        setInviterCodeError('Для применения кода войдите как контакт через Telegram или VK.');
+        setInviterCodeError('Для применения кода войдите как контакт через Telegram, VK или email.');
         return;
       }
       if (applyError instanceof ApiError) {
@@ -1632,7 +1640,7 @@ export default function ContactClientPage({
               : 'Публичный просмотр страницы'}
           </div>
           <div>
-            Запись на слот и партнёрская программа доступны после входа как контакт через Telegram или VK.
+            Запись на слот и партнёрская программа доступны после входа как контакт через Telegram, VK или email.
           </div>
           <div>
             <button
@@ -1819,7 +1827,7 @@ export default function ContactClientPage({
               <div className="text-muted-foreground">{niche}</div>
               <div className="text-xs text-muted-foreground">ID клиента: #{activeClientId ?? pageClientId}</div>
               <div className="text-xs text-muted-foreground">
-                Контакт Telegram/VK: {bookingContactId ? (bookingContactName || `#${bookingContactId}`) : 'не авторизован'}
+                Контакт Telegram/VK/Email: {bookingContactId ? (bookingContactName || `#${bookingContactId}`) : 'не авторизован'}
               </div>
             </div>
           </div>
@@ -1887,7 +1895,7 @@ export default function ContactClientPage({
                   )}
                   {!canUseContactFeatures && (
                     <span className="text-xs text-muted-foreground">
-                      Покупка доступна только после входа как контакт через Telegram или VK
+                      Покупка доступна только после входа как контакт через Telegram, VK или email
                     </span>
                   )}
                 </div>
@@ -1942,7 +1950,7 @@ export default function ContactClientPage({
 
           {!canUseContactFeatures && (
             <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-sm text-slate-700">
-              Список покупок доступен после входа как контакт через Telegram или VK.
+              Список покупок доступен после входа как контакт через Telegram, VK или email.
             </div>
           )}
 
@@ -2073,7 +2081,7 @@ export default function ContactClientPage({
 
         {!canUseContactFeatures && (
           <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-sm text-slate-700">
-            Чтобы записаться на слот, войдите как контакт через Telegram или VK. До входа доступен только просмотр расписания.
+            Чтобы записаться на слот, войдите как контакт через Telegram, VK или email. До входа доступен только просмотр расписания.
           </div>
         )}
 
@@ -2202,7 +2210,7 @@ export default function ContactClientPage({
 
         {!canUseContactFeatures && (
           <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-sm text-slate-700">
-            Партнёрская программа доступна после входа как контакт через Telegram или VK.
+            Партнёрская программа доступна после входа как контакт через Telegram, VK или email.
           </div>
         )}
 
@@ -2289,7 +2297,7 @@ export default function ContactClientPage({
         </DialogHeader>
         <div className="space-y-3">
           <div className="text-sm text-gray-600">
-            Подтверждение отправлено в ваш основной мессенджер (Telegram или VK).
+            Подтверждение отправлено в ваш основной мессенджер (Telegram, VK или email).
           </div>
           {purchaseDeliveryLink && (
             <a

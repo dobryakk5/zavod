@@ -6,7 +6,7 @@ import { Toaster } from 'sonner';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Платформа ИИ маркетинга',
+  title: 'Трекинг прогресса',
   description: 'Личный кабинет',
   icons: {
     icon: '/favicon.ico',

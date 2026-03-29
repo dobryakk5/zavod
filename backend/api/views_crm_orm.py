@@ -445,6 +445,18 @@ class MapContactTagsViewSet(viewsets.ModelViewSet):
             .filter(contact_id__in=_tenant_contact_ids_queryset(int(client.id)))
         )
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response(
+            {
+                "success": True,
+                "contact_tag": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
     @action(detail=False, methods=["delete"], url_path="remove")
     def remove_by_ids(self, request):
         """DELETE с body {contact_id, tag_id} — совместимость со старым ContactTagsView."""

@@ -3,6 +3,13 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     ArticleViewSet,
+    CoachGroupDetailView,
+    CoachGroupMemberDetailView,
+    CoachGroupMembersBulkView,
+    CoachGroupMembersView,
+    CoachGroupsView,
+    CoachGroupTaskDetailView,
+    CoachGroupTasksView,
     ChannelAnalysisViewSet,
     CoachClientsView,
     CoachStatsView,
@@ -162,6 +169,7 @@ from .views_quiz_builder import (
 )
 from .views_public_client_page import (
     CaddyAskView,
+    PublicClientPageCoachingView,
     PublicClientPageByDomainView,
     PublicClientPageBuyProductView,
     PublicClientPageProductCourseLessonCompleteView,
@@ -257,6 +265,13 @@ urlpatterns = [
     # Client endpoints
     path('coach/stats/', CoachStatsView.as_view(), name='coach-stats'),
     path('coach/clients/', CoachClientsView.as_view(), name='coach-clients'),
+    path('coach/groups/', CoachGroupsView.as_view(), name='coach-groups'),
+    path('coach/groups/<int:group_id>/', CoachGroupDetailView.as_view(), name='coach-group-detail'),
+    path('coach/groups/<int:group_id>/members/', CoachGroupMembersView.as_view(), name='coach-group-members'),
+    path('coach/groups/<int:group_id>/members/bulk/', CoachGroupMembersBulkView.as_view(), name='coach-group-members-bulk'),
+    path('coach/groups/<int:group_id>/members/<int:client_id>/', CoachGroupMemberDetailView.as_view(), name='coach-group-member-detail'),
+    path('coach/groups/<int:group_id>/tasks/', CoachGroupTasksView.as_view(), name='coach-group-tasks'),
+    path('coach/groups/<int:group_id>/tasks/<int:task_id>/', CoachGroupTaskDetailView.as_view(), name='coach-group-task-detail'),
     path('clients/<int:contact_id>/', CoachingContactDetailView.as_view(), name='coaching-contact-detail'),
     path('clients/<int:contact_id>/competencies/', ContactCompetenciesView.as_view(), name='coaching-contact-competencies'),
     path('clients/<int:contact_id>/goals/', ContactGoalsView.as_view(), name='coaching-contact-goals'),
@@ -272,6 +287,7 @@ urlpatterns = [
     path('goals/<str:goal_id>/steps/<str:step_id>/', ContactGoalStepDetailView.as_view(), name='coaching-goal-step-detail'),
     path('onboarding/', CoachingOnboardingView.as_view(), name='coaching-onboarding'),
     path('public/client-page/<int:client_id>/', PublicClientPageView.as_view(), name='public-client-page'),
+    path('public/client-page/<int:client_id>/coaching/', PublicClientPageCoachingView.as_view(), name='public-client-page-coaching'),
     path('public/client-page/by-domain/', PublicClientPageByDomainView.as_view(), name='public-client-page-by-domain'),
     path('caddy-ask/', CaddyAskView.as_view(), name='caddy-ask'),
     path('public/client-page/<int:client_id>/steps/', PublicClientPageStepsView.as_view(), name='public-client-page-steps'),

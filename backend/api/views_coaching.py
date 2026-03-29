@@ -4,16 +4,23 @@ from copy import deepcopy
 from datetime import datetime, time, timedelta
 from uuid import uuid4
 
+from django.db import transaction
+from django.db.models import Count
+from django.db.utils import NotSupportedError
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.models import ContactCoachingProfile, MapContact, UserTenantBinding
+from core.models import CoachGroup, CoachGroupMember, CoachGroupTask, ContactCoachingProfile, MapContact, UserTenantBinding
 
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers_coaching import (
+    CoachGroupCreateSerializer,
+    CoachGroupMemberCreateSerializer,
+    CoachGroupMembersBulkCreateSerializer,
+    CoachGroupTaskCreateSerializer,
     CoachingCompetencySerializer,
     CoachingContactUpdateSerializer,
     CoachingGoalEditSerializer,
@@ -25,6 +32,9 @@ from .serializers_coaching import (
     CoachingSessionUpdateSerializer,
 )
 from .utils import get_active_client
+
+
+GROUP_GOAL_ID_PREFIX = "group-"
 
 
 def _tenant_contact_ids_queryset(tenant_id: int):
@@ -77,6 +87,148 @@ def _contact_initials(name: str) -> str:
     if not parts:
         return "—"
     return "".join(part[:1].upper() for part in parts[:2])
+
+
+def _group_goal_id(group_id: int) -> str:
+    return f"{GROUP_GOAL_ID_PREFIX}{group_id}"
+
+
+def _group_task_step_refs(task: CoachGroupTask) -> list[dict]:
+    refs = task.step_refs if isinstance(task.step_refs, list) else []
+    return [ref for ref in refs if isinstance(ref, dict)]
+
+
+def _is_group_goal(goal: dict) -> bool:
+    goal_id = str(goal.get("id") or "")
+    return goal_id.startswith(GROUP_GOAL_ID_PREFIX)
+
+
+def _recalculate_goal_progress(goal: dict) -> None:
+    steps = [step for step in (goal.get("steps") or []) if isinstance(step, dict)]
+    if not steps:
+        goal["progress"] = 0
+        return
+    done_count = sum(1 for step in steps if step.get("done"))
+    goal["progress"] = round((done_count / len(steps)) * 100)
+
+
+def _ensure_group_goal(profile: ContactCoachingProfile, group: CoachGroup) -> tuple[list[dict], int, dict]:
+    goal_id = _group_goal_id(int(group.id))
+    goals = [goal for goal in (profile.goals or []) if isinstance(goal, dict)]
+    for index, goal in enumerate(goals):
+        if str(goal.get("id") or "") == goal_id:
+            goal["title"] = str(goal.get("title") or f"Группа: {group.name}")
+            goal["status"] = str(goal.get("status") or "active")
+            goal.setdefault("competencyLinks", [])
+            goal.setdefault("steps", [])
+            goal.setdefault("createdAt", timezone.now().isoformat())
+            _recalculate_goal_progress(goal)
+            return goals, index, goal
+
+    goal = {
+        "id": goal_id,
+        "title": f"Группа: {group.name}",
+        "progress": 0,
+        "horizon": "month",
+        "status": "active",
+        "competencyLinks": [],
+        "steps": [],
+        "createdAt": timezone.now().isoformat(),
+    }
+    goals.append(goal)
+    return goals, len(goals) - 1, goal
+
+
+def _drop_group_goal_if_empty(goals: list[dict], goal_index: int) -> list[dict]:
+    if goal_index < 0 or goal_index >= len(goals):
+        return goals
+    goal = goals[goal_index]
+    if not _is_group_goal(goal):
+        return goals
+    steps = [step for step in (goal.get("steps") or []) if isinstance(step, dict)]
+    if steps:
+        return goals
+    return [item for index, item in enumerate(goals) if index != goal_index]
+
+
+def _remove_group_step_from_profile(profile: ContactCoachingProfile, group_id: int, step_id: str) -> bool:
+    goals = [goal for goal in (profile.goals or []) if isinstance(goal, dict)]
+    goal_id = _group_goal_id(group_id)
+    changed = False
+    for index, goal in enumerate(goals):
+        if str(goal.get("id") or "") != goal_id:
+            continue
+        next_goal = deepcopy(goal)
+        previous_count = len(next_goal.get("steps") or [])
+        next_goal["steps"] = [
+            step
+            for step in (next_goal.get("steps") or [])
+            if isinstance(step, dict) and str(step.get("id") or "") != step_id
+        ]
+        if len(next_goal["steps"]) == previous_count:
+            break
+        _recalculate_goal_progress(next_goal)
+        goals[index] = next_goal
+        goals = _drop_group_goal_if_empty(goals, index)
+        profile.goals = goals
+        changed = True
+        break
+    if changed:
+        profile.save(update_fields=["goals"])
+    return changed
+
+
+def _remove_group_steps_from_profile(profile: ContactCoachingProfile | None, group_id: int, step_ids: set[str]) -> bool:
+    if profile is None or not step_ids:
+        return False
+
+    goals = [goal for goal in (profile.goals or []) if isinstance(goal, dict)]
+    goal_id = _group_goal_id(group_id)
+    changed = False
+    for index, goal in enumerate(goals):
+        if str(goal.get("id") or "") != goal_id:
+            continue
+
+        next_goal = deepcopy(goal)
+        previous_count = len(next_goal.get("steps") or [])
+        next_goal["steps"] = [
+            step
+            for step in (next_goal.get("steps") or [])
+            if isinstance(step, dict) and str(step.get("id") or "") not in step_ids
+        ]
+        if len(next_goal["steps"]) == previous_count:
+            break
+
+        _recalculate_goal_progress(next_goal)
+        goals[index] = next_goal
+        goals = _drop_group_goal_if_empty(goals, index)
+        profile.goals = goals
+        changed = True
+        break
+
+    if changed:
+        profile.save(update_fields=["goals"])
+    return changed
+
+
+def _build_group_step_done_index(
+    group_id: int,
+    profiles_by_contact_id: dict[int, ContactCoachingProfile],
+) -> dict[tuple[int, str], bool]:
+    goal_id = _group_goal_id(group_id)
+    done_index: dict[tuple[int, str], bool] = {}
+    for contact_id, profile in profiles_by_contact_id.items():
+        for goal in profile.goals or []:
+            if not isinstance(goal, dict) or str(goal.get("id") or "") != goal_id:
+                continue
+            for step in goal.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                step_id = str(step.get("id") or "")
+                if step_id:
+                    done_index[(contact_id, step_id)] = bool(step.get("done"))
+            break
+    return done_index
 
 
 def _competencies_map(profile: ContactCoachingProfile) -> dict[str, dict]:
@@ -323,6 +475,27 @@ def _serialize_contact(contact: MapContact, tenant_id: int, profile: ContactCoac
     }
 
 
+def _serialize_group(group: CoachGroup, member_count: int | None = None) -> dict:
+    return {
+        "id": str(group.id),
+        "name": str(group.name or ""),
+        "initials": _contact_initials(group.name),
+        "memberCount": int(member_count if member_count is not None else getattr(group, "member_count", 0) or 0),
+        "createdAt": group.created_at.isoformat() if group.created_at else timezone.now().isoformat(),
+    }
+
+
+def _serialize_group_member(contact: MapContact, profile: ContactCoachingProfile | None) -> dict:
+    profile = profile or ContactCoachingProfile(contact_id=int(contact.id), tenant_id=0)
+    return {
+        "clientId": str(contact.id),
+        "name": str(contact.name or ""),
+        "initials": _contact_initials(contact.name),
+        "focus": _goal_focus(profile),
+        "avgProgress": _profile_avg_progress(profile),
+    }
+
+
 def _serialize_goal_for_edit(goal: dict, competencies_by_id: dict[str, dict]) -> dict:
     links = []
     for link in goal.get("competencyLinks") or []:
@@ -557,6 +730,58 @@ def _find_profile_task(tenant_id: int, task_id: str) -> tuple[ContactCoachingPro
             if isinstance(task, dict) and str(task.get("id") or "") == task_id:
                 return profile, index
     return None, None
+
+
+def _serialize_group_task(task: CoachGroupTask, done_index: dict[tuple[int, str], bool] | None = None) -> dict:
+    done_count = 0
+    refs = _group_task_step_refs(task)
+    for ref in refs:
+        try:
+            contact_id = int(ref.get("contactId"))
+        except (TypeError, ValueError):
+            continue
+        step_id = str(ref.get("stepId") or "")
+        if done_index and done_index.get((contact_id, step_id)):
+            done_count += 1
+
+    return {
+        "id": str(task.id),
+        "groupId": str(task.group_id),
+        "text": str(task.text or ""),
+        "dueDate": task.due_date.isoformat() if task.due_date else None,
+        "createdAt": task.created_at.isoformat() if task.created_at else timezone.now().isoformat(),
+        "doneCount": done_count,
+        "totalCount": len(refs),
+    }
+
+
+def _delete_group_task_steps(task: CoachGroupTask) -> None:
+    refs_by_contact: dict[int, list[dict]] = {}
+    for ref in _group_task_step_refs(task):
+        try:
+            contact_id = int(ref.get("contactId"))
+        except (TypeError, ValueError):
+            continue
+        refs_by_contact.setdefault(contact_id, []).append(ref)
+
+    if not refs_by_contact:
+        return
+
+    profiles = {
+        profile.contact_id: profile
+        for profile in ContactCoachingProfile.objects.filter(
+            tenant_id=task.group.tenant_id,
+            contact_id__in=list(refs_by_contact.keys()),
+        )
+    }
+    for contact_id, refs in refs_by_contact.items():
+        profile = profiles.get(contact_id)
+        if profile is None:
+            continue
+        for ref in refs:
+            step_id = str(ref.get("stepId") or "")
+            if step_id:
+                _remove_group_step_from_profile(profile, int(task.group_id), step_id)
 
 
 def _adjust_competencies_for_goal(profile: ContactCoachingProfile, goal: dict, next_progress: int) -> None:
@@ -893,6 +1118,8 @@ class ContactGoalStepDetailView(APIView):
             return Response({"error": "Шаг не найден"}, status=status.HTTP_404_NOT_FOUND)
 
         goal["steps"] = steps
+        if _is_group_goal(goal):
+            _recalculate_goal_progress(goal)
         goals[goal_index] = goal
         profile.goals = goals
         profile.save()
@@ -915,7 +1142,10 @@ class ContactGoalStepDetailView(APIView):
         if len(goal["steps"]) == previous_count:
             return Response({"error": "Шаг не найден"}, status=status.HTTP_404_NOT_FOUND)
 
+        if _is_group_goal(goal):
+            _recalculate_goal_progress(goal)
         goals[goal_index] = goal
+        goals = _drop_group_goal_if_empty(goals, goal_index)
         profile.goals = goals
         profile.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -1084,6 +1314,317 @@ class ContactSessionDetailView(APIView):
                 return Response(_serialize_session(profile, next_session))
 
         return Response({"error": "Сессия не найдена"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class CoachGroupsView(APIView):
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsTenantMember()]
+        return [IsTenantOwnerOrEditor()]
+
+    def get(self, request):
+        tenant = get_active_client(request.user)
+        groups = (
+            CoachGroup.objects
+            .filter(tenant=tenant)
+            .annotate(member_count=Count("members"))
+            .order_by("created_at", "id")
+        )
+        return Response([_serialize_group(group) for group in groups])
+
+    def post(self, request):
+        tenant = get_active_client(request.user)
+        serializer = CoachGroupCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        group = CoachGroup.objects.create(
+            tenant=tenant,
+            name=serializer.validated_data["name"].strip(),
+        )
+        return Response(_serialize_group(group, member_count=0), status=status.HTTP_201_CREATED)
+
+
+class CoachGroupDetailView(APIView):
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsTenantMember()]
+        return [IsTenantOwnerOrEditor()]
+
+    def get(self, request, group_id: int):
+        tenant = get_active_client(request.user)
+        group = (
+            CoachGroup.objects
+            .filter(id=group_id, tenant=tenant)
+            .annotate(member_count=Count("members"))
+            .prefetch_related("members", "tasks")
+            .first()
+        )
+        if group is None:
+            return Response({"error": "Группа не найдена"}, status=status.HTTP_404_NOT_FOUND)
+
+        members = list(group.members.order_by("created_at", "id"))
+        contact_ids = [member.contact_id for member in members]
+        contacts = {
+            int(contact.id): contact
+            for contact in MapContact.objects.filter(id__in=contact_ids)
+        }
+        profiles = {
+            profile.contact_id: profile
+            for profile in ContactCoachingProfile.objects.filter(tenant=tenant, contact_id__in=contact_ids)
+        }
+        done_index = _build_group_step_done_index(int(group.id), profiles)
+
+        payload_members = []
+        for member in members:
+            contact = contacts.get(int(member.contact_id))
+            if contact is None:
+                continue
+            payload_members.append(_serialize_group_member(contact, profiles.get(int(member.contact_id))))
+
+        payload_tasks = [
+            _serialize_group_task(task, done_index)
+            for task in group.tasks.order_by("created_at", "id")
+        ]
+
+        return Response(
+            {
+                "group": _serialize_group(group),
+                "members": payload_members,
+                "tasks": payload_tasks,
+            }
+        )
+
+    def delete(self, request, group_id: int):
+        tenant = get_active_client(request.user)
+        group = CoachGroup.objects.filter(id=group_id, tenant=tenant).first()
+        if group is None:
+            return Response({"error": "Группа не найдена"}, status=status.HTTP_404_NOT_FOUND)
+
+        with transaction.atomic():
+            tasks = list(group.tasks.select_related("group").all())
+            for task in tasks:
+                _delete_group_task_steps(task)
+            group.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CoachGroupMembersView(APIView):
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request, group_id: int):
+        tenant = get_active_client(request.user)
+        group = CoachGroup.objects.filter(id=group_id, tenant=tenant).first()
+        if group is None:
+            return Response({"error": "Группа не найдена"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = CoachGroupMemberCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        contact_id = int(serializer.validated_data["clientId"])
+        contact = _tenant_contact_or_none(int(tenant.id), contact_id)
+        if contact is None:
+            return Response({"error": "Контакт не найден"}, status=status.HTTP_404_NOT_FOUND)
+
+        _, created = CoachGroupMember.objects.get_or_create(group=group, contact_id=contact_id)
+        if not created:
+            return Response({"error": "Контакт уже в группе"}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = _get_profile(int(tenant.id), contact_id)
+        return Response(_serialize_group_member(contact, profile), status=status.HTTP_201_CREATED)
+
+
+class CoachGroupMembersBulkView(APIView):
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request, group_id: int):
+        tenant = get_active_client(request.user)
+        group = CoachGroup.objects.filter(id=group_id, tenant=tenant).first()
+        if group is None:
+            return Response({"error": "Группа не найдена"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = CoachGroupMembersBulkCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        requested_ids = [int(contact_id) for contact_id in serializer.validated_data["clientIds"]]
+        contact_ids = list(dict.fromkeys(requested_ids))
+        contacts = {
+            int(contact.id): contact
+            for contact in (
+                MapContact.objects
+                .filter(id__in=contact_ids)
+                .filter(id__in=_tenant_contact_ids_queryset(int(tenant.id)))
+            )
+        }
+        if len(contacts) != len(contact_ids):
+            return Response({"error": "Часть контактов не найдена"}, status=status.HTTP_404_NOT_FOUND)
+
+        existing_ids = set(
+            group.members
+            .filter(contact_id__in=contact_ids)
+            .values_list("contact_id", flat=True)
+        )
+        create_ids = [contact_id for contact_id in contact_ids if contact_id not in existing_ids]
+        if not create_ids:
+            return Response([])
+
+        CoachGroupMember.objects.bulk_create(
+            [CoachGroupMember(group=group, contact_id=contact_id) for contact_id in create_ids],
+            ignore_conflicts=True,
+        )
+        profiles = {
+            profile.contact_id: profile
+            for profile in ContactCoachingProfile.objects.filter(tenant=tenant, contact_id__in=create_ids)
+        }
+
+        payload = [
+            _serialize_group_member(contacts[contact_id], profiles.get(contact_id))
+            for contact_id in create_ids
+        ]
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class CoachGroupMemberDetailView(APIView):
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def delete(self, request, group_id: int, client_id: int):
+        tenant = get_active_client(request.user)
+        group = CoachGroup.objects.filter(id=group_id, tenant=tenant).first()
+        if group is None:
+            return Response({"error": "Группа не найдена"}, status=status.HTTP_404_NOT_FOUND)
+
+        member = group.members.filter(contact_id=client_id).first()
+        if member is None:
+            return Response({"error": "Участник не найден"}, status=status.HTTP_404_NOT_FOUND)
+
+        with transaction.atomic():
+            tasks_queryset = group.tasks.select_related("group")
+            try:
+                tasks = list(tasks_queryset.filter(step_refs__contains=[{"contactId": client_id}]))
+            except NotSupportedError:
+                tasks = list(tasks_queryset.all())
+
+            removed_step_ids: set[str] = set()
+            changed_tasks: list[CoachGroupTask] = []
+            now = timezone.now()
+            for task in tasks:
+                next_refs = []
+                changed = False
+                for ref in _group_task_step_refs(task):
+                    try:
+                        ref_contact_id = int(ref.get("contactId"))
+                    except (TypeError, ValueError):
+                        next_refs.append(ref)
+                        continue
+                    if ref_contact_id == client_id:
+                        step_id = str(ref.get("stepId") or "")
+                        if step_id:
+                            removed_step_ids.add(step_id)
+                        changed = True
+                    else:
+                        next_refs.append(ref)
+
+                if changed:
+                    task.step_refs = next_refs
+                    task.updated_at = now
+                    changed_tasks.append(task)
+
+            if changed_tasks:
+                CoachGroupTask.objects.bulk_update(changed_tasks, ["step_refs", "updated_at"])
+
+            profile = _get_profile(int(tenant.id), client_id)
+            _remove_group_steps_from_profile(profile, int(group.id), removed_step_ids)
+
+            member.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CoachGroupTasksView(APIView):
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request, group_id: int):
+        tenant = get_active_client(request.user)
+        group = CoachGroup.objects.filter(id=group_id, tenant=tenant).first()
+        if group is None:
+            return Response({"error": "Группа не найдена"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = CoachGroupTaskCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        members = list(group.members.order_by("created_at", "id"))
+        if not members:
+            return Response({"error": "В группе нет участников"}, status=status.HTTP_400_BAD_REQUEST)
+
+        due_date = serializer.validated_data.get("dueDate")
+        due_date_value = due_date.isoformat() if due_date else ""
+        step_refs: list[dict] = []
+
+        with transaction.atomic():
+            for member in members:
+                profile = _get_or_create_profile(int(tenant.id), int(member.contact_id))
+                goals, goal_index, goal = _ensure_group_goal(profile, group)
+                next_goal = deepcopy(goal)
+                step = {
+                    "id": uuid4().hex,
+                    "text": serializer.validated_data["text"].strip(),
+                    "done": False,
+                    "isMilestone": False,
+                    "milestoneNote": "",
+                    "doneAt": "",
+                    "dueDate": due_date_value,
+                    "goalId": str(next_goal.get("id") or ""),
+                    "goalTitle": str(next_goal.get("title") or ""),
+                }
+                next_goal["steps"] = [*next_goal.get("steps", []), step]
+                _recalculate_goal_progress(next_goal)
+                goals[goal_index] = next_goal
+                profile.goals = goals
+                profile.save(update_fields=["goals"])
+                step_refs.append(
+                    {
+                        "contactId": int(member.contact_id),
+                        "goalId": str(next_goal.get("id") or ""),
+                        "stepId": str(step["id"]),
+                    }
+                )
+
+            task = CoachGroupTask.objects.create(
+                group=group,
+                text=serializer.validated_data["text"].strip(),
+                due_date=due_date,
+                step_refs=step_refs,
+            )
+
+        profiles = {
+            profile.contact_id: profile
+            for profile in ContactCoachingProfile.objects.filter(
+                tenant=tenant,
+                contact_id__in=[int(member.contact_id) for member in members],
+            )
+        }
+        return Response(_serialize_group_task(task, profiles), status=status.HTTP_201_CREATED)
+
+
+class CoachGroupTaskDetailView(APIView):
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def delete(self, request, group_id: int, task_id: int):
+        tenant = get_active_client(request.user)
+        task = (
+            CoachGroupTask.objects
+            .select_related("group")
+            .filter(id=task_id, group_id=group_id, group__tenant=tenant)
+            .first()
+        )
+        if task is None:
+            return Response({"error": "Задание не найдено"}, status=status.HTTP_404_NOT_FOUND)
+
+        with transaction.atomic():
+            _delete_group_task_steps(task)
+            task.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CoachingOnboardingView(APIView):

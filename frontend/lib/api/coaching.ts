@@ -331,3 +331,111 @@ export type CoachingApiExtended = typeof coachingApi & {
 };
 
 export const coachingApiExt = coachingApi as CoachingApiExtended;
+
+export type CoachGroup = {
+  id: string;
+  name: string;
+  initials: string;
+  memberCount: number;
+  createdAt: string;
+};
+
+export type CoachGroupMember = {
+  clientId: string;
+  name: string;
+  initials: string;
+  focus: string;
+  avgProgress: number;
+};
+
+export type CoachGroupTask = {
+  id: string;
+  groupId: string;
+  text: string;
+  dueDate: string | null;
+  createdAt: string;
+  doneCount: number;
+  totalCount: number;
+};
+
+export type CoachGroupDetail = {
+  group: CoachGroup;
+  members: CoachGroupMember[];
+  tasks: CoachGroupTask[];
+};
+
+Object.assign(coachingApi, {
+  getCoachGroups: async (): Promise<CoachGroup[]> => {
+    return apiFetch<CoachGroup[]>('/coach/groups/');
+  },
+
+  createCoachGroup: async (name: string): Promise<CoachGroup> => {
+    return apiFetch<CoachGroup>('/coach/groups/', {
+      method: 'POST',
+      body: { name },
+    });
+  },
+
+  getCoachGroupDetail: async (groupId: string): Promise<CoachGroupDetail> => {
+    return apiFetch<CoachGroupDetail>(`/coach/groups/${groupId}/`);
+  },
+
+  deleteCoachGroup: async (groupId: string): Promise<void> => {
+    await apiFetch<void>(`/coach/groups/${groupId}/`, {
+      method: 'DELETE',
+    });
+  },
+
+  addGroupMember: async (groupId: string, clientId: string): Promise<CoachGroupMember> => {
+    return apiFetch<CoachGroupMember>(`/coach/groups/${groupId}/members/`, {
+      method: 'POST',
+      body: { clientId: Number(clientId) },
+    });
+  },
+
+  addGroupMembers: async (groupId: string, clientIds: string[]): Promise<CoachGroupMember[]> => {
+    return apiFetch<CoachGroupMember[]>(`/coach/groups/${groupId}/members/bulk/`, {
+      method: 'POST',
+      body: { clientIds: clientIds.map((clientId) => Number(clientId)) },
+    });
+  },
+
+  removeGroupMember: async (groupId: string, clientId: string): Promise<void> => {
+    await apiFetch<void>(`/coach/groups/${groupId}/members/${clientId}/`, {
+      method: 'DELETE',
+    });
+  },
+
+  createGroupTask: async (
+    groupId: string,
+    payload: { text: string; dueDate?: string | null },
+  ): Promise<CoachGroupTask> => {
+    return apiFetch<CoachGroupTask>(`/coach/groups/${groupId}/tasks/`, {
+      method: 'POST',
+      body: {
+        text: payload.text,
+        dueDate: payload.dueDate || null,
+      },
+    });
+  },
+
+  deleteGroupTask: async (groupId: string, taskId: string): Promise<void> => {
+    await apiFetch<void>(`/coach/groups/${groupId}/tasks/${taskId}/`, {
+      method: 'DELETE',
+    });
+  },
+});
+
+export type CoachingApiWithGroups = typeof coachingApi & {
+  getCoachGroups(): Promise<CoachGroup[]>;
+  createCoachGroup(name: string): Promise<CoachGroup>;
+  getCoachGroupDetail(groupId: string): Promise<CoachGroupDetail>;
+  deleteCoachGroup(groupId: string): Promise<void>;
+  addGroupMember(groupId: string, clientId: string): Promise<CoachGroupMember>;
+  addGroupMembers(groupId: string, clientIds: string[]): Promise<CoachGroupMember[]>;
+  removeGroupMember(groupId: string, clientId: string): Promise<void>;
+  createGroupTask(groupId: string, payload: { text: string; dueDate?: string | null }): Promise<CoachGroupTask>;
+  deleteGroupTask(groupId: string, taskId: string): Promise<void>;
+};
+
+export const coachingApiGroups = coachingApi as CoachingApiWithGroups;

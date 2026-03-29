@@ -753,7 +753,7 @@ export function PaymentTab() {
 
         <div className="space-y-6">
           <Card>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-4 pt-6">
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-sm font-semibold">{selectedPlan?.name || 'Тариф не выбран'}</div>

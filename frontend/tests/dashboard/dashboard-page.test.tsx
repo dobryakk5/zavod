@@ -6,6 +6,14 @@ const testState = vi.hoisted(() => ({
   getCoachStats: vi.fn(),
   getCoachClients: vi.fn(),
   getCoachClientCompetencies: vi.fn(),
+  getCoachGroups: vi.fn(),
+  getCoachGroupDetail: vi.fn(),
+  createCoachGroup: vi.fn(),
+  addGroupMember: vi.fn(),
+  addGroupMembers: vi.fn(),
+  removeGroupMember: vi.fn(),
+  createGroupTask: vi.fn(),
+  deleteGroupTask: vi.fn(),
   contactsList: vi.fn(),
   dealsList: vi.fn(),
   eventsList: vi.fn(),
@@ -23,6 +31,16 @@ vi.mock('@/lib/api/coaching', () => ({
     getCoachStats: (...args: unknown[]) => testState.getCoachStats(...args),
     getCoachClients: (...args: unknown[]) => testState.getCoachClients(...args),
     getCoachClientCompetencies: (...args: unknown[]) => testState.getCoachClientCompetencies(...args),
+  },
+  coachingApiGroups: {
+    getCoachGroups: (...args: unknown[]) => testState.getCoachGroups(...args),
+    getCoachGroupDetail: (...args: unknown[]) => testState.getCoachGroupDetail(...args),
+    createCoachGroup: (...args: unknown[]) => testState.createCoachGroup(...args),
+    addGroupMember: (...args: unknown[]) => testState.addGroupMember(...args),
+    addGroupMembers: (...args: unknown[]) => testState.addGroupMembers(...args),
+    removeGroupMember: (...args: unknown[]) => testState.removeGroupMember(...args),
+    createGroupTask: (...args: unknown[]) => testState.createGroupTask(...args),
+    deleteGroupTask: (...args: unknown[]) => testState.deleteGroupTask(...args),
   },
 }));
 
@@ -64,6 +82,14 @@ describe('DashboardPage', () => {
       },
     ]);
     testState.getCoachClientCompetencies.mockResolvedValue([]);
+    testState.getCoachGroups.mockResolvedValue([]);
+    testState.getCoachGroupDetail.mockResolvedValue(null);
+    testState.createCoachGroup.mockResolvedValue(null);
+    testState.addGroupMember.mockResolvedValue(null);
+    testState.removeGroupMember.mockResolvedValue(undefined);
+    testState.createGroupTask.mockResolvedValue(null);
+    testState.deleteGroupTask.mockResolvedValue(undefined);
+    testState.addGroupMembers.mockResolvedValue([]);
     testState.contactsList.mockResolvedValue([]);
     testState.dealsList.mockResolvedValue([]);
     testState.eventsList.mockResolvedValue([]);
@@ -74,7 +100,7 @@ describe('DashboardPage', () => {
     cleanup();
   });
 
-  it('shows add client link next to clients heading', async () => {
+  it('shows crm link in dashboard tabs', async () => {
     const mod = await import('@/app/dashboard/page');
     const DashboardPage = mod.default;
 
@@ -84,7 +110,7 @@ describe('DashboardPage', () => {
       expect(testState.getCoachClients).toHaveBeenCalled();
     });
 
-    expect(screen.getByRole('link', { name: 'Добавить клиента' })).toHaveAttribute('href', '/clients/new?from=dashboard');
+    expect(screen.getByRole('link', { name: /crm/i })).toHaveAttribute('href', '/clients');
   });
 
   it('shows recent new clients summary for clients created in the last 30 days', async () => {

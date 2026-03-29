@@ -77,6 +77,8 @@ class MapCRMTagSerializer(serializers.ModelSerializer):
 
 
 class MapContactTagSerializer(serializers.ModelSerializer):
+    contact_id = serializers.IntegerField()
+    tag_id = serializers.IntegerField()
     type = serializers.CharField(source="tag.type", read_only=True)
     value = serializers.CharField(source="tag.value", read_only=True)
     tag_type = serializers.CharField(source="tag.type", read_only=True)
@@ -85,6 +87,55 @@ class MapContactTagSerializer(serializers.ModelSerializer):
     class Meta:
         model = MapContactTag
         fields = ["id", "contact_id", "tag_id", "type", "value", "tag_type", "tag_value", "description"]
+
+    def validate_contact_id(self, value: int) -> int:
+        tenant_id = _active_client_id_from_context(self)
+        if tenant_id is None:
+            if not MapContact.objects.filter(id=value).exists():
+                raise serializers.ValidationError("Контакт не найден.")
+            return value
+        if not _tenant_contact_queryset(tenant_id).filter(id=value).exists():
+            raise serializers.ValidationError("Контакт недоступен в этом тенанте.")
+        return value
+
+    def validate_tag_id(self, value: int) -> int:
+        if not MapCRMTag.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Тег не найден.")
+        return value
+
+    def create(self, validated_data):
+        contact_id = int(validated_data.pop("contact_id"))
+        tag_id = int(validated_data.pop("tag_id"))
+        description = validated_data.pop("description", serializers.empty)
+
+        defaults = {
+            "description": "" if description in (serializers.empty, None) else str(description),
+        }
+        contact_tag, created = MapContactTag.objects.get_or_create(
+            contact_id=contact_id,
+            tag_id=tag_id,
+            defaults=defaults,
+        )
+
+        # Preserve legacy raw-SQL behaviour:
+        # repeated POST acts like upsert and only updates description when it is provided.
+        if not created and description not in (serializers.empty, None):
+            next_description = str(description)
+            if contact_tag.description != next_description:
+                contact_tag.description = next_description
+                contact_tag.save(update_fields=["description"])
+
+        return contact_tag
+
+    def update(self, instance, validated_data):
+        if "contact_id" in validated_data:
+            instance.contact_id = int(validated_data["contact_id"])
+        if "tag_id" in validated_data:
+            instance.tag_id = int(validated_data["tag_id"])
+        if "description" in validated_data and validated_data["description"] is not None:
+            instance.description = str(validated_data["description"])
+        instance.save()
+        return instance
 
 
 class MapContactSerializer(serializers.ModelSerializer):

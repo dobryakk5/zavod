@@ -98,3 +98,23 @@ class CoachingOnboardingSerializer(serializers.Serializer):
     intention = serializers.CharField(required=False, allow_blank=True, default="")
     wheel = serializers.ListField(required=False, default=list)
     competencies = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+
+
+class CoachGroupCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+
+
+class CoachGroupMemberCreateSerializer(serializers.Serializer):
+    clientId = serializers.IntegerField(min_value=1)
+
+
+class CoachGroupMembersBulkCreateSerializer(serializers.Serializer):
+    clientIds = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+    )
+
+
+class CoachGroupTaskCreateSerializer(serializers.Serializer):
+    text = serializers.CharField(max_length=500)
+    dueDate = serializers.DateField(required=False, allow_null=True)

@@ -54,7 +54,7 @@ export default function PublicTasksPage({
         if (err instanceof ApiError && err.status === 404) {
           setSteps([]);
         } else if (err instanceof ApiError && err.status === 401) {
-          setError('Войдите через Telegram или VK, чтобы увидеть задания.');
+          setError('Войдите через Telegram, VK или email, чтобы увидеть задания.');
         } else {
           setError('Не удалось загрузить задания.');
         }

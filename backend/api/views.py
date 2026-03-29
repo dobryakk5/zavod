@@ -122,6 +122,13 @@ from .views_unified_inbox import (  # noqa: F401
     UnifiedInboxThreadsView,
 )
 from .views_coaching import (  # noqa: F401
+    CoachGroupDetailView,
+    CoachGroupMemberDetailView,
+    CoachGroupMembersView,
+    CoachGroupMembersBulkView,
+    CoachGroupsView,
+    CoachGroupTaskDetailView,
+    CoachGroupTasksView,
     CoachClientsView,
     CoachStatsView,
     CoachingContactDetailView,
