@@ -393,6 +393,46 @@ def _resolve_request_contact_id_for_client(request, client_id: int) -> int | Non
     return _resolve_bound_contact_id_for_client(user, client_id)
 
 
+def _resolve_coaching_contact_id_for_request(request, client_id: int) -> int | None:
+    invite_contact_id = resolve_coach_invite_contact_id(request, client_id)
+    if invite_contact_id is not None and int(invite_contact_id) > 0:
+        return int(invite_contact_id)
+
+    raw_contact_id = str(request.query_params.get("contact_id") or "").strip()
+    if not raw_contact_id:
+        return None
+
+    try:
+        contact_id = int(raw_contact_id)
+    except (TypeError, ValueError):
+        return None
+
+    if contact_id <= 0:
+        return None
+
+    user = _authenticate_cookie_user_optional(request)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+
+    has_tenant_access = UserTenantRole.objects.filter(
+        user=user,
+        client_id=client_id,
+        role__in=("owner", "editor", "viewer"),
+    ).exists()
+    if not has_tenant_access:
+        return None
+
+    is_tenant_contact = UserTenantBinding.objects.filter(
+        tenant_id=client_id,
+        contact_id=contact_id,
+        contact_id__gt=0,
+    ).exists()
+    if not is_tenant_contact:
+        return None
+
+    return contact_id
+
+
 def _public_goal_step_sort_key(step: dict) -> tuple[int, str, str]:
     due_date = str(step.get("dueDate") or "")
     done_at = str(step.get("doneAt") or "")
@@ -1883,7 +1923,7 @@ class PublicClientPageTasksView(APIView):
         if not client_exists:
             raise Http404("Клиент не найден")
 
-        contact_id = resolve_coach_invite_contact_id(request, client_id)
+        contact_id = _resolve_coaching_contact_id_for_request(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
                 {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть задания."},
@@ -1924,7 +1964,7 @@ class PublicClientPageStepsView(APIView):
         if not client_exists:
             raise Http404("Клиент не найден")
 
-        contact_id = resolve_coach_invite_contact_id(request, client_id)
+        contact_id = _resolve_coaching_contact_id_for_request(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
                 {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть задания."},
@@ -1957,7 +1997,7 @@ class PublicClientPageCoachingView(APIView):
         if not client_exists:
             raise Http404("Клиент не найден")
 
-        contact_id = resolve_coach_invite_contact_id(request, client_id)
+        contact_id = _resolve_coaching_contact_id_for_request(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
                 {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть кабинет."},
@@ -1991,7 +2031,7 @@ class PublicClientPageStepDetailView(APIView):
         if not client_exists:
             raise Http404("Клиент не найден")
 
-        contact_id = resolve_coach_invite_contact_id(request, client_id)
+        contact_id = _resolve_coaching_contact_id_for_request(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
                 {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть задания."},

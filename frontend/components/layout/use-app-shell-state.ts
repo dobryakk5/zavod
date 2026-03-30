@@ -16,7 +16,7 @@ const buildApiUrl = (path: string) => {
 const VK_CLIENT_NAME_RE = /^vk_\d+$/i;
 
 export const APP_SHELL_NAV_ITEMS = [
-  { href: DASHBOARD_ROUTE, label: 'Дашборд' },
+  { href: DASHBOARD_ROUTE, label: 'Обзор' },
   { href: MARKETING_ROUTE, label: 'Маркетинг' },
   { href: '/products', label: 'Продукты' },
   { href: '/settings', label: 'Настройки' },
@@ -31,7 +31,7 @@ export function getAppShellRouteTitle(pathname: string): string {
     return matchedNavItem.label;
   }
 
-  if (pathname === DASHBOARD_ROUTE || pathname.startsWith(`${DASHBOARD_ROUTE}/`)) return 'Дашборд';
+  if (pathname === DASHBOARD_ROUTE || pathname.startsWith(`${DASHBOARD_ROUTE}/`)) return 'Обзор';
   if (pathname === '/analytics' || pathname.startsWith('/analytics/')) return 'Аналитика';
   if (pathname === '/posts' || pathname.startsWith('/posts/')) return 'Посты';
   if (pathname === '/seo' || pathname.startsWith('/seo/')) return 'SEO';

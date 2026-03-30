@@ -53,7 +53,7 @@ describe('CoachClientSessionPage', () => {
     cleanup();
   });
 
-  it('shows a link to the public coaching portal in the session header', async () => {
+  it('starts the left panel with horizon tabs instead of a duplicated client header', async () => {
     const mod = await import('@/app/coach/clients/[client_id]/page-client');
     const CoachClientSessionPage = mod.default;
 
@@ -63,8 +63,68 @@ describe('CoachClientSessionPage', () => {
       expect(testState.getCoachClient).toHaveBeenCalledWith(46);
     });
 
-    expect(
-      screen.getByRole('link', { name: 'Открыть кабинет клиента Анна Иванова' }),
-    ).toHaveAttribute('href', '/c/46/coaching');
+    expect(screen.queryByRole('link', { name: 'Открыть кабинет клиента Анна Иванова' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Год' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Квартал' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Месяц' })).toBeInTheDocument();
   }, 10000);
+
+  it('shows schedule links when there is no active session', async () => {
+    testState.getCoachClientSessions.mockResolvedValue([
+      {
+        id: 'sess-done-5',
+        clientId: 46,
+        number: 5,
+        date: '2026-03-28T12:00:00.000Z',
+        notes: 'Подвели итоги месяца',
+        coachNotes: 'Согласовать время следующей встречи',
+        status: 'done',
+      },
+    ]);
+
+    const mod = await import('@/app/coach/clients/[client_id]/page-client');
+    const CoachClientSessionPage = mod.default;
+
+    render(<CoachClientSessionPage clientId={46} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Запланируйте сессию' })).toHaveAttribute('href', '/contact/46?tab=schedule');
+    });
+
+    expect(screen.getByRole('link', { name: 'Обзор календаря' })).toHaveAttribute(
+      'href',
+      '/clients?tab=schedule&scheduleTab=calendar',
+    );
+    expect(
+      screen.queryByText(/Активной сессии нет\. Нажмите «Начать сессию/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('Подвели итоги месяца')).toBeInTheDocument();
+    expect(screen.getByText('Согласовать время следующей встречи')).toBeInTheDocument();
+  });
+
+  it('keeps schedule links hidden while a draft session is active', async () => {
+    testState.getCoachClientSessions.mockResolvedValue([
+      {
+        id: 'sess-draft-6',
+        clientId: 46,
+        number: 6,
+        date: '2026-03-30T12:00:00.000Z',
+        notes: 'Черновик заметок',
+        coachNotes: 'Черновик задания',
+        status: 'draft',
+      },
+    ]);
+
+    const mod = await import('@/app/coach/clients/[client_id]/page-client');
+    const CoachClientSessionPage = mod.default;
+
+    render(<CoachClientSessionPage clientId={46} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Автосохранение включено')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('link', { name: 'Запланируйте сессию' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Обзор календаря' })).not.toBeInTheDocument();
+  });
 });

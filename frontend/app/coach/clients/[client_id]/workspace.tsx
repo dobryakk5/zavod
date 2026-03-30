@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Undo2 } from 'lucide-react';
+import { ExternalLink, Undo2 } from 'lucide-react';
 import {
   coachingApi,
   coachingApiExt,
@@ -142,12 +142,22 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
-              <Link
-                href={`/contact/${clientId}`}
-                className="truncate text-[14px] font-medium text-[#1a1a18] transition-colors hover:text-[#185fa5] hover:underline"
-              >
-                {client?.name ?? 'Клиент'}
-              </Link>
+              <div className="flex min-w-0 items-center gap-2">
+                <Link
+                  href={`/contact/${clientId}`}
+                  className="truncate text-[14px] font-medium text-[#1a1a18] transition-colors hover:text-[#185fa5] hover:underline"
+                >
+                  {client?.name ?? 'Клиент'}
+                </Link>
+                <Link
+                  href={`/c/${client?.coachId ?? clientId}/coaching?contact_id=${clientId}`}
+                  aria-label={`Открыть кабинет клиента ${client?.name ?? 'Клиент'}`}
+                  title="Открыть кабинет клиента"
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
               <InviteButton
                 clientId={clientId}
                 clientName={client?.name ?? 'Клиент'}

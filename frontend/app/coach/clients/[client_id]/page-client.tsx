@@ -2,8 +2,6 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, ExternalLink, Undo2 } from 'lucide-react';
-import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import {
   coachingApi,
@@ -89,18 +87,6 @@ export default function CoachClientSessionPage({
   const [savingGoalList, setSavingGoalList] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
-
-  const handleCopyPortalLink = useCallback(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const portalUrl = new URL(`/c/${clientId}/coaching`, window.location.origin).toString();
-    navigator.clipboard.writeText(portalUrl).then(
-      () => toast.success('Ссылка на кабинет клиента скопирована'),
-      () => toast.error('Не удалось скопировать ссылку'),
-    );
-  }, [clientId]);
 
   useEffect(() => {
     let isActive = true;
@@ -618,51 +604,6 @@ export default function CoachClientSessionPage({
     <div className="min-h-full bg-[#f5f4f0] p-3 text-[#1a1a18] sm:p-5">
       <div className="mx-auto flex min-h-[calc(100vh-72px)] max-w-[1400px] flex-col rounded-none border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] sm:rounded-[12px] lg:flex-row">
         <div className="w-full border-b-[0.5px] border-[#e0ddd6] bg-white lg:w-[340px] lg:border-b-0 lg:border-r-[0.5px]">
-          <div className="flex flex-wrap items-start gap-[10px] border-b-[0.5px] border-[#e0ddd6] px-3 py-3 sm:px-4 sm:py-[14px]">
-            <Link
-              href="/dashboard"
-              aria-label="Вернуться к dashboard"
-              title="Вернуться"
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center text-[#73726c] transition-colors hover:text-[#185fa5]"
-            >
-              <Undo2 className="h-4.5 w-4.5" />
-            </Link>
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e1f5ee] text-[11px] font-medium text-[#0f6e56]">
-              {data.client?.initials || getInitials(data.client?.name || 'Клиент')}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-start justify-between gap-2">
-                <Link
-                  href={`/contact/${clientId}`}
-                  className="truncate text-[13px] font-medium transition-colors hover:text-[#185fa5] hover:underline"
-                >
-                  {data.client?.name || 'Клиент'}
-                </Link>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleCopyPortalLink}
-                    aria-label={`Скопировать ссылку кабинета клиента ${data.client?.name ?? 'Клиент'}`}
-                    title="Скопировать ссылку"
-                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
-                  >
-                    <Copy className="h-3 w-3" />
-                  </button>
-                  <Link
-                    href={`/c/${clientId}/coaching`}
-                    aria-label={`Открыть кабинет клиента ${data.client?.name ?? 'Клиент'}`}
-                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                  </Link>
-                </div>
-              </div>
-            </div>
-            <div className="w-full rounded-full bg-[#e6f1fb] px-[7px] py-[2px] text-[10px] text-[#185fa5] sm:ml-auto sm:w-auto">
-              {activeSession ? `Сессия ${currentSessionNumber} · черновик` : `Следующая сессия ${currentSessionNumber}`}
-            </div>
-          </div>
-
           <div className="flex border-b-[0.5px] border-[#e0ddd6]">
             {HORIZONS.map((horizon) => (
               <button
@@ -708,8 +649,23 @@ export default function CoachClientSessionPage({
                             : 'border-[#e0ddd6] bg-white hover:border-[#b4b2a9]'
                         }`}
                       >
-                        <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] bg-[#f1efe8] text-[9px] text-[#73726c]">
-                          {isActive ? '▾' : '▸'}
+                        <div className="flex h-6 w-6 shrink-0 items-center justify-center text-[#73726c]">
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 12 12"
+                            aria-hidden="true"
+                            className={`transition-transform ${isActive ? 'rotate-90' : ''}`}
+                          >
+                            <path
+                              d="M4 2.5 8 6 4 9.5"
+                              stroke="currentColor"
+                              strokeWidth="1.8"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              fill="none"
+                            />
+                          </svg>
                         </div>
                         <div className="min-w-0 flex-1 text-[12px] leading-[1.4] text-[#1a1a18]">{goal.title}</div>
                         <div className="shrink-0 text-[11px] font-medium" style={{ color: goalColor }}>
@@ -1073,6 +1029,99 @@ export default function CoachClientSessionPage({
               </div>
 
               <div className={`${PANEL_CLASS} p-[14px]`}>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="text-[11px] font-medium text-[#73726c]">Заметки сессии {currentSessionNumber}</div>
+                  {activeSession ? (
+                    <div className="text-[10px] text-[#73726c]">
+                      {savingSession ? 'Автосохранение...' : 'Автосохранение включено'}
+                    </div>
+                  ) : null}
+                </div>
+
+                {!activeSession ? (
+                  <div className="space-y-3">
+                    <div className="rounded-[8px] border-[0.5px] border-dashed border-[#d7d2c7] bg-[#f5f4f0] px-3 py-3">
+                      <div className="flex flex-col gap-2 text-[12px]">
+                        <Link
+                          href={`/contact/${clientId}?tab=schedule`}
+                          className="text-[#185fa5] transition-colors hover:text-[#11497f] hover:underline"
+                        >
+                          Запланируйте сессию
+                        </Link>
+                        <Link
+                          href="/clients?tab=schedule&scheduleTab=calendar"
+                          className="text-[#185fa5] transition-colors hover:text-[#11497f] hover:underline"
+                        >
+                          Обзор календаря
+                        </Link>
+                      </div>
+                    </div>
+                    <div className="rounded-[8px] bg-[#f5f4f0] p-3">
+                      <div className="mb-2 text-[11px] font-medium text-[#73726c]">
+                        {lastCompletedSession ? `Последняя завершённая сессия #${lastCompletedSession.number}` : 'Последняя завершённая сессия'}
+                      </div>
+                      <div className="text-[12px] leading-[1.6] text-[#1a1a18]">
+                        {lastCompletedSession?.notes || 'Заметок по завершённым сессиям пока нет.'}
+                      </div>
+                      <div className="mt-3 text-[11px] font-medium text-[#73726c]">Задание до следующей сессии</div>
+                      <div className="mt-1 text-[12px] leading-[1.6] text-[#1a1a18]">
+                        {lastCompletedSession?.coachNotes || 'Не задано.'}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <textarea
+                      value={sessionNotes}
+                      onChange={(event) => setSessionNotes(event.target.value)}
+                      onBlur={() => {
+                        void persistActiveSession({ force: true });
+                      }}
+                      rows={4}
+                      placeholder="Что происходит сегодня по этой цели? Инсайты, сопротивление, движение..."
+                      className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] px-[10px] py-2 text-[12px] leading-[1.5] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
+                    />
+                    <div className="mt-[10px]">
+                      <div className="mb-2 text-[11px] font-medium text-[#73726c]">Задание до следующей сессии</div>
+                      <textarea
+                        value={nextTask}
+                        onChange={(event) => setNextTask(event.target.value)}
+                        onBlur={() => {
+                          void persistActiveSession({ force: true });
+                        }}
+                        rows={2}
+                        placeholder="Конкретное действие до следующей встречи..."
+                        className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] px-[10px] py-2 text-[12px] leading-[1.5] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className={`${PANEL_CLASS} p-[14px]`}>
+                <div className="mb-2 text-[11px] font-medium text-[#73726c]">Обновить прогресс цели</div>
+                <div className="mt-1 flex items-center gap-[10px]">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={draftProgress}
+                    onChange={(event) => setDraftProgress(Number(event.target.value))}
+                    className="flex-1 accent-[#1D9E75]"
+                    disabled={!selectedGoal || !activeSession}
+                  />
+                  <span className="min-w-[36px] text-[14px] font-medium">{draftProgress}%</span>
+                </div>
+                <div className="mt-[6px] text-[11px] text-[#73726c]">
+                  {!activeSession
+                    ? 'Прогресс редактируется только внутри активной сессии.'
+                    : savingProgress
+                      ? 'Обновляю прогресс...'
+                      : 'Изменение автоматически обновит прогресс цели и связанные компетенции.'}
+                </div>
+              </div>
+
+              <div className={`${PANEL_CLASS} p-[14px]`}>
                 <div className="mb-2 text-[11px] font-medium text-[#73726c]">История и вехи</div>
 
                 {milestoneOpen ? (
@@ -1140,86 +1189,6 @@ export default function CoachClientSessionPage({
                 ) : (
                   <div className="text-[12px] text-[#73726c]">История по этой цели пока пустая.</div>
                 )}
-              </div>
-
-              <div className={`${PANEL_CLASS} p-[14px]`}>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div className="text-[11px] font-medium text-[#73726c]">Заметки сессии {currentSessionNumber}</div>
-                  {activeSession ? (
-                    <div className="text-[10px] text-[#73726c]">
-                      {savingSession ? 'Автосохранение...' : 'Автосохранение включено'}
-                    </div>
-                  ) : null}
-                </div>
-
-                {!activeSession ? (
-                  <div className="space-y-3">
-                    <div className="rounded-[8px] border-[0.5px] border-dashed border-[#d7d2c7] bg-[#f5f4f0] px-3 py-3 text-[12px] text-[#73726c]">
-                      Активной сессии нет. Нажмите «Начать сессию #{currentSessionNumber}», чтобы открыть рабочее пространство и включить автосохранение.
-                    </div>
-                    <div className="rounded-[8px] bg-[#f5f4f0] p-3">
-                      <div className="mb-2 text-[11px] font-medium text-[#73726c]">
-                        {lastCompletedSession ? `Последняя завершённая сессия #${lastCompletedSession.number}` : 'Последняя завершённая сессия'}
-                      </div>
-                      <div className="text-[12px] leading-[1.6] text-[#1a1a18]">
-                        {lastCompletedSession?.notes || 'Заметок по завершённым сессиям пока нет.'}
-                      </div>
-                      <div className="mt-3 text-[11px] font-medium text-[#73726c]">Задание до следующей сессии</div>
-                      <div className="mt-1 text-[12px] leading-[1.6] text-[#1a1a18]">
-                        {lastCompletedSession?.coachNotes || 'Не задано.'}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <textarea
-                      value={sessionNotes}
-                      onChange={(event) => setSessionNotes(event.target.value)}
-                      onBlur={() => {
-                        void persistActiveSession({ force: true });
-                      }}
-                      rows={4}
-                      placeholder="Что происходит сегодня по этой цели? Инсайты, сопротивление, движение..."
-                      className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] px-[10px] py-2 text-[12px] leading-[1.5] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
-                    />
-                    <div className="mt-[10px]">
-                      <div className="mb-2 text-[11px] font-medium text-[#73726c]">Задание до следующей сессии</div>
-                      <textarea
-                        value={nextTask}
-                        onChange={(event) => setNextTask(event.target.value)}
-                        onBlur={() => {
-                          void persistActiveSession({ force: true });
-                        }}
-                        rows={2}
-                        placeholder="Конкретное действие до следующей встречи..."
-                        className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-[#f5f4f0] px-[10px] py-2 text-[12px] leading-[1.5] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
-                      />
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className={`${PANEL_CLASS} p-[14px]`}>
-                <div className="mb-2 text-[11px] font-medium text-[#73726c]">Обновить прогресс цели</div>
-                <div className="mt-1 flex items-center gap-[10px]">
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={draftProgress}
-                    onChange={(event) => setDraftProgress(Number(event.target.value))}
-                    className="flex-1 accent-[#1D9E75]"
-                    disabled={!selectedGoal || !activeSession}
-                  />
-                  <span className="min-w-[36px] text-[14px] font-medium">{draftProgress}%</span>
-                </div>
-                <div className="mt-[6px] text-[11px] text-[#73726c]">
-                  {!activeSession
-                    ? 'Прогресс редактируется только внутри активной сессии.'
-                    : savingProgress
-                      ? 'Обновляю прогресс...'
-                      : 'Изменение автоматически обновит прогресс цели и связанные компетенции.'}
-                </div>
               </div>
             </div>
           </div>

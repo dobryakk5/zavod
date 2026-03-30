@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '@/lib/api';
 import {
@@ -30,8 +30,16 @@ export default function CoachingPortalPage({
   useCustomDomainPaths = false,
 }: PublicCoachingPortalPageProps = {}) {
   const { client_id: rawClientId } = useParams<{ client_id?: string }>();
+  const searchParams = useSearchParams();
   const pageClientId = resolvedClientId ?? Number(rawClientId);
-  const backPath = useCustomDomainPaths ? '/' : `/c/${pageClientId}`;
+  const rawContactId = (searchParams.get('contact_id') || '').trim();
+  const pageContactId = rawContactId ? Number(rawContactId) : null;
+  const resolvedContactId = pageContactId && Number.isFinite(pageContactId) && pageContactId > 0 ? pageContactId : null;
+  const backPath = useCustomDomainPaths
+    ? '/'
+    : resolvedContactId
+      ? `/coach/clients/${resolvedContactId}?tab=session`
+      : `/c/${pageClientId}`;
 
   const [data, setData] = useState<PortalData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,7 +59,9 @@ export default function CoachingPortalPage({
       setLoading(true);
       setError(null);
       try {
-        const raw = await coachingApi.getClientCoachingPortal(pageClientId);
+        const raw = await coachingApi.getClientCoachingPortal(pageClientId, {
+          contactId: resolvedContactId,
+        });
         setData({
           clientName: raw.client?.name ?? '',
           intention: raw.client?.intention?.trim() || raw.client?.focus?.trim() || '',
@@ -79,7 +89,7 @@ export default function CoachingPortalPage({
     };
 
     void load();
-  }, [pageClientId]);
+  }, [pageClientId, resolvedContactId]);
 
   useEffect(() => {
     if (!radarRef.current || !data?.competencies.length) {
@@ -117,7 +127,9 @@ export default function CoachingPortalPage({
     });
 
     try {
-      const updated = await coachingApi.updateClientCoachingStep(pageClientId, step.id, nextDone);
+      const updated = await coachingApi.updateClientCoachingStep(pageClientId, step.id, nextDone, {
+        contactId: resolvedContactId,
+      });
       setData((current) => {
         if (!current) {
           return current;

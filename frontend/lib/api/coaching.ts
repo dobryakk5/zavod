@@ -132,6 +132,21 @@ async function publicCoachingFetch<TResponse>(endpoint: string, options: Request
   return (await response.json()) as TResponse;
 }
 
+function buildPublicCoachingEndpoint(
+  baseEndpoint: string,
+  options?: { contactId?: number | string | null },
+): string {
+  const normalizedBaseEndpoint = baseEndpoint.startsWith('/') ? baseEndpoint : `/${baseEndpoint}`;
+  const rawContactId = options?.contactId;
+  if (rawContactId === undefined || rawContactId === null || String(rawContactId).trim() === '') {
+    return normalizedBaseEndpoint;
+  }
+
+  const params = new URLSearchParams();
+  params.set('contact_id', String(rawContactId));
+  return `${normalizedBaseEndpoint}?${params.toString()}`;
+}
+
 export const coachingApi = {
   getCoachStats: async (): Promise<CoachStats> => {
     return apiFetch<CoachStats>('/coach/stats/');
@@ -215,19 +230,26 @@ export const coachingApi = {
 
   getClientCoachingPortal: async (
     clientId: number | string,
+    options?: { contactId?: number | string | null },
   ): Promise<PublicClientCoachingPortalResponse> => {
-    return publicCoachingFetch<PublicClientCoachingPortalResponse>(`/public/client-page/${clientId}/coaching/`);
+    return publicCoachingFetch<PublicClientCoachingPortalResponse>(
+      buildPublicCoachingEndpoint(`/public/client-page/${clientId}/coaching/`, options),
+    );
   },
 
   updateClientCoachingStep: async (
     clientId: number | string,
     stepId: string,
     done: boolean,
+    options?: { contactId?: number | string | null },
   ): Promise<PublicClientCoachingStepResponse> => {
-    return publicCoachingFetch<PublicClientCoachingStepResponse>(`/public/client-page/${clientId}/steps/${stepId}/`, {
-      method: 'PATCH',
-      body: JSON.stringify({ done }),
-    });
+    return publicCoachingFetch<PublicClientCoachingStepResponse>(
+      buildPublicCoachingEndpoint(`/public/client-page/${clientId}/steps/${stepId}/`, options),
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ done }),
+      },
+    );
   },
 
   createCoachSession: async (

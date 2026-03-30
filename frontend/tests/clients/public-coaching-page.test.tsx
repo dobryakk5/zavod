@@ -4,12 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const testState = vi.hoisted(() => ({
   clientId: '46',
+  contactId: '91',
   getClientCoachingPortal: vi.fn(),
   updateClientCoachingStep: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ client_id: testState.clientId }),
+  useSearchParams: () => new URLSearchParams(testState.contactId ? `contact_id=${testState.contactId}` : ''),
 }));
 
 vi.mock('next/link', async () => {
@@ -46,6 +48,7 @@ describe('Public coaching portal page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     testState.clientId = '46';
+    testState.contactId = '91';
     testState.getClientCoachingPortal.mockResolvedValue({
       client: {
         name: 'Анна Иванова',
@@ -111,9 +114,10 @@ describe('Public coaching portal page', () => {
     render(<CoachingPortalPage />);
 
     await waitFor(() => {
-      expect(testState.getClientCoachingPortal).toHaveBeenCalledWith(46);
+      expect(testState.getClientCoachingPortal).toHaveBeenCalledWith(46, { contactId: 91 });
     });
 
+    expect(screen.getByRole('link', { name: '← Назад' })).toHaveAttribute('href', '/coach/clients/91?tab=session');
     expect(screen.getByText('Моё намерение')).toBeInTheDocument();
     expect(screen.getByText('Говорить увереннее на встречах')).toBeInTheDocument();
     expect(screen.getByText('Подготовить новый формат общения')).toBeInTheDocument();
@@ -130,7 +134,7 @@ describe('Public coaching portal page', () => {
     fireEvent.click(stepButton);
 
     await waitFor(() => {
-      expect(testState.updateClientCoachingStep).toHaveBeenCalledWith(46, 'step-1', true);
+      expect(testState.updateClientCoachingStep).toHaveBeenCalledWith(46, 'step-1', true, { contactId: 91 });
     });
   });
 });

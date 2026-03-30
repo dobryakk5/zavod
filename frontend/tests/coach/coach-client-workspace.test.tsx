@@ -205,6 +205,6 @@ describe('CoachClientWorkspace', () => {
 
     expect(
       screen.getByRole('link', { name: 'Открыть кабинет клиента Анна Иванова' }),
-    ).toHaveAttribute('href', '/c/46/coaching');
+    ).toHaveAttribute('href', '/c/7/coaching?contact_id=46');
   }, 10000);
 });

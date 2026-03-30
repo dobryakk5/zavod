@@ -469,6 +469,43 @@ def test_public_coaching_portal_no_longer_resolves_contact_by_email_auth(
 
 
 @pytest.mark.django_db
+def test_tenant_member_can_open_public_coaching_portal_with_contact_query(
+    coaching_api_client,
+    coaching_tenant,
+    coaching_contact,
+):
+    ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        intention="Спокойно отстаивать границы",
+        goals=[
+            {
+                "id": "goal-1",
+                "title": "Наладить границы в работе",
+                "progress": 30,
+                "horizon": "quarter",
+                "status": "active",
+                "competencyLinks": [],
+                "steps": [],
+                "createdAt": "2026-03-01T10:00:00+03:00",
+            }
+        ],
+    )
+
+    response = coaching_api_client.get(
+        reverse("api:public-client-page-coaching", args=[coaching_tenant.id]),
+        {"contact_id": coaching_contact.id},
+    )
+
+    assert response.status_code == 200, response.content
+    payload = response.json()
+    assert payload["client"]["id"] == int(coaching_contact.id)
+    assert payload["client"]["name"] == "Анна Иванова"
+    assert payload["client"]["intention"] == "Спокойно отстаивать границы"
+    assert payload["goals"][0]["title"] == "Наладить границы в работе"
+
+
+@pytest.mark.django_db
 def test_public_steps_endpoint_returns_goal_steps_and_allows_completion_after_invite_auth(
     coaching_tenant,
     coaching_contact,
@@ -534,6 +571,54 @@ def test_public_steps_endpoint_returns_goal_steps_and_allows_completion_after_in
     profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
     assert profile.goals[0]["steps"][0]["done"] is True
     assert profile.goals[0]["steps"][0]["doneAt"]
+
+
+@pytest.mark.django_db
+def test_tenant_member_can_complete_public_step_with_contact_query(
+    coaching_api_client,
+    coaching_tenant,
+    coaching_contact,
+):
+    ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        goals=[
+            {
+                "id": "goal-1",
+                "title": "Наладить границы в работе",
+                "progress": 30,
+                "horizon": "quarter",
+                "status": "active",
+                "competencyLinks": [],
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "text": "Подготовить фразы для отказа",
+                        "done": False,
+                        "isMilestone": False,
+                        "milestoneNote": "",
+                        "doneAt": "",
+                        "dueDate": "2026-04-02",
+                    }
+                ],
+                "createdAt": "2026-03-01T10:00:00+03:00",
+            }
+        ],
+    )
+
+    patch_response = coaching_api_client.patch(
+        f"{reverse('api:public-client-page-step-detail', args=[coaching_tenant.id, 'step-1'])}?contact_id={coaching_contact.id}",
+        {"done": True},
+        format="json",
+    )
+
+    assert patch_response.status_code == 200, patch_response.content
+    patch_payload = patch_response.json()
+    assert patch_payload["done"] is True
+    assert patch_payload["doneAt"]
+
+    profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
+    assert profile.goals[0]["steps"][0]["done"] is True
 
 
 @pytest.mark.django_db

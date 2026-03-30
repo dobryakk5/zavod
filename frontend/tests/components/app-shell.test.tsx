@@ -151,7 +151,7 @@ describe('AppShell', () => {
       expect(testState.info).toHaveBeenCalled();
     });
 
-    expect(screen.getByRole('link', { name: 'Дашборд' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Обзор' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Маркетинг' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Продукты' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Настройки' })).toBeInTheDocument();
