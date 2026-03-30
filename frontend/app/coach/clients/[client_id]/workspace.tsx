@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ExternalLink, Undo2 } from 'lucide-react';
 import {
@@ -13,7 +13,6 @@ import {
   type CoachingCompetency,
   type CoachMilestone,
   type CoachSession,
-  type CoachTask,
 } from '@/lib/api/coaching';
 import InviteButton from '@/components/coaching/InviteButton';
 import CoachClientSessionPage from './page-client';
@@ -35,7 +34,6 @@ type SideData = {
   goals: CoachGoalTreeNode[];
   milestones: CoachMilestone[];
   sessions: CoachSession[];
-  tasks: CoachTask[];
 };
 
 export default function CoachClientWorkspace({ clientId }: { clientId: number }) {
@@ -50,7 +48,6 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
     goals: [],
     milestones: [],
     sessions: [],
-    tasks: [],
   });
   const [loading, setLoading] = useState(true);
 
@@ -59,20 +56,19 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
     setLoading(true);
 
     const fetchAll = async () => {
-      const [client, competencies, goals, milestones, sessions, tasks] = await Promise.all([
+      const [client, competencies, goals, milestones, sessions] = await Promise.all([
         coachingApi.getCoachClient(clientId).catch(() => null),
         coachingApi.getCoachClientCompetencies(clientId).catch(() => []),
         coachingApi.getCoachClientGoals(clientId).catch(() => []),
         coachingApi.getCoachClientMilestones(clientId).catch(() => []),
-        coachingApi.getCoachClientSessions(clientId).catch(() => []),
-        coachingApiExt.getCoachClientTasks(clientId).catch(() => []),
+        coachingApi.getCoachClientSessions(clientId).then(sortCoachSessions).catch(() => []),
       ]);
 
       if (!active) {
         return;
       }
 
-      setSideData({ client, competencies, goals, milestones, sessions, tasks });
+      setSideData({ client, competencies, goals, milestones, sessions });
       setLoading(false);
     };
 
@@ -119,6 +115,14 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
     ));
   }, []);
 
+  const sessionInitialData = useMemo(() => ({
+    client: sideData.client,
+    competencies: sideData.competencies,
+    goals: sideData.goals,
+    milestones: sideData.milestones,
+    sessions: sideData.sessions,
+  }), [sideData.client, sideData.competencies, sideData.goals, sideData.milestones, sideData.sessions]);
+
   if (loading) {
     return <WorkspaceSkeleton />;
   }
@@ -151,6 +155,7 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
                 </Link>
                 <Link
                   href={`/c/${client?.coachId ?? clientId}/coaching?contact_id=${clientId}`}
+                  prefetch={false}
                   aria-label={`Открыть кабинет клиента ${client?.name ?? 'Клиент'}`}
                   title="Открыть кабинет клиента"
                   className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
@@ -218,6 +223,7 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
         {activeTab === 'session' ? (
           <CoachClientSessionPage
             clientId={clientId}
+            initialData={sessionInitialData}
             onSessionsChange={handleSessionsChange}
             onMilestonesChange={handleMilestonesChange}
             onGoalsChange={handleGoalsChange}
@@ -524,8 +530,13 @@ function EditTab({
   onSaveGoals: (goals: CoachGoalTreeNode[]) => Promise<void>;
   onSave: (payload: { competencies: CoachingCompetency[]; intention: string }) => Promise<void>;
 }) {
+  const editableGoals = useMemo(
+    () => goals.filter((goal) => !isSystemGroupGoalId(goal.id)),
+    [goals],
+  );
+  const hasSystemGoals = editableGoals.length !== goals.length;
   const [localComps, setLocalComps] = useState<CoachingCompetency[]>(competencies);
-  const [localGoals, setLocalGoals] = useState<CoachGoalTreeNode[]>(goals);
+  const [localGoals, setLocalGoals] = useState<CoachGoalTreeNode[]>(editableGoals);
   const [intention, setIntention] = useState(client?.intention ?? '');
   const [profileSaveState, setProfileSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [goalSaveState, setGoalSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -564,8 +575,8 @@ function EditTab({
       hasSyncedGoals.current = true;
       return;
     }
-    setLocalGoals(goals);
-  }, [goals]);
+    setLocalGoals(editableGoals);
+  }, [editableGoals]);
 
   useEffect(() => {
     setIntention(client?.intention ?? '');
@@ -622,7 +633,7 @@ function EditTab({
   }, [client?.intention, competencies, intention, localComps]);
 
   useEffect(() => {
-    const source = JSON.stringify(goals);
+    const source = JSON.stringify(editableGoals);
     const draft = JSON.stringify(localGoals);
     if (source === draft) {
       setGoalSaveState('idle');
@@ -651,7 +662,7 @@ function EditTab({
         window.clearTimeout(goalSaveTimeoutRef.current);
       }
     };
-  }, [goals, localGoals]);
+  }, [editableGoals, localGoals]);
 
   function update(id: string, field: 'score' | 'startScore', value: number) {
     setProfileSaveState('idle');
@@ -779,9 +790,15 @@ function EditTab({
                 ? 'Сохранено'
                 : goalSaveState === 'error'
                   ? 'Не удалось сохранить'
-                  : 'Автосохранение включено'}
+              : 'Автосохранение включено'}
           </div>
         </div>
+
+        {hasSystemGoals ? (
+          <p className="mb-3 text-[10px] text-[#73726c]">
+            Групповые цели управляются через группу и здесь не редактируются.
+          </p>
+        ) : null}
 
         {localGoals.length > 0 ? (
           <div className="mb-4 space-y-2">
@@ -843,7 +860,7 @@ function EditTab({
           </div>
         ) : (
           <div className="mb-4 rounded-[8px] border-[0.5px] border-dashed border-[#d7d2c7] bg-[#f5f4f0] px-3 py-3 text-[12px] text-[#73726c]">
-            Целей пока нет. Добавьте первые квартальные цели ниже.
+            Личных целей пока нет. Добавьте первые квартальные цели ниже.
           </div>
         )}
 
@@ -1332,6 +1349,10 @@ function toggleGoalCompetencyLink(goal: CoachGoalTreeNode, competencyId: string,
   };
 }
 
+function isSystemGroupGoalId(goalId: string | null | undefined): boolean {
+  return String(goalId || '').startsWith('group-');
+}
+
 function rebalanceGoalCompetencies(competencies: CoachingCompetency[]) {
   if (competencies.length === 0) {
     return [];
@@ -1343,6 +1364,15 @@ function rebalanceGoalCompetencies(competencies: CoachingCompetency[]) {
     competencyName: competency.name,
     weight,
   }));
+}
+
+function sortCoachSessions(sessions: CoachSession[]) {
+  return [...sessions].sort((left, right) => {
+    if (left.status !== right.status) {
+      return left.status === 'draft' ? -1 : 1;
+    }
+    return new Date(right.date).getTime() - new Date(left.date).getTime();
+  });
 }
 
 function clampPercent(value: number) {

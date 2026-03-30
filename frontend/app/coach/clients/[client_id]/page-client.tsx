@@ -14,6 +14,7 @@ import {
 
 type CoachClientSessionPageProps = {
   clientId: number;
+  initialData?: WorkspaceData | null;
   onSessionsChange?: (sessions: CoachSession[]) => void;
   onMilestonesChange?: (milestones: CoachMilestone[]) => void;
   onGoalsChange?: (goals: CoachGoalTreeNode[]) => void;
@@ -45,6 +46,7 @@ const HORIZONS = [
 
 export default function CoachClientSessionPage({
   clientId,
+  initialData,
   onSessionsChange,
   onMilestonesChange,
   onGoalsChange,
@@ -55,13 +57,7 @@ export default function CoachClientSessionPage({
     notes: '',
     coachNotes: '',
   });
-  const [data, setData] = useState<WorkspaceData>({
-    client: null,
-    competencies: [],
-    goals: [],
-    milestones: [],
-    sessions: [],
-  });
+  const [data, setData] = useState<WorkspaceData>(() => normalizeWorkspaceData(initialData));
   const [selectedHorizon, setSelectedHorizon] = useState<'year' | 'quarter' | 'month'>('quarter');
   const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
   const [sessionNotes, setSessionNotes] = useState('');
@@ -74,10 +70,7 @@ export default function CoachClientSessionPage({
   const [milestoneNote, setMilestoneNote] = useState('');
   const [milestoneOpen, setMilestoneOpen] = useState(false);
   const [draftProgress, setDraftProgress] = useState(0);
-  const [editingStepId, setEditingStepId] = useState<string | null>(null);
-  const [editingStepText, setEditingStepText] = useState('');
-  const [editingStepDueDate, setEditingStepDueDate] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => initialData == null);
   const [savingSession, setSavingSession] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
   const [finishingSession, setFinishingSession] = useState(false);
@@ -89,6 +82,33 @@ export default function CoachClientSessionPage({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    if (initialData) {
+      const normalizedInitialData = normalizeWorkspaceData(initialData);
+      setData((current) => (
+        current.client === normalizedInitialData.client
+        && current.competencies === normalizedInitialData.competencies
+        && current.goals === normalizedInitialData.goals
+        && current.milestones === normalizedInitialData.milestones
+        && current.sessions === normalizedInitialData.sessions
+          ? current
+          : normalizedInitialData
+      ));
+
+      const firstGoal = normalizedInitialData.goals.find((goal) => goal.horizon === 'quarter') ?? normalizedInitialData.goals[0] ?? null;
+      if (firstGoal) {
+        setSelectedHorizon(firstGoal.horizon);
+        setSelectedGoalId(firstGoal.id);
+        setDraftProgress(firstGoal.progress);
+      } else {
+        setSelectedGoalId(null);
+        setDraftProgress(0);
+      }
+
+      setLoading(false);
+      setError(null);
+      return undefined;
+    }
+
     let isActive = true;
 
     const loadWorkspace = async () => {
@@ -112,15 +132,16 @@ export default function CoachClientSessionPage({
       const nextMilestones = milestonesResult.status === 'fulfilled' ? milestonesResult.value : [];
       const nextSessions = sessionsResult.status === 'fulfilled' ? sortCoachSessions(sessionsResult.value) : [];
 
-      setData({
+      const nextData = normalizeWorkspaceData({
         client: nextClient,
         competencies: nextCompetencies,
         goals: nextGoals,
         milestones: nextMilestones,
         sessions: nextSessions,
       });
+      setData(nextData);
 
-      const firstGoal = nextGoals.find((goal) => goal.horizon === 'quarter') ?? nextGoals[0] ?? null;
+      const firstGoal = nextData.goals.find((goal) => goal.horizon === 'quarter') ?? nextData.goals[0] ?? null;
       if (firstGoal) {
         setSelectedHorizon(firstGoal.horizon);
         setSelectedGoalId(firstGoal.id);
@@ -146,7 +167,14 @@ export default function CoachClientSessionPage({
     return () => {
       isActive = false;
     };
-  }, [clientId]);
+  }, [
+    clientId,
+    initialData?.client,
+    initialData?.competencies,
+    initialData?.goals,
+    initialData?.milestones,
+    initialData?.sessions,
+  ]);
 
   useEffect(() => {
     if (!loading) {
@@ -307,20 +335,6 @@ export default function CoachClientSessionPage({
     }
   }, [activeSession]);
 
-  useEffect(() => {
-    if (!selectedGoal) {
-      setEditingStepId(null);
-      setEditingStepText('');
-      setEditingStepDueDate('');
-      return;
-    }
-    if (editingStepId && !selectedGoal.steps.some((step) => step.id === editingStepId)) {
-      setEditingStepId(null);
-      setEditingStepText('');
-      setEditingStepDueDate('');
-    }
-  }, [editingStepId, selectedGoal]);
-
   const intentionText = data.client?.intention?.trim() || data.client?.focus || 'Намерение пока не заполнено';
 
   const upsertSession = useCallback((session: CoachSession) => {
@@ -388,14 +402,41 @@ export default function CoachClientSessionPage({
   const handleToggleStep = async (stepId: string, done: boolean) => {
     if (!selectedGoal) return;
 
+    const goalId = selectedGoal.id;
+    const previousSteps = selectedGoal.steps;
+
+    setData((current) => ({
+      ...current,
+      goals: current.goals.map((goal) => (
+        goal.id === goalId
+          ? {
+              ...goal,
+              steps: goal.steps.map((step) => (
+                step.id === stepId
+                  ? {
+                      ...step,
+                      done,
+                      doneAt: done ? new Date().toISOString() : null,
+                    }
+                  : step
+              )),
+            }
+          : goal
+      )),
+    }));
+
     setSavingStepId(stepId);
     try {
-      const response = await coachingApi.updateCoachGoalStep(selectedGoal.id, stepId, { done });
+      const response = await coachingApi.updateCoachGoalStep(goalId, stepId, { done });
       setData((current) => ({
         ...current,
-        goals: current.goals.map((goal) => (goal.id === selectedGoal.id ? { ...goal, steps: response.steps } : goal)),
+        goals: current.goals.map((goal) => (goal.id === goalId ? { ...goal, steps: response.steps } : goal)),
       }));
     } catch {
+      setData((current) => ({
+        ...current,
+        goals: current.goals.map((goal) => (goal.id === goalId ? { ...goal, steps: previousSteps } : goal)),
+      }));
       setActionMessage('Не удалось обновить шаг.');
     } finally {
       setSavingStepId(null);
@@ -427,45 +468,6 @@ export default function CoachClientSessionPage({
     }
   };
 
-  const handleStartStepEdit = (step: CoachGoalTreeNode['steps'][number]) => {
-    setEditingStepId(step.id);
-    setEditingStepText(step.text);
-    setEditingStepDueDate(step.dueDate ?? '');
-  };
-
-  const handleCancelStepEdit = () => {
-    setEditingStepId(null);
-    setEditingStepText('');
-    setEditingStepDueDate('');
-  };
-
-  const handleSaveStepEdit = async (stepId: string) => {
-    if (!selectedGoal) return;
-    const text = editingStepText.trim();
-    if (!text) {
-      setActionMessage('Введите текст шага.');
-      return;
-    }
-
-    setSavingStepId(stepId);
-    try {
-      const response = await coachingApi.updateCoachGoalStep(selectedGoal.id, stepId, {
-        text,
-        dueDate: editingStepDueDate || '',
-      });
-      setData((current) => ({
-        ...current,
-        goals: current.goals.map((goal) => (goal.id === selectedGoal.id ? { ...goal, steps: response.steps } : goal)),
-      }));
-      handleCancelStepEdit();
-      setActionMessage('Шаг обновлён.');
-    } catch {
-      setActionMessage('Не удалось обновить шаг.');
-    } finally {
-      setSavingStepId(null);
-    }
-  };
-
   const handleDeleteStep = async (stepId: string) => {
     if (!selectedGoal) return;
 
@@ -480,9 +482,6 @@ export default function CoachClientSessionPage({
             : goal
         )),
       }));
-      if (editingStepId === stepId) {
-        handleCancelStepEdit();
-      }
       setActionMessage('Шаг удалён.');
     } catch {
       setActionMessage('Не удалось удалить шаг.');
@@ -679,18 +678,17 @@ export default function CoachClientSessionPage({
                       {isActive ? (
                         <div className="ml-6 mt-1 flex flex-col gap-1">
                           {goal.steps.map((step) => {
-                            const isEditing = editingStepId === step.id;
                             return (
                               <div
                                 key={step.id}
                                 className="rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[10px] py-[7px]"
                               >
-                                <div className="flex items-start gap-2">
+                                <div className="flex items-center gap-2">
                                   <button
                                     type="button"
                                     onClick={() => void handleToggleStep(step.id, !step.done)}
                                     disabled={savingStepId === step.id}
-                                    className="mt-[1px] flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[0.5px] border-[#d3d1c7] disabled:cursor-not-allowed disabled:opacity-70"
+                                    className="flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[0.5px] border-[#d3d1c7] disabled:cursor-not-allowed disabled:opacity-70"
                                   >
                                     <div
                                       className={`flex h-[14px] w-[14px] items-center justify-center rounded-[3px] ${
@@ -712,144 +710,38 @@ export default function CoachClientSessionPage({
                                   </button>
 
                                   <div className="min-w-0 flex-1">
-                                    {isEditing ? (
-                                      <div className="space-y-2">
-                                        <input
-                                          value={editingStepText}
-                                          onChange={(event) => setEditingStepText(event.target.value)}
-                                          onKeyDown={(event) => {
-                                            if (event.key === 'Enter' && editingStepText.trim()) {
-                                              event.preventDefault();
-                                              void handleSaveStepEdit(step.id);
-                                            }
-                                            if (event.key === 'Escape') {
-                                              handleCancelStepEdit();
-                                            }
-                                          }}
-                                          className="w-full rounded-[6px] border border-[#d7d2c7] bg-white px-2.5 py-1.5 text-[11px] text-[#1a1a18] outline-none focus:border-[#185fa5]"
-                                        />
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <input
-                                            type="date"
-                                            value={editingStepDueDate}
-                                            onChange={(event) => setEditingStepDueDate(event.target.value)}
-                                            className="rounded-[6px] border border-[#d7d2c7] bg-white px-2.5 py-1.5 text-[11px] text-[#4f4b45] outline-none focus:border-[#185fa5]"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => void handleSaveStepEdit(step.id)}
-                                            disabled={savingStepId === step.id || !editingStepText.trim()}
-                                            className="rounded-[6px] bg-[#1D9E75] px-2.5 py-1.5 text-[10px] text-[#E1F5EE] disabled:cursor-not-allowed disabled:opacity-60"
-                                          >
-                                            Сохранить
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={handleCancelStepEdit}
-                                            disabled={savingStepId === step.id}
-                                            className="rounded-[6px] border border-[#d7d2c7] px-2.5 py-1.5 text-[10px] text-[#73726c] disabled:cursor-not-allowed disabled:opacity-60"
-                                          >
-                                            Отмена
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => void handleDeleteStep(step.id)}
-                                            disabled={savingStepId === step.id}
-                                            className="rounded-[6px] border border-red-200 px-2.5 py-1.5 text-red-700 transition-colors hover:bg-red-50 hover:text-red-800 disabled:cursor-not-allowed disabled:opacity-60"
-                                            aria-label={`Удалить шаг ${step.text}`}
-                                            title="Удалить шаг"
-                                          >
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                              <path
-                                                d="M4 7h16"
-                                                stroke="currentColor"
-                                                strokeWidth="1.7"
-                                                strokeLinecap="round"
-                                              />
-                                              <path
-                                                d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"
-                                                stroke="currentColor"
-                                                strokeWidth="1.7"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                              />
-                                              <path
-                                                d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9L17 7"
-                                                stroke="currentColor"
-                                                strokeWidth="1.7"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                              />
-                                              <path
-                                                d="M10 11v5M14 11v5"
-                                                stroke="currentColor"
-                                                strokeWidth="1.7"
-                                                strokeLinecap="round"
-                                              />
-                                            </svg>
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <div
-                                        className={`text-[11px] ${
-                                          step.done ? 'text-[#73726c] opacity-60 line-through' : 'text-[#73726c]'
-                                        }`}
-                                      >
-                                        {step.text}
-                                      </div>
-                                    )}
+                                    <Link
+                                      href={`/coach/clients/${clientId}/steps/${step.id}`}
+                                      className={`block text-[11px] transition-colors hover:text-[#185fa5] hover:underline ${
+                                        step.done ? 'text-[#73726c] opacity-60 line-through' : 'text-[#73726c]'
+                                      }`}
+                                    >
+                                      {step.text}
+                                    </Link>
                                   </div>
 
-                                  {!isEditing && step.dueDate && !step.done ? (
+                                  {step.dueDate && !step.done ? (
                                     <div className="shrink-0 rounded-full bg-[rgba(186,117,23,0.1)] px-[6px] py-[1px] text-[10px] text-[#633806]">
                                       {formatShortDate(step.dueDate)}
                                     </div>
                                   ) : null}
 
-                                  {!isEditing ? (
-                                    <div className="flex shrink-0 items-center gap-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleToggleStepMilestone(step.id, !step.isMilestone)}
-                                        disabled={savingStepId === step.id}
-                                        className={`flex h-[27px] w-[27px] items-center justify-center rounded-[6px] border text-[13px] leading-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                                          step.isMilestone
-                                            ? 'border-[#EF9F27] bg-[rgba(186,117,23,0.08)] text-[#BA7517]'
-                                            : 'border-[#d7d2c7] text-[#b4b2a9] hover:bg-[#f5f4f0]'
-                                        }`}
-                                        aria-label={step.isMilestone ? `Убрать веху у шага ${step.text}` : `Сделать шаг вехой ${step.text}`}
-                                        title={step.isMilestone ? 'Убрать веху' : 'Отметить как веху'}
-                                      >
-                                        ★
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartStepEdit(step)}
-                                        disabled={savingStepId === step.id}
-                                        className="flex h-[27px] w-[27px] items-center justify-center rounded-[6px] border border-[#d7d2c7] text-[#73726c] disabled:cursor-not-allowed disabled:opacity-60"
-                                        aria-label={`Редактировать шаг ${step.text}`}
-                                        title="Редактировать шаг"
-                                      >
-                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                          <path
-                                            d="M4 20h4l10-10-4-4L4 16v4Z"
-                                            stroke="currentColor"
-                                            strokeWidth="1.7"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                          />
-                                          <path
-                                            d="M12 6l4 4"
-                                            stroke="currentColor"
-                                            strokeWidth="1.7"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                          />
-                                        </svg>
-                                      </button>
-                                    </div>
-                                  ) : null}
+                                  <div className="flex shrink-0 items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleToggleStepMilestone(step.id, !step.isMilestone)}
+                                      disabled={savingStepId === step.id}
+                                      className={`flex h-[27px] w-[27px] items-center justify-center rounded-[6px] border text-[13px] leading-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                        step.isMilestone
+                                          ? 'border-[#EF9F27] bg-[rgba(186,117,23,0.08)] text-[#BA7517]'
+                                          : 'border-[#d7d2c7] text-[#b4b2a9] hover:bg-[#f5f4f0]'
+                                      }`}
+                                      aria-label={step.isMilestone ? `Убрать веху у шага ${step.text}` : `Сделать шаг вехой ${step.text}`}
+                                      title={step.isMilestone ? 'Убрать веху' : 'Отметить как веху'}
+                                    >
+                                      ★
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             );
@@ -867,7 +759,7 @@ export default function CoachClientSessionPage({
                                 }}
                                 disabled={false}
                                 placeholder="Введите новый шаг"
-                                className="min-w-0 flex-1 rounded-[6px] border-[0.5px] border-dashed border-[#e0ddd6] bg-white px-[10px] py-[6px] text-[11px] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
+                                className="min-w-0 h-[34px] flex-1 rounded-[6px] border-[0.5px] border-dashed border-[#e0ddd6] bg-white px-[10px] py-0 text-[11px] leading-[34px] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
                               />
                               <input
                                 ref={newStepDueDateInputRef}
@@ -923,13 +815,11 @@ export default function CoachClientSessionPage({
                 </div>
                 <Link
                   href={`/coach/clients/${clientId}?tab=edit`}
-                  target="_blank"
-                  rel="noreferrer"
                   className="mt-3 inline-flex rounded-[6px] bg-[#185fa5] px-3 py-2 text-[11px] text-white transition-opacity hover:opacity-90"
                 >
                   + Добавить цели к кварталу →
                 </Link>
-                <div className="mt-1 text-[10px] text-[#73726c]">Откроется редактор в новой вкладке.</div>
+                <div className="mt-1 text-[10px] text-[#73726c]">Откроется редактор в текущей вкладке.</div>
               </div>
             )}
 
@@ -1040,22 +930,6 @@ export default function CoachClientSessionPage({
 
                 {!activeSession ? (
                   <div className="space-y-3">
-                    <div className="rounded-[8px] border-[0.5px] border-dashed border-[#d7d2c7] bg-[#f5f4f0] px-3 py-3">
-                      <div className="flex flex-col gap-2 text-[12px]">
-                        <Link
-                          href={`/contact/${clientId}?tab=schedule`}
-                          className="text-[#185fa5] transition-colors hover:text-[#11497f] hover:underline"
-                        >
-                          Запланируйте сессию
-                        </Link>
-                        <Link
-                          href="/clients?tab=schedule&scheduleTab=calendar"
-                          className="text-[#185fa5] transition-colors hover:text-[#11497f] hover:underline"
-                        >
-                          Обзор календаря
-                        </Link>
-                      </div>
-                    </div>
                     <div className="rounded-[8px] bg-[#f5f4f0] p-3">
                       <div className="mb-2 text-[11px] font-medium text-[#73726c]">
                         {lastCompletedSession ? `Последняя завершённая сессия #${lastCompletedSession.number}` : 'Последняя завершённая сессия'}
@@ -1097,6 +971,25 @@ export default function CoachClientSessionPage({
                   </>
                 )}
               </div>
+
+              {!activeSession ? (
+                <div className={`${PANEL_CLASS} p-[14px]`}>
+                  <div className="flex flex-col gap-2 text-[12px]">
+                    <Link
+                      href={`/contact/${clientId}?tab=schedule`}
+                      className="text-[#185fa5] transition-colors hover:text-[#11497f] hover:underline"
+                    >
+                      Запланируйте сессию
+                    </Link>
+                    <Link
+                      href="/clients?tab=schedule&scheduleTab=calendar"
+                      className="text-[#185fa5] transition-colors hover:text-[#11497f] hover:underline"
+                    >
+                      Обзор календаря
+                    </Link>
+                  </div>
+                </div>
+              ) : null}
 
               <div className={`${PANEL_CLASS} p-[14px]`}>
                 <div className="mb-2 text-[11px] font-medium text-[#73726c]">Обновить прогресс цели</div>
@@ -1217,6 +1110,16 @@ function LoadingState() {
       </div>
     </div>
   );
+}
+
+function normalizeWorkspaceData(source?: WorkspaceData | null): WorkspaceData {
+  return {
+    client: source?.client ?? null,
+    competencies: source?.competencies ?? [],
+    goals: source?.goals ?? [],
+    milestones: source?.milestones ?? [],
+    sessions: source?.sessions ?? [],
+  };
 }
 
 function getGoalColor(goal: CoachGoalTreeNode) {

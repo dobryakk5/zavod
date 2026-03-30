@@ -120,7 +120,16 @@ class TelegramTaskListView(generics.ListAPIView):
 
 
 def _crm_tasks_access_q(user, client):
-    return Q(level__client=client) | (Q(level__isnull=True) & Q(created_by=user.id))
+    tenant_contact_ids = UserTenantBinding.objects.filter(
+        tenant_id=client.id,
+        contact_id__isnull=False,
+        contact_id__gt=0,
+    ).values_list("contact_id", flat=True)
+    return (
+        Q(level__client=client)
+        | (Q(level__isnull=True) & Q(created_by=user.id))
+        | (Q(source="coaching") & Q(contact_id__in=tenant_contact_ids))
+    )
 
 
 def _parse_task_priority(value):

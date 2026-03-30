@@ -1,4 +1,5 @@
 import { API_BASE_URL, ApiError, apiFetch } from '../api';
+import type { OperatorTaskHistory } from '../types';
 
 export type CoachStats = {
   activeClients: number;
@@ -47,6 +48,15 @@ export type CoachGoalStep = {
   dueDate: string | null;
   goalId?: string;
   goalTitle?: string;
+};
+
+export type CoachStepHistoryEntry = OperatorTaskHistory;
+export type CoachStepUpdatePayload = {
+  done?: boolean;
+  text?: string;
+  dueDate?: string | null;
+  isMilestone?: boolean;
+  milestoneNote?: string;
 };
 
 export type CoachGoalCompetencyLink = {
@@ -98,6 +108,10 @@ export type PublicClientCoachingPortalResponse = {
 };
 
 export type PublicClientCoachingStepResponse = CoachGoalStep;
+export type PublicClientStepsResponse = {
+  contact_id?: number;
+  items?: CoachGoalStep[];
+};
 
 export type CoachInviteLink = {
   id: string;
@@ -144,7 +158,8 @@ function buildPublicCoachingEndpoint(
 
   const params = new URLSearchParams();
   params.set('contact_id', String(rawContactId));
-  return `${normalizedBaseEndpoint}?${params.toString()}`;
+  const separator = normalizedBaseEndpoint.includes('?') ? '&' : '?';
+  return `${normalizedBaseEndpoint}${separator}${params.toString()}`;
 }
 
 export const coachingApi = {
@@ -172,7 +187,9 @@ export const coachingApi = {
   replaceCoachClientGoals: async (clientId: number | string, goals: CoachGoalTreeNode[]): Promise<CoachGoalTreeNode[]> => {
     const response = await apiFetch<CoachGoalTreeNode[]>(`/clients/${clientId}/goals/edit/`, {
       method: 'PUT',
-      body: goals.map(serializeCoachGoal),
+      body: goals
+        .filter((goal) => !isSystemGroupGoalId(goal.id))
+        .map(serializeCoachGoal),
     });
     return response.map(normalizeCoachGoal);
   },
@@ -181,10 +198,11 @@ export const coachingApi = {
     goalId: string,
     payload: { text: string; dueDate?: string | null },
   ): Promise<CoachGoalStep> => {
-    return apiFetch<CoachGoalStep>(`/goals/${goalId}/steps/`, {
+    const response = await apiFetch<CoachGoalStep>(`/goals/${goalId}/steps/`, {
       method: 'POST',
       body: payload,
     });
+    return normalizeCoachStep(response);
   },
 
   deleteCoachGoalStep: async (goalId: string, stepId: string): Promise<void> => {
@@ -196,7 +214,8 @@ export const coachingApi = {
     filters?: { done?: boolean },
   ): Promise<CoachGoalStep[]> => {
     const qs = filters?.done !== undefined ? `?done=${filters.done}` : '';
-    return apiFetch<CoachGoalStep[]>(`/clients/${clientId}/steps/${qs}`);
+    const response = await apiFetch<CoachGoalStep[]>(`/clients/${clientId}/steps/${qs}`);
+    return Array.isArray(response) ? response.map(normalizeCoachStep) : [];
   },
 
   toggleCoachGoalStep: async (
@@ -204,10 +223,15 @@ export const coachingApi = {
     stepId: string,
     done: boolean,
   ): Promise<{ id: string; steps: CoachGoalStep[] }> => {
-    return apiFetch<{ id: string; steps: CoachGoalStep[] }>(`/goals/${goalId}/steps/${stepId}/`, {
+    const response = await apiFetch<{ id: string; steps: CoachGoalStep[] }>(`/goals/${goalId}/steps/${stepId}/`, {
       method: 'PATCH',
       body: { done },
     });
+    return {
+      ...response,
+      id: String(response.id),
+      steps: Array.isArray(response.steps) ? response.steps.map(normalizeCoachStep) : [],
+    };
   },
 
   getCoachClientMilestones: async (clientId: number | string): Promise<CoachMilestone[]> => {
@@ -237,17 +261,70 @@ export const coachingApi = {
     );
   },
 
+  getPublicClientSteps: async (
+    clientId: number | string,
+    filters?: { done?: boolean },
+    options?: { contactId?: number | string | null },
+  ): Promise<CoachGoalStep[]> => {
+    const params = new URLSearchParams();
+    if (filters?.done !== undefined) {
+      params.set('done', String(filters.done));
+    }
+    const endpoint = buildPublicCoachingEndpoint(
+      `/public/client-page/${clientId}/steps/${params.toString() ? `?${params.toString()}` : ''}`,
+      options,
+    );
+    const response = await publicCoachingFetch<PublicClientStepsResponse | CoachGoalStep[]>(endpoint);
+    const items = Array.isArray(response) ? response : response.items ?? [];
+    return Array.isArray(items) ? items.map(normalizeCoachStep) : [];
+  },
+
+  editClientCoachingStep: async (
+    clientId: number | string,
+    stepId: string,
+    payload: CoachStepUpdatePayload,
+    options?: { contactId?: number | string | null },
+  ): Promise<PublicClientCoachingStepResponse> => {
+    const response = await publicCoachingFetch<PublicClientCoachingStepResponse>(
+      buildPublicCoachingEndpoint(`/public/client-page/${clientId}/steps/${stepId}/`, options),
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      },
+    );
+    return normalizeCoachStep(response);
+  },
+
   updateClientCoachingStep: async (
     clientId: number | string,
     stepId: string,
     done: boolean,
     options?: { contactId?: number | string | null },
   ): Promise<PublicClientCoachingStepResponse> => {
-    return publicCoachingFetch<PublicClientCoachingStepResponse>(
-      buildPublicCoachingEndpoint(`/public/client-page/${clientId}/steps/${stepId}/`, options),
+    return coachingApi.editClientCoachingStep(clientId, stepId, { done }, options);
+  },
+
+  getClientStepHistory: async (
+    clientId: number | string,
+    stepId: string,
+    options?: { contactId?: number | string | null },
+  ): Promise<CoachStepHistoryEntry[]> => {
+    return publicCoachingFetch<CoachStepHistoryEntry[]>(
+      buildPublicCoachingEndpoint(`/public/client-page/${clientId}/steps/${stepId}/history/`, options),
+    );
+  },
+
+  addClientStepComment: async (
+    clientId: number | string,
+    stepId: string,
+    note: string,
+    options?: { contactId?: number | string | null },
+  ): Promise<CoachStepHistoryEntry> => {
+    return publicCoachingFetch<CoachStepHistoryEntry>(
+      buildPublicCoachingEndpoint(`/public/client-page/${clientId}/steps/${stepId}/history/`, options),
       {
-        method: 'PATCH',
-        body: JSON.stringify({ done }),
+        method: 'POST',
+        body: JSON.stringify({ note }),
       },
     );
   },
@@ -282,7 +359,7 @@ export const coachingApi = {
   updateCoachGoalStep: async (
     goalId: string,
     stepId: string,
-    payload: { done?: boolean; text?: string; dueDate?: string | null; isMilestone?: boolean },
+    payload: { done?: boolean; text?: string; dueDate?: string | null; isMilestone?: boolean; milestoneNote?: string },
   ): Promise<{ id: string; steps: CoachGoalStep[] }> => {
     const response = await apiFetch<{ id: string; steps: CoachGoalStep[] }>(`/goals/${goalId}/steps/${stepId}/`, {
       method: 'PATCH',
@@ -290,34 +367,53 @@ export const coachingApi = {
     });
     return {
       ...response,
-      steps: Array.isArray(response.steps)
-        ? response.steps.map((step) => ({
-            ...step,
-            doneAt: step.doneAt || null,
-            dueDate: step.dueDate || null,
-          }))
-        : [],
+      id: String(response.id),
+      steps: Array.isArray(response.steps) ? response.steps.map(normalizeCoachStep) : [],
     };
+  },
+
+  getCoachStepHistory: async (stepId: string): Promise<CoachStepHistoryEntry[]> => {
+    return apiFetch<CoachStepHistoryEntry[]>(`/telegram-tasks/crm-tasks/${stepId}/history/`);
+  },
+
+  addCoachStepComment: async (stepId: string, note: string): Promise<CoachStepHistoryEntry> => {
+    return apiFetch<CoachStepHistoryEntry>(`/telegram-tasks/crm-tasks/${stepId}/history/`, {
+      method: 'POST',
+      body: { note },
+    });
   },
 };
 
 function normalizeCoachGoal(goal: CoachGoalTreeNode): CoachGoalTreeNode {
   return {
     ...goal,
+    id: String(goal.id || ''),
+    title: String(goal.title || ''),
     competencyLinks: Array.isArray(goal.competencyLinks)
       ? goal.competencyLinks.map((link) => ({
           ...link,
+          competencyId: String(link.competencyId || ''),
+          competencyName: String(link.competencyName || ''),
           weight: Number(link.weight || 0),
         }))
       : [],
     steps: Array.isArray(goal.steps)
-      ? goal.steps.map((step) => ({
-          ...step,
-          doneAt: step.doneAt || null,
-          dueDate: step.dueDate || null,
-        }))
+      ? goal.steps.map(normalizeCoachStep)
       : [],
     createdAt: goal.createdAt || new Date().toISOString(),
+  };
+}
+
+function normalizeCoachStep(step: CoachGoalStep): CoachGoalStep {
+  return {
+    ...step,
+    id: String(step.id || ''),
+    text: String(step.text || ''),
+    milestoneNote: String(step.milestoneNote || ''),
+    doneAt: step.doneAt || null,
+    dueDate: step.dueDate || null,
+    goalId: step.goalId != null && String(step.goalId).trim() ? String(step.goalId) : undefined,
+    goalTitle: step.goalTitle != null ? String(step.goalTitle) : undefined,
   };
 }
 
@@ -344,6 +440,10 @@ function serializeCoachGoal(goal: CoachGoalTreeNode): CoachGoalTreeNode {
         }))
       : [],
   };
+}
+
+function isSystemGroupGoalId(goalId: string | null | undefined): boolean {
+  return String(goalId || '').startsWith('group-');
 }
 
 export type CoachTask = {

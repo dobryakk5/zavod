@@ -130,8 +130,10 @@ describe('Public coaching portal page', () => {
 
     render(<CoachingPortalPage />);
 
-    const stepButton = await screen.findByRole('button', { name: /Сделать 3 пробных разговора/i });
-    fireEvent.click(stepButton);
+    const stepLink = await screen.findByRole('link', { name: /Сделать 3 пробных разговора/i });
+    expect(stepLink).toHaveAttribute('href', '/c/46/coaching/steps/step-1?contact_id=91');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Отметить шаг Сделать 3 пробных разговора выполненным' }));
 
     await waitFor(() => {
       expect(testState.updateClientCoachingStep).toHaveBeenCalledWith(46, 'step-1', true, { contactId: 91 });

@@ -235,8 +235,13 @@ class CRMTaskHistorySerializer(serializers.ModelSerializer):
 
 class CRMTaskSerializer(serializers.ModelSerializer):
     level_id = serializers.IntegerField(allow_null=True, required=False)
+    source = serializers.CharField(required=False)
     contact_id = serializers.IntegerField(allow_null=True, required=False)
+    goal_id = serializers.CharField(allow_null=True, required=False)
     due_at = serializers.DateTimeField(allow_null=True, required=False)
+    is_milestone = serializers.BooleanField(required=False)
+    milestone_note = serializers.CharField(allow_null=True, required=False)
+    done_at = serializers.DateTimeField(allow_null=True, required=False)
     created_by_username = serializers.SerializerMethodField()
     history = CRMTaskHistorySerializer(source="history_entries", many=True, read_only=True)
 
@@ -257,12 +262,17 @@ class CRMTaskSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "level_id",
+            "source",
             "contact_id",
+            "goal_id",
             "title",
             "description",
             "status",
             "priority",
             "due_at",
+            "is_milestone",
+            "milestone_note",
+            "done_at",
             "created_by",
             "created_by_username",
             "created_at",

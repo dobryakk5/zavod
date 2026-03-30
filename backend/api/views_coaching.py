@@ -13,8 +13,57 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.models import CoachGroup, CoachGroupMember, CoachGroupTask, ContactCoachingProfile, InviteLink, MapContact, UserTenantBinding
+from core.models import (
+    CRMTask,
+    CoachGroup,
+    CoachGroupMember,
+    CoachGroupTask,
+    CoachingGoal,
+    CoachingGoalCompetency,
+    ContactCoachingProfile,
+    InviteLink,
+    MapContact,
+    UserTenantBinding,
+)
 
+from .coaching_tasks import (
+    COACHING_DONE_STATUSES,
+    COACHING_TASK_SOURCE,
+    COACH_DONE_HISTORY_NOTE,
+    COACH_REOPEN_HISTORY_NOTE,
+    CREATE_HISTORY_NOTE,
+    EDIT_HISTORY_NOTE,
+    completed_coaching_task_count_last_30_days,
+    coaching_task_queryset,
+    create_coaching_milestone,
+    create_coaching_task,
+    flatten_coaching_steps,
+    has_recent_coaching_milestone,
+    has_overdue_coaching_task,
+    list_coaching_milestones,
+    list_coaching_task_payloads,
+    list_coaching_tasks_by_goal,
+    serialize_coaching_milestone,
+    serialize_coaching_task,
+    serialize_coaching_step,
+    update_coaching_task,
+    CoachingTaskUpdate,
+)
+from .coaching_goals import (
+    GROUP_GOAL_ID_PREFIX,
+    average_progress as average_goal_progress,
+    competencies_map,
+    goal_display_title,
+    goal_focus as resolve_goal_focus,
+    goal_progress_for_payload,
+    goal_title_map as build_goal_title_map,
+    group_goal_id,
+    group_goal_title,
+    is_group_goal_public_id,
+    profile_goal_rows,
+    serialize_goal_for_edit,
+    serialize_goal_for_list,
+)
 from .invite_auth import build_frontend_url
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers_coaching import (
@@ -33,9 +82,6 @@ from .serializers_coaching import (
     CoachingSessionUpdateSerializer,
 )
 from .utils import get_active_client
-
-
-GROUP_GOAL_ID_PREFIX = "group-"
 
 
 def _tenant_contact_ids_queryset(tenant_id: int):
@@ -90,178 +136,81 @@ def _contact_initials(name: str) -> str:
     return "".join(part[:1].upper() for part in parts[:2])
 
 
-def _group_goal_id(group_id: int) -> str:
-    return f"{GROUP_GOAL_ID_PREFIX}{group_id}"
-
-
-def _group_task_step_refs(task: CoachGroupTask) -> list[dict]:
+def _group_task_refs(task: CoachGroupTask) -> list[dict]:
     refs = task.step_refs if isinstance(task.step_refs, list) else []
     return [ref for ref in refs if isinstance(ref, dict)]
 
 
-def _is_group_goal(goal: dict) -> bool:
-    goal_id = str(goal.get("id") or "")
-    return goal_id.startswith(GROUP_GOAL_ID_PREFIX)
+def _profile_goals(profile: ContactCoachingProfile) -> list[CoachingGoal]:
+    return profile_goal_rows(profile)
 
 
-def _recalculate_goal_progress(goal: dict) -> None:
-    steps = [step for step in (goal.get("steps") or []) if isinstance(step, dict)]
-    if not steps:
-        goal["progress"] = 0
-        return
-    done_count = sum(1 for step in steps if step.get("done"))
-    goal["progress"] = round((done_count / len(steps)) * 100)
+def _ensure_group_goal(profile: ContactCoachingProfile, group: CoachGroup) -> CoachingGoal:
+    goal_id = group_goal_id(int(group.id))
+    goal, created = CoachingGoal.objects.get_or_create(
+        profile=profile,
+        public_id=goal_id,
+        defaults={
+            "goal_type": CoachingGoal.TYPE_GROUP,
+            "title": group_goal_title(group.name),
+            "progress": 0,
+            "horizon": CoachingGoal.HORIZON_MONTH,
+            "status": CoachingGoal.STATUS_ACTIVE,
+            "sort_order": profile.goal_rows.count(),
+            "group": group,
+            "created_at": timezone.now(),
+        },
+    )
+    changed_fields: list[str] = []
+    if goal.goal_type != CoachingGoal.TYPE_GROUP:
+        goal.goal_type = CoachingGoal.TYPE_GROUP
+        changed_fields.append("goal_type")
+    expected_title = group_goal_title(group.name)
+    if goal.title != expected_title:
+        goal.title = expected_title
+        changed_fields.append("title")
+    if goal.group_id != group.id:
+        goal.group = group
+        changed_fields.append("group")
+    if created:
+        return goal
+    if changed_fields:
+        goal.save(update_fields=changed_fields + ["updated_at"])
+    return goal
 
 
-def _ensure_group_goal(profile: ContactCoachingProfile, group: CoachGroup) -> tuple[list[dict], int, dict]:
-    goal_id = _group_goal_id(int(group.id))
-    goals = [goal for goal in (profile.goals or []) if isinstance(goal, dict)]
-    for index, goal in enumerate(goals):
-        if str(goal.get("id") or "") == goal_id:
-            goal["title"] = str(goal.get("title") or f"Группа: {group.name}")
-            goal["status"] = str(goal.get("status") or "active")
-            goal.setdefault("competencyLinks", [])
-            goal.setdefault("steps", [])
-            goal.setdefault("createdAt", timezone.now().isoformat())
-            _recalculate_goal_progress(goal)
-            return goals, index, goal
-
-    goal = {
-        "id": goal_id,
-        "title": f"Группа: {group.name}",
-        "progress": 0,
-        "horizon": "month",
-        "status": "active",
-        "competencyLinks": [],
-        "steps": [],
-        "createdAt": timezone.now().isoformat(),
-    }
-    goals.append(goal)
-    return goals, len(goals) - 1, goal
-
-
-def _drop_group_goal_if_empty(goals: list[dict], goal_index: int) -> list[dict]:
-    if goal_index < 0 or goal_index >= len(goals):
-        return goals
-    goal = goals[goal_index]
-    if not _is_group_goal(goal):
-        return goals
-    steps = [step for step in (goal.get("steps") or []) if isinstance(step, dict)]
-    if steps:
-        return goals
-    return [item for index, item in enumerate(goals) if index != goal_index]
-
-
-def _remove_group_step_from_profile(profile: ContactCoachingProfile, group_id: int, step_id: str) -> bool:
-    goals = [goal for goal in (profile.goals or []) if isinstance(goal, dict)]
-    goal_id = _group_goal_id(group_id)
-    changed = False
-    for index, goal in enumerate(goals):
-        if str(goal.get("id") or "") != goal_id:
-            continue
-        next_goal = deepcopy(goal)
-        previous_count = len(next_goal.get("steps") or [])
-        next_goal["steps"] = [
-            step
-            for step in (next_goal.get("steps") or [])
-            if isinstance(step, dict) and str(step.get("id") or "") != step_id
-        ]
-        if len(next_goal["steps"]) == previous_count:
-            break
-        _recalculate_goal_progress(next_goal)
-        goals[index] = next_goal
-        goals = _drop_group_goal_if_empty(goals, index)
-        profile.goals = goals
-        changed = True
-        break
-    if changed:
-        profile.save(update_fields=["goals"])
-    return changed
-
-
-def _remove_group_steps_from_profile(profile: ContactCoachingProfile | None, group_id: int, step_ids: set[str]) -> bool:
-    if profile is None or not step_ids:
+def _drop_group_goal_if_no_tasks(profile: ContactCoachingProfile | None, goal_id: str) -> bool:
+    if profile is None:
         return False
-
-    goals = [goal for goal in (profile.goals or []) if isinstance(goal, dict)]
-    goal_id = _group_goal_id(group_id)
-    changed = False
-    for index, goal in enumerate(goals):
-        if str(goal.get("id") or "") != goal_id:
-            continue
-
-        next_goal = deepcopy(goal)
-        previous_count = len(next_goal.get("steps") or [])
-        next_goal["steps"] = [
-            step
-            for step in (next_goal.get("steps") or [])
-            if isinstance(step, dict) and str(step.get("id") or "") not in step_ids
-        ]
-        if len(next_goal["steps"]) == previous_count:
-            break
-
-        _recalculate_goal_progress(next_goal)
-        goals[index] = next_goal
-        goals = _drop_group_goal_if_empty(goals, index)
-        profile.goals = goals
-        changed = True
-        break
-
-    if changed:
-        profile.save(update_fields=["goals"])
-    return changed
+    goal = (
+        CoachingGoal.objects
+        .filter(profile=profile, public_id=goal_id, goal_type=CoachingGoal.TYPE_GROUP)
+        .first()
+    )
+    if goal is None:
+        return False
+    if coaching_task_queryset(contact_id=int(profile.contact_id), goal_id=goal_id).exists():
+        return False
+    goal.delete()
+    return True
 
 
 def _build_group_step_done_index(
     group_id: int,
-    profiles_by_contact_id: dict[int, ContactCoachingProfile],
+    contact_ids: list[int],
 ) -> dict[tuple[int, str], bool]:
-    goal_id = _group_goal_id(group_id)
+    goal_id = group_goal_id(group_id)
     done_index: dict[tuple[int, str], bool] = {}
-    for contact_id, profile in profiles_by_contact_id.items():
-        for goal in profile.goals or []:
-            if not isinstance(goal, dict) or str(goal.get("id") or "") != goal_id:
-                continue
-            for step in goal.get("steps") or []:
-                if not isinstance(step, dict):
-                    continue
-                step_id = str(step.get("id") or "")
-                if step_id:
-                    done_index[(contact_id, step_id)] = bool(step.get("done"))
-            break
+    for task in coaching_task_queryset(goal_id=goal_id).filter(contact_id__in=contact_ids):
+        done_index[(int(task.contact_id), str(task.id))] = str(task.status or "").strip().lower() in COACHING_DONE_STATUSES
     return done_index
 
-
-def _competencies_map(profile: ContactCoachingProfile) -> dict[str, dict]:
-    competencies = profile.competencies if isinstance(profile.competencies, list) else []
-    return {
-        str(item.get("id") or ""): item
-        for item in competencies
-        if isinstance(item, dict) and item.get("id")
-    }
-
-
 def _goal_focus(profile: ContactCoachingProfile) -> str:
-    goals = profile.goals if isinstance(profile.goals, list) else []
-    active_goal = next((goal for goal in goals if isinstance(goal, dict) and goal.get("status") == "active" and goal.get("title")), None)
-    if active_goal:
-        return str(active_goal.get("title") or "")
-    first_goal = next((goal for goal in goals if isinstance(goal, dict) and goal.get("title")), None)
-    if first_goal:
-        return str(first_goal.get("title") or "")
-    competencies = profile.competencies if isinstance(profile.competencies, list) else []
-    first_comp = next((comp for comp in competencies if isinstance(comp, dict) and comp.get("name")), None)
-    if not isinstance(first_comp, dict):
-        return ""
-    return str(first_comp.get("name") or "")
+    return resolve_goal_focus(_profile_goals(profile), profile.competencies if isinstance(profile.competencies, list) else [])
 
 
 def _profile_avg_progress(profile: ContactCoachingProfile) -> int:
-    goals = [goal for goal in (profile.goals or []) if isinstance(goal, dict)]
-    if not goals:
-        return 0
-    total = sum(int(goal.get("progress") or 0) for goal in goals)
-    return round(total / len(goals))
+    return average_goal_progress(_profile_goals(profile))
 
 
 def _session_status_value(session: dict) -> str:
@@ -303,21 +252,7 @@ def _profile_sessions(profile: ContactCoachingProfile, *, include_drafts: bool =
 
 
 def _profile_completed_tasks_last_30_days(profile: ContactCoachingProfile, today) -> int:
-    since = today - timedelta(days=29)
-    completed = 0
-    for goal in profile.goals or []:
-        if not isinstance(goal, dict):
-            continue
-        for step in goal.get("steps") or []:
-            if not isinstance(step, dict) or not step.get("done"):
-                continue
-            done_at = _parse_moment(str(step.get("doneAt") or ""))
-            if done_at is None:
-                continue
-            done_day = timezone.localdate(done_at)
-            if since <= done_day <= today:
-                completed += 1
-    return completed
+    return completed_coaching_task_count_last_30_days(profile.contact_id, today)
 
 
 def _profile_next_session(profile: ContactCoachingProfile) -> str | None:
@@ -362,33 +297,11 @@ def _profile_last_session_moment(profile: ContactCoachingProfile, now: datetime)
 
 
 def _profile_has_overdue_task(profile: ContactCoachingProfile, now: datetime) -> bool:
-    for task in _profile_items(profile, "tasks"):
-        task_status = str(task.get("status") or "").strip().lower()
-        if task_status == "done":
-            continue
-        if task_status == "overdue":
-            return True
-
-        due_moment = _parse_moment(str(task.get("dueDate") or ""))
-        if due_moment is not None and due_moment < now:
-            return True
-    for goal in _profile_items(profile, "goals"):
-        for step in goal.get("steps") or []:
-            if not isinstance(step, dict) or step.get("done"):
-                continue
-            due_moment = _parse_moment(str(step.get("dueDate") or ""))
-            if due_moment is not None and due_moment < now:
-                return True
-    return False
+    return has_overdue_coaching_task(profile.contact_id, profile.tenant.timezone, now)
 
 
 def _profile_has_recent_milestone(profile: ContactCoachingProfile, now: datetime) -> bool:
-    week_ago = now - timedelta(days=7)
-    for milestone in _profile_items(profile, "milestones"):
-        created_at = _parse_moment(str(milestone.get("createdAt") or ""))
-        if created_at is not None and created_at >= week_ago:
-            return True
-    return False
+    return has_recent_coaching_milestone(profile.contact_id, now)
 
 
 def _format_status_time(moment: datetime) -> str:
@@ -498,92 +411,17 @@ def _serialize_group_member(contact: MapContact, profile: ContactCoachingProfile
     }
 
 
-def _serialize_goal_for_edit(goal: dict, competencies_by_id: dict[str, dict]) -> dict:
-    links = []
-    for link in goal.get("competencyLinks") or []:
-        if not isinstance(link, dict):
-            continue
-        competency_id = str(link.get("competencyId") or "")
-        competency = competencies_by_id.get(competency_id, {})
-        links.append(
-            {
-                "competencyId": competency_id,
-                "competencyName": str(competency.get("name") or link.get("competencyName") or ""),
-                "weight": round(float(link.get("weight") or 0) * 100),
-            }
-        )
-    return {
-        "id": str(goal.get("id") or ""),
-        "title": str(goal.get("title") or ""),
-        "progress": int(goal.get("progress") or 0),
-        "horizon": str(goal.get("horizon") or "quarter"),
-        "status": str(goal.get("status") or "active"),
-        "competencyLinks": links,
-        "steps": deepcopy(goal.get("steps") or []),
-        "createdAt": str(goal.get("createdAt") or timezone.now().isoformat()),
-    }
-
-
-def _serialize_goal_for_list(goal: dict, competencies_by_id: dict[str, dict], contact_id: int) -> dict:
-    links = []
-    for link in goal.get("competencyLinks") or []:
-        if not isinstance(link, dict):
-            continue
-        competency = competencies_by_id.get(str(link.get("competencyId") or ""), {})
-        links.append(
-            {
-                "name": str(competency.get("name") or link.get("competencyName") or ""),
-                "weight": float(link.get("weight") or 0),
-            }
-        )
-    return {
-        "id": str(goal.get("id") or ""),
-        "clientId": str(contact_id),
-        "title": str(goal.get("title") or ""),
-        "progress": int(goal.get("progress") or 0),
-        "horizon": str(goal.get("horizon") or "quarter"),
-        "status": str(goal.get("status") or "active"),
-        "competencies": links,
-        "steps": deepcopy(goal.get("steps") or []),
-        "createdAt": str(goal.get("createdAt") or timezone.now().isoformat()),
-    }
-
-
-def _serialize_goal_step(profile: ContactCoachingProfile, goal: dict, step: dict) -> dict:
-    return {
-        "id": str(step.get("id") or ""),
-        "text": str(step.get("text") or ""),
-        "done": bool(step.get("done")),
-        "isMilestone": bool(step.get("isMilestone")),
-        "milestoneNote": str(step.get("milestoneNote") or ""),
-        "doneAt": str(step.get("doneAt") or "").strip() or None,
-        "dueDate": str(step.get("dueDate") or "").strip() or None,
-        "goalId": str(goal.get("id") or ""),
-        "goalTitle": str(step.get("goalTitle") or goal.get("title") or ""),
-        "clientId": int(profile.contact_id),
-    }
-
-
-def _goal_step_sort_key(step: dict) -> tuple[int, str, str]:
-    due_date = str(step.get("dueDate") or "")
-    done_at = str(step.get("doneAt") or "")
-    return (1 if step.get("done") else 0, due_date or "9999", done_at or "9999")
+def _goal_title_map(profile: ContactCoachingProfile) -> dict[str, str]:
+    return build_goal_title_map(_profile_goals(profile))
 
 
 def _flatten_profile_goal_steps(profile: ContactCoachingProfile, *, done: bool | None = None) -> list[dict]:
-    flattened: list[dict] = []
-    for goal in profile.goals or []:
-        if not isinstance(goal, dict):
-            continue
-        for step in goal.get("steps") or []:
-            if not isinstance(step, dict):
-                continue
-            payload = _serialize_goal_step(profile, goal, step)
-            if done is not None and bool(payload["done"]) is not done:
-                continue
-            flattened.append(payload)
-    flattened.sort(key=_goal_step_sort_key)
-    return flattened
+    return flatten_coaching_steps(
+        profile.contact_id,
+        profile.tenant.timezone,
+        done=done,
+        goal_titles_by_id=_goal_title_map(profile),
+    )
 
 
 def _normalize_competencies(data: list[dict]) -> list[dict]:
@@ -617,7 +455,6 @@ def _build_removed_competency_milestones(contact_id: int, previous: list[dict], 
         growth = max(int(item.get("score") or 0) - int(item.get("startScore") or 0), 0)
         milestones.append(
             {
-                "id": uuid4().hex,
                 "clientId": contact_id,
                 "goalId": "",
                 "text": f"Рост компетенции {name} на {growth}%",
@@ -628,122 +465,130 @@ def _build_removed_competency_milestones(contact_id: int, previous: list[dict], 
     return milestones
 
 
-def _normalize_goals_for_storage(validated_goals: list[dict], existing_goals: list[dict]) -> list[dict]:
-    existing_by_id = {
-        str(goal.get("id") or ""): goal
-        for goal in existing_goals
-        if isinstance(goal, dict) and goal.get("id")
-    }
-    normalized = []
-    for position, goal in enumerate(validated_goals):
-        goal_id = str(goal["id"])
-        previous = existing_by_id.get(goal_id, {})
-        links = []
-        for link in goal.get("competencyLinks") or []:
-            links.append(
-                {
-                    "competencyId": str(link["competencyId"]),
-                    "competencyName": str(link.get("competencyName") or ""),
-                    "weight": round(float(link["weight"]), 4),
-                }
-            )
-        steps = deepcopy(goal.get("steps") or previous.get("steps") or [])
-        created_at = str(goal.get("createdAt") or previous.get("createdAt") or timezone.now().isoformat())
-        normalized.append(
-            {
-                "id": goal_id,
-                "title": goal["title"],
-                "progress": int(goal["progress"]),
-                "horizon": goal["horizon"],
-                "status": goal["status"],
-                "sortOrder": position,
-                "competencyLinks": links,
-                "steps": steps,
-                "createdAt": created_at,
-            }
+def _parse_goal_created_at(value: str | None):
+    parsed = _parse_moment(value)
+    return parsed or timezone.now()
+
+
+def _replace_personal_goals(profile: ContactCoachingProfile, validated_goals: list[dict]) -> list[CoachingGoal]:
+    existing_goals = {
+        goal.public_id: goal
+        for goal in (
+            CoachingGoal.objects
+            .filter(profile=profile, goal_type=CoachingGoal.TYPE_PERSONAL)
+            .prefetch_related("competency_links")
         )
-    return normalized
+    }
+    incoming_ids: list[str] = []
+
+    for position, payload in enumerate(validated_goals):
+        goal_id = str(payload["id"]).strip()
+        incoming_ids.append(goal_id)
+        goal = existing_goals.get(goal_id)
+        if goal is None:
+            goal = CoachingGoal(
+                profile=profile,
+                public_id=goal_id,
+                goal_type=CoachingGoal.TYPE_PERSONAL,
+                created_at=_parse_goal_created_at(payload.get("createdAt")),
+            )
+        goal.title = str(payload["title"] or "")
+        goal.progress = int(payload["progress"])
+        goal.horizon = payload["horizon"]
+        goal.status = payload["status"]
+        goal.sort_order = position
+        goal.group = None
+        goal.save()
+
+        goal.competency_links.all().delete()
+        CoachingGoalCompetency.objects.bulk_create(
+            [
+                CoachingGoalCompetency(
+                    goal=goal,
+                    competency_id=str(link["competencyId"]),
+                    competency_name=str(link.get("competencyName") or ""),
+                    weight=round(float(link["weight"]), 4),
+                    sort_order=link_index,
+                )
+                for link_index, link in enumerate(payload.get("competencyLinks") or [])
+            ]
+        )
+
+    removed_goal_ids = set(existing_goals) - set(incoming_ids)
+    if removed_goal_ids:
+        CRMTask.objects.filter(
+            source=COACHING_TASK_SOURCE,
+            contact_id=profile.contact_id,
+            goal_id__in=removed_goal_ids,
+        ).delete()
+
+    if incoming_ids:
+        CoachingGoal.objects.filter(profile=profile, goal_type=CoachingGoal.TYPE_PERSONAL).exclude(public_id__in=incoming_ids).delete()
+    else:
+        CoachingGoal.objects.filter(profile=profile, goal_type=CoachingGoal.TYPE_PERSONAL).delete()
+
+    return list(
+        CoachingGoal.objects
+        .filter(profile=profile)
+        .select_related("group")
+        .prefetch_related("competency_links")
+        .order_by("sort_order", "created_at", "id")
+    )
 
 
-def _find_profile_goal(tenant_id: int, goal_id: str) -> tuple[ContactCoachingProfile, int] | tuple[None, None]:
-    for profile in ContactCoachingProfile.objects.filter(tenant_id=tenant_id).order_by("id"):
-        goals = profile.goals if isinstance(profile.goals, list) else []
-        for index, goal in enumerate(goals):
-            if isinstance(goal, dict) and str(goal.get("id") or "") == goal_id:
-                return profile, index
-    return None, None
+def _find_profile_goal(tenant_id: int, goal_id: str) -> tuple[ContactCoachingProfile, CoachingGoal] | tuple[None, None]:
+    goal = (
+        CoachingGoal.objects
+        .select_related("profile__tenant", "group")
+        .prefetch_related("competency_links")
+        .filter(profile__tenant_id=tenant_id, public_id=goal_id)
+        .first()
+    )
+    if goal is None:
+        return None, None
+    return goal.profile, goal
 
 
-def _goal_response(profile: ContactCoachingProfile, goal_index: int) -> dict:
-    competencies_by_id = _competencies_map(profile)
-    goal = (profile.goals or [])[goal_index]
-    return _serialize_goal_for_list(goal, competencies_by_id, profile.contact_id)
+def _goal_response(profile: ContactCoachingProfile, goal: CoachingGoal) -> dict:
+    competencies_by_id = competencies_map(profile)
+    steps_by_goal_id = list_coaching_tasks_by_goal(profile.contact_id, profile.tenant.timezone, _goal_title_map(profile))
+    return serialize_goal_for_list(goal, profile.contact_id, competencies_by_id, steps_by_goal_id)
 
 
 def _goal_title_for_task(profile: ContactCoachingProfile, goal_id: str | None) -> str:
     if not goal_id:
         return ""
-    for goal in profile.goals or []:
-        if isinstance(goal, dict) and str(goal.get("id") or "") == str(goal_id):
-            return str(goal.get("title") or "")
+    for goal in _profile_goals(profile):
+        if str(goal.public_id or "") == str(goal_id):
+            return goal_display_title(goal)
     return ""
 
 
-def _serialize_task(profile: ContactCoachingProfile, task: dict) -> dict:
-    task_id = str(task.get("id") or "")
-    goal_id = str(task.get("goalId") or "").strip() or None
-    due_date = str(task.get("dueDate") or "").strip() or None
-    done_at = str(task.get("doneAt") or "").strip() or None
-    created_at = str(task.get("createdAt") or timezone.now().isoformat())
-    status_value = str(task.get("status") or "pending").strip().lower()
-    if status_value not in {"pending", "done", "overdue"}:
-        status_value = "pending"
-
-    if status_value != "done" and due_date:
-        due_moment = _parse_moment(due_date)
-        if due_moment is not None and due_moment < timezone.now():
-            status_value = "overdue"
-
-    return {
-        "id": task_id,
-        "clientId": int(task.get("clientId") or profile.contact_id),
-        "goalId": goal_id,
-        "goalTitle": str(task.get("goalTitle") or _goal_title_for_task(profile, goal_id)),
-        "sessionId": str(task.get("sessionId") or "").strip() or None,
-        "text": str(task.get("text") or ""),
-        "status": status_value,
-        "dueDate": due_date,
-        "doneAt": done_at,
-        "createdAt": created_at,
-    }
-
-
-def _task_sort_key(task: dict) -> tuple[int, str, str]:
-    status = str(task.get("status") or "pending")
-    due_date = str(task.get("dueDate") or "")
-    created_at = str(task.get("createdAt") or "")
-    return (1 if status == "done" else 0, due_date or "9999", created_at)
-
-
-def _find_profile_task(tenant_id: int, task_id: str) -> tuple[ContactCoachingProfile, int] | tuple[None, None]:
-    for profile in ContactCoachingProfile.objects.filter(tenant_id=tenant_id).order_by("id"):
-        tasks = profile.tasks if isinstance(profile.tasks, list) else []
-        for index, task in enumerate(tasks):
-            if isinstance(task, dict) and str(task.get("id") or "") == task_id:
-                return profile, index
-    return None, None
+def _find_coaching_task(tenant_id: int, task_id: str) -> CRMTask | None:
+    try:
+        task_pk = int(task_id)
+    except (TypeError, ValueError):
+        return None
+    allowed_contact_ids = list(_tenant_contact_ids_queryset(tenant_id))
+    if not allowed_contact_ids:
+        return None
+    return (
+        coaching_task_queryset()
+        .filter(id=task_pk, contact_id__in=allowed_contact_ids)
+        .first()
+    )
 
 
 def _serialize_group_task(task: CoachGroupTask, done_index: dict[tuple[int, str], bool] | None = None) -> dict:
     done_count = 0
-    refs = _group_task_step_refs(task)
+    refs = _group_task_refs(task)
     for ref in refs:
         try:
             contact_id = int(ref.get("contactId"))
         except (TypeError, ValueError):
             continue
-        step_id = str(ref.get("stepId") or "")
-        if done_index and done_index.get((contact_id, step_id)):
+        task_id = str(ref.get("taskId") or "")
+        if done_index and done_index.get((contact_id, task_id)):
             done_count += 1
 
     return {
@@ -770,56 +615,48 @@ def _serialize_invite_link(invite: InviteLink, request) -> dict:
 
 
 def _delete_group_task_steps(task: CoachGroupTask) -> None:
-    refs_by_contact: dict[int, list[dict]] = {}
-    for ref in _group_task_step_refs(task):
+    refs_by_contact: dict[int, list[str]] = {}
+    for ref in _group_task_refs(task):
         try:
             contact_id = int(ref.get("contactId"))
         except (TypeError, ValueError):
             continue
-        refs_by_contact.setdefault(contact_id, []).append(ref)
-
-    if not refs_by_contact:
-        return
-
-    profiles = {
-        profile.contact_id: profile
-        for profile in ContactCoachingProfile.objects.filter(
-            tenant_id=task.group.tenant_id,
-            contact_id__in=list(refs_by_contact.keys()),
-        )
-    }
-    for contact_id, refs in refs_by_contact.items():
-        profile = profiles.get(contact_id)
-        if profile is None:
+        task_id = str(ref.get("taskId") or "")
+        if not task_id:
             continue
-        for ref in refs:
-            step_id = str(ref.get("stepId") or "")
-            if step_id:
-                _remove_group_step_from_profile(profile, int(task.group_id), step_id)
+        refs_by_contact.setdefault(contact_id, []).append(task_id)
+
+    goal_id = group_goal_id(int(task.group_id))
+    for contact_id, task_ids in refs_by_contact.items():
+        CRMTask.objects.filter(
+            id__in=[int(task_id) for task_id in task_ids if task_id.isdigit()],
+            source=COACHING_TASK_SOURCE,
+            contact_id=contact_id,
+        ).delete()
+        profile = _get_profile(int(task.group.tenant_id), contact_id)
+        _drop_group_goal_if_no_tasks(profile, goal_id)
 
 
-def _adjust_competencies_for_goal(profile: ContactCoachingProfile, goal: dict, next_progress: int) -> None:
-    previous_progress = int(goal.get("progress") or 0)
+def _adjust_competencies_for_goal(profile: ContactCoachingProfile, goal: CoachingGoal, next_progress: int) -> None:
+    previous_progress = int(goal.progress or 0)
     delta = next_progress - previous_progress
     if delta == 0:
         return
 
     competencies = []
+    links_by_competency_id = {
+        str(link.competency_id or ""): link
+        for link in goal.competency_links.all()
+    }
     for competency in profile.competencies or []:
         if not isinstance(competency, dict):
             continue
-        link = next(
-            (
-                item for item in goal.get("competencyLinks") or []
-                if isinstance(item, dict) and str(item.get("competencyId") or "") == str(competency.get("id") or "")
-            ),
-            None,
-        )
+        link = links_by_competency_id.get(str(competency.get("id") or ""))
         if link is None:
             competencies.append(competency)
             continue
 
-        next_score = round(float(competency.get("score") or 0) + (delta * float(link.get("weight") or 0)))
+        next_score = round(float(competency.get("score") or 0) + (delta * float(link.weight or 0)))
         competencies.append(
             {
                 **competency,
@@ -837,7 +674,11 @@ class CoachStatsView(APIView):
         contact_ids = list(set(_tenant_contact_ids_queryset(int(tenant.id))))
         profiles = {
             profile.contact_id: profile
-            for profile in ContactCoachingProfile.objects.filter(tenant=tenant, contact_id__in=contact_ids)
+            for profile in (
+                ContactCoachingProfile.objects
+                .filter(tenant=tenant, contact_id__in=contact_ids)
+                .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            )
         }
 
         all_goals = []
@@ -845,9 +686,8 @@ class CoachStatsView(APIView):
         sessions_today = 0
         completed_tasks = 0
         for profile in profiles.values():
-            for goal in profile.goals or []:
-                if isinstance(goal, dict):
-                    all_goals.append(int(goal.get("progress") or 0))
+            for goal in _profile_goals(profile):
+                all_goals.append(int(goal.progress or 0))
             completed_tasks += _profile_completed_tasks_last_30_days(profile, today)
             for session in _profile_sessions(profile, include_drafts=False):
                 moment = _parse_moment(str(session.get("date") or ""))
@@ -878,7 +718,11 @@ class CoachClientsView(APIView):
         )
         profiles = {
             profile.contact_id: profile
-            for profile in ContactCoachingProfile.objects.filter(tenant=tenant, contact_id__in=[int(contact.id) for contact in contacts])
+            for profile in (
+                ContactCoachingProfile.objects
+                .filter(tenant=tenant, contact_id__in=[int(contact.id) for contact in contacts])
+                .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            )
         }
         payload = [_serialize_contact(contact, int(tenant.id), profiles.get(int(contact.id))) for contact in contacts]
         return Response(payload)
@@ -941,11 +785,17 @@ class ContactCompetenciesView(APIView):
         previous_competencies = [item for item in (profile.competencies or []) if isinstance(item, dict)]
         next_competencies = _normalize_competencies(serializer.validated_data)
         new_milestones = _build_removed_competency_milestones(contact_id, previous_competencies, next_competencies)
-        profile.competencies = next_competencies
-        if new_milestones:
-            existing_milestones = [item for item in (profile.milestones or []) if isinstance(item, dict)]
-            profile.milestones = [*new_milestones, *existing_milestones]
-        profile.save()
+        with transaction.atomic():
+            profile.competencies = next_competencies
+            profile.save()
+            for milestone in new_milestones:
+                create_coaching_milestone(
+                    contact_id=contact_id,
+                    goal_id=milestone.get("goalId") or None,
+                    text=str(milestone["text"]),
+                    note=str(milestone.get("note") or ""),
+                    created_at=_parse_moment(str(milestone.get("createdAt") or "")) or timezone.now(),
+                )
         return Response(profile.competencies)
 
 
@@ -961,12 +811,24 @@ class ContactGoalsEditView(APIView):
         if contact is None:
             return Response({"error": "Контакт не найден"}, status=status.HTTP_404_NOT_FOUND)
 
-        profile = _get_or_create_profile(int(tenant.id), contact_id)
-        competencies_by_id = _competencies_map(profile)
+        profile = (
+            ContactCoachingProfile.objects
+            .filter(tenant_id=int(tenant.id), contact_id=contact_id)
+            .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            .first()
+        )
+        if profile is None:
+            profile = _get_or_create_profile(int(tenant.id), contact_id)
+        goals = _profile_goals(profile)
+        competencies_by_id = competencies_map(profile)
+        steps_by_goal_id = list_coaching_tasks_by_goal(profile.contact_id, tenant.timezone, _goal_title_map(profile))
         payload = [
-            _serialize_goal_for_edit(goal, competencies_by_id)
-            for goal in (profile.goals or [])
-            if isinstance(goal, dict)
+            {
+                **serialize_goal_for_edit(goal, competencies_by_id),
+                "steps": deepcopy(steps_by_goal_id.get(str(goal.public_id or ""), [])),
+                "progress": goal_progress_for_payload(goal, steps_by_goal_id.get(str(goal.public_id or ""), [])),
+            }
+            for goal in goals
         ]
         return Response(payload)
 
@@ -980,12 +842,24 @@ class ContactGoalsEditView(APIView):
         serializer.is_valid(raise_exception=True)
 
         profile = _get_or_create_profile(int(tenant.id), contact_id)
-        existing_goals = profile.goals if isinstance(profile.goals, list) else []
-        profile.goals = _normalize_goals_for_storage(serializer.validated_data, existing_goals)
-        profile.save()
-
-        competencies_by_id = _competencies_map(profile)
-        payload = [_serialize_goal_for_edit(goal, competencies_by_id) for goal in profile.goals]
+        goals = _replace_personal_goals(profile, serializer.validated_data)
+        profile = (
+            ContactCoachingProfile.objects
+            .filter(id=profile.id)
+            .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            .first()
+            or profile
+        )
+        competencies_by_id = competencies_map(profile)
+        steps_by_goal_id = list_coaching_tasks_by_goal(profile.contact_id, tenant.timezone, _goal_title_map(profile))
+        payload = [
+            {
+                **serialize_goal_for_edit(goal, competencies_by_id),
+                "steps": deepcopy(steps_by_goal_id.get(str(goal.public_id or ""), [])),
+                "progress": goal_progress_for_payload(goal, steps_by_goal_id.get(str(goal.public_id or ""), [])),
+            }
+            for goal in goals
+        ]
         return Response(payload)
 
 
@@ -1000,14 +874,20 @@ class ContactGoalsView(APIView):
 
         horizon = str(request.query_params.get("horizon") or "").strip()
         profile = _get_or_create_profile(int(tenant.id), contact_id)
-        competencies_by_id = _competencies_map(profile)
+        profile = (
+            ContactCoachingProfile.objects
+            .filter(id=profile.id)
+            .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            .first()
+            or profile
+        )
+        competencies_by_id = competencies_map(profile)
+        steps_by_goal_id = list_coaching_tasks_by_goal(profile.contact_id, tenant.timezone, _goal_title_map(profile))
         goals = []
-        for goal in profile.goals or []:
-            if not isinstance(goal, dict):
+        for goal in _profile_goals(profile):
+            if horizon and str(goal.horizon or "") != horizon:
                 continue
-            if horizon and str(goal.get("horizon") or "") != horizon:
-                continue
-            goals.append(_serialize_goal_for_list(goal, competencies_by_id, contact_id))
+            goals.append(serialize_goal_for_list(goal, competencies_by_id=competencies_by_id, contact_id=contact_id, steps_by_goal_id=steps_by_goal_id))
         return Response(goals)
 
 
@@ -1036,8 +916,8 @@ class ContactGoalDetailView(APIView):
 
     def patch(self, request, goal_id: str):
         tenant = get_active_client(request.user)
-        profile, goal_index = _find_profile_goal(int(tenant.id), goal_id)
-        if profile is None or goal_index is None:
+        profile, goal = _find_profile_goal(int(tenant.id), goal_id)
+        if profile is None or goal is None:
             return Response({"error": "Цель не найдена"}, status=status.HTTP_404_NOT_FOUND)
 
         raw_progress = request.data.get("progress")
@@ -1048,14 +928,19 @@ class ContactGoalDetailView(APIView):
         if next_progress < 0 or next_progress > 100:
             return Response({"error": "Некорректный progress"}, status=status.HTTP_400_BAD_REQUEST)
 
-        goals = list(profile.goals or [])
-        goal = deepcopy(goals[goal_index])
         _adjust_competencies_for_goal(profile, goal, next_progress)
-        goal["progress"] = next_progress
-        goals[goal_index] = goal
-        profile.goals = goals
-        profile.save()
-        return Response(_goal_response(profile, goal_index))
+        goal.progress = next_progress
+        profile.save(update_fields=["competencies"])
+        goal.save(update_fields=["progress", "updated_at"])
+        profile = (
+            ContactCoachingProfile.objects
+            .filter(id=profile.id)
+            .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            .first()
+            or profile
+        )
+        goal = next((item for item in _profile_goals(profile) if item.id == goal.id), goal)
+        return Response(_goal_response(profile, goal))
 
 
 class ContactGoalStepsView(APIView):
@@ -1063,32 +948,24 @@ class ContactGoalStepsView(APIView):
 
     def post(self, request, goal_id: str):
         tenant = get_active_client(request.user)
-        profile, goal_index = _find_profile_goal(int(tenant.id), goal_id)
-        if profile is None or goal_index is None:
+        profile, goal = _find_profile_goal(int(tenant.id), goal_id)
+        if profile is None or goal is None:
             return Response({"error": "Цель не найдена"}, status=status.HTTP_404_NOT_FOUND)
 
         serializer = CoachingGoalStepCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
-        goals = list(profile.goals or [])
-        goal = deepcopy(goals[goal_index])
-        steps = [step for step in (goal.get("steps") or []) if isinstance(step, dict)]
-        step = {
-            "id": uuid4().hex,
-            "text": serializer.validated_data["text"],
-            "done": False,
-            "isMilestone": False,
-            "milestoneNote": "",
-            "doneAt": "",
-            "dueDate": serializer.validated_data.get("dueDate") or "",
-            "goalId": str(goal.get("id") or ""),
-            "goalTitle": str(goal.get("title") or ""),
-        }
-        goal["steps"] = [*steps, step]
-        goals[goal_index] = goal
-        profile.goals = goals
-        profile.save()
-        return Response(_serialize_goal_step(profile, goal, step), status=status.HTTP_201_CREATED)
+        task = create_coaching_task(
+            contact_id=profile.contact_id,
+            goal_id=str(goal.public_id or ""),
+            title=serializer.validated_data["text"],
+            due_date=serializer.validated_data.get("dueDate") or "",
+            tenant_timezone=tenant.timezone,
+            history_note=CREATE_HISTORY_NOTE,
+        )
+        return Response(
+            serialize_coaching_step(task, tenant_timezone=tenant.timezone, goal_title=goal_display_title(goal)),
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class ContactGoalStepDetailView(APIView):
@@ -1096,72 +973,66 @@ class ContactGoalStepDetailView(APIView):
 
     def patch(self, request, goal_id: str, step_id: str):
         tenant = get_active_client(request.user)
-        profile, goal_index = _find_profile_goal(int(tenant.id), goal_id)
-        if profile is None or goal_index is None:
+        profile, goal = _find_profile_goal(int(tenant.id), goal_id)
+        if profile is None or goal is None:
             return Response({"error": "Цель не найдена"}, status=status.HTTP_404_NOT_FOUND)
 
         serializer = CoachingGoalStepUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         if not serializer.validated_data:
             return Response({"error": "Нет данных для обновления"}, status=status.HTTP_400_BAD_REQUEST)
-
-        goals = list(profile.goals or [])
-        goal = deepcopy(goals[goal_index])
-        steps = list(goal.get("steps") or [])
-        step_found = False
-        for index, step in enumerate(steps):
-            if not isinstance(step, dict):
-                continue
-            if str(step.get("id") or "") != step_id:
-                continue
-            next_step = {**step}
-            if "text" in serializer.validated_data:
-                next_step["text"] = serializer.validated_data["text"]
-            if "dueDate" in serializer.validated_data:
-                next_step["dueDate"] = serializer.validated_data["dueDate"]
-            if "isMilestone" in serializer.validated_data:
-                next_step["isMilestone"] = bool(serializer.validated_data["isMilestone"])
-            if "done" in serializer.validated_data:
-                done = bool(serializer.validated_data["done"])
-                next_step["done"] = done
-                next_step["doneAt"] = timezone.now().isoformat() if done else ""
-            steps[index] = next_step
-            step_found = True
-            break
-        if not step_found:
+        task = (
+            coaching_task_queryset(contact_id=profile.contact_id, goal_id=goal_id)
+            .filter(id=step_id)
+            .first()
+        )
+        if task is None:
             return Response({"error": "Шаг не найден"}, status=status.HTTP_404_NOT_FOUND)
-
-        goal["steps"] = steps
-        if _is_group_goal(goal):
-            _recalculate_goal_progress(goal)
-        goals[goal_index] = goal
-        profile.goals = goals
-        profile.save()
-        return Response(_goal_response(profile, goal_index))
+        history_note = EDIT_HISTORY_NOTE
+        next_status = None
+        next_done_at = task.done_at
+        if "done" in serializer.validated_data:
+            done = bool(serializer.validated_data["done"])
+            next_status = "done" if done else "open"
+            next_done_at = timezone.now() if done else None
+            history_note = COACH_DONE_HISTORY_NOTE if done else COACH_REOPEN_HISTORY_NOTE
+        task = update_coaching_task(
+            task,
+            tenant_timezone=tenant.timezone,
+            changes=CoachingTaskUpdate(
+                title=serializer.validated_data.get("text") if "text" in serializer.validated_data else None,
+                due_date=serializer.validated_data.get("dueDate") if "dueDate" in serializer.validated_data else None,
+                is_milestone=serializer.validated_data.get("isMilestone") if "isMilestone" in serializer.validated_data else None,
+                milestone_note=serializer.validated_data.get("milestoneNote") if "milestoneNote" in serializer.validated_data else None,
+                status=next_status,
+                done_at=next_done_at if "done" in serializer.validated_data else None,
+                history_note=history_note,
+            ),
+        )
+        profile = (
+            ContactCoachingProfile.objects
+            .filter(id=profile.id)
+            .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            .first()
+            or profile
+        )
+        goal = next((item for item in _profile_goals(profile) if item.public_id == goal_id), goal)
+        return Response(_goal_response(profile, goal))
 
     def delete(self, request, goal_id: str, step_id: str):
         tenant = get_active_client(request.user)
-        profile, goal_index = _find_profile_goal(int(tenant.id), goal_id)
-        if profile is None or goal_index is None:
+        profile, goal = _find_profile_goal(int(tenant.id), goal_id)
+        if profile is None or goal is None:
             return Response({"error": "Цель не найдена"}, status=status.HTTP_404_NOT_FOUND)
-
-        goals = list(profile.goals or [])
-        goal = deepcopy(goals[goal_index])
-        previous_count = len(goal.get("steps") or [])
-        goal["steps"] = [
-            step
-            for step in (goal.get("steps") or [])
-            if isinstance(step, dict) and str(step.get("id") or "") != step_id
-        ]
-        if len(goal["steps"]) == previous_count:
+        task = (
+            coaching_task_queryset(contact_id=profile.contact_id, goal_id=goal_id)
+            .filter(id=step_id)
+            .first()
+        )
+        if task is None:
             return Response({"error": "Шаг не найден"}, status=status.HTTP_404_NOT_FOUND)
-
-        if _is_group_goal(goal):
-            _recalculate_goal_progress(goal)
-        goals[goal_index] = goal
-        goals = _drop_group_goal_if_empty(goals, goal_index)
-        profile.goals = goals
-        profile.save()
+        task.delete()
+        _drop_group_goal_if_no_tasks(profile, goal_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -1178,9 +1049,7 @@ class ContactMilestonesView(APIView):
             return Response({"error": "Контакт не найден"}, status=status.HTTP_404_NOT_FOUND)
 
         profile = _get_or_create_profile(int(tenant.id), contact_id)
-        milestones = [item for item in (profile.milestones or []) if isinstance(item, dict)]
-        milestones.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
-        return Response(milestones)
+        return Response(list_coaching_milestones(profile.contact_id))
 
     def post(self, request, contact_id: int):
         tenant = get_active_client(request.user)
@@ -1192,17 +1061,13 @@ class ContactMilestonesView(APIView):
         serializer.is_valid(raise_exception=True)
 
         profile = _get_or_create_profile(int(tenant.id), contact_id)
-        milestone = {
-            "id": uuid4().hex,
-            "clientId": contact_id,
-            "goalId": serializer.validated_data.get("goalId") or "",
-            "text": serializer.validated_data["text"],
-            "note": serializer.validated_data.get("note") or "",
-            "createdAt": timezone.now().isoformat(),
-        }
-        profile.milestones = [milestone, *[item for item in (profile.milestones or []) if isinstance(item, dict)]]
-        profile.save()
-        return Response(milestone, status=status.HTTP_201_CREATED)
+        task = create_coaching_milestone(
+            contact_id=profile.contact_id,
+            goal_id=serializer.validated_data.get("goalId") or None,
+            text=serializer.validated_data["text"],
+            note=serializer.validated_data.get("note") or "",
+        )
+        return Response(serialize_coaching_milestone(task), status=status.HTTP_201_CREATED)
 
 
 class ContactTasksView(APIView):
@@ -1215,8 +1080,7 @@ class ContactTasksView(APIView):
             return Response({"error": "Контакт не найден"}, status=status.HTTP_404_NOT_FOUND)
 
         profile = _get_or_create_profile(int(tenant.id), contact_id)
-        tasks = [_serialize_task(profile, task) for task in (profile.tasks or []) if isinstance(task, dict)]
-        tasks.sort(key=_task_sort_key)
+        tasks = list_coaching_task_payloads(profile.contact_id, tenant.timezone, _goal_title_map(profile))
         return Response(tasks)
 
 
@@ -1225,24 +1089,25 @@ class ContactTaskDetailView(APIView):
 
     def patch(self, request, task_id: str):
         tenant = get_active_client(request.user)
-        profile, task_index = _find_profile_task(int(tenant.id), task_id)
-        if profile is None or task_index is None:
+        task = _find_coaching_task(int(tenant.id), task_id)
+        if task is None:
             return Response({"error": "Задание не найдено"}, status=status.HTTP_404_NOT_FOUND)
 
         next_status = str(request.data.get("status") or "").strip().lower()
         if next_status not in {"pending", "done", "overdue"}:
             return Response({"error": "Некорректный status"}, status=status.HTTP_400_BAD_REQUEST)
-
-        tasks = list(profile.tasks or [])
-        task = deepcopy(tasks[task_index])
-        task["status"] = next_status
-        task["doneAt"] = timezone.now().isoformat() if next_status == "done" else ""
-        task["clientId"] = int(task.get("clientId") or profile.contact_id)
-        task["createdAt"] = str(task.get("createdAt") or timezone.now().isoformat())
-        tasks[task_index] = task
-        profile.tasks = tasks
-        profile.save()
-        return Response(_serialize_task(profile, task))
+        profile = _get_or_create_profile(int(tenant.id), int(task.contact_id))
+        goal_title = _goal_title_for_task(profile, str(task.goal_id or "").strip() or None)
+        task = update_coaching_task(
+            task,
+            tenant_timezone=tenant.timezone,
+            changes=CoachingTaskUpdate(
+                status="done" if next_status == "done" else "open",
+                done_at=timezone.now() if next_status == "done" else None,
+                history_note=COACH_DONE_HISTORY_NOTE if next_status == "done" else COACH_REOPEN_HISTORY_NOTE,
+            ),
+        )
+        return Response(serialize_coaching_task(task, tenant_timezone=tenant.timezone, goal_title=goal_title))
 
 
 class ContactSessionsView(APIView):
@@ -1384,9 +1249,13 @@ class CoachGroupDetailView(APIView):
         }
         profiles = {
             profile.contact_id: profile
-            for profile in ContactCoachingProfile.objects.filter(tenant=tenant, contact_id__in=contact_ids)
+            for profile in (
+                ContactCoachingProfile.objects
+                .filter(tenant=tenant, contact_id__in=contact_ids)
+                .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            )
         }
-        done_index = _build_group_step_done_index(int(group.id), profiles)
+        done_index = _build_group_step_done_index(int(group.id), [int(member.contact_id) for member in members])
 
         payload_members = []
         for member in members:
@@ -1488,7 +1357,11 @@ class CoachGroupMembersBulkView(APIView):
         )
         profiles = {
             profile.contact_id: profile
-            for profile in ContactCoachingProfile.objects.filter(tenant=tenant, contact_id__in=create_ids)
+            for profile in (
+                ContactCoachingProfile.objects
+                .filter(tenant=tenant, contact_id__in=create_ids)
+                .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            )
         }
 
         payload = [
@@ -1518,27 +1391,33 @@ class CoachGroupMemberDetailView(APIView):
             except NotSupportedError:
                 tasks = list(tasks_queryset.all())
 
-            removed_step_ids: set[str] = set()
             changed_tasks: list[CoachGroupTask] = []
             now = timezone.now()
             for task in tasks:
                 next_refs = []
                 changed = False
-                for ref in _group_task_step_refs(task):
+                removed_task_ids: list[int] = []
+                for ref in _group_task_refs(task):
                     try:
                         ref_contact_id = int(ref.get("contactId"))
                     except (TypeError, ValueError):
                         next_refs.append(ref)
                         continue
                     if ref_contact_id == client_id:
-                        step_id = str(ref.get("stepId") or "")
-                        if step_id:
-                            removed_step_ids.add(step_id)
+                        task_id = str(ref.get("taskId") or "")
+                        if task_id.isdigit():
+                            removed_task_ids.append(int(task_id))
                         changed = True
                     else:
                         next_refs.append(ref)
 
                 if changed:
+                    if removed_task_ids:
+                        CRMTask.objects.filter(
+                            id__in=removed_task_ids,
+                            source=COACHING_TASK_SOURCE,
+                            contact_id=client_id,
+                        ).delete()
                     task.step_refs = next_refs
                     task.updated_at = now
                     changed_tasks.append(task)
@@ -1547,7 +1426,7 @@ class CoachGroupMemberDetailView(APIView):
                 CoachGroupTask.objects.bulk_update(changed_tasks, ["step_refs", "updated_at"])
 
             profile = _get_profile(int(tenant.id), client_id)
-            _remove_group_steps_from_profile(profile, int(group.id), removed_step_ids)
+            _drop_group_goal_if_no_tasks(profile, group_goal_id(int(group.id)))
 
             member.delete()
 
@@ -1577,29 +1456,20 @@ class CoachGroupTasksView(APIView):
         with transaction.atomic():
             for member in members:
                 profile = _get_or_create_profile(int(tenant.id), int(member.contact_id))
-                goals, goal_index, goal = _ensure_group_goal(profile, group)
-                next_goal = deepcopy(goal)
-                step = {
-                    "id": uuid4().hex,
-                    "text": serializer.validated_data["text"].strip(),
-                    "done": False,
-                    "isMilestone": False,
-                    "milestoneNote": "",
-                    "doneAt": "",
-                    "dueDate": due_date_value,
-                    "goalId": str(next_goal.get("id") or ""),
-                    "goalTitle": str(next_goal.get("title") or ""),
-                }
-                next_goal["steps"] = [*next_goal.get("steps", []), step]
-                _recalculate_goal_progress(next_goal)
-                goals[goal_index] = next_goal
-                profile.goals = goals
-                profile.save(update_fields=["goals"])
+                goal = _ensure_group_goal(profile, group)
+                created_task = create_coaching_task(
+                    contact_id=int(member.contact_id),
+                    goal_id=str(goal.public_id or ""),
+                    title=serializer.validated_data["text"].strip(),
+                    due_date=due_date_value,
+                    tenant_timezone=tenant.timezone,
+                    history_note=CREATE_HISTORY_NOTE,
+                )
                 step_refs.append(
                     {
                         "contactId": int(member.contact_id),
-                        "goalId": str(next_goal.get("id") or ""),
-                        "stepId": str(step["id"]),
+                        "goalId": str(goal.public_id or ""),
+                        "taskId": str(created_task.id),
                     }
                 )
 
@@ -1610,14 +1480,8 @@ class CoachGroupTasksView(APIView):
                 step_refs=step_refs,
             )
 
-        profiles = {
-            profile.contact_id: profile
-            for profile in ContactCoachingProfile.objects.filter(
-                tenant=tenant,
-                contact_id__in=[int(member.contact_id) for member in members],
-            )
-        }
-        return Response(_serialize_group_task(task, profiles), status=status.HTTP_201_CREATED)
+        done_index = _build_group_step_done_index(int(group.id), [int(member.contact_id) for member in members])
+        return Response(_serialize_group_task(task, done_index), status=status.HTTP_201_CREATED)
 
 
 class CoachGroupTaskDetailView(APIView):

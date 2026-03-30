@@ -18,8 +18,10 @@ from rest_framework.views import APIView
 
 from core.models import (
     CRMTask,
+    CRMTaskHistory,
     Client,
     ClientProduct,
+    CoachingGoal,
     ContactCoachingProfile,
     ContactProductPurchase,
     InviteLink,
@@ -45,7 +47,29 @@ from core.services.custom_domain import CustomDomainValidationError, normalize_c
 from core.tasks.chains import _send_telegram_message, _send_vk_message
 
 from .authentication import CookieJWTAuthentication
+from .coaching_goals import (
+    competencies_map,
+    goal_display_title,
+    goal_focus as resolve_goal_focus,
+    goal_title_map as build_goal_title_map,
+    profile_goal_rows,
+    serialize_public_goal,
+)
+from .coaching_tasks import (
+    CLIENT_EDIT_HISTORY_NOTE,
+    CLIENT_DONE_HISTORY_NOTE,
+    CLIENT_REOPEN_HISTORY_NOTE,
+    coaching_task_queryset,
+    flatten_coaching_steps,
+    list_coaching_milestones,
+    list_coaching_tasks_by_goal,
+    serialize_coaching_step,
+    update_coaching_task,
+    CoachingTaskUpdate,
+)
 from .invite_auth import resolve_coach_invite_contact_id, set_coach_invite_cookie
+from .serializers import CRMTaskHistorySerializer
+from .serializers_coaching import CoachingGoalStepUpdateSerializer
 from .views_payments import (
     _build_yookassa_request_kwargs,
     _get_yookassa_credentials,
@@ -433,72 +457,20 @@ def _resolve_coaching_contact_id_for_request(request, client_id: int) -> int | N
     return contact_id
 
 
-def _public_goal_step_sort_key(step: dict) -> tuple[int, str, str]:
-    due_date = str(step.get("dueDate") or "")
-    done_at = str(step.get("doneAt") or "")
-    return (1 if step.get("done") else 0, due_date or "9999", done_at or "9999")
-
-
 def _serialize_public_goal_steps(profile: ContactCoachingProfile, *, done: bool | None = None) -> list[dict]:
-    items: list[dict] = []
-    for goal in profile.goals or []:
-        if not isinstance(goal, dict):
-            continue
-        goal_id = str(goal.get("id") or "")
-        goal_title = str(goal.get("title") or "")
-        for step in goal.get("steps") or []:
-            if not isinstance(step, dict):
-                continue
-            payload = {
-                "id": str(step.get("id") or ""),
-                "text": str(step.get("text") or ""),
-                "done": bool(step.get("done")),
-                "isMilestone": bool(step.get("isMilestone")),
-                "milestoneNote": str(step.get("milestoneNote") or ""),
-                "doneAt": str(step.get("doneAt") or "").strip() or None,
-                "dueDate": str(step.get("dueDate") or "").strip() or None,
-                "goalId": goal_id,
-                "goalTitle": str(step.get("goalTitle") or goal_title),
-                "clientId": int(profile.contact_id),
-            }
-            if done is not None and bool(payload["done"]) is not done:
-                continue
-            items.append(payload)
-    items.sort(key=_public_goal_step_sort_key)
-    return items
+    goal_titles_by_id = build_goal_title_map(profile_goal_rows(profile))
+    return flatten_coaching_steps(
+        profile.contact_id,
+        profile.tenant.timezone,
+        done=done,
+        goal_titles_by_id=goal_titles_by_id,
+    )
 
 
 def _public_coaching_focus(profile: ContactCoachingProfile | None) -> str:
     if profile is None:
         return ""
-
-    goals = profile.goals if isinstance(profile.goals, list) else []
-    active_goal = next(
-        (
-            goal
-            for goal in goals
-            if isinstance(goal, dict) and goal.get("status") == "active" and goal.get("title")
-        ),
-        None,
-    )
-    if isinstance(active_goal, dict):
-        return str(active_goal.get("title") or "")
-
-    first_goal = next(
-        (goal for goal in goals if isinstance(goal, dict) and goal.get("title")),
-        None,
-    )
-    if isinstance(first_goal, dict):
-        return str(first_goal.get("title") or "")
-
-    competencies = profile.competencies if isinstance(profile.competencies, list) else []
-    first_competency = next(
-        (item for item in competencies if isinstance(item, dict) and item.get("name")),
-        None,
-    )
-    if isinstance(first_competency, dict):
-        return str(first_competency.get("name") or "")
-    return ""
+    return resolve_goal_focus(profile_goal_rows(profile), profile.competencies if isinstance(profile.competencies, list) else [])
 
 
 def _serialize_public_coaching_competencies(profile: ContactCoachingProfile | None) -> list[dict]:
@@ -522,87 +494,23 @@ def _serialize_public_coaching_competencies(profile: ContactCoachingProfile | No
 
 
 def _serialize_public_coaching_goals(profile: ContactCoachingProfile | None) -> list[dict]:
-    if profile is None or not isinstance(profile.goals, list):
+    if profile is None:
         return []
 
-    competencies_by_id = {
-        str(item.get("id") or ""): item
-        for item in (profile.competencies or [])
-        if isinstance(item, dict) and item.get("id")
-    }
+    goals = profile_goal_rows(profile)
+    competencies_by_id = competencies_map(profile)
     items: list[dict] = []
-    for goal in profile.goals:
-        if not isinstance(goal, dict):
-            continue
-
-        competency_links: list[dict] = []
-        for link in goal.get("competencyLinks") or []:
-            if not isinstance(link, dict):
-                continue
-            competency_id = str(link.get("competencyId") or "")
-            competency = competencies_by_id.get(competency_id, {})
-            competency_links.append(
-                {
-                    "competencyId": competency_id,
-                    "competencyName": str(competency.get("name") or link.get("competencyName") or ""),
-                    "weight": float(link.get("weight") or 0),
-                }
-            )
-
-        steps: list[dict] = []
-        for step in goal.get("steps") or []:
-            if not isinstance(step, dict):
-                continue
-            steps.append(
-                {
-                    "id": str(step.get("id") or ""),
-                    "text": str(step.get("text") or ""),
-                    "done": bool(step.get("done")),
-                    "isMilestone": bool(step.get("isMilestone")),
-                    "milestoneNote": str(step.get("milestoneNote") or ""),
-                    "doneAt": str(step.get("doneAt") or "").strip() or None,
-                    "dueDate": str(step.get("dueDate") or "").strip() or None,
-                    "goalId": str(step.get("goalId") or goal.get("id") or ""),
-                    "goalTitle": str(step.get("goalTitle") or goal.get("title") or ""),
-                }
-            )
-
-        items.append(
-            {
-                "id": str(goal.get("id") or ""),
-                "clientId": int(profile.contact_id),
-                "title": str(goal.get("title") or ""),
-                "progress": int(goal.get("progress") or 0),
-                "horizon": str(goal.get("horizon") or "quarter"),
-                "status": str(goal.get("status") or "active"),
-                "competencyLinks": competency_links,
-                "steps": steps,
-                "createdAt": str(goal.get("createdAt") or timezone.now().isoformat()),
-            }
-        )
+    goal_titles_by_id = build_goal_title_map(goals)
+    steps_by_goal_id = list_coaching_tasks_by_goal(profile.contact_id, profile.tenant.timezone, goal_titles_by_id)
+    for goal in goals:
+        items.append(serialize_public_goal(goal, profile, competencies_by_id, steps_by_goal_id))
     return items
 
 
 def _serialize_public_coaching_milestones(profile: ContactCoachingProfile | None) -> list[dict]:
-    if profile is None or not isinstance(profile.milestones, list):
+    if profile is None:
         return []
-
-    items: list[dict] = []
-    for milestone in profile.milestones:
-        if not isinstance(milestone, dict):
-            continue
-        items.append(
-            {
-                "id": str(milestone.get("id") or ""),
-                "clientId": int(milestone.get("clientId") or profile.contact_id),
-                "goalId": str(milestone.get("goalId") or ""),
-                "text": str(milestone.get("text") or ""),
-                "note": str(milestone.get("note") or ""),
-                "createdAt": str(milestone.get("createdAt") or timezone.now().isoformat()),
-            }
-        )
-    items.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
-    return items
+    return list_coaching_milestones(profile.contact_id)
 
 
 def _resolve_or_provision_request_contact_id_for_client(request, client_id: int) -> int | None:
@@ -1978,7 +1886,12 @@ class PublicClientPageStepsView(APIView):
         elif raw_done in {"0", "false", "no"}:
             done = False
 
-        profile = ContactCoachingProfile.objects.filter(tenant_id=client_id, contact_id=int(contact_id)).first()
+        profile = (
+            ContactCoachingProfile.objects
+            .filter(tenant_id=client_id, contact_id=int(contact_id))
+            .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            .first()
+        )
         items = _serialize_public_goal_steps(profile, done=done) if profile else []
         return Response(
             {
@@ -2005,7 +1918,13 @@ class PublicClientPageCoachingView(APIView):
             )
 
         contact = MapContact.objects.filter(id=int(contact_id)).first()
-        profile = ContactCoachingProfile.objects.filter(tenant_id=client_id, contact_id=int(contact_id)).first()
+        profile = (
+            ContactCoachingProfile.objects
+            .filter(tenant_id=client_id, contact_id=int(contact_id))
+            .select_related("tenant")
+            .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            .first()
+        )
 
         return Response(
             {
@@ -2026,6 +1945,36 @@ class PublicClientPageStepDetailView(APIView):
     permission_classes = [AllowAny]
     authentication_classes: tuple = ()
 
+    def get(self, request, client_id: int, step_id: str):
+        client_exists = Client.objects.filter(id=client_id).exists()
+        if not client_exists:
+            raise Http404("Клиент не найден")
+
+        contact_id = _resolve_coaching_contact_id_for_request(request, client_id)
+        if contact_id is None or contact_id <= 0:
+            return Response(
+                {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть задания."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        profile = (
+            ContactCoachingProfile.objects
+            .filter(tenant_id=client_id, contact_id=int(contact_id))
+            .select_related("tenant")
+            .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            .first()
+        )
+        if profile is None:
+            return Response({"detail": "Шаг не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+        task = coaching_task_queryset(contact_id=int(contact_id)).filter(id=step_id).first()
+        if task is None:
+            return Response({"detail": "Шаг не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+        goal_id = str(task.goal_id or "")
+        goal_title = next((goal_display_title(goal) for goal in profile_goal_rows(profile) if str(goal.public_id or "") == goal_id), "")
+        return Response(serialize_coaching_step(task, tenant_timezone=profile.tenant.timezone, goal_title=goal_title))
+
     def patch(self, request, client_id: int, step_id: str):
         client_exists = Client.objects.filter(id=client_id).exists()
         if not client_exists:
@@ -2038,60 +1987,106 @@ class PublicClientPageStepDetailView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        if "done" not in request.data:
-            return Response({"detail": "Поле done обязательно."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = CoachingGoalStepUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not serializer.validated_data:
+            return Response({"detail": "Нет данных для обновления."}, status=status.HTTP_400_BAD_REQUEST)
 
-        raw_done = request.data.get("done")
-        if isinstance(raw_done, bool):
-            done = raw_done
-        elif str(raw_done).strip().lower() in {"1", "true", "yes"}:
-            done = True
-        elif str(raw_done).strip().lower() in {"0", "false", "no"}:
-            done = False
-        else:
-            return Response({"detail": "Некорректный done."}, status=status.HTTP_400_BAD_REQUEST)
-
-        profile = ContactCoachingProfile.objects.filter(tenant_id=client_id, contact_id=int(contact_id)).first()
+        profile = (
+            ContactCoachingProfile.objects
+            .filter(tenant_id=client_id, contact_id=int(contact_id))
+            .select_related("tenant")
+            .prefetch_related("goal_rows__competency_links", "goal_rows__group")
+            .first()
+        )
         if profile is None:
             return Response({"detail": "Шаг не найден."}, status=status.HTTP_404_NOT_FOUND)
+        task = coaching_task_queryset(contact_id=int(contact_id)).filter(id=step_id).first()
+        if task is None:
+            return Response({"detail": "Шаг не найден."}, status=status.HTTP_404_NOT_FOUND)
+        goal_id = str(task.goal_id or "")
+        goal_title = next((goal_display_title(goal) for goal in profile_goal_rows(profile) if str(goal.public_id or "") == goal_id), "")
+        validated = serializer.validated_data
+        history_note: str | None = None
+        status_value: str | None = None
+        done_at_value: datetime | None = None
 
-        goals = list(profile.goals or [])
-        matched_payload: dict | None = None
-        step_found = False
-        for goal_index, goal in enumerate(goals):
-            if not isinstance(goal, dict):
-                continue
-            steps = list(goal.get("steps") or [])
-            for step_index, step in enumerate(steps):
-                if not isinstance(step, dict) or str(step.get("id") or "") != step_id:
-                    continue
-                next_step = {**step, "done": done, "doneAt": timezone.now().isoformat() if done else ""}
-                steps[step_index] = next_step
-                next_goal = {**goal, "steps": steps}
-                goals[goal_index] = next_goal
-                matched_payload = {
-                    "id": str(next_step.get("id") or ""),
-                    "text": str(next_step.get("text") or ""),
-                    "done": bool(next_step.get("done")),
-                    "isMilestone": bool(next_step.get("isMilestone")),
-                    "milestoneNote": str(next_step.get("milestoneNote") or ""),
-                    "doneAt": str(next_step.get("doneAt") or "").strip() or None,
-                    "dueDate": str(next_step.get("dueDate") or "").strip() or None,
-                    "goalId": str(next_goal.get("id") or ""),
-                    "goalTitle": str(next_step.get("goalTitle") or next_goal.get("title") or ""),
-                    "clientId": int(profile.contact_id),
-                }
-                step_found = True
-                break
-            if step_found:
-                break
+        if "done" in validated:
+            done = bool(validated["done"])
+            status_value = "done" if done else "open"
+            done_at_value = timezone.now() if done else None
+            history_note = CLIENT_DONE_HISTORY_NOTE if done else CLIENT_REOPEN_HISTORY_NOTE
+        elif any(field in validated for field in ("text", "dueDate", "isMilestone", "milestoneNote")):
+            history_note = CLIENT_EDIT_HISTORY_NOTE
 
-        if not step_found or matched_payload is None:
+        updated_task = update_coaching_task(
+            task,
+            tenant_timezone=profile.tenant.timezone,
+            changes=CoachingTaskUpdate(
+                title=validated.get("text") if "text" in validated else None,
+                due_date=validated.get("dueDate") if "dueDate" in validated else None,
+                is_milestone=validated.get("isMilestone") if "isMilestone" in validated else None,
+                milestone_note=validated.get("milestoneNote") if "milestoneNote" in validated else None,
+                status=status_value,
+                done_at=done_at_value,
+                history_note=history_note,
+            ),
+        )
+        return Response(serialize_coaching_step(updated_task, tenant_timezone=profile.tenant.timezone, goal_title=goal_title))
+
+
+class PublicClientPageStepHistoryView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def get(self, request, client_id: int, step_id: str):
+        client_exists = Client.objects.filter(id=client_id).exists()
+        if not client_exists:
+            raise Http404("Клиент не найден")
+
+        contact_id = _resolve_coaching_contact_id_for_request(request, client_id)
+        if contact_id is None or contact_id <= 0:
+            return Response(
+                {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть задания."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        task = coaching_task_queryset(contact_id=int(contact_id)).filter(id=step_id).first()
+        if task is None:
             return Response({"detail": "Шаг не найден."}, status=status.HTTP_404_NOT_FOUND)
 
-        profile.goals = goals
-        profile.save()
-        return Response(matched_payload)
+        entries = task.history_entries.order_by("created_at", "id")
+        serializer = CRMTaskHistorySerializer(entries, many=True)
+        return Response(serializer.data)
+
+    def post(self, request, client_id: int, step_id: str):
+        client_exists = Client.objects.filter(id=client_id).exists()
+        if not client_exists:
+            raise Http404("Клиент не найден")
+
+        contact_id = _resolve_coaching_contact_id_for_request(request, client_id)
+        if contact_id is None or contact_id <= 0:
+            return Response(
+                {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть задания."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        task = coaching_task_queryset(contact_id=int(contact_id)).filter(id=step_id).first()
+        if task is None:
+            return Response({"detail": "Шаг не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+        note = str(request.data.get("note") or "").strip()
+        if not note:
+            return Response({"detail": "Комментарий не может быть пустым."}, status=status.HTTP_400_BAD_REQUEST)
+
+        entry = CRMTaskHistory.objects.create(
+            task=task,
+            note=note,
+            status=task.status,
+            created_by=-int(contact_id),
+        )
+        serializer = CRMTaskHistorySerializer(entry)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class PublicClientPageBuyProductView(APIView):

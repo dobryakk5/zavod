@@ -899,12 +899,17 @@ class CRMTask(models.Model):
         TelegramTask, on_delete=models.SET_NULL, db_column="level_id",
         related_name="crm_tasks", blank=True, null=True,
     )
+    source = models.CharField(max_length=32, default="operator")
     contact_id = models.IntegerField(blank=True, null=True)
+    goal_id = models.CharField(max_length=128, blank=True, null=True)
     title = models.TextField()
     description = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, default="open")
     priority = models.IntegerField(default=2)
     due_at = models.DateTimeField(blank=True, null=True)
+    is_milestone = models.BooleanField(default=False)
+    milestone_note = models.TextField(blank=True, null=True)
+    done_at = models.DateTimeField(blank=True, null=True)
     created_by = models.IntegerField(default=0)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(default=timezone.now)

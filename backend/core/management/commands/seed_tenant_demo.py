@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 
@@ -11,7 +12,11 @@ from django.utils import timezone
 from core.models import (
     Client,
     ClientProduct,
+    CoachingGoal,
+    CoachingGoalCompetency,
     ContactCoachingProfile,
+    CRMTask,
+    CRMTaskHistory,
     MapContact,
     MapContactTag,
     MapCRMCategory,
@@ -273,18 +278,6 @@ class Command(BaseCommand):
 
         goals = []
         for goal_index, goal in enumerate(spec.goals, start=1):
-            steps = []
-            for step_index, step in enumerate(goal["steps"], start=1):
-                steps.append(
-                    {
-                        "id": f"{spec.key}-goal-{goal_index}-step-{step_index}",
-                        "text": step["text"],
-                        "done": bool(step.get("done")),
-                        "isMilestone": bool(step.get("isMilestone")),
-                        "milestoneNote": step.get("milestoneNote") or "",
-                        "doneAt": step.get("doneAt") or "",
-                    }
-                )
             goals.append(
                 {
                     "id": f"{spec.key}-goal-{goal_index}",
@@ -301,7 +294,7 @@ class Command(BaseCommand):
                         }
                         for link in goal["competencyLinks"]
                     ],
-                    "steps": steps,
+                    "steps": goal["steps"],
                     "createdAt": (now - timedelta(days=80 - (index * 9) - (goal_index * 6))).isoformat(),
                 }
             )
@@ -369,11 +362,88 @@ class Command(BaseCommand):
                 "intention": spec.intention,
                 "wheel": wheel,
                 "competencies": competencies,
-                "goals": goals,
-                "milestones": milestones,
                 "sessions": sessions,
             },
         )
+        profile = ContactCoachingProfile.objects.get(tenant_id=tenant_id, contact_id=contact_id)
+        CoachingGoal.objects.filter(profile=profile, goal_type=CoachingGoal.TYPE_PERSONAL).delete()
+        CRMTask.objects.filter(source="coaching", contact_id=contact_id).delete()
+
+        for goal in goals:
+            goal_row = CoachingGoal.objects.create(
+                profile=profile,
+                public_id=str(goal["id"]),
+                goal_type=CoachingGoal.TYPE_PERSONAL,
+                title=str(goal["title"]),
+                progress=int(goal["progress"]),
+                horizon=str(goal["horizon"]),
+                status=str(goal["status"]),
+                sort_order=int(goal["sortOrder"]),
+                created_at=datetime.fromisoformat(str(goal["createdAt"]).replace("Z", "+00:00")),
+            )
+            CoachingGoalCompetency.objects.bulk_create(
+                [
+                    CoachingGoalCompetency(
+                        goal=goal_row,
+                        competency_id=str(link["competencyId"]),
+                        competency_name=str(link["competencyName"]),
+                        weight=float(link["weight"]),
+                        sort_order=link_index,
+                    )
+                    for link_index, link in enumerate(goal["competencyLinks"])
+                ]
+            )
+            for step in goal["steps"]:
+                done_at = step.get("doneAt")
+                done_at_value = datetime.fromisoformat(str(done_at).replace("Z", "+00:00")) if done_at else None
+                task = CRMTask.objects.create(
+                    source="coaching",
+                    contact_id=contact_id,
+                    goal_id=goal_row.public_id,
+                    title=str(step["text"]),
+                    description=None,
+                    status="done" if step.get("done") else "open",
+                    priority=2,
+                    due_at=None,
+                    is_milestone=bool(step.get("isMilestone")),
+                    milestone_note=str(step.get("milestoneNote") or ""),
+                    done_at=done_at_value,
+                    created_by=0,
+                    created_at=done_at_value or now,
+                    updated_at=done_at_value or now,
+                )
+                CRMTaskHistory.objects.create(
+                    task=task,
+                    note="Создано коучем",
+                    status=task.status,
+                    created_by=0,
+                    created_at=task.created_at,
+                )
+        for milestone in milestones:
+            created_at = datetime.fromisoformat(str(milestone["createdAt"]).replace("Z", "+00:00"))
+            task = CRMTask.objects.create(
+                source="coaching",
+                contact_id=contact_id,
+                goal_id=str(milestone.get("goalId") or "") or None,
+                title=str(milestone["text"]),
+                description=None,
+                status="done",
+                priority=2,
+                due_at=None,
+                is_milestone=True,
+                milestone_note=str(milestone.get("note") or ""),
+                done_at=created_at,
+                created_by=0,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+            CRMTaskHistory.objects.create(
+                task=task,
+                note="Создано коучем",
+                status=task.status,
+                created_by=0,
+                created_at=created_at,
+            )
 
     def _seed_crm_notes(self, *, contact_id: int, notes_items: list[tuple[str, str, bool]]) -> None:
         for title, content, is_important in notes_items:

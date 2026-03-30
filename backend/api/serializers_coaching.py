@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from .coaching_goals import GROUP_GOAL_ID_PREFIX
+
 
 class CoachingCompetencySerializer(serializers.Serializer):
     id = serializers.CharField(max_length=128)
@@ -39,6 +41,7 @@ class CoachingGoalStepUpdateSerializer(serializers.Serializer):
     dueDate = serializers.CharField(allow_blank=True, required=False)
     done = serializers.BooleanField(required=False)
     isMilestone = serializers.BooleanField(required=False)
+    milestoneNote = serializers.CharField(allow_blank=True, required=False)
 
 
 class CoachingGoalEditSerializer(serializers.Serializer):
@@ -50,6 +53,12 @@ class CoachingGoalEditSerializer(serializers.Serializer):
     competencyLinks = CoachingGoalCompetencyLinkSerializer(many=True, required=False, default=list)
     steps = CoachingGoalStepSerializer(many=True, required=False, default=list)
     createdAt = serializers.CharField(allow_blank=True, required=False, default="")
+
+    def validate_id(self, value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized.startswith(GROUP_GOAL_ID_PREFIX):
+            raise serializers.ValidationError("Префикс group- зарезервирован для системных групповых целей.")
+        return normalized
 
 
 class CoachingMilestoneSerializer(serializers.Serializer):

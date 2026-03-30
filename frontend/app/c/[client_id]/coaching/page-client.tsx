@@ -35,6 +35,14 @@ export default function CoachingPortalPage({
   const rawContactId = (searchParams.get('contact_id') || '').trim();
   const pageContactId = rawContactId ? Number(rawContactId) : null;
   const resolvedContactId = pageContactId && Number.isFinite(pageContactId) && pageContactId > 0 ? pageContactId : null;
+  const stepHref = (stepId: string) => {
+    const params = new URLSearchParams();
+    if (resolvedContactId) {
+      params.set('contact_id', String(resolvedContactId));
+    }
+    const query = params.toString();
+    return `/c/${pageClientId}/coaching/steps/${stepId}${query ? `?${query}` : ''}`;
+  };
   const backPath = useCustomDomainPaths
     ? '/'
     : resolvedContactId
@@ -265,6 +273,7 @@ export default function CoachingPortalPage({
               key={goal.id}
               goal={goal}
               completing={completing}
+              buildStepHref={stepHref}
               onToggleStep={handleToggleStep}
             />
           ))}
@@ -333,10 +342,12 @@ export default function CoachingPortalPage({
 function GoalCard({
   goal,
   completing,
+  buildStepHref,
   onToggleStep,
 }: {
   goal: CoachGoalTreeNode;
   completing: string | null;
+  buildStepHref: (stepId: string) => string;
   onToggleStep: (goalId: string, step: CoachGoalStep) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -376,19 +387,18 @@ function GoalCard({
           {goal.steps.map((step) => {
             const isOverdue = !step.done && Boolean(step.dueDate) && new Date(step.dueDate!).getTime() < Date.now();
             return (
-              <button
+              <div
                 key={step.id}
-                type="button"
-                onClick={() => void onToggleStep(goal.id, step)}
-                disabled={completing === step.id}
-                className={`flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors disabled:cursor-wait ${
-                  step.done
-                    ? 'bg-[#f5f4f0] opacity-70'
-                    : 'hover:bg-[#f5f4f0]'
+                className={`flex items-start gap-3 rounded-lg px-3 py-2.5 transition-colors ${
+                  step.done ? 'bg-[#f5f4f0] opacity-70' : 'hover:bg-[#f5f4f0]'
                 }`}
               >
-                <div
-                  className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                <button
+                  type="button"
+                  onClick={() => void onToggleStep(goal.id, step)}
+                  disabled={completing === step.id}
+                  aria-label={step.done ? `Вернуть шаг ${step.text} в работу` : `Отметить шаг ${step.text} выполненным`}
+                  className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors disabled:cursor-wait ${
                     step.done
                       ? 'border-[#1D9E75] bg-[#1D9E75]'
                       : 'border-[#d3d1c7] hover:border-[#1D9E75]'
@@ -399,12 +409,15 @@ function GoalCard({
                       <path d="M2 5l2.5 2.5L8 3" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round" />
                     </svg>
                   ) : null}
-                </div>
+                </button>
 
                 <div className="min-w-0 flex-1">
-                  <p className={`text-[12px] leading-relaxed ${step.done ? 'text-[#73726c] line-through' : 'text-[#1a1a18]'}`}>
+                  <Link
+                    href={buildStepHref(step.id)}
+                    className={`block text-[12px] leading-relaxed hover:underline ${step.done ? 'text-[#73726c] line-through' : 'text-[#1a1a18]'}`}
+                  >
                     {step.text}
-                  </p>
+                  </Link>
                   {step.dueDate ? (
                     <p className={`mt-0.5 text-[10px] ${
                       step.done
@@ -423,7 +436,7 @@ function GoalCard({
                 {step.isMilestone && !step.done ? (
                   <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#EF9F27]" />
                 ) : null}
-              </button>
+              </div>
             );
           })}
         </div>

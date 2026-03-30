@@ -1,20 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ApiError, apiFetch } from '@/lib/api';
-import type { CoachGoalStep } from '@/lib/api/coaching';
+import { ApiError } from '@/lib/api';
+import { coachingApi, type CoachGoalStep } from '@/lib/api/coaching';
 
 type StepsByGoal = {
   goalId: string;
   goalTitle: string;
   steps: CoachGoalStep[];
-};
-
-type PublicStepsResponse = {
-  contact_id?: number;
-  items?: CoachGoalStep[];
 };
 
 type PublicTasksPageClientProps = {
@@ -27,8 +22,16 @@ export default function PublicTasksPage({
   useCustomDomainPaths = false,
 }: PublicTasksPageClientProps = {}) {
   const { client_id: rawClientId } = useParams<{ client_id?: string }>();
+  const searchParams = useSearchParams();
   const pageClientId = resolvedClientId ?? Number(rawClientId);
-  const publicRootPath = useCustomDomainPaths ? '/' : `/c/${pageClientId}`;
+  const rawContactId = (searchParams.get('contact_id') || '').trim();
+  const pageContactId = rawContactId ? Number(rawContactId) : null;
+  const resolvedContactId = pageContactId && Number.isFinite(pageContactId) && pageContactId > 0 ? pageContactId : null;
+  const rootParams = new URLSearchParams();
+  if (resolvedContactId) {
+    rootParams.set('contact_id', String(resolvedContactId));
+  }
+  const publicRootPath = useCustomDomainPaths ? '/' : `/c/${pageClientId}${rootParams.toString() ? `?${rootParams.toString()}` : ''}`;
 
   const [steps, setSteps] = useState<CoachGoalStep[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,8 +50,7 @@ export default function PublicTasksPage({
       setLoading(true);
       setError(null);
       try {
-        const data = await apiFetch<PublicStepsResponse | CoachGoalStep[]>(`/public/client-page/${pageClientId}/steps/`);
-        const items = Array.isArray(data) ? data : data.items ?? [];
+        const items = await coachingApi.getPublicClientSteps(pageClientId, undefined, { contactId: resolvedContactId });
         setSteps(items);
       } catch (err) {
         if (err instanceof ApiError && err.status === 404) {
@@ -64,7 +66,7 @@ export default function PublicTasksPage({
     };
 
     void load();
-  }, [pageClientId]);
+  }, [pageClientId, resolvedContactId]);
 
   async function handleToggle(step: CoachGoalStep) {
     if (completing) {
@@ -73,9 +75,8 @@ export default function PublicTasksPage({
 
     setCompleting(step.id);
     try {
-      const updated = await apiFetch<CoachGoalStep>(`/public/client-page/${pageClientId}/steps/${step.id}/`, {
-        method: 'PATCH',
-        body: { done: !step.done },
+      const updated = await coachingApi.updateClientCoachingStep(pageClientId, step.id, !step.done, {
+        contactId: resolvedContactId,
       });
       setSteps((prev) => prev.map((item) => (item.id === step.id ? { ...item, ...updated } : item)));
     } catch {
@@ -83,6 +84,15 @@ export default function PublicTasksPage({
     } finally {
       setCompleting(null);
     }
+  }
+
+  function buildStepHref(stepId: string) {
+    const params = new URLSearchParams();
+    params.set('from', 'tasks');
+    if (resolvedContactId) {
+      params.set('contact_id', String(resolvedContactId));
+    }
+    return `/c/${pageClientId}/coaching/steps/${stepId}?${params.toString()}`;
   }
 
   if (loading) {
@@ -184,17 +194,18 @@ export default function PublicTasksPage({
                 {group.steps.map((step) => {
                   const isOverdue = !step.done && step.dueDate && new Date(step.dueDate).getTime() < Date.now();
                   return (
-                    <button
+                    <div
                       key={step.id}
-                      type="button"
-                      onClick={() => void handleToggle(step)}
-                      disabled={completing === step.id}
-                      className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left transition-colors disabled:cursor-wait ${
+                      className={`flex items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${
                         step.done ? 'border-[#e0ddd6] bg-white opacity-60' : 'border-[#e0ddd6] bg-white hover:border-[#b4b2a9]'
                       }`}
                     >
-                      <div
-                        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                      <button
+                        type="button"
+                        onClick={() => void handleToggle(step)}
+                        disabled={completing === step.id}
+                        aria-label={step.done ? `Вернуть шаг ${step.text} в работу` : `Отметить шаг ${step.text} выполненным`}
+                        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors disabled:cursor-wait ${
                           step.done ? 'border-[#1D9E75] bg-[#1D9E75]' : 'border-[#d3d1c7] hover:border-[#1D9E75]'
                         }`}
                       >
@@ -203,11 +214,14 @@ export default function PublicTasksPage({
                             <path d="M2 5l2.5 2.5L8 3" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round" />
                           </svg>
                         ) : null}
-                      </div>
+                      </button>
                       <div className="min-w-0 flex-1">
-                        <p className={`text-[13px] leading-relaxed ${step.done ? 'text-[#73726c] line-through' : 'text-[#1a1a18]'}`}>
+                        <Link
+                          href={buildStepHref(step.id)}
+                          className={`block text-[13px] leading-relaxed hover:underline ${step.done ? 'text-[#73726c] line-through' : 'text-[#1a1a18]'}`}
+                        >
                           {step.text}
-                        </p>
+                        </Link>
                         {step.dueDate ? (
                           <p className={`mt-0.5 text-[11px] ${step.done ? 'text-[#b4b2a9]' : isOverdue ? 'font-medium text-red-500' : 'text-[#73726c]'}`}>
                             {isOverdue ? 'Просрочено · ' : 'До '}
@@ -220,7 +234,7 @@ export default function PublicTasksPage({
                           ★ milestone
                         </div>
                       ) : null}
-                    </button>
+                    </div>
                   );
                 })}
               </div>

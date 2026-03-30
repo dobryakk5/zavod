@@ -5,6 +5,7 @@ from django.core.management import call_command
 
 from core.models import (
     Client,
+    CoachingGoal,
     ContactCoachingProfile,
     MapContact,
     MapCRMDeal,
@@ -37,7 +38,10 @@ def test_seed_tenant_demo_command_creates_idempotent_demo_dataset():
     assert MapCRMNote.objects.filter(contact_id__in=contact_ids).count() >= 5
 
     avg_progresses = sorted(
-        round(sum(int(goal.get("progress") or 0) for goal in (profile.goals or [])) / max(len(profile.goals or []), 1))
+        round(
+            sum(goal.progress for goal in CoachingGoal.objects.filter(profile=profile))
+            / max(CoachingGoal.objects.filter(profile=profile).count(), 1)
+        )
         for profile in ContactCoachingProfile.objects.filter(tenant_id=tenant.id)
     )
     assert avg_progresses[0] < avg_progresses[-1]

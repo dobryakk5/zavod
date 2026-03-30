@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.utils import timezone
 
 
 class ContactCoachingProfile(models.Model):
@@ -34,6 +35,95 @@ class ContactCoachingProfile(models.Model):
 
     def __str__(self) -> str:
         return f"tenant={self.tenant_id} contact={self.contact_id}"
+
+
+class CoachingGoal(models.Model):
+    TYPE_PERSONAL = "personal"
+    TYPE_GROUP = "group"
+    TYPE_CHOICES = (
+        (TYPE_PERSONAL, "Personal"),
+        (TYPE_GROUP, "Group"),
+    )
+
+    HORIZON_YEAR = "year"
+    HORIZON_QUARTER = "quarter"
+    HORIZON_MONTH = "month"
+    HORIZON_CHOICES = (
+        (HORIZON_YEAR, "Year"),
+        (HORIZON_QUARTER, "Quarter"),
+        (HORIZON_MONTH, "Month"),
+    )
+
+    STATUS_ACTIVE = "active"
+    STATUS_PAUSED = "paused"
+    STATUS_ACHIEVED = "achieved"
+    STATUS_REVISED = "revised"
+    STATUS_CHOICES = (
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_PAUSED, "Paused"),
+        (STATUS_ACHIEVED, "Achieved"),
+        (STATUS_REVISED, "Revised"),
+    )
+
+    profile = models.ForeignKey(
+        "core.ContactCoachingProfile",
+        on_delete=models.CASCADE,
+        related_name="goal_rows",
+    )
+    public_id = models.CharField(max_length=128)
+    goal_type = models.CharField(max_length=16, choices=TYPE_CHOICES, default=TYPE_PERSONAL)
+    title = models.CharField(max_length=255, blank=True, default="")
+    progress = models.PositiveSmallIntegerField(default=0)
+    horizon = models.CharField(max_length=16, choices=HORIZON_CHOICES, default=HORIZON_QUARTER)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    sort_order = models.IntegerField(default=0)
+    group = models.ForeignKey(
+        "core.CoachGroup",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="coaching_goals",
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("profile", "public_id"),
+                name="uniq_coaching_goal_profile_public_id",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("profile", "sort_order", "id"), name="idx_coach_goal_profile_sort"),
+            models.Index(fields=("profile", "goal_type"), name="idx_coach_goal_profile_type"),
+            models.Index(fields=("group",), name="idx_coach_goal_group"),
+        ]
+        ordering = ("sort_order", "created_at", "id")
+
+    def __str__(self) -> str:
+        return f"profile={self.profile_id} goal={self.public_id}"
+
+
+class CoachingGoalCompetency(models.Model):
+    goal = models.ForeignKey(
+        "core.CoachingGoal",
+        on_delete=models.CASCADE,
+        related_name="competency_links",
+    )
+    competency_id = models.CharField(max_length=128)
+    competency_name = models.CharField(max_length=255, blank=True, default="")
+    weight = models.FloatField(default=0)
+    sort_order = models.IntegerField(default=0)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("goal", "sort_order", "id"), name="idx_coach_goal_comp_goal_sort"),
+        ]
+        ordering = ("sort_order", "id")
+
+    def __str__(self) -> str:
+        return f"goal={self.goal_id} competency={self.competency_id}"
 
 
 class CoachGroup(models.Model):

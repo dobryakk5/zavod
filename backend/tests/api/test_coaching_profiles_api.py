@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from core.models import (
     Client,
+    CRMTask,
+    CRMTaskHistory,
     CoachGroup,
     CoachGroupTask,
+    CoachingGoal,
+    CoachingGoalCompetency,
     ContactCoachingProfile,
     InviteLink,
     MapContact,
@@ -21,6 +27,61 @@ from core.models import (
 )
 
 User = get_user_model()
+
+
+def create_coaching_crm_task(
+    *,
+    contact_id: int,
+    goal_id: str | None = None,
+    title: str,
+    due_date: str | None = None,
+    status: str = "open",
+    created_at: datetime | None = None,
+    done_at: datetime | None = None,
+    is_milestone: bool = False,
+    milestone_note: str = "",
+) -> CRMTask:
+    due_at = None
+    if due_date:
+        due_at = timezone.make_aware(datetime.combine(datetime.fromisoformat(due_date).date(), time(hour=12, minute=0)))
+    created_at_value = created_at or timezone.now()
+    return CRMTask.objects.create(
+        source="coaching",
+        contact_id=contact_id,
+        goal_id=goal_id or None,
+        title=title,
+        description=None,
+        status=status,
+        priority=2,
+        due_at=due_at,
+        is_milestone=is_milestone,
+        milestone_note=milestone_note,
+        done_at=done_at,
+        created_by=0,
+        created_at=created_at_value,
+        updated_at=done_at or created_at_value,
+    )
+
+
+def create_coaching_milestone_task(
+    *,
+    contact_id: int,
+    text: str,
+    goal_id: str | None = None,
+    note: str = "",
+    created_at: datetime | None = None,
+) -> CRMTask:
+    created_at_value = created_at or timezone.now()
+    return create_coaching_crm_task(
+        contact_id=contact_id,
+        goal_id=goal_id,
+        title=text,
+        status="done",
+        created_at=created_at_value,
+        done_at=created_at_value,
+        is_milestone=True,
+        milestone_note=note,
+    )
 
 
 @pytest.fixture
@@ -93,6 +154,84 @@ def portal_api_client(portal_user):
     client = APIClient()
     client.force_authenticate(user=portal_user)
     return client
+
+
+@pytest.mark.django_db
+def test_crm_tasks_schema_supports_coaching_metadata():
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'map' AND table_name = 'crm_tasks'
+            """
+        )
+        columns = {row[0] for row in cursor.fetchall()}
+
+        cursor.execute(
+            """
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = 'map' AND tablename = 'crm_tasks'
+            """
+        )
+        indexes = {row[0] for row in cursor.fetchall()}
+
+        cursor.execute(
+            """
+            INSERT INTO map.crm_tasks (title, status, priority, created_by, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, NOW(), NOW())
+            RETURNING id, source
+            """,
+            ["schema test task", "open", 2, 0],
+        )
+        inserted_id, source = cursor.fetchone()
+
+    assert {"source", "goal_id", "is_milestone", "milestone_note", "done_at"}.issubset(columns)
+    assert "idx_crm_tasks_contact_source" in indexes
+    assert "idx_crm_tasks_source_goal" in indexes
+    assert source == "operator"
+    assert CRMTask.objects.filter(id=inserted_id, source="operator").exists()
+
+
+def create_coaching_goal(
+    profile: ContactCoachingProfile,
+    *,
+    goal_id: str,
+    title: str,
+    progress: int,
+    horizon: str = "quarter",
+    status: str = "active",
+    competency_links: list[dict] | None = None,
+    created_at: str = "2026-03-01T10:00:00+03:00",
+    goal_type: str = CoachingGoal.TYPE_PERSONAL,
+    group=None,
+) -> CoachingGoal:
+    goal = CoachingGoal.objects.create(
+        profile=profile,
+        public_id=goal_id,
+        goal_type=goal_type,
+        title=title,
+        progress=progress,
+        horizon=horizon,
+        status=status,
+        sort_order=profile.goal_rows.count(),
+        group=group,
+        created_at=datetime.fromisoformat(created_at),
+    )
+    CoachingGoalCompetency.objects.bulk_create(
+        [
+            CoachingGoalCompetency(
+                goal=goal,
+                competency_id=str(link["competencyId"]),
+                competency_name=str(link.get("competencyName") or ""),
+                weight=float(link["weight"]),
+                sort_order=index,
+            )
+            for index, link in enumerate(competency_links or [])
+        ]
+    )
+    return goal
 
 
 @pytest.mark.django_db
@@ -180,48 +319,39 @@ def test_removing_competency_creates_growth_milestone(coaching_api_client, coach
             "color": "#1D9E75",
         }
     ]
-    assert profile.milestones[0]["text"] == "Рост компетенции Грамматика на 28%"
-    assert profile.milestones[0]["goalId"] == ""
-    assert profile.milestones[0]["clientId"] == coaching_contact.id
+    milestone_task = CRMTask.objects.get(source="coaching", contact_id=int(coaching_contact.id), is_milestone=True)
+    assert milestone_task.title == "Рост компетенции Грамматика на 28%"
+    assert milestone_task.goal_id in {"", None}
+    assert milestone_task.status == "done"
 
 
 @pytest.mark.django_db
 def test_tasks_endpoint_returns_profile_tasks_with_goal_titles(coaching_api_client, coaching_tenant, coaching_contact):
-    yesterday = (timezone.now() - timedelta(days=1)).isoformat()
-    tomorrow = (timezone.now() + timedelta(days=1)).isoformat()
-    ContactCoachingProfile.objects.create(
+    yesterday = (timezone.localdate() - timedelta(days=1)).isoformat()
+    tomorrow = (timezone.localdate() + timedelta(days=1)).isoformat()
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Наладить границы в работе",
-                "progress": 30,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
-        tasks=[
-            {
-                "id": "task-1",
-                "text": "Подготовить фразы для отказа",
-                "goalId": "goal-1",
-                "status": "pending",
-                "dueDate": tomorrow,
-                "createdAt": "2026-03-20T10:00:00+03:00",
-            },
-            {
-                "id": "task-2",
-                "text": "Зафиксировать 3 сложные ситуации",
-                "goalId": "goal-1",
-                "status": "pending",
-                "dueDate": yesterday,
-                "createdAt": "2026-03-18T10:00:00+03:00",
-            },
-        ],
+    )
+    create_coaching_goal(
+        profile,
+        goal_id="goal-1",
+        title="Наладить границы в работе",
+        progress=30,
+    )
+    first_task = create_coaching_crm_task(
+        contact_id=int(coaching_contact.id),
+        goal_id="goal-1",
+        title="Подготовить фразы для отказа",
+        due_date=tomorrow,
+        created_at=timezone.make_aware(datetime(2026, 3, 20, 10, 0, 0)),
+    )
+    second_task = create_coaching_crm_task(
+        contact_id=int(coaching_contact.id),
+        goal_id="goal-1",
+        title="Зафиксировать 3 сложные ситуации",
+        due_date=yesterday,
+        created_at=timezone.make_aware(datetime(2026, 3, 18, 10, 0, 0)),
     )
 
     response = coaching_api_client.get(
@@ -230,29 +360,27 @@ def test_tasks_endpoint_returns_profile_tasks_with_goal_titles(coaching_api_clie
 
     assert response.status_code == 200, response.content
     payload = response.json()
-    assert payload[0]["id"] == "task-2"
+    assert payload[0]["id"] == str(second_task.id)
     assert payload[0]["status"] == "overdue"
     assert payload[0]["goalTitle"] == "Наладить границы в работе"
+    assert payload[1]["id"] == str(first_task.id)
     assert payload[1]["status"] == "pending"
 
 
 @pytest.mark.django_db
 def test_task_status_patch_marks_task_as_done(coaching_api_client, coaching_tenant, coaching_contact):
-    profile = ContactCoachingProfile.objects.create(
+    ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
-        tasks=[
-            {
-                "id": "task-1",
-                "text": "Подготовить тезисы",
-                "status": "pending",
-                "createdAt": "2026-03-20T10:00:00+03:00",
-            }
-        ],
+    )
+    task = create_coaching_crm_task(
+        contact_id=int(coaching_contact.id),
+        title="Подготовить тезисы",
+        created_at=timezone.make_aware(datetime(2026, 3, 20, 10, 0, 0)),
     )
 
     response = coaching_api_client.patch(
-        reverse("api:coaching-task-detail", args=["task-1"]),
+        reverse("api:coaching-task-detail", args=[task.id]),
         {"status": "done"},
         format="json",
     )
@@ -262,9 +390,10 @@ def test_task_status_patch_marks_task_as_done(coaching_api_client, coaching_tena
     assert payload["status"] == "done"
     assert payload["doneAt"]
 
-    profile.refresh_from_db()
-    assert profile.tasks[0]["status"] == "done"
-    assert profile.tasks[0]["doneAt"]
+    task.refresh_from_db()
+    assert task.status == "done"
+    assert task.done_at is not None
+    assert CRMTaskHistory.objects.filter(task=task, note="Коуч отметил задачу выполненной").exists()
 
 
 @pytest.mark.django_db
@@ -295,21 +424,15 @@ def test_coach_can_create_and_revoke_contact_invite_link(coaching_api_client, co
 
 @pytest.mark.django_db
 def test_goal_step_create_persists_due_date(coaching_api_client, coaching_tenant, coaching_contact):
-    ContactCoachingProfile.objects.create(
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Наладить границы в работе",
-                "progress": 30,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
+    )
+    create_coaching_goal(
+        profile,
+        goal_id="goal-1",
+        title="Наладить границы в работе",
+        progress=30,
     )
 
     response = coaching_api_client.post(
@@ -325,7 +448,11 @@ def test_goal_step_create_persists_due_date(coaching_api_client, coaching_tenant
     assert payload["goalId"] == "goal-1"
 
     profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
-    assert profile.goals[0]["steps"][0]["dueDate"] == "2026-04-01"
+    assert profile.goal_rows.filter(public_id="goal-1").exists()
+    task = CRMTask.objects.get(source="coaching", contact_id=int(coaching_contact.id), goal_id="goal-1")
+    assert task.title == "Подготовить 3 сценария ответа"
+    assert task.due_at is not None
+    assert CRMTaskHistory.objects.filter(task=task, note="Создано коучем").exists()
 
 
 @pytest.mark.django_db
@@ -337,45 +464,32 @@ def test_public_coaching_portal_returns_profile_only_after_invite_auth(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
     )
-    ContactCoachingProfile.objects.create(
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
         intention="Строить границы спокойно и последовательно",
         competencies=[
             {"id": "c1", "name": "Говорение", "score": 55, "startScore": 25, "color": "#1D9E75"},
         ],
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Наладить границы в работе",
-                "progress": 30,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [{"competencyId": "c1", "weight": 0.6}],
-                "steps": [
-                    {
-                        "id": "step-1",
-                        "text": "Подготовить фразы для отказа",
-                        "done": False,
-                        "isMilestone": False,
-                        "milestoneNote": "",
-                        "doneAt": "",
-                        "dueDate": "2026-04-02",
-                    }
-                ],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
-        milestones=[
-            {
-                "id": "ms-1",
-                "clientId": int(coaching_contact.id),
-                "goalId": "goal-1",
-                "text": "Первая уверенная граница",
-                "note": "",
-                "createdAt": "2026-03-10T10:00:00+03:00",
-            }
-        ],
+    )
+    create_coaching_goal(
+        profile,
+        goal_id="goal-1",
+        title="Наладить границы в работе",
+        progress=30,
+        competency_links=[{"competencyId": "c1", "competencyName": "Говорение", "weight": 0.6}],
+    )
+    create_coaching_crm_task(
+        contact_id=int(coaching_contact.id),
+        goal_id="goal-1",
+        title="Подготовить фразы для отказа",
+        due_date="2026-04-02",
+    )
+    create_coaching_milestone_task(
+        contact_id=int(coaching_contact.id),
+        goal_id="goal-1",
+        text="Первая уверенная граница",
+        created_at=datetime.fromisoformat("2026-03-10T10:00:00+03:00"),
     )
 
     client = APIClient()
@@ -403,6 +517,48 @@ def test_public_coaching_portal_returns_profile_only_after_invite_auth(
     assert payload["milestones"][0]["text"] == "Первая уверенная граница"
     invite.refresh_from_db()
     assert invite.used_at is not None
+
+
+@pytest.mark.django_db
+def test_milestones_endpoint_creates_done_milestone_task(
+    coaching_api_client,
+    coaching_tenant,
+    coaching_contact,
+):
+    profile = ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+    )
+    create_coaching_goal(profile, goal_id="goal-1", title="Наладить границы в работе", progress=30)
+
+    response = coaching_api_client.post(
+        reverse("api:coaching-contact-milestones", args=[coaching_contact.id]),
+        {
+            "goalId": "goal-1",
+            "text": "Первая уверенная граница",
+            "note": "Зафиксировано на сессии",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201, response.content
+    payload = response.json()
+    assert payload["goalId"] == "goal-1"
+    assert payload["text"] == "Первая уверенная граница"
+    assert payload["note"] == "Зафиксировано на сессии"
+    assert payload["createdAt"]
+
+    task = CRMTask.objects.get(source="coaching", contact_id=int(coaching_contact.id), is_milestone=True, goal_id="goal-1")
+    assert task.title == "Первая уверенная граница"
+    assert task.milestone_note == "Зафиксировано на сессии"
+    assert task.status == "done"
+    assert task.done_at is not None
+
+    list_response = coaching_api_client.get(
+        reverse("api:coaching-contact-milestones", args=[coaching_contact.id]),
+    )
+    assert list_response.status_code == 200, list_response.content
+    assert list_response.json()[0]["id"] == str(task.id)
 
 
 @pytest.mark.django_db
@@ -436,23 +592,12 @@ def test_public_coaching_portal_no_longer_resolves_contact_by_email_auth(
     portal_user.email = "anna@example.com"
     portal_user.save(update_fields=["email"])
 
-    ContactCoachingProfile.objects.create(
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
         intention="Спокойно отстаивать границы",
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Наладить границы в работе",
-                "progress": 30,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
     )
+    create_coaching_goal(profile, goal_id="goal-1", title="Наладить границы в работе", progress=30)
 
     page_response = portal_api_client.get(
         reverse("api:public-client-page", args=[coaching_tenant.id]),
@@ -474,23 +619,12 @@ def test_tenant_member_can_open_public_coaching_portal_with_contact_query(
     coaching_tenant,
     coaching_contact,
 ):
-    ContactCoachingProfile.objects.create(
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
         intention="Спокойно отстаивать границы",
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Наладить границы в работе",
-                "progress": 30,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
     )
+    create_coaching_goal(profile, goal_id="goal-1", title="Наладить границы в работе", progress=30)
 
     response = coaching_api_client.get(
         reverse("api:public-client-page-coaching", args=[coaching_tenant.id]),
@@ -514,31 +648,16 @@ def test_public_steps_endpoint_returns_goal_steps_and_allows_completion_after_in
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
     )
-    ContactCoachingProfile.objects.create(
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Наладить границы в работе",
-                "progress": 30,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [
-                    {
-                        "id": "step-1",
-                        "text": "Подготовить фразы для отказа",
-                        "done": False,
-                        "isMilestone": False,
-                        "milestoneNote": "",
-                        "doneAt": "",
-                        "dueDate": "2026-04-02",
-                    }
-                ],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
+    )
+    create_coaching_goal(profile, goal_id="goal-1", title="Наладить границы в работе", progress=30)
+    task = create_coaching_crm_task(
+        contact_id=int(coaching_contact.id),
+        goal_id="goal-1",
+        title="Подготовить фразы для отказа",
+        due_date="2026-04-02",
     )
 
     client = APIClient()
@@ -558,7 +677,7 @@ def test_public_steps_endpoint_returns_goal_steps_and_allows_completion_after_in
     assert list_payload["items"][0]["dueDate"] == "2026-04-02"
 
     patch_response = client.patch(
-        reverse("api:public-client-page-step-detail", args=[coaching_tenant.id, "step-1"]),
+        reverse("api:public-client-page-step-detail", args=[coaching_tenant.id, task.id]),
         {"done": True},
         format="json",
     )
@@ -568,9 +687,10 @@ def test_public_steps_endpoint_returns_goal_steps_and_allows_completion_after_in
     assert patch_payload["done"] is True
     assert patch_payload["doneAt"]
 
-    profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
-    assert profile.goals[0]["steps"][0]["done"] is True
-    assert profile.goals[0]["steps"][0]["doneAt"]
+    task.refresh_from_db()
+    assert task.status == "done"
+    assert task.done_at is not None
+    assert CRMTaskHistory.objects.filter(task=task, note="Клиент отметил задачу выполненной").exists()
 
 
 @pytest.mark.django_db
@@ -579,35 +699,20 @@ def test_tenant_member_can_complete_public_step_with_contact_query(
     coaching_tenant,
     coaching_contact,
 ):
-    ContactCoachingProfile.objects.create(
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Наладить границы в работе",
-                "progress": 30,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [
-                    {
-                        "id": "step-1",
-                        "text": "Подготовить фразы для отказа",
-                        "done": False,
-                        "isMilestone": False,
-                        "milestoneNote": "",
-                        "doneAt": "",
-                        "dueDate": "2026-04-02",
-                    }
-                ],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
+    )
+    create_coaching_goal(profile, goal_id="goal-1", title="Наладить границы в работе", progress=30)
+    task = create_coaching_crm_task(
+        contact_id=int(coaching_contact.id),
+        goal_id="goal-1",
+        title="Подготовить фразы для отказа",
+        due_date="2026-04-02",
     )
 
     patch_response = coaching_api_client.patch(
-        f"{reverse('api:public-client-page-step-detail', args=[coaching_tenant.id, 'step-1'])}?contact_id={coaching_contact.id}",
+        f"{reverse('api:public-client-page-step-detail', args=[coaching_tenant.id, task.id])}?contact_id={coaching_contact.id}",
         {"done": True},
         format="json",
     )
@@ -617,8 +722,111 @@ def test_tenant_member_can_complete_public_step_with_contact_query(
     assert patch_payload["done"] is True
     assert patch_payload["doneAt"]
 
-    profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
-    assert profile.goals[0]["steps"][0]["done"] is True
+    task.refresh_from_db()
+    assert task.status == "done"
+
+
+@pytest.mark.django_db
+def test_public_step_detail_allows_client_editing_fields_and_tracks_history_after_invite_auth(
+    coaching_tenant,
+    coaching_contact,
+):
+    invite = InviteLink.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+    )
+    profile = ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+    )
+    create_coaching_goal(profile, goal_id="goal-1", title="Наладить границы в работе", progress=30)
+    task = create_coaching_crm_task(
+        contact_id=int(coaching_contact.id),
+        goal_id="goal-1",
+        title="Подготовить фразы для отказа",
+        due_date="2026-04-02",
+    )
+
+    client = APIClient()
+    auth_response = client.post(
+        reverse("api:invite-auth", args=[invite.token]),
+        format="json",
+    )
+    assert auth_response.status_code == 200, auth_response.content
+
+    patch_response = client.patch(
+        reverse("api:public-client-page-step-detail", args=[coaching_tenant.id, task.id]),
+        {
+            "text": "Обновить формулировки отказа",
+            "dueDate": "2026-04-05",
+            "isMilestone": True,
+            "milestoneNote": "Проверить на следующей встрече",
+        },
+        format="json",
+    )
+
+    assert patch_response.status_code == 200, patch_response.content
+    patch_payload = patch_response.json()
+    assert patch_payload["text"] == "Обновить формулировки отказа"
+    assert patch_payload["dueDate"] == "2026-04-05"
+    assert patch_payload["isMilestone"] is True
+    assert patch_payload["milestoneNote"] == "Проверить на следующей встрече"
+
+    task.refresh_from_db()
+    assert task.title == "Обновить формулировки отказа"
+    assert task.is_milestone is True
+    assert task.milestone_note == "Проверить на следующей встрече"
+    assert task.status == "open"
+    assert CRMTaskHistory.objects.filter(task=task, note="Клиент обновил задачу", status="open").exists()
+
+
+@pytest.mark.django_db
+def test_public_step_history_endpoint_allows_client_comment_after_invite_auth(
+    coaching_tenant,
+    coaching_contact,
+):
+    invite = InviteLink.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+    )
+    profile = ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+    )
+    create_coaching_goal(profile, goal_id="goal-1", title="Наладить границы в работе", progress=30)
+    task = create_coaching_crm_task(
+        contact_id=int(coaching_contact.id),
+        goal_id="goal-1",
+        title="Подготовить фразы для отказа",
+        due_date="2026-04-02",
+    )
+
+    client = APIClient()
+    auth_response = client.post(
+        reverse("api:invite-auth", args=[invite.token]),
+        format="json",
+    )
+    assert auth_response.status_code == 200, auth_response.content
+
+    comment_response = client.post(
+        reverse("api:public-client-page-step-history", args=[coaching_tenant.id, task.id]),
+        {"note": "Хочу обсудить это на следующей встрече"},
+        format="json",
+    )
+
+    assert comment_response.status_code == 201, comment_response.content
+    comment_payload = comment_response.json()
+    assert comment_payload["note"] == "Хочу обсудить это на следующей встрече"
+    assert comment_payload["created_by"] == -int(coaching_contact.id)
+    assert comment_payload["status"] == "open"
+
+    list_response = client.get(
+        reverse("api:public-client-page-step-history", args=[coaching_tenant.id, task.id]),
+    )
+
+    assert list_response.status_code == 200, list_response.content
+    list_payload = list_response.json()
+    assert any(item["note"] == "Хочу обсудить это на следующей встрече" for item in list_payload)
 
 
 @pytest.mark.django_db
@@ -668,14 +876,15 @@ def test_goals_edit_is_persisted_and_list_endpoint_resolves_competency_names(
 
     assert response.status_code == 200, response.content
     profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
-    assert profile.goals[0]["competencyLinks"][0]["weight"] == pytest.approx(0.7)
+    goal = profile.goal_rows.get(public_id="goal-1")
+    assert goal.competency_links.order_by("sort_order", "id").first().weight == pytest.approx(0.7)
 
     edit_response = coaching_api_client.get(
         reverse("api:coaching-contact-goals-edit", args=[coaching_contact.id]),
     )
     assert edit_response.status_code == 200, edit_response.content
     assert edit_response.json()[0]["competencyLinks"][0]["weight"] == 70
-    assert edit_response.json()[0]["steps"][0]["text"] == "Составить план подготовки"
+    assert edit_response.json()[0]["steps"] == []
     assert edit_response.json()[0]["createdAt"] == "2026-03-01T10:00:00+03:00"
 
     goals_response = coaching_api_client.get(
@@ -691,41 +900,150 @@ def test_goals_edit_is_persisted_and_list_endpoint_resolves_competency_names(
 
 
 @pytest.mark.django_db
+def test_goals_edit_rejects_reserved_group_prefix(
+    coaching_api_client,
+    coaching_contact,
+):
+    response = coaching_api_client.put(
+        reverse("api:coaching-contact-goals-edit", args=[coaching_contact.id]),
+        [
+            {
+                "id": "group-42",
+                "title": "Недопустимая цель",
+                "progress": 10,
+                "horizon": "quarter",
+                "status": "active",
+                "competencyLinks": [],
+                "steps": [],
+                "createdAt": "2026-03-01T10:00:00+03:00",
+            }
+        ],
+        format="json",
+    )
+
+    assert response.status_code == 400, response.content
+    assert "group-" in str(response.json())
+
+
+@pytest.mark.django_db
+def test_goals_edit_removes_tasks_for_deleted_personal_goals(
+    coaching_api_client,
+    coaching_tenant,
+    coaching_contact,
+):
+    profile = ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+    )
+    create_coaching_goal(profile, goal_id="goal-1", title="Первая цель", progress=40)
+    create_coaching_goal(profile, goal_id="goal-2", title="Вторая цель", progress=25)
+    create_coaching_crm_task(contact_id=int(coaching_contact.id), goal_id="goal-1", title="Шаг первой цели")
+    removed_task = create_coaching_crm_task(contact_id=int(coaching_contact.id), goal_id="goal-2", title="Шаг второй цели")
+
+    response = coaching_api_client.put(
+        reverse("api:coaching-contact-goals-edit", args=[coaching_contact.id]),
+        [
+            {
+                "id": "goal-1",
+                "title": "Первая цель",
+                "progress": 40,
+                "horizon": "quarter",
+                "status": "active",
+                "competencyLinks": [],
+                "steps": [],
+                "createdAt": "2026-03-01T10:00:00+03:00",
+            }
+        ],
+        format="json",
+    )
+
+    assert response.status_code == 200, response.content
+    profile.refresh_from_db()
+    assert profile.goal_rows.filter(public_id="goal-1").exists()
+    assert not profile.goal_rows.filter(public_id="goal-2").exists()
+    assert CRMTask.objects.filter(id=removed_task.id).count() == 0
+    assert CRMTask.objects.filter(source="coaching", contact_id=int(coaching_contact.id), goal_id="goal-1").count() == 1
+
+
+@pytest.mark.django_db
+def test_goals_edit_get_avoids_n_plus_one_queries(
+    coaching_api_client,
+    coaching_tenant,
+    coaching_contact,
+):
+    profile = ContactCoachingProfile.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        competencies=[
+            {"id": "c1", "name": "Говорение", "score": 55, "startScore": 25, "color": "#1D9E75"},
+            {"id": "c2", "name": "Грамматика", "score": 48, "startScore": 20, "color": "#378ADD"},
+        ],
+    )
+    create_coaching_goal(
+        profile,
+        goal_id="goal-1",
+        title="Базовая цель",
+        progress=40,
+        competency_links=[
+            {"competencyId": "c1", "competencyName": "Говорение", "weight": 0.6},
+            {"competencyId": "c2", "competencyName": "Грамматика", "weight": 0.4},
+        ],
+    )
+    create_coaching_crm_task(contact_id=int(coaching_contact.id), goal_id="goal-1", title="Первый шаг")
+
+    endpoint = reverse("api:coaching-contact-goals-edit", args=[coaching_contact.id])
+    with CaptureQueriesContext(connection) as base_queries:
+        base_response = coaching_api_client.get(endpoint)
+
+    assert base_response.status_code == 200, base_response.content
+
+    for index in range(2, 6):
+        create_coaching_goal(
+            profile,
+            goal_id=f"goal-{index}",
+            title=f"Цель {index}",
+            progress=10 * index,
+            competency_links=[
+                {"competencyId": "c1", "competencyName": "Говорение", "weight": 0.5},
+                {"competencyId": "c2", "competencyName": "Грамматика", "weight": 0.5},
+            ],
+        )
+        create_coaching_crm_task(contact_id=int(coaching_contact.id), goal_id=f"goal-{index}", title=f"Шаг {index}")
+
+    with CaptureQueriesContext(connection) as expanded_queries:
+        expanded_response = coaching_api_client.get(endpoint)
+
+    assert expanded_response.status_code == 200, expanded_response.content
+    assert len(expanded_response.json()) == 5
+    assert len(expanded_queries) <= len(base_queries) + 1
+
+
+@pytest.mark.django_db
 def test_goal_step_patch_allows_editing_text_and_due_date(
     coaching_api_client,
     coaching_tenant,
     coaching_contact,
 ):
-    ContactCoachingProfile.objects.create(
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Наладить границы в работе",
-                "progress": 30,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [
-                    {
-                        "id": "step-1",
-                        "text": "Подготовить фразы для отказа",
-                        "done": False,
-                        "isMilestone": False,
-                        "milestoneNote": "",
-                        "doneAt": "",
-                        "dueDate": "2026-04-02",
-                    }
-                ],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
+    )
+    create_coaching_goal(profile, goal_id="goal-1", title="Наладить границы в работе", progress=30)
+    task = create_coaching_crm_task(
+        contact_id=int(coaching_contact.id),
+        goal_id="goal-1",
+        title="Подготовить фразы для отказа",
+        due_date="2026-04-02",
     )
 
     response = coaching_api_client.patch(
-        reverse("api:coaching-goal-step-detail", args=["goal-1", "step-1"]),
-        {"text": "Потренировать короткие ответы", "dueDate": "2026-04-08"},
+        reverse("api:coaching-goal-step-detail", args=["goal-1", task.id]),
+        {
+            "text": "Потренировать короткие ответы",
+            "dueDate": "2026-04-08",
+            "isMilestone": True,
+            "milestoneNote": "Ключевой шаг перед следующей сессией",
+        },
         format="json",
     )
 
@@ -733,10 +1051,15 @@ def test_goal_step_patch_allows_editing_text_and_due_date(
     payload = response.json()
     assert payload["steps"][0]["text"] == "Потренировать короткие ответы"
     assert payload["steps"][0]["dueDate"] == "2026-04-08"
+    assert payload["steps"][0]["isMilestone"] is True
+    assert payload["steps"][0]["milestoneNote"] == "Ключевой шаг перед следующей сессией"
 
-    profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=coaching_contact.id)
-    assert profile.goals[0]["steps"][0]["text"] == "Потренировать короткие ответы"
-    assert profile.goals[0]["steps"][0]["dueDate"] == "2026-04-08"
+    task.refresh_from_db()
+    assert task.title == "Потренировать короткие ответы"
+    assert task.due_at is not None
+    assert task.is_milestone is True
+    assert task.milestone_note == "Ключевой шаг перед следующей сессией"
+    assert CRMTaskHistory.objects.filter(task=task, note="Обновлено коучем").exists()
 
 
 @pytest.mark.django_db
@@ -748,20 +1071,15 @@ def test_goal_progress_patch_updates_goal_and_related_competencies(coaching_api_
             {"id": "c1", "name": "Говорение", "score": 50, "startScore": 25, "color": "#1D9E75"},
             {"id": "c2", "name": "Грамматика", "score": 40, "startScore": 20, "color": "#378ADD"},
         ],
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Уверенно отвечать устно",
-                "progress": 20,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [
-                    {"competencyId": "c1", "competencyName": "Говорение", "weight": 0.6},
-                    {"competencyId": "c2", "competencyName": "Грамматика", "weight": 0.4},
-                ],
-                "steps": [],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
+    )
+    create_coaching_goal(
+        profile,
+        goal_id="goal-1",
+        title="Уверенно отвечать устно",
+        progress=20,
+        competency_links=[
+            {"competencyId": "c1", "competencyName": "Говорение", "weight": 0.6},
+            {"competencyId": "c2", "competencyName": "Грамматика", "weight": 0.4},
         ],
     )
 
@@ -773,7 +1091,7 @@ def test_goal_progress_patch_updates_goal_and_related_competencies(coaching_api_
 
     assert response.status_code == 200, response.content
     profile.refresh_from_db()
-    assert profile.goals[0]["progress"] == 50
+    assert profile.goal_rows.get(public_id="goal-1").progress == 50
     assert profile.competencies[0]["score"] == 68
     assert profile.competencies[1]["score"] == 52
 
@@ -787,22 +1105,10 @@ def test_goal_progress_patch_updates_goal_and_related_competencies(coaching_api_
 
 @pytest.mark.django_db
 def test_contact_detail_returns_profile_summary(coaching_api_client, coaching_tenant, coaching_contact):
-    ContactCoachingProfile.objects.create(
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(coaching_contact.id),
         intention="Перестать откладывать сложные разговоры",
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Дойти до B1",
-                "progress": 60,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
         sessions=[
             {
                 "id": "sess-1",
@@ -814,6 +1120,7 @@ def test_contact_detail_returns_profile_summary(coaching_api_client, coaching_te
             }
         ],
     )
+    create_coaching_goal(profile, goal_id="goal-1", title="Дойти до B1", progress=60)
 
     response = coaching_api_client.get(
         reverse("api:coaching-contact-detail", args=[coaching_contact.id]),
@@ -971,38 +1278,9 @@ def test_coach_stats_returns_completed_tasks_for_last_30_days(
     anna = bind_contact_to_tenant(MapContact.objects.create(name="Анна Иванова", email="anna@example.com"))
     maria = bind_contact_to_tenant(MapContact.objects.create(name="Мария Петрова", email="maria@example.com"))
 
-    ContactCoachingProfile.objects.create(
+    anna_profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(anna.id),
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Прокачать уверенность",
-                "progress": 70,
-                "horizon": "month",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [
-                    {
-                        "id": "step-1",
-                        "text": "Сделать упражнение",
-                        "done": True,
-                        "isMilestone": False,
-                        "milestoneNote": "",
-                        "doneAt": (fixed_now - timedelta(days=3)).date().isoformat(),
-                    },
-                    {
-                        "id": "step-2",
-                        "text": "Подвести итоги недели",
-                        "done": True,
-                        "isMilestone": False,
-                        "milestoneNote": "",
-                        "doneAt": (fixed_now - timedelta(days=45)).date().isoformat(),
-                    },
-                ],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
         sessions=[
             {
                 "id": "sess-1",
@@ -1014,39 +1292,38 @@ def test_coach_stats_returns_completed_tasks_for_last_30_days(
             }
         ],
     )
-    ContactCoachingProfile.objects.create(
+    create_coaching_goal(anna_profile, goal_id="goal-1", title="Прокачать уверенность", progress=70, horizon="month")
+    create_coaching_crm_task(
+        contact_id=int(anna.id),
+        goal_id="goal-1",
+        title="Сделать упражнение",
+        status="done",
+        done_at=fixed_now - timedelta(days=3),
+    )
+    create_coaching_crm_task(
+        contact_id=int(anna.id),
+        goal_id="goal-1",
+        title="Подвести итоги недели",
+        status="done",
+        done_at=fixed_now - timedelta(days=45),
+    )
+    maria_profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(maria.id),
-        goals=[
-            {
-                "id": "goal-2",
-                "title": "Выстроить режим",
-                "progress": 50,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [
-                    {
-                        "id": "step-3",
-                        "text": "Ложиться спать до 23:00 пять дней",
-                        "done": True,
-                        "isMilestone": False,
-                        "milestoneNote": "",
-                        "doneAt": (fixed_now - timedelta(days=10)).date().isoformat(),
-                    },
-                    {
-                        "id": "step-4",
-                        "text": "Запланировать утренний ритуал",
-                        "done": False,
-                        "isMilestone": False,
-                        "milestoneNote": "",
-                        "doneAt": "",
-                    },
-                ],
-                "createdAt": "2026-03-05T10:00:00+03:00",
-            }
-        ],
         sessions=[],
+    )
+    create_coaching_goal(maria_profile, goal_id="goal-2", title="Выстроить режим", progress=50)
+    create_coaching_crm_task(
+        contact_id=int(maria.id),
+        goal_id="goal-2",
+        title="Ложиться спать до 23:00 пять дней",
+        status="done",
+        done_at=fixed_now - timedelta(days=10),
+    )
+    create_coaching_crm_task(
+        contact_id=int(maria.id),
+        goal_id="goal-2",
+        title="Запланировать утренний ритуал",
     )
 
     response = coaching_api_client.get(reverse("api:coach-stats"))
@@ -1077,15 +1354,6 @@ def test_coach_clients_returns_prioritized_client_statuses(
     ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(olga.id),
-        milestones=[
-            {
-                "id": "m1",
-                "clientId": int(olga.id),
-                "text": "Разговор с руководителем",
-                "note": "",
-                "createdAt": (fixed_now - timedelta(days=2)).isoformat(),
-            }
-        ],
         sessions=[
             {
                 "id": "sess-1",
@@ -1112,6 +1380,11 @@ def test_coach_clients_returns_prioritized_client_statuses(
                 "coachNotes": "",
             },
         ],
+    )
+    create_coaching_milestone_task(
+        contact_id=int(olga.id),
+        text="Разговор с руководителем",
+        created_at=fixed_now - timedelta(days=2),
     )
     ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
@@ -1142,15 +1415,11 @@ def test_coach_clients_returns_prioritized_client_statuses(
                 "coachNotes": "",
             },
         ],
-        milestones=[
-            {
-                "id": "m2",
-                "clientId": int(mihail.id),
-                "text": "Получил оффер",
-                "note": "",
-                "createdAt": (fixed_now - timedelta(days=1)).isoformat(),
-            }
-        ],
+    )
+    create_coaching_milestone_task(
+        contact_id=int(mihail.id),
+        text="Получил оффер",
+        created_at=fixed_now - timedelta(days=1),
     )
     ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
@@ -1235,22 +1504,11 @@ def test_coach_group_detail_returns_members_with_progress(
     group.members.create(contact_id=int(first_contact.id))
     group.members.create(contact_id=int(second_contact.id))
 
-    ContactCoachingProfile.objects.create(
+    profile = ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
         contact_id=int(first_contact.id),
-        goals=[
-            {
-                "id": "goal-1",
-                "title": "Уверенность в переговорах",
-                "progress": 60,
-                "horizon": "quarter",
-                "status": "active",
-                "competencyLinks": [],
-                "steps": [],
-                "createdAt": "2026-03-01T10:00:00+03:00",
-            }
-        ],
     )
+    create_coaching_goal(profile, goal_id="goal-1", title="Уверенность в переговорах", progress=60)
 
     response = coaching_api_client.get(reverse("api:coach-group-detail", args=[group.id]))
 
@@ -1290,16 +1548,20 @@ def test_group_task_creates_steps_for_all_members_and_counts_completion(
 
     first_profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=int(first_contact.id))
     second_profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=int(second_contact.id))
-    first_goal = first_profile.goals[0]
-    second_goal = second_profile.goals[0]
+    first_goal = first_profile.goal_rows.get(public_id=f"group-{group.id}")
+    second_goal = second_profile.goal_rows.get(public_id=f"group-{group.id}")
 
-    assert first_goal["id"] == f"group-{group.id}"
-    assert first_goal["steps"][0]["dueDate"] == "2026-04-05"
-    assert second_goal["steps"][0]["goalId"] == f"group-{group.id}"
+    assert first_goal.public_id == f"group-{group.id}"
+    assert first_goal.goal_type == CoachingGoal.TYPE_GROUP
+    assert second_goal.goal_type == CoachingGoal.TYPE_GROUP
 
-    step_id = first_goal["steps"][0]["id"]
+    first_task = CRMTask.objects.get(source="coaching", contact_id=int(first_contact.id), goal_id=f"group-{group.id}")
+    second_task = CRMTask.objects.get(source="coaching", contact_id=int(second_contact.id), goal_id=f"group-{group.id}")
+    assert first_task.due_at is not None
+    assert second_task.goal_id == f"group-{group.id}"
+
     patch_response = coaching_api_client.patch(
-        reverse("api:coaching-goal-step-detail", args=[f"group-{group.id}", step_id]),
+        reverse("api:coaching-goal-step-detail", args=[f"group-{group.id}", first_task.id]),
         {"done": True},
         format="json",
     )
@@ -1341,11 +1603,13 @@ def test_removing_member_from_group_cleans_member_steps_and_task_refs(
     assert remove_response.status_code == 204, remove_response.content
 
     second_profile = ContactCoachingProfile.objects.get(tenant=coaching_tenant, contact_id=int(second_contact.id))
-    assert second_profile.goals == []
+    assert second_profile.goal_rows.count() == 0
 
     task = CoachGroupTask.objects.get(group=group)
     assert len(task.step_refs) == 1
     assert int(task.step_refs[0]["contactId"]) == int(first_contact.id)
+    assert str(task.step_refs[0]["taskId"]).isdigit()
+    assert CRMTask.objects.filter(source="coaching", contact_id=int(second_contact.id), goal_id=f"group-{group.id}").count() == 0
 
     detail_response = coaching_api_client.get(reverse("api:coach-group-detail", args=[group.id]))
 

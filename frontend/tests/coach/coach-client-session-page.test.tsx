@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const testState = vi.hoisted(() => ({
@@ -8,12 +8,13 @@ const testState = vi.hoisted(() => ({
   getCoachClientGoals: vi.fn(),
   getCoachClientMilestones: vi.fn(),
   getCoachClientSessions: vi.fn(),
+  updateCoachGoalStep: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
   const ReactModule = await import('react');
   return {
-    default: ({ href, children, ...props }: any) => ReactModule.createElement('a', { href, ...props }, children),
+    default: ({ href, children, prefetch: _prefetch, ...props }: any) => ReactModule.createElement('a', { href, ...props }, children),
   };
 });
 
@@ -24,6 +25,7 @@ vi.mock('@/lib/api/coaching', () => ({
     getCoachClientGoals: (...args: unknown[]) => testState.getCoachClientGoals(...args),
     getCoachClientMilestones: (...args: unknown[]) => testState.getCoachClientMilestones(...args),
     getCoachClientSessions: (...args: unknown[]) => testState.getCoachClientSessions(...args),
+    updateCoachGoalStep: (...args: unknown[]) => testState.updateCoachGoalStep(...args),
   },
 }));
 
@@ -47,6 +49,7 @@ describe('CoachClientSessionPage', () => {
     testState.getCoachClientGoals.mockResolvedValue([]);
     testState.getCoachClientMilestones.mockResolvedValue([]);
     testState.getCoachClientSessions.mockResolvedValue([]);
+    testState.updateCoachGoalStep.mockResolvedValue({ id: 'goal-1', steps: [] });
   });
 
   afterEach(() => {
@@ -126,5 +129,119 @@ describe('CoachClientSessionPage', () => {
 
     expect(screen.queryByRole('link', { name: 'Запланируйте сессию' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Обзор календаря' })).not.toBeInTheDocument();
+  });
+
+  it('marks a step optimistically before the toggle request resolves', async () => {
+    let resolveToggle: ((value: { id: string; steps: Array<Record<string, unknown>> }) => void) | null = null;
+    testState.getCoachClientGoals.mockResolvedValue([
+      {
+        id: 'goal-1',
+        title: 'Прокачать уверенность',
+        progress: 36,
+        horizon: 'quarter',
+        status: 'active',
+        competencyLinks: [],
+        steps: [
+          {
+            id: 'step-1',
+            text: 'Сказать руководителю',
+            done: false,
+            isMilestone: false,
+            milestoneNote: '',
+            doneAt: null,
+            dueDate: null,
+          },
+        ],
+        createdAt: '2026-03-01T10:00:00.000Z',
+      },
+    ]);
+    testState.updateCoachGoalStep.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveToggle = resolve;
+      }),
+    );
+
+    const mod = await import('@/app/coach/clients/[client_id]/page-client');
+    const CoachClientSessionPage = mod.default;
+
+    render(<CoachClientSessionPage clientId={46} />);
+
+    const stepText = await screen.findByText('Сказать руководителю');
+    expect(stepText.className).not.toContain('line-through');
+
+    const stepRow = stepText.closest('.min-w-0.flex-1');
+    const toggleButton = stepRow?.previousElementSibling as HTMLButtonElement | null;
+    expect(toggleButton).not.toBeNull();
+
+    fireEvent.click(toggleButton!);
+
+    expect(screen.getByText('Сказать руководителю').className).toContain('line-through');
+
+    resolveToggle?.({
+      id: 'goal-1',
+      steps: [
+        {
+          id: 'step-1',
+          text: 'Сказать руководителю',
+          done: true,
+          isMilestone: false,
+          milestoneNote: '',
+          doneAt: '2026-03-30T10:00:00.000Z',
+          dueDate: null,
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(testState.updateCoachGoalStep).toHaveBeenCalledWith('goal-1', 'step-1', { done: true });
+    });
+  });
+
+  it('uses initial data without repeating the first load requests', async () => {
+    const mod = await import('@/app/coach/clients/[client_id]/page-client');
+    const CoachClientSessionPage = mod.default;
+
+    render(
+      <CoachClientSessionPage
+        clientId={46}
+        initialData={{
+          client: {
+            id: '46',
+            name: 'Анна Иванова',
+            initials: 'АИ',
+            focus: 'Уверенность',
+            intention: 'Выстроить спокойную коммуникацию',
+            sessionsCount: 3,
+            avgProgress: 52,
+            nextSession: null,
+            clientStatus: null,
+            coachId: '7',
+            createdAt: '2026-03-01T10:00:00.000Z',
+          },
+          competencies: [],
+          goals: [
+            {
+              id: 'goal-1',
+              title: 'Прокачать уверенность',
+              progress: 36,
+              horizon: 'quarter',
+              status: 'active',
+              competencyLinks: [],
+              steps: [],
+              createdAt: '2026-03-01T10:00:00.000Z',
+            },
+          ],
+          milestones: [],
+          sessions: [],
+        }}
+      />,
+    );
+
+    expect((await screen.findAllByText('Прокачать уверенность')).length).toBeGreaterThan(0);
+    expect(testState.getCoachClient).not.toHaveBeenCalled();
+    expect(testState.getCoachClientCompetencies).not.toHaveBeenCalled();
+    expect(testState.getCoachClientGoals).not.toHaveBeenCalled();
+    expect(testState.getCoachClientMilestones).not.toHaveBeenCalled();
+    expect(testState.getCoachClientSessions).not.toHaveBeenCalled();
   });
 });
