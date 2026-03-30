@@ -131,6 +131,7 @@ from .views_coaching import (  # noqa: F401
     CoachGroupTasksView,
     CoachClientsView,
     CoachStatsView,
+    CoachingContactInviteView,
     CoachingContactDetailView,
     CoachingOnboardingView,
     ContactCompetenciesView,
@@ -146,3 +147,4 @@ from .views_coaching import (  # noqa: F401
     ContactTaskDetailView,
     ContactTasksView,
 )
+from .views_public_client_page import InviteAuthView  # noqa: F401

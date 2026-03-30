@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const testState = vi.hoisted(() => ({
   clientId: '46',
   getClientCoachingPortal: vi.fn(),
-  apiFetch: vi.fn(),
+  updateClientCoachingStep: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -32,13 +32,13 @@ vi.mock('@/lib/api', () => {
 
   return {
     ApiError: TestApiError,
-    apiFetch: (...args: unknown[]) => testState.apiFetch(...args),
   };
 });
 
 vi.mock('@/lib/api/coaching', () => ({
   coachingApi: {
     getClientCoachingPortal: (...args: unknown[]) => testState.getClientCoachingPortal(...args),
+    updateClientCoachingStep: (...args: unknown[]) => testState.updateClientCoachingStep(...args),
   },
 }));
 
@@ -87,7 +87,7 @@ describe('Public coaching portal page', () => {
         },
       ],
     });
-    testState.apiFetch.mockResolvedValue({
+    testState.updateClientCoachingStep.mockResolvedValue({
       id: 'step-1',
       text: 'Сделать 3 пробных разговора',
       done: true,
@@ -130,10 +130,7 @@ describe('Public coaching portal page', () => {
     fireEvent.click(stepButton);
 
     await waitFor(() => {
-      expect(testState.apiFetch).toHaveBeenCalledWith('/public/client-page/46/steps/step-1/', {
-        method: 'PATCH',
-        body: { done: true },
-      });
+      expect(testState.updateClientCoachingStep).toHaveBeenCalledWith(46, 'step-1', true);
     });
   });
 });

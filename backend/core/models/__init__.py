@@ -21,7 +21,7 @@ from .client import Client, ProjectTeamInvite, UserActiveClientPreference, UserT
 from .crm import ClientCategory, CRMClient, Event, EventType, Payment, Note
 from .amocrm import AmoCRMAccount, AmoCRMContactMapping, AmoCRMLogEntry
 from .bitrix24 import Bitrix24Account, Bitrix24ContactMapping, Bitrix24LogEntry, Bitrix24WebhookEvent
-from .coaching import CoachGroup, CoachGroupMember, CoachGroupTask, ContactCoachingProfile
+from .coaching import CoachGroup, CoachGroupMember, CoachGroupTask, ContactCoachingProfile, InviteLink
 
 # --- Integrations ---
 from .integrations import VkIntegration, SocialAccount, Connection, UserSocialAccount
@@ -160,6 +160,7 @@ __all__ = [
     "CoachGroup",
     "CoachGroupMember",
     "CoachGroupTask",
+    "InviteLink",
     # Integrations
     "VkIntegration",
     "SocialAccount",

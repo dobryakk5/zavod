@@ -13,9 +13,9 @@ from core.models import (
     CoachGroup,
     CoachGroupTask,
     ContactCoachingProfile,
+    InviteLink,
     MapContact,
     UserActiveClientPreference,
-    UserSocialAccount,
     UserTenantBinding,
     UserTenantRole,
 )
@@ -268,6 +268,32 @@ def test_task_status_patch_marks_task_as_done(coaching_api_client, coaching_tena
 
 
 @pytest.mark.django_db
+def test_coach_can_create_and_revoke_contact_invite_link(coaching_api_client, coaching_tenant, coaching_contact):
+    create_response = coaching_api_client.post(
+        reverse("api:coaching-contact-invite", args=[coaching_contact.id]),
+        format="json",
+    )
+
+    assert create_response.status_code == 200, create_response.content
+    payload = create_response.json()
+    assert payload["clientId"] == str(coaching_contact.id)
+    assert payload["token"]
+    assert payload["url"].endswith(f"/invite/{payload['token']}")
+    assert InviteLink.objects.filter(tenant=coaching_tenant, contact_id=int(coaching_contact.id)).count() == 1
+
+    revoke_response = coaching_api_client.delete(
+        reverse("api:coaching-contact-invite", args=[coaching_contact.id]),
+    )
+
+    assert revoke_response.status_code == 204, revoke_response.content
+    assert InviteLink.objects.filter(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+        used_at__isnull=True,
+    ).count() == 0
+
+
+@pytest.mark.django_db
 def test_goal_step_create_persists_due_date(coaching_api_client, coaching_tenant, coaching_contact):
     ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
@@ -303,25 +329,13 @@ def test_goal_step_create_persists_due_date(coaching_api_client, coaching_tenant
 
 
 @pytest.mark.django_db
-def test_public_coaching_portal_returns_bound_contact_profile(
-    portal_api_client,
-    portal_user,
+def test_public_coaching_portal_returns_profile_only_after_invite_auth(
     coaching_tenant,
     coaching_contact,
 ):
-    provider_id = f"telegram-{portal_user.id}"
-    UserSocialAccount.objects.create(
-        user=portal_user,
-        provider=UserSocialAccount.PROVIDER_TELEGRAM,
-        provider_id=provider_id,
-        extra_data={"username": "portal-user"},
-    )
-    UserTenantBinding.objects.create(
+    invite = InviteLink.objects.create(
         tenant=coaching_tenant,
-        provider=UserTenantBinding.PROVIDER_TELEGRAM,
-        provider_user_id=provider_id,
         contact_id=int(coaching_contact.id),
-        is_active=True,
     )
     ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
@@ -364,7 +378,16 @@ def test_public_coaching_portal_returns_bound_contact_profile(
         ],
     )
 
-    response = portal_api_client.get(
+    client = APIClient()
+    auth_response = client.post(
+        reverse("api:invite-auth", args=[invite.token]),
+        format="json",
+    )
+
+    assert auth_response.status_code == 200, auth_response.content
+    assert auth_response.json()["clientId"] == int(coaching_tenant.id)
+
+    response = client.get(
         reverse("api:public-client-page-coaching", args=[coaching_tenant.id]),
     )
 
@@ -378,10 +401,33 @@ def test_public_coaching_portal_returns_bound_contact_profile(
     assert payload["goals"][0]["competencyLinks"][0]["competencyName"] == "Говорение"
     assert payload["goals"][0]["steps"][0]["goalTitle"] == "Наладить границы в работе"
     assert payload["milestones"][0]["text"] == "Первая уверенная граница"
+    invite.refresh_from_db()
+    assert invite.used_at is not None
 
 
 @pytest.mark.django_db
-def test_public_pages_resolve_contact_by_email_auth(
+def test_invite_auth_token_cannot_be_reused(coaching_tenant, coaching_contact):
+    invite = InviteLink.objects.create(
+        tenant=coaching_tenant,
+        contact_id=int(coaching_contact.id),
+    )
+
+    client = APIClient()
+    first_response = client.post(
+        reverse("api:invite-auth", args=[invite.token]),
+        format="json",
+    )
+    second_response = client.post(
+        reverse("api:invite-auth", args=[invite.token]),
+        format="json",
+    )
+
+    assert first_response.status_code == 200, first_response.content
+    assert second_response.status_code == 410, second_response.content
+
+
+@pytest.mark.django_db
+def test_public_coaching_portal_no_longer_resolves_contact_by_email_auth(
     portal_api_client,
     portal_user,
     coaching_tenant,
@@ -419,33 +465,17 @@ def test_public_pages_resolve_contact_by_email_auth(
     coaching_response = portal_api_client.get(
         reverse("api:public-client-page-coaching", args=[coaching_tenant.id]),
     )
-    assert coaching_response.status_code == 200, coaching_response.content
-    coaching_payload = coaching_response.json()
-    assert coaching_payload["client"]["id"] == int(coaching_contact.id)
-    assert coaching_payload["client"]["name"] == "Анна Иванова"
-    assert coaching_payload["client"]["intention"] == "Спокойно отстаивать границы"
+    assert coaching_response.status_code == 401, coaching_response.content
 
 
 @pytest.mark.django_db
-def test_public_steps_endpoint_returns_goal_steps_and_allows_completion(
-    portal_api_client,
-    portal_user,
+def test_public_steps_endpoint_returns_goal_steps_and_allows_completion_after_invite_auth(
     coaching_tenant,
     coaching_contact,
 ):
-    provider_id = f"telegram-{portal_user.id}"
-    UserSocialAccount.objects.create(
-        user=portal_user,
-        provider=UserSocialAccount.PROVIDER_TELEGRAM,
-        provider_id=provider_id,
-        extra_data={"username": "portal-user"},
-    )
-    UserTenantBinding.objects.create(
+    invite = InviteLink.objects.create(
         tenant=coaching_tenant,
-        provider=UserTenantBinding.PROVIDER_TELEGRAM,
-        provider_user_id=provider_id,
         contact_id=int(coaching_contact.id),
-        is_active=True,
     )
     ContactCoachingProfile.objects.create(
         tenant=coaching_tenant,
@@ -474,7 +504,14 @@ def test_public_steps_endpoint_returns_goal_steps_and_allows_completion(
         ],
     )
 
-    list_response = portal_api_client.get(
+    client = APIClient()
+    auth_response = client.post(
+        reverse("api:invite-auth", args=[invite.token]),
+        format="json",
+    )
+    assert auth_response.status_code == 200, auth_response.content
+
+    list_response = client.get(
         reverse("api:public-client-page-steps", args=[coaching_tenant.id]),
     )
 
@@ -483,7 +520,7 @@ def test_public_steps_endpoint_returns_goal_steps_and_allows_completion(
     assert list_payload["items"][0]["goalTitle"] == "Наладить границы в работе"
     assert list_payload["items"][0]["dueDate"] == "2026-04-02"
 
-    patch_response = portal_api_client.patch(
+    patch_response = client.patch(
         reverse("api:public-client-page-step-detail", args=[coaching_tenant.id, "step-1"]),
         {"done": True},
         format="json",

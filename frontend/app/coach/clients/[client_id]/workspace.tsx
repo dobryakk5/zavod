@@ -4,8 +4,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Copy, ExternalLink, Undo2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { Undo2 } from 'lucide-react';
 import {
   coachingApi,
   coachingApiExt,
@@ -16,6 +15,7 @@ import {
   type CoachSession,
   type CoachTask,
 } from '@/lib/api/coaching';
+import InviteButton from '@/components/coaching/InviteButton';
 import CoachClientSessionPage from './page-client';
 
 type Tab = 'overview' | 'session' | 'history' | 'edit';
@@ -53,18 +53,6 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
     tasks: [],
   });
   const [loading, setLoading] = useState(true);
-
-  const handleCopyPortalLink = useCallback(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const portalUrl = new URL(`/c/${clientId}/coaching`, window.location.origin).toString();
-    navigator.clipboard.writeText(portalUrl).then(
-      () => toast.success('Ссылка на кабинет клиента скопирована'),
-      () => toast.error('Не удалось скопировать ссылку'),
-    );
-  }, [clientId]);
 
   useEffect(() => {
     let active = true;
@@ -160,24 +148,12 @@ export default function CoachClientWorkspace({ clientId }: { clientId: number })
               >
                 {client?.name ?? 'Клиент'}
               </Link>
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleCopyPortalLink}
-                  aria-label={`Скопировать ссылку кабинета клиента ${client?.name ?? 'Клиент'}`}
-                  title="Скопировать ссылку"
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
-                >
-                  <Copy className="h-4 w-4" />
-                </button>
-                <Link
-                  href={`/c/${clientId}/coaching`}
-                  aria-label={`Открыть кабинет клиента ${client?.name ?? 'Клиент'}`}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#d8d4ca] text-[#73726c] transition-colors hover:border-[#5c52e0] hover:text-[#5c52e0]"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </Link>
-              </div>
+              <InviteButton
+                clientId={clientId}
+                clientName={client?.name ?? 'Клиент'}
+                clientEmail={client?.email}
+                compact
+              />
             </div>
             <p className="text-[11px] leading-4 text-[#73726c]">
               {client?.sessionsCount ?? 0} сессий · {client?.focus ?? ''}

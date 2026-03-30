@@ -5,7 +5,7 @@ from datetime import datetime, time, timedelta
 from uuid import uuid4
 
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.db.utils import NotSupportedError
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -13,8 +13,9 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.models import CoachGroup, CoachGroupMember, CoachGroupTask, ContactCoachingProfile, MapContact, UserTenantBinding
+from core.models import CoachGroup, CoachGroupMember, CoachGroupTask, ContactCoachingProfile, InviteLink, MapContact, UserTenantBinding
 
+from .invite_auth import build_frontend_url
 from .permissions import IsTenantMember, IsTenantOwnerOrEditor
 from .serializers_coaching import (
     CoachGroupCreateSerializer,
@@ -463,6 +464,7 @@ def _serialize_contact(contact: MapContact, tenant_id: int, profile: ContactCoac
     return {
         "id": str(contact.id),
         "name": contact.name,
+        "email": str(contact.email or ""),
         "initials": _contact_initials(contact.name),
         "focus": _goal_focus(profile),
         "intention": str(profile.intention or ""),
@@ -752,6 +754,18 @@ def _serialize_group_task(task: CoachGroupTask, done_index: dict[tuple[int, str]
         "createdAt": task.created_at.isoformat() if task.created_at else timezone.now().isoformat(),
         "doneCount": done_count,
         "totalCount": len(refs),
+    }
+
+
+def _serialize_invite_link(invite: InviteLink, request) -> dict:
+    return {
+        "id": str(invite.id),
+        "clientId": str(invite.contact_id),
+        "token": str(invite.token),
+        "url": build_frontend_url(request, f"/invite/{invite.token}"),
+        "expiresAt": invite.expires_at.isoformat() if invite.expires_at else None,
+        "usedAt": invite.used_at.isoformat() if invite.used_at else None,
+        "createdAt": invite.created_at.isoformat() if invite.created_at else timezone.now().isoformat(),
     }
 
 
@@ -1624,6 +1638,50 @@ class CoachGroupTaskDetailView(APIView):
             _delete_group_task_steps(task)
             task.delete()
 
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CoachingContactInviteView(APIView):
+    permission_classes = [IsTenantOwnerOrEditor]
+
+    def post(self, request, contact_id: int):
+        tenant = get_active_client(request.user)
+        contact = _tenant_contact_or_none(int(tenant.id), contact_id)
+        if contact is None:
+            return Response({"error": "Контакт не найден"}, status=status.HTTP_404_NOT_FOUND)
+
+        now = timezone.now()
+        invite = (
+            InviteLink.objects
+            .filter(tenant=tenant, contact_id=int(contact.id), used_at__isnull=True)
+            .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        if invite is None:
+            InviteLink.objects.filter(
+                tenant=tenant,
+                contact_id=int(contact.id),
+                used_at__isnull=True,
+            ).filter(expires_at__isnull=False, expires_at__lte=now).delete()
+            invite = InviteLink.objects.create(
+                tenant=tenant,
+                contact_id=int(contact.id),
+            )
+
+        return Response(_serialize_invite_link(invite, request), status=status.HTTP_200_OK)
+
+    def delete(self, request, contact_id: int):
+        tenant = get_active_client(request.user)
+        contact = _tenant_contact_or_none(int(tenant.id), contact_id)
+        if contact is None:
+            return Response({"error": "Контакт не найден"}, status=status.HTTP_404_NOT_FOUND)
+
+        InviteLink.objects.filter(
+            tenant=tenant,
+            contact_id=int(contact.id),
+            used_at__isnull=True,
+        ).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

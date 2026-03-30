@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 
 
@@ -99,3 +101,27 @@ class CoachGroupTask(models.Model):
 
     def __str__(self) -> str:
         return f"group={self.group_id} task={self.id}"
+
+
+class InviteLink(models.Model):
+    tenant = models.ForeignKey(
+        "core.Client",
+        on_delete=models.CASCADE,
+        related_name="coach_invite_links",
+    )
+    contact_id = models.IntegerField(db_index=True)
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("tenant", "contact_id"), name="idx_coach_inv_tenant_contact"),
+            models.Index(fields=("used_at",), name="idx_coach_invite_used_at"),
+        ]
+        ordering = ("-created_at", "-id")
+
+    def __str__(self) -> str:
+        return f"tenant={self.tenant_id} contact={self.contact_id} token={self.token}"

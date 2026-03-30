@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { ApiError, apiFetch } from '@/lib/api';
+import { ApiError } from '@/lib/api';
 import {
   coachingApi,
   type CoachGoalStep,
@@ -61,7 +61,7 @@ export default function CoachingPortalPage({
         });
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
-          setError('Войдите через Telegram, VK или email, чтобы увидеть свой прогресс.');
+          setError('Откройте персональную ссылку от коуча, чтобы войти в кабинет.');
         } else if (err instanceof ApiError && err.status === 404) {
           setData({
             clientName: '',
@@ -117,10 +117,7 @@ export default function CoachingPortalPage({
     });
 
     try {
-      const updated = await apiFetch<CoachGoalStep>(`/public/client-page/${pageClientId}/steps/${step.id}/`, {
-        method: 'PATCH',
-        body: { done: nextDone },
-      });
+      const updated = await coachingApi.updateClientCoachingStep(pageClientId, step.id, nextDone);
       setData((current) => {
         if (!current) {
           return current;

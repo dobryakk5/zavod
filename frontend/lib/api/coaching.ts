@@ -1,4 +1,4 @@
-import { apiFetch } from '../api';
+import { API_BASE_URL, ApiError, apiFetch } from '../api';
 
 export type CoachStats = {
   activeClients: number;
@@ -17,6 +17,7 @@ export type CoachingClientStatus = {
 export type CoachingClient = {
   id: string;
   name: string;
+  email?: string;
   initials: string;
   focus: string;
   intention?: string;
@@ -95,6 +96,41 @@ export type PublicClientCoachingPortalResponse = {
   competencies?: CoachingCompetency[];
   milestones?: CoachMilestone[];
 };
+
+export type PublicClientCoachingStepResponse = CoachGoalStep;
+
+export type CoachInviteLink = {
+  id: string;
+  clientId: string;
+  token: string;
+  url: string;
+  expiresAt: string | null;
+  usedAt: string | null;
+  createdAt: string;
+};
+
+async function publicCoachingFetch<TResponse>(endpoint: string, options: RequestInit = {}): Promise<TResponse> {
+  const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const response = await fetch(`${API_BASE_URL}${normalizedEndpoint}`, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(text || 'API request failed', response.status, text);
+  }
+
+  if (response.status === 204) {
+    return undefined as TResponse;
+  }
+
+  return (await response.json()) as TResponse;
+}
 
 export const coachingApi = {
   getCoachStats: async (): Promise<CoachStats> => {
@@ -180,7 +216,18 @@ export const coachingApi = {
   getClientCoachingPortal: async (
     clientId: number | string,
   ): Promise<PublicClientCoachingPortalResponse> => {
-    return apiFetch<PublicClientCoachingPortalResponse>(`/public/client-page/${clientId}/coaching/`);
+    return publicCoachingFetch<PublicClientCoachingPortalResponse>(`/public/client-page/${clientId}/coaching/`);
+  },
+
+  updateClientCoachingStep: async (
+    clientId: number | string,
+    stepId: string,
+    done: boolean,
+  ): Promise<PublicClientCoachingStepResponse> => {
+    return publicCoachingFetch<PublicClientCoachingStepResponse>(`/public/client-page/${clientId}/steps/${stepId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({ done }),
+    });
   },
 
   createCoachSession: async (
@@ -439,3 +486,24 @@ export type CoachingApiWithGroups = typeof coachingApi & {
 };
 
 export const coachingApiGroups = coachingApi as CoachingApiWithGroups;
+
+Object.assign(coachingApi, {
+  createInviteLink: async (clientId: string | number): Promise<CoachInviteLink> => {
+    return apiFetch<CoachInviteLink>(`/clients/${clientId}/invite/`, {
+      method: 'POST',
+    });
+  },
+
+  revokeInviteLink: async (clientId: string | number): Promise<void> => {
+    await apiFetch<void>(`/clients/${clientId}/invite/`, {
+      method: 'DELETE',
+    });
+  },
+});
+
+export type CoachingApiWithInvites = typeof coachingApi & {
+  createInviteLink(clientId: string | number): Promise<CoachInviteLink>;
+  revokeInviteLink(clientId: string | number): Promise<void>;
+};
+
+export const coachingApiInvites = coachingApi as CoachingApiWithInvites;

@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 
 import requests
 from django.conf import settings
+from django.db import transaction
 from django.http import Http404
 from django.utils import timezone
 from rest_framework import status
@@ -21,6 +22,7 @@ from core.models import (
     ClientProduct,
     ContactCoachingProfile,
     ContactProductPurchase,
+    InviteLink,
     MapContact,
     ProductCourseComment,
     ProductCourseEvent,
@@ -43,6 +45,7 @@ from core.services.custom_domain import CustomDomainValidationError, normalize_c
 from core.tasks.chains import _send_telegram_message, _send_vk_message
 
 from .authentication import CookieJWTAuthentication
+from .invite_auth import resolve_coach_invite_contact_id, set_coach_invite_cookie
 from .views_payments import (
     _build_yookassa_request_kwargs,
     _get_yookassa_credentials,
@@ -1827,6 +1830,50 @@ class PublicClientPageProductCourseLessonCommentsView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class InviteAuthView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: tuple = ()
+
+    def post(self, request, token):
+        with transaction.atomic():
+            invite = (
+                InviteLink.objects
+                .select_for_update()
+                .select_related("tenant")
+                .filter(token=token)
+                .first()
+            )
+            if invite is None:
+                raise Http404("Ссылка не найдена")
+
+            now = timezone.now()
+            if invite.used_at is not None:
+                return Response(
+                    {"detail": "Ссылка уже была использована."},
+                    status=status.HTTP_410_GONE,
+                )
+            if invite.expires_at is not None and invite.expires_at <= now:
+                return Response(
+                    {"detail": "Срок действия ссылки истёк."},
+                    status=status.HTTP_410_GONE,
+                )
+
+            invite.used_at = now
+            invite.save()
+
+        contact = MapContact.objects.filter(id=int(invite.contact_id)).only("name").first()
+        response = Response(
+            {
+                "ok": True,
+                "clientId": int(invite.tenant_id),
+                "clientName": str(contact.name or "") if contact is not None else "",
+                "coachName": str(invite.tenant.name or ""),
+            }
+        )
+        set_coach_invite_cookie(response, invite)
+        return response
+
+
 class PublicClientPageTasksView(APIView):
     permission_classes = [AllowAny]
     authentication_classes: tuple = ()
@@ -1836,10 +1883,10 @@ class PublicClientPageTasksView(APIView):
         if not client_exists:
             raise Http404("Клиент не найден")
 
-        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        contact_id = resolve_coach_invite_contact_id(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
-                {"detail": "Для просмотра заданий войдите как контакт через Telegram, VK или email."},
+                {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть задания."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -1877,10 +1924,10 @@ class PublicClientPageStepsView(APIView):
         if not client_exists:
             raise Http404("Клиент не найден")
 
-        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        contact_id = resolve_coach_invite_contact_id(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
-                {"detail": "Для просмотра заданий войдите как контакт через Telegram, VK или email."},
+                {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть задания."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -1910,10 +1957,10 @@ class PublicClientPageCoachingView(APIView):
         if not client_exists:
             raise Http404("Клиент не найден")
 
-        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        contact_id = resolve_coach_invite_contact_id(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
-                {"detail": "Для просмотра прогресса войдите как контакт через Telegram, VK или email."},
+                {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть кабинет."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -1944,10 +1991,10 @@ class PublicClientPageStepDetailView(APIView):
         if not client_exists:
             raise Http404("Клиент не найден")
 
-        contact_id = _resolve_request_contact_id_for_client(request, client_id)
+        contact_id = resolve_coach_invite_contact_id(request, client_id)
         if contact_id is None or contact_id <= 0:
             return Response(
-                {"detail": "Для просмотра заданий войдите как контакт через Telegram, VK или email."},
+                {"detail": "Откройте персональную invite-ссылку от коуча, чтобы увидеть задания."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
