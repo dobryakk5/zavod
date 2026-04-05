@@ -72,6 +72,6 @@ describe('MarketingPage', () => {
     expect(screen.getByRole('link', { name: 'Конкуренты' })).toHaveAttribute('href', '/seo?tab=competitors');
     expect(screen.getByRole('link', { name: 'Новый пост' })).toHaveAttribute('href', '/posts/new');
     expect(screen.getByRole('link', { name: 'Открыть статьи' })).toHaveAttribute('href', '/articles');
-    expect(screen.getByRole('link', { name: 'Календарь' })).toHaveAttribute('href', '/clients?tab=schedule&scheduleTab=calendar');
+    expect(screen.getByRole('link', { name: 'Календарь' })).toHaveAttribute('href', '/clients/schedule');
   });
 });

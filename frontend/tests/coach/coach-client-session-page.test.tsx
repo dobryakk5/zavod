@@ -96,7 +96,7 @@ describe('CoachClientSessionPage', () => {
 
     expect(screen.getByRole('link', { name: 'Обзор календаря' })).toHaveAttribute(
       'href',
-      '/clients?tab=schedule&scheduleTab=calendar',
+      '/clients/schedule',
     );
     expect(
       screen.queryByText(/Активной сессии нет\. Нажмите «Начать сессию/i),

@@ -982,7 +982,7 @@ export default function CoachClientSessionPage({
                       Запланируйте сессию
                     </Link>
                     <Link
-                      href="/clients?tab=schedule&scheduleTab=calendar"
+                      href="/clients/schedule"
                       className="text-[#185fa5] transition-colors hover:text-[#11497f] hover:underline"
                     >
                       Обзор календаря

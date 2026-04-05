@@ -178,7 +178,7 @@ function DealCreatePageContent() {
           </p>
         </div>
         <Button asChild variant="outline">
-          <Link href="/clients?tab=deals">К списку сделок</Link>
+          <Link href="/clients/deals">К списку сделок</Link>
         </Button>
       </div>
 

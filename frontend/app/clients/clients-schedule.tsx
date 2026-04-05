@@ -25,6 +25,7 @@ import {
 } from '@/lib/timezone';
 import type { ClientProduct } from '@/lib/types';
 import { useCalendarDnD } from './useCalendarDnD';
+import { useIsMobileBreakpoint } from './use-mobile-breakpoint';
 import {
   crmAvailabilityEventsApi,
   crmContactsApi,
@@ -950,8 +951,101 @@ function DayViewContent({
   );
 }
 
+function MobileAgendaContent({
+  cursor,
+  itemsByDate,
+  onDayClick,
+  onItemEdit,
+  timeZone,
+}: {
+  cursor: Date;
+  itemsByDate: ItemsByDate;
+  onDayClick?: DayClickHandler;
+  onItemEdit?: (item: EditableCalendarItem) => void;
+  timeZone: string;
+}) {
+  const dayKey = formatKey(cursor);
+  const items = itemsByDate[dayKey] || [];
+
+  return (
+    <div className="space-y-3" data-testid="clients-schedule-mobile-agenda">
+      <div className="rounded-2xl border bg-white p-4">
+        <div className="text-xs uppercase tracking-wide text-slate-500">
+          {formatTenantLocalDate(cursor, timeZone, { weekday: 'long' })}
+        </div>
+        <div className="mt-1 text-lg font-semibold text-slate-900">
+          {formatTenantLocalDate(cursor, timeZone, { day: 'numeric', month: 'long', year: 'numeric' })}
+        </div>
+        <div className="mt-3">
+          <Button type="button" size="sm" onClick={() => onDayClick?.(cursor)}>
+            Добавить свободное окно
+          </Button>
+        </div>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="rounded-2xl border border-dashed bg-white p-4 text-sm text-slate-500">
+          На этот день пока нет встреч и свободных слотов.
+        </div>
+      ) : (
+        items.map((item) => (
+          <div key={item.id} className="rounded-2xl border bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs uppercase tracking-wide text-slate-500">
+                  {item.kind === 'availability'
+                    ? 'Свободное окно'
+                    : item.kind === 'event'
+                      ? 'Встреча'
+                      : 'Событие продукта'}
+                </div>
+                <div className="mt-1 text-base font-semibold text-slate-900">
+                  {item.kind === 'availability'
+                    ? item.time || 'Доступно'
+                    : item.kind === 'event'
+                      ? item.contactName
+                      : item.title}
+                </div>
+              </div>
+              {item.kind !== 'product-event' ? (
+                <Button type="button" size="sm" variant="outline" onClick={() => onItemEdit?.(item)}>
+                  Изменить
+                </Button>
+              ) : null}
+            </div>
+
+            <div className="mt-3 space-y-2 text-sm text-slate-600">
+              <div className="flex items-center justify-between gap-3">
+                <span>Время</span>
+                <span className="font-medium text-slate-900">{item.time || '—'}</span>
+              </div>
+              {item.kind === 'event' ? (
+                <>
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Название</span>
+                    <span className="truncate font-medium text-slate-900">{item.title}</span>
+                  </div>
+                  <Link href={`/contact/${item.contactId}?tab=schedule`} className="text-sm font-medium text-blue-600 hover:underline">
+                    Открыть карточку клиента
+                  </Link>
+                </>
+              ) : null}
+              {item.kind === 'product-event' ? (
+                <Link href={`/product/${item.productId}`} className="text-sm font-medium text-blue-600 hover:underline">
+                  Открыть продукт
+                </Link>
+              ) : null}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 export default function ClientsSchedule() {
   const router = useRouter();
+  const isMobile = useIsMobileBreakpoint();
   const [view, setView] = useState<ViewMode>('week');
   const [tenantTimezone, setTenantTimezone] = useState(DEFAULT_TENANT_TIMEZONE);
   const cursorInitializedRef = useRef(false);
@@ -991,6 +1085,12 @@ export default function ClientsSchedule() {
       cursorInitializedRef.current = true;
     }
   }, [normalizedTimezone]);
+
+  useEffect(() => {
+    if (isMobile) {
+      setView('day');
+    }
+  }, [isMobile]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -1374,7 +1474,7 @@ export default function ClientsSchedule() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-full">
+      <div className="max-w-full p-2 sm:p-4">
         <div className="flex items-center justify-center py-12">
           <div className="text-slate-500">Загрузка расписания...</div>
         </div>
@@ -1383,35 +1483,39 @@ export default function ClientsSchedule() {
   }
 
   return (
-    <div className="p-6 max-w-full">
-      <header className="flex items-center justify-between mb-6">
+    <div className="max-w-full p-1 sm:p-4">
+      <header className="mb-4 flex flex-col gap-3 md:mb-6 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold">Календарь встреч</h2>
+          <h2 className="text-xl font-semibold sm:text-2xl">Календарь встреч</h2>
           {error && <div className="text-sm text-red-500 mt-1">{error}</div>}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="flex items-center gap-2">
-            <Button
-              variant={view === 'month' ? 'default' : 'ghost'}
-              onClick={() => setView('month')}
-              size="sm"
-            >
-              Месяц
-            </Button>
-            <Button
-              variant={view === 'week' ? 'default' : 'ghost'}
-              onClick={() => setView('week')}
-              size="sm"
-            >
-              Неделя
-            </Button>
+            {!isMobile ? (
+              <>
+                <Button
+                  variant={view === 'month' ? 'default' : 'ghost'}
+                  onClick={() => setView('month')}
+                  size="sm"
+                >
+                  Месяц
+                </Button>
+                <Button
+                  variant={view === 'week' ? 'default' : 'ghost'}
+                  onClick={() => setView('week')}
+                  size="sm"
+                >
+                  Неделя
+                </Button>
+              </>
+            ) : null}
             <Button
               variant={view === 'day' ? 'default' : 'ghost'}
               onClick={() => setView('day')}
               size="sm"
             >
-              День
+              {isMobile ? 'Лента дня' : 'День'}
             </Button>
           </div>
 
@@ -1433,43 +1537,55 @@ export default function ClientsSchedule() {
         </div>
       </header>
 
-      <div className="overflow-x-auto">
-        {view === 'week' && (
-          <WeekViewContent
-            weekDates={weekDates}
-            itemsByDate={itemsByDate}
-            onDayClick={openAvailability}
-            onItemEdit={openMonthEdit}
-            onEventDrop={handleEventDrop}
-            timeZone={normalizedTimezone}
-          />
-        )}
-        {view === 'month' && (
-          <MonthViewContent
-            monthDates={monthDates}
-            itemsByDate={itemsByDate}
-            cursor={cursor}
-            onDayClick={openAvailability}
-            showAvailability={showAvailabilityInMonth}
-            onItemEdit={openMonthEdit}
-            timeZone={normalizedTimezone}
-          />
-        )}
-        {view === 'day' && (
-          <DayViewContent
-            cursor={cursor}
-            itemsByDate={itemsByDate}
-            onDayClick={openAvailability}
-            onItemEdit={openMonthEdit}
-            onEventDrop={handleEventDrop}
-            timeZone={normalizedTimezone}
-          />
-        )}
-      </div>
-      <div className="mt-4 text-sm text-slate-500">
-        Кликните на свободное пространство дня, чтобы внести туда доступное для записи время.
-      </div>
-      {view === 'month' && (
+      {isMobile ? (
+        <MobileAgendaContent
+          cursor={cursor}
+          itemsByDate={itemsByDate}
+          onDayClick={openAvailability}
+          onItemEdit={openMonthEdit}
+          timeZone={normalizedTimezone}
+        />
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            {view === 'week' && (
+              <WeekViewContent
+                weekDates={weekDates}
+                itemsByDate={itemsByDate}
+                onDayClick={openAvailability}
+                onItemEdit={openMonthEdit}
+                onEventDrop={handleEventDrop}
+                timeZone={normalizedTimezone}
+              />
+            )}
+            {view === 'month' && (
+              <MonthViewContent
+                monthDates={monthDates}
+                itemsByDate={itemsByDate}
+                cursor={cursor}
+                onDayClick={openAvailability}
+                showAvailability={showAvailabilityInMonth}
+                onItemEdit={openMonthEdit}
+                timeZone={normalizedTimezone}
+              />
+            )}
+            {view === 'day' && (
+              <DayViewContent
+                cursor={cursor}
+                itemsByDate={itemsByDate}
+                onDayClick={openAvailability}
+                onItemEdit={openMonthEdit}
+                onEventDrop={handleEventDrop}
+                timeZone={normalizedTimezone}
+              />
+            )}
+          </div>
+          <div className="mt-4 text-sm text-slate-500">
+            Кликните на свободное пространство дня, чтобы внести туда доступное для записи время.
+          </div>
+        </>
+      )}
+      {!isMobile && view === 'month' && (
         <label className="mt-3 inline-flex items-center gap-2 text-sm text-slate-600">
           <input
             type="checkbox"

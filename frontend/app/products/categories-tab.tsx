@@ -129,36 +129,64 @@ export function CategoriesTab() {
                 <CardTitle>{TAG_LABELS[type]}</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="rounded-xl border bg-card/70 shadow-sm">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Тег</TableHead>
-                        <TableHead className="w-[120px]">Действия</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
+                {tagsByType[type].length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Тегов этого типа пока нет.</p>
+                ) : (
+                  <>
+                    <div className="space-y-3 md:hidden" data-testid={`tags-mobile-${type}`}>
                       {tagsByType[type].map((tag) => (
-                        <TableRow key={tag.id}>
-                          <TableCell className="font-medium">{tag.value}</TableCell>
-                          <TableCell>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-red-600 hover:text-red-700"
-                              onClick={() => handleDeleteTag(tag)}
-                              aria-label="Удалить тег"
-                              title="Удалить тег"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
+                        <div key={tag.id} className="flex items-center justify-between gap-3 rounded-xl border px-4 py-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-slate-900">{tag.value}</div>
+                            <div className="mt-1 text-xs text-slate-500">Тип: {TAG_LABELS[type]}</div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0 text-red-600 hover:text-red-700"
+                            onClick={() => handleDeleteTag(tag)}
+                            aria-label="Удалить тег"
+                            title="Удалить тег"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                    </div>
+
+                    <div className="hidden rounded-xl border bg-card/70 shadow-sm md:block">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Тег</TableHead>
+                            <TableHead className="w-[120px]">Действия</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {tagsByType[type].map((tag) => (
+                            <TableRow key={tag.id}>
+                              <TableCell className="font-medium">{tag.value}</TableCell>
+                              <TableCell>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-red-600 hover:text-red-700"
+                                  onClick={() => handleDeleteTag(tag)}
+                                  aria-label="Удалить тег"
+                                  title="Удалить тег"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           ))}

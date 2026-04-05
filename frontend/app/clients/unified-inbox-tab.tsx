@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Textarea } from '@/components/ui/textarea';
 import {
   unifiedInboxApi,
@@ -21,6 +22,7 @@ import {
   type UnifiedInboxChannel as ApiInboxChannel,
 } from '@/lib/api/unifiedInbox';
 import { cn } from '@/lib/utils';
+import { useIsMobileBreakpoint } from './use-mobile-breakpoint';
 
 type InboxChannel = ApiInboxChannel;
 type InquiryType = ApiInquiryType;
@@ -429,6 +431,7 @@ type StatusFilter = 'all' | ThreadStatus;
 type SlaFilter = 'all' | SlaState;
 
 export default function UnifiedInboxTab() {
+  const isMobile = useIsMobileBreakpoint();
   const [threads, setThreads] = useState<InboxThread[]>([]);
   const [selectedThreadId, setSelectedThreadId] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
@@ -446,6 +449,9 @@ export default function UnifiedInboxTab() {
   const [sendingThreadId, setSendingThreadId] = useState<string | null>(null);
   const [acceptingThreadId, setAcceptingThreadId] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [mobileView, setMobileView] = useState<'queue' | 'thread'>('queue');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [clientCardOpen, setClientCardOpen] = useState(false);
 
   useEffect(() => {
     let isActive = true;
@@ -576,6 +582,9 @@ export default function UnifiedInboxTab() {
   const handleSelectThread = (threadId: string) => {
     setSelectedThreadId(threadId);
     setSendError(null);
+    if (isMobile) {
+      setMobileView('thread');
+    }
     setThreads((prev) =>
       prev.map((thread) =>
         thread.id === threadId && thread.unreadCount > 0
@@ -675,6 +684,203 @@ export default function UnifiedInboxTab() {
       .slice(0, 6);
   }, [activeThread]);
 
+  useEffect(() => {
+    if (!isMobile) {
+      setMobileView('thread');
+    }
+  }, [isMobile]);
+
+  const filtersContent = (
+    <>
+      <div className={cn('grid grid-cols-1 gap-3', !isMobile && 'xl:grid-cols-[1.1fr_1fr_1fr_1fr_auto]')}>
+        {!isMobile ? (
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Поиск по клиенту, сообщению, email, телефону..."
+          />
+        ) : null}
+
+        <select
+          value={channelFilter}
+          onChange={(event) => setChannelFilter(event.target.value as ChannelFilter)}
+          className={selectClassName}
+          aria-label="Фильтр по каналу"
+        >
+          <option value="all">Все каналы</option>
+          {(Object.keys(CHANNEL_META) as InboxChannel[]).map((channel) => (
+            <option key={channel} value={channel}>
+              {CHANNEL_META[channel].label}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={inquiryTypeFilter}
+          onChange={(event) => setInquiryTypeFilter(event.target.value as InquiryTypeFilter)}
+          className={selectClassName}
+          aria-label="Фильтр по типу обращения"
+        >
+          <option value="all">Все типы</option>
+          {(Object.keys(INQUIRY_TYPE_LABELS) as InquiryType[]).map((type) => (
+            <option key={type} value={type}>
+              {INQUIRY_TYPE_LABELS[type]}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={serviceLevelFilter}
+          onChange={(event) => setServiceLevelFilter(event.target.value as ServiceLevelFilter)}
+          className={selectClassName}
+          aria-label="Фильтр по уровню сервиса"
+        >
+          <option value="all">Уровень сервиса: все</option>
+          {(Object.keys(SERVICE_LEVEL_LABELS) as ServiceLevel[]).map((level) => (
+            <option key={level} value={level}>
+              {SERVICE_LEVEL_LABELS[level]}
+            </option>
+          ))}
+        </select>
+
+        {!isMobile ? (
+          <Button
+            type="button"
+            variant={onlyUnread ? 'default' : 'outline'}
+            className="h-9"
+            onClick={() => setOnlyUnread((prev) => !prev)}
+          >
+            Только непрочитанные
+          </Button>
+        ) : null}
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <span className="pt-1 text-xs text-muted-foreground">SLA:</span>
+        {([
+          ['all', 'Все'],
+          ['breached', 'Просрочено'],
+          ['risk', 'Под риском'],
+          ['ok', 'В норме'],
+        ] as Array<[SlaFilter, string]>).map(([value, label]) => (
+          <Button
+            key={value}
+            type="button"
+            size="sm"
+            variant={slaFilter === value ? 'secondary' : 'outline'}
+            className="h-7 text-xs"
+            onClick={() => setSlaFilter(value)}
+          >
+            {label}
+          </Button>
+        ))}
+
+        <span className="ml-2 pt-1 text-xs text-muted-foreground">Статус:</span>
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+          className={cn(selectClassName, 'h-7 px-2 text-xs')}
+          aria-label="Фильтр по статусу обращения"
+        >
+          <option value="all">Все статусы</option>
+          {(Object.keys(THREAD_STATUS_LABELS) as ThreadStatus[]).map((status) => (
+            <option key={status} value={status}>
+              {THREAD_STATUS_LABELS[status]}
+            </option>
+          ))}
+        </select>
+      </div>
+    </>
+  );
+
+  const clientCardContent = activeThread ? (
+    <div className="space-y-4 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold">Карточка клиента</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Вся история по каналам хранится в карточке клиента
+          </p>
+        </div>
+        {activeThread.client.id > 0 ? (
+          <Button asChild type="button" size="sm" variant="outline">
+            <Link href={`/contact/${activeThread.client.id}`}>Открыть</Link>
+          </Button>
+        ) : (
+          <Button type="button" size="sm" variant="outline" disabled>
+            Нет карточки
+          </Button>
+        )}
+      </div>
+
+      <div className="rounded-lg border p-3">
+        <div className="text-sm font-medium">{activeThread.client.name}</div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          {activeThread.client.company || 'Без компании'} · Менеджер: {activeThread.client.manager}
+        </div>
+        <div className="mt-3 space-y-1 text-xs">
+          {activeThread.client.phone && <div>Телефон: {activeThread.client.phone}</div>}
+          {activeThread.client.email && <div>Email: {activeThread.client.email}</div>}
+          <div>ID клиента: {activeThread.client.id > 0 ? activeThread.client.id : 'не привязан'}</div>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-xs font-medium text-slate-700">Каналы клиента</div>
+        <div className="mt-2 space-y-2">
+          {activeThread.client.channels.map((item) => (
+            <div
+              key={`${activeThread.client.id}-${item.channel}-${item.handle}`}
+              className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs"
+            >
+              <div className="flex items-center gap-2">
+                {channelBadge(item.channel)}
+                <span>{CHANNEL_META[item.channel].label}</span>
+              </div>
+              <span className="truncate text-muted-foreground">{item.handle}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div className="text-xs font-medium text-slate-700">Теги</div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {activeThread.client.tags.map((tag) => (
+            <Badge key={`${activeThread.client.id}-${tag}`} variant="outline" className="text-[11px]">
+              {tag}
+            </Badge>
+          ))}
+        </div>
+      </div>
+
+      {activeThread.client.notes ? (
+        <div className="rounded-lg border bg-slate-50 p-3 text-xs text-slate-700">
+          {activeThread.client.notes}
+        </div>
+      ) : null}
+
+      <div>
+        <div className="text-xs font-medium text-slate-700">История взаимодействий (последние)</div>
+        <div className="mt-2 space-y-2">
+          {activeClientTimeline.map((entry) => (
+            <div key={`${activeThread.id}-${entry.id}`} className="rounded-md border p-2">
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                {channelBadge(entry.channel)}
+                <span>{entry.createdAtLabel}</span>
+                <span>·</span>
+                <span>{entry.direction === 'out' ? 'Ответ менеджера' : 'Сообщение клиента'}</span>
+              </div>
+              <div className="mt-1 line-clamp-2 text-xs text-slate-700">{entry.text}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  ) : (
+    <div className="p-4 text-sm text-muted-foreground">Выберите диалог, чтобы открыть карточку клиента.</div>
+  );
+
   return (
     <div className="space-y-4">
       <div className="rounded-xl border bg-gradient-to-r from-slate-50 to-white p-4">
@@ -745,103 +951,34 @@ export default function UnifiedInboxTab() {
       </div>
 
       <div className="rounded-xl border bg-white p-4">
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.1fr_1fr_1fr_1fr_auto]">
+        <div className="flex flex-col gap-3 md:hidden">
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Поиск по клиенту, сообщению, email, телефону..."
           />
-
-          <select
-            value={channelFilter}
-            onChange={(event) => setChannelFilter(event.target.value as ChannelFilter)}
-            className={selectClassName}
-            aria-label="Фильтр по каналу"
-          >
-            <option value="all">Все каналы</option>
-            {(Object.keys(CHANNEL_META) as InboxChannel[]).map((channel) => (
-              <option key={channel} value={channel}>
-                {CHANNEL_META[channel].label}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={inquiryTypeFilter}
-            onChange={(event) => setInquiryTypeFilter(event.target.value as InquiryTypeFilter)}
-            className={selectClassName}
-            aria-label="Фильтр по типу обращения"
-          >
-            <option value="all">Все типы</option>
-            {(Object.keys(INQUIRY_TYPE_LABELS) as InquiryType[]).map((type) => (
-              <option key={type} value={type}>
-                {INQUIRY_TYPE_LABELS[type]}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={serviceLevelFilter}
-            onChange={(event) => setServiceLevelFilter(event.target.value as ServiceLevelFilter)}
-            className={selectClassName}
-            aria-label="Фильтр по уровню сервиса"
-          >
-            <option value="all">Уровень сервиса: все</option>
-            {(Object.keys(SERVICE_LEVEL_LABELS) as ServiceLevel[]).map((level) => (
-              <option key={level} value={level}>
-                {SERVICE_LEVEL_LABELS[level]}
-              </option>
-            ))}
-          </select>
-
-          <Button
-            type="button"
-            variant={onlyUnread ? 'default' : 'outline'}
-            className="h-9"
-            onClick={() => setOnlyUnread((prev) => !prev)}
-          >
-            Только непрочитанные
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={onlyUnread ? 'default' : 'outline'}
+              className="flex-1"
+              onClick={() => setOnlyUnread((prev) => !prev)}
+            >
+              Только непрочитанные
+            </Button>
+            <Button type="button" variant="outline" className="flex-1" onClick={() => setFiltersOpen(true)}>
+              Фильтры
+            </Button>
+          </div>
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          <span className="text-xs text-muted-foreground pt-1">SLA:</span>
-          {([
-            ['all', 'Все'],
-            ['breached', 'Просрочено'],
-            ['risk', 'Под риском'],
-            ['ok', 'В норме'],
-          ] as Array<[SlaFilter, string]>).map(([value, label]) => (
-            <Button
-              key={value}
-              type="button"
-              size="sm"
-              variant={slaFilter === value ? 'secondary' : 'outline'}
-              className="h-7 text-xs"
-              onClick={() => setSlaFilter(value)}
-            >
-              {label}
-            </Button>
-          ))}
-
-          <span className="ml-2 text-xs text-muted-foreground pt-1">Статус:</span>
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-            className={cn(selectClassName, 'h-7 px-2 text-xs')}
-            aria-label="Фильтр по статусу обращения"
-          >
-            <option value="all">Все статусы</option>
-            {(Object.keys(THREAD_STATUS_LABELS) as ThreadStatus[]).map((status) => (
-              <option key={status} value={status}>
-                {THREAD_STATUS_LABELS[status]}
-              </option>
-            ))}
-          </select>
+        <div className="hidden md:block">
+          {filtersContent}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[360px_minmax(0,1fr)_320px]">
+      <div className={cn('grid grid-cols-1 gap-4', !isMobile && 'xl:grid-cols-[360px_minmax(0,1fr)_320px]')}>
+        {(!isMobile || mobileView === 'queue') ? (
         <div className="rounded-xl border bg-white">
           <div className="border-b px-4 py-3">
             <div className="text-sm font-semibold">Очередь входящих</div>
@@ -928,13 +1065,20 @@ export default function UnifiedInboxTab() {
             )}
           </div>
         </div>
+        ) : null}
 
+        {(!isMobile || mobileView === 'thread') ? (
         <div className="rounded-xl border bg-white">
           {activeThread ? (
             <div className="flex h-full min-h-[720px] flex-col">
               <div className="border-b px-4 py-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
+                    {isMobile ? (
+                      <Button type="button" size="sm" variant="ghost" className="-ml-2 mb-2 px-2" onClick={() => setMobileView('queue')}>
+                        ← К очереди
+                      </Button>
+                    ) : null}
                     <div className="flex items-center gap-2">
                       <h3 className="text-base font-semibold">{activeThread.client.name}</h3>
                       {channelBadge(activeThread.sourceChannel)}
@@ -952,6 +1096,11 @@ export default function UnifiedInboxTab() {
                     <Badge variant="outline" className={cn('border', SLA_BADGE_CLASS[activeThread.slaState])}>
                       {activeThread.slaDeadlineLabel}
                     </Badge>
+                    {isMobile ? (
+                      <Button type="button" size="sm" variant="outline" onClick={() => setClientCardOpen(true)}>
+                        Клиент
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
 
@@ -1085,101 +1234,27 @@ export default function UnifiedInboxTab() {
             </div>
           )}
         </div>
+        ) : null}
 
-        <div className="rounded-xl border bg-white">
-          {activeThread ? (
-            <div className="space-y-4 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-semibold">Карточка клиента</h3>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Вся история по каналам хранится в карточке клиента
-                  </p>
-                </div>
-                {activeThread.client.id > 0 ? (
-                  <Button asChild type="button" size="sm" variant="outline">
-                    <Link href={`/contact/${activeThread.client.id}`}>Открыть</Link>
-                  </Button>
-                ) : (
-                  <Button type="button" size="sm" variant="outline" disabled>
-                    Нет карточки
-                  </Button>
-                )}
-              </div>
-
-              <div className="rounded-lg border p-3">
-                <div className="text-sm font-medium">{activeThread.client.name}</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {activeThread.client.company || 'Без компании'} · Менеджер: {activeThread.client.manager}
-                </div>
-                <div className="mt-3 space-y-1 text-xs">
-                  {activeThread.client.phone && (
-                    <div>Телефон: {activeThread.client.phone}</div>
-                  )}
-                  {activeThread.client.email && (
-                    <div>Email: {activeThread.client.email}</div>
-                  )}
-                  <div>ID клиента: {activeThread.client.id > 0 ? activeThread.client.id : 'не привязан'}</div>
-                </div>
-              </div>
-
-              <div>
-                <div className="text-xs font-medium text-slate-700">Каналы клиента</div>
-                <div className="mt-2 space-y-2">
-                  {activeThread.client.channels.map((item) => (
-                    <div
-                      key={`${activeThread.client.id}-${item.channel}-${item.handle}`}
-                      className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs"
-                    >
-                      <div className="flex items-center gap-2">
-                        {channelBadge(item.channel)}
-                        <span>{CHANNEL_META[item.channel].label}</span>
-                      </div>
-                      <span className="truncate text-muted-foreground">{item.handle}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-xs font-medium text-slate-700">Теги</div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {activeThread.client.tags.map((tag) => (
-                    <Badge key={`${activeThread.client.id}-${tag}`} variant="outline" className="text-[11px]">
-                      {tag}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-
-              {activeThread.client.notes && (
-                <div className="rounded-lg border bg-slate-50 p-3 text-xs text-slate-700">
-                  {activeThread.client.notes}
-                </div>
-              )}
-
-              <div>
-                <div className="text-xs font-medium text-slate-700">История взаимодействий (последние)</div>
-                <div className="mt-2 space-y-2">
-                  {activeClientTimeline.map((entry) => (
-                    <div key={`${activeThread.id}-${entry.id}`} className="rounded-md border p-2">
-                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                        {channelBadge(entry.channel)}
-                        <span>{entry.createdAtLabel}</span>
-                        <span>·</span>
-                        <span>{entry.direction === 'out' ? 'Ответ менеджера' : 'Сообщение клиента'}</span>
-                      </div>
-                      <div className="mt-1 line-clamp-2 text-xs text-slate-700">{entry.text}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="p-4 text-sm text-muted-foreground">Выберите диалог, чтобы открыть карточку клиента.</div>
-          )}
-        </div>
+        {!isMobile ? (
+          <div className="rounded-xl border bg-white">
+            {clientCardContent}
+          </div>
+        ) : null}
       </div>
+
+      <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+        <SheetContent side="bottom" className="max-h-[85vh] rounded-t-3xl border-t bg-white px-4 py-6">
+          <div className="mb-4 text-base font-semibold text-slate-900">Фильтры inbox</div>
+          {filtersContent}
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={clientCardOpen} onOpenChange={setClientCardOpen}>
+        <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto rounded-t-3xl border-t bg-white px-0 py-0">
+          {clientCardContent}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

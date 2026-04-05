@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { crmContactsApi, crmDealsApi, type Contact, type Deal } from '@/lib/api/crm';
 import { clientProductsApi } from '@/lib/api/clientProducts';
 import type { ClientProduct } from '@/lib/types';
+import { useIsMobileBreakpoint } from './use-mobile-breakpoint';
 
 type DealsView = 'list' | 'kanban';
 type DealStageKey = Deal['stage'];
@@ -72,6 +73,7 @@ function getProductLabel(productId: number | null | undefined, productsById: Map
 
 export function DealsTab() {
   const searchParams = useSearchParams();
+  const isMobile = useIsMobileBreakpoint();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [products, setProducts] = useState<ClientProduct[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
@@ -131,6 +133,12 @@ export function DealsTab() {
   useEffect(() => {
     if (viewFromQuery) setView(viewFromQuery);
   }, [viewFromQuery]);
+
+  useEffect(() => {
+    if (isMobile) {
+      setView('list');
+    }
+  }, [isMobile]);
 
   const rows = useMemo(() => {
     return [...deals].sort((a, b) => {
@@ -208,6 +216,8 @@ export function DealsTab() {
     return <p className="text-sm text-red-500">{error}</p>;
   }
 
+  const effectiveView: DealsView = isMobile ? 'list' : view;
+
   return (
     <div className="space-y-4">
       {funnelStageFilter ? (
@@ -215,14 +225,14 @@ export function DealsTab() {
           <div>
             Фильтр по этапу воронки: <span className="font-medium">{DEAL_STAGE_LABELS[funnelStageFilter]}</span>
           </div>
-          <Link href="/clients?tab=deals" className="text-primary hover:underline">
+          <Link href="/clients/deals" className="text-primary hover:underline">
             Сбросить фильтр
           </Link>
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg border bg-background p-1">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="hidden rounded-lg border bg-background p-1 md:inline-flex">
           <Button type="button" size="sm" variant={view === 'list' ? 'default' : 'ghost'} onClick={() => setView('list')}>
             Список
           </Button>
@@ -242,35 +252,63 @@ export function DealsTab() {
         <p className="text-sm text-muted-foreground">
           {funnelStageFilter ? 'Сделки по выбранному этапу не найдены.' : 'Сделки не найдены.'}
         </p>
-      ) : view === 'list' ? (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40">
-              <tr>
-                <th className="px-4 py-2 text-left font-medium">Продукт</th>
-                <th className="px-4 py-2 text-left font-medium">Имя</th>
-                <th className="px-4 py-2 text-left font-medium">Этап</th>
-                <th className="px-4 py-2 text-left font-medium">Сумма</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.map((deal) => (
-                <tr key={deal.id} className="border-t">
-                  <td className="px-4 py-2">
-                    <Link href={`/clients/deals/${deal.id}`} className="font-medium hover:underline">
+      ) : effectiveView === 'list' ? (
+        <>
+          <div className="space-y-3 md:hidden" data-testid="deals-mobile-list">
+            {filteredRows.map((deal) => (
+              <Link
+                key={deal.id}
+                href={`/clients/deals/${deal.id}`}
+                className="block rounded-xl border p-4 transition-colors hover:border-slate-300 hover:bg-slate-50"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-slate-900">
                       {getProductLabel(deal.product_id, productsById)}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2">{getContactLabel(deal, contactsById)}</td>
-                  <td className="px-4 py-2">{DEAL_STAGE_LABELS[deal.stage]}</td>
-                  <td className="px-4 py-2">{formatDealAmount(deal.amount, deal.currency)}</td>
+                    </div>
+                    <div className="mt-1 text-sm text-slate-600">{getContactLabel(deal, contactsById)}</div>
+                  </div>
+                  <Badge variant="secondary" className="shrink-0">
+                    {DEAL_STAGE_LABELS[deal.stage]}
+                  </Badge>
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
+                  <span>Сумма</span>
+                  <span className="font-medium text-slate-900">{formatDealAmount(deal.amount, deal.currency)}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+
+          <div className="hidden overflow-x-auto rounded-lg border md:block">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40">
+                <tr>
+                  <th className="px-4 py-2 text-left font-medium">Продукт</th>
+                  <th className="px-4 py-2 text-left font-medium">Имя</th>
+                  <th className="px-4 py-2 text-left font-medium">Этап</th>
+                  <th className="px-4 py-2 text-left font-medium">Сумма</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filteredRows.map((deal) => (
+                  <tr key={deal.id} className="border-t">
+                    <td className="px-4 py-2">
+                      <Link href={`/clients/deals/${deal.id}`} className="font-medium hover:underline">
+                        {getProductLabel(deal.product_id, productsById)}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2">{getContactLabel(deal, contactsById)}</td>
+                    <td className="px-4 py-2">{DEAL_STAGE_LABELS[deal.stage]}</td>
+                    <td className="px-4 py-2">{formatDealAmount(deal.amount, deal.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-6">
+        <div className="hidden gap-4 md:grid xl:grid-cols-6">
           {DEAL_STAGE_ORDER.map((stage) => (
             <div
               key={stage}

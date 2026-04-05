@@ -195,8 +195,8 @@ function buildMarketingSections(
         { label: 'Встреч впереди', value: formatCount(crmOverview?.upcomingEvents) },
       ],
       secondaryLinks: [
-        { label: 'Календарь', href: '/clients?tab=schedule&scheduleTab=calendar' },
-        { label: 'Сделки', href: '/clients?tab=deals' },
+        { label: 'Календарь', href: '/clients/schedule' },
+        { label: 'Сделки', href: '/clients/deals' },
       ],
     },
   ];
@@ -387,7 +387,7 @@ export default function MarketingPage() {
               { label: 'Конкуренты', href: '/seo?tab=competitors' },
               { label: 'Новый пост', href: '/posts/new' },
               { label: 'Открыть статьи', href: '/articles' },
-              { label: 'Календарь', href: '/clients?tab=schedule&scheduleTab=calendar' },
+              { label: 'Календарь', href: '/clients/schedule' },
             ]}
           />
 
@@ -399,7 +399,7 @@ export default function MarketingPage() {
               { label: `AI-запуски: ${overviewCards[0]?.value ?? '...'}`, href: '/welcome' },
               { label: `Публикации: ${overviewCards[1]?.value ?? '...'}`, href: '/posts' },
               { label: `Клиенты: ${overviewCards[2]?.value ?? '...'}`, href: '/clients' },
-              { label: `Касания: ${overviewCards[3]?.value ?? '...'}`, href: '/clients?tab=schedule&scheduleTab=calendar' },
+              { label: `Касания: ${overviewCards[3]?.value ?? '...'}`, href: '/clients/schedule' },
             ]}
           />
 

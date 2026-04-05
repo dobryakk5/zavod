@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Textarea } from '@/components/ui/textarea';
 import { ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -176,6 +177,7 @@ export function ClientsTab() {
   const [pendingLostFromStage, setPendingLostFromStage] = useState<DealStage | null>(null);
   const [lossReasonCode, setLossReasonCode] = useState<string>('none');
   const [lossReasonText, setLossReasonText] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const clientDraftsRef = useRef(clientDrafts);
   const tagDraftsRef = useRef(tagDrafts);
 
@@ -946,6 +948,88 @@ export function ClientsTab() {
     });
   }, [tags, tagDrafts]);
 
+  const tagLookupById = useMemo(() => {
+    return new Map<number, MapTag>(tags.map((tag) => [tag.id, tag]));
+  }, [tags]);
+
+  const getClientTagSummary = useCallback((client: MapClient) => {
+    return TAG_TYPES.flatMap((type) =>
+      (client.tags?.[type] ?? [])
+        .map((tagId) => {
+          const tag = tagLookupById.get(tagId);
+          if (!tag) return null;
+          return {
+            key: `${type}-${tag.id}`,
+            type,
+            label: TAG_LABELS[type],
+            value: tag.value,
+          };
+        })
+        .filter((item): item is { key: string; type: TagType; label: string; value: string } => Boolean(item))
+    );
+  }, [tagLookupById]);
+
+  const clientsFiltersContent = (
+    <div className="grid gap-3 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
+      <div className="space-y-2">
+        <div className="text-xs font-semibold text-muted-foreground">Имя клиента</div>
+        <Input
+          value={nameFilter}
+          onChange={(e) => setNameFilter(e.target.value)}
+          placeholder="Поиск по имени"
+          className="h-8 text-xs"
+        />
+      </div>
+      {TAG_TYPES.map((type) => (
+        <div key={`filter-${type}`} className="space-y-2">
+          <div className="text-xs font-semibold text-muted-foreground">{TAG_LABELS[type]}</div>
+          {tagsByType[type].length === 0 ? (
+            <p className="text-sm text-muted-foreground">Нет тегов</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, [type]: [] }))}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                  filters[type].length === 0
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                }`}
+              >
+                Все
+              </button>
+              {tagsByType[type].map((tag) => {
+                const selected = filters[type].includes(tag.id);
+                return (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    onClick={() =>
+                      setFilters((prev) => {
+                        const existing = prev[type] ?? [];
+                        const next = selected
+                          ? existing.filter((id) => id !== tag.id)
+                          : [...existing, tag.id];
+                        return { ...prev, [type]: next };
+                      })
+                    }
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                      selected
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    }`}
+                  >
+                    {tag.value}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       {error && (
@@ -1009,65 +1093,20 @@ export function ClientsTab() {
           ) : (
             <div className="space-y-4">
               {workspaceMode === 'clients' && (
-                <div className="rounded-xl border bg-card/70 p-4 shadow-sm">
-                  <div className="grid gap-3 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
-                    <div className="space-y-2">
-                      <div className="text-xs font-semibold text-muted-foreground">Имя клиента</div>
-                      <Input
-                        value={nameFilter}
-                        onChange={(e) => setNameFilter(e.target.value)}
-                        placeholder="Поиск по имени"
-                        className="h-8 text-xs"
-                      />
-                    </div>
-                    {TAG_TYPES.map((type) => (
-                      <div key={`filter-${type}`} className="space-y-2">
-                        <div className="text-xs font-semibold text-muted-foreground">{TAG_LABELS[type]}</div>
-                        {tagsByType[type].length === 0 ? (
-                          <p className="text-sm text-muted-foreground">Нет тегов</p>
-                        ) : (
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setFilters((prev) => ({ ...prev, [type]: [] }))}
-                              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                                filters[type].length === 0
-                                  ? 'bg-primary text-primary-foreground shadow-sm'
-                                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                              }`}
-                            >
-                              Все
-                            </button>
-                            {tagsByType[type].map((tag) => {
-                              const selected = filters[type].includes(tag.id);
-                              return (
-                                <button
-                                  key={tag.id}
-                                  type="button"
-                                  onClick={() =>
-                                    setFilters((prev) => {
-                                      const existing = prev[type] ?? [];
-                                      const next = selected
-                                        ? existing.filter((id) => id !== tag.id)
-                                        : [...existing, tag.id];
-                                      return { ...prev, [type]: next };
-                                    })
-                                  }
-                                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                                    selected
-                                      ? 'bg-primary text-primary-foreground shadow-sm'
-                                      : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                                  }`}
-                                >
-                                  {tag.value}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                <div className="flex items-center justify-between gap-3 rounded-xl border bg-card/70 p-3 shadow-sm md:hidden">
+                  <div>
+                    <div className="text-sm font-medium text-slate-900">Клиенты</div>
+                    <div className="text-xs text-muted-foreground">Найдено: {filteredClients.length}</div>
                   </div>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setFiltersOpen(true)}>
+                    Фильтры
+                  </Button>
+                </div>
+              )}
+
+              {workspaceMode === 'clients' && (
+                <div className="hidden rounded-xl border bg-card/70 p-4 shadow-sm md:block">
+                  {clientsFiltersContent}
                 </div>
               )}
 
@@ -1161,6 +1200,185 @@ export function ClientsTab() {
                     ? 'Клиенты по выбранным тегам не найдены.'
                     : 'Сделки по выбранным фильтрам не найдены.'}
                 </p>
+              ) : workspaceMode === 'clients' ? (
+                <>
+                  <div className="space-y-3 md:hidden" data-testid="clients-mobile-list">
+                    {filteredClients.map((client) => {
+                      const tagSummary = getClientTagSummary(client);
+                      return (
+                        <Card key={client.id}>
+                          <CardContent className="space-y-4 p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-base font-semibold text-slate-900">{client.name}</div>
+                                <div className="mt-1 text-xs text-slate-500">ID клиента: {client.id}</div>
+                              </div>
+                              <Button type="button" variant="outline" size="sm" onClick={() => openClientWindow(client.id)}>
+                                Открыть
+                              </Button>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              {TAG_TYPES.map((type) => (
+                                <div key={`${client.id}-${type}`} className="rounded-xl border bg-slate-50 px-3 py-2">
+                                  <div className="text-[11px] uppercase tracking-wide text-slate-500">{TAG_LABELS[type]}</div>
+                                  <div className="mt-1 text-lg font-semibold text-slate-900">
+                                    {client.tags?.[type]?.length ?? 0}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="space-y-2">
+                              <div className="text-xs font-semibold text-slate-500">Теги</div>
+                              {tagSummary.length === 0 ? (
+                                <div className="text-sm text-slate-500">Теги пока не назначены.</div>
+                              ) : (
+                                <div className="flex flex-wrap gap-2">
+                                  {tagSummary.slice(0, 8).map((tag) => (
+                                    <Badge key={tag.key} variant="outline" className="max-w-full">
+                                      <span className="truncate">{tag.value}</span>
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex items-center justify-between gap-3">
+                              <Button type="button" variant="ghost" className="px-0 text-red-600 hover:text-red-700" onClick={() => void handleDeleteClient(client)}>
+                                Удалить
+                              </Button>
+                              <Button type="button" variant="outline" onClick={() => openClientWindow(client.id)}>
+                                В карточку клиента
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+
+                  <div className="hidden space-y-4 md:block">
+                    {filteredClients.map((client) => {
+                      const row = clientRows.find((item) => item.client.id === client.id);
+                      const dealStage = normalizeDealStage(client);
+                      return (
+                        <Card
+                          key={client.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={(event) => {
+                            const target = event.target as HTMLElement | null;
+                            if (target?.closest('input,textarea,button,a,select')) return;
+                            openClientWindow(client.id);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              openClientWindow(client.id);
+                            }
+                          }}
+                          className="cursor-pointer transition hover:shadow-sm"
+                        >
+                          <CardContent className="p-4">
+                            {workspaceMode === 'clients' ? (
+                              <div className="grid gap-4 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
+                              <div className="space-y-2">
+                                <Input
+                                  value={row?.name ?? client.name}
+                                  onChange={(e) => {
+                                    const nextName = e.target.value;
+                                    setClientDrafts((prev) => {
+                                      const existing = prev[client.id] ?? {
+                                        name: client.name ?? '',
+                                        dirty: false,
+                                        saving: false,
+                                        error: null,
+                                        revision: 0
+                                      };
+                                      return {
+                                        ...prev,
+                                        [client.id]: {
+                                          ...existing,
+                                          name: nextName,
+                                          dirty: true,
+                                          error: null,
+                                          revision: existing.revision + 1
+                                        }
+                                      };
+                                    });
+                                  }}
+                                  onBlur={() => void saveClientDraft(client.id)}
+                                  className="h-9"
+                                />
+                                {row?.error ? <div className="text-xs text-destructive">{row.error}</div> : null}
+                                {row?.saving ? <div className="text-xs text-muted-foreground">Сохранение…</div> : null}
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => void handleDeleteClient(client)}
+                                  aria-label="Удалить клиента"
+                                  title="Удалить клиента"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                              {TAG_TYPES.map((type) => (
+                                <TagColumn
+                                  key={`${client.id}-${type}`}
+                                  title={TAG_LABELS[type]}
+                                  type={type}
+                                  client={client}
+                                  tags={tagsByType[type]}
+                                  onToggle={toggleTag}
+                                  pending={pending}
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="grid gap-3 md:grid-cols-[minmax(220px,1.5fr)_repeat(3,minmax(0,1fr))]">
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <div className="font-medium">{client.name}</div>
+                                  <Badge variant={DEAL_STAGE_BADGE_VARIANTS[dealStage]}>
+                                    {DEAL_STAGE_LABELS[dealStage]}
+                                  </Badge>
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  #{client.id} · {normalizeDealSource(client)}
+                                </div>
+                                {client.deal_loss_reason_code && dealStage === 'lost' && (
+                                  <div className="text-xs text-amber-700">
+                                    {DEAL_LOSS_REASON_LABELS[client.deal_loss_reason_code as DealLossReasonCode] ?? client.deal_loss_reason_code}
+                                    {client.deal_loss_reason_text ? ` · ${client.deal_loss_reason_text}` : ''}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="rounded-md border px-3 py-2">
+                                <div className="text-xs text-muted-foreground">Сумма сделки</div>
+                                <div className="mt-1 font-semibold">
+                                  {(client.deal_amount ?? '') !== '' && client.deal_amount !== null ? `${client.deal_amount} ₽` : '—'}
+                                </div>
+                              </div>
+                              <div className="rounded-md border px-3 py-2">
+                                <div className="text-xs text-muted-foreground">Быстрый переход</div>
+                                <div className="mt-1 text-sm">Откройте карточку контакта для суммы/причины/деталей</div>
+                              </div>
+                              <div className="flex items-center justify-end">
+                                <Button type="button" variant="outline" onClick={() => openClientWindow(client.id)}>
+                                  Открыть сделку
+                                </Button>
+                              </div>
+                            </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </>
               ) : workspaceMode === 'deals' && clientsView === 'kanban' ? (
                 <div className="grid gap-4 xl:grid-cols-6">
                   {DEAL_STAGE_ORDER.map((stage) => (
@@ -1265,7 +1483,7 @@ export function ClientsTab() {
                   ))}
                 </div>
               ) : (
-                (workspaceMode === 'clients' ? filteredClients : dealFilteredClients).map((client) => {
+                (dealFilteredClients).map((client) => {
                   const row = clientRows.find((item) => item.client.id === client.id);
                   const dealStage = normalizeDealStage(client);
                   return (
@@ -1287,63 +1505,6 @@ export function ClientsTab() {
                       className="cursor-pointer transition hover:shadow-sm"
                     >
                       <CardContent className="p-4">
-                        {workspaceMode === 'clients' ? (
-                          <div className="grid gap-4 lg:grid-cols-[minmax(200px,260px)_repeat(3,minmax(200px,1fr))]">
-                          <div className="space-y-2">
-                            <Input
-                              value={row?.name ?? client.name}
-                              onChange={(e) => {
-                                const nextName = e.target.value;
-                                setClientDrafts((prev) => {
-                                  const existing = prev[client.id] ?? {
-                                    name: client.name ?? '',
-                                    dirty: false,
-                                    saving: false,
-                                    error: null,
-                                    revision: 0
-                                  };
-                                  return {
-                                    ...prev,
-                                    [client.id]: {
-                                      ...existing,
-                                      name: nextName,
-                                      dirty: true,
-                                      error: null,
-                                      revision: existing.revision + 1
-                                    }
-                                  };
-                                });
-                              }}
-                              onBlur={() => void saveClientDraft(client.id)}
-                              className="h-9"
-                            />
-                            {row?.error ? <div className="text-xs text-destructive">{row.error}</div> : null}
-                            {row?.saving ? <div className="text-xs text-muted-foreground">Сохранение…</div> : null}
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => void handleDeleteClient(client)}
-                              aria-label="Удалить клиента"
-                              title="Удалить клиента"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          {TAG_TYPES.map((type) => (
-                            <TagColumn
-                              key={`${client.id}-${type}`}
-                              title={TAG_LABELS[type]}
-                              type={type}
-                              client={client}
-                              tags={tagsByType[type]}
-                              onToggle={toggleTag}
-                              pending={pending}
-                            />
-                          ))}
-                        </div>
-                      ) : (
                         <div className="grid gap-3 md:grid-cols-[minmax(220px,1.5fr)_repeat(3,minmax(0,1fr))]">
                           <div className="space-y-2">
                             <div className="flex items-center gap-2">
@@ -1378,7 +1539,6 @@ export function ClientsTab() {
                             </Button>
                           </div>
                         </div>
-                        )}
                       </CardContent>
                     </Card>
                   );
@@ -1487,6 +1647,13 @@ export function ClientsTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+        <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto rounded-t-3xl border-t bg-white px-4 py-6">
+          <div className="mb-4 text-base font-semibold text-slate-900">Фильтры клиентов</div>
+          {clientsFiltersContent}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
