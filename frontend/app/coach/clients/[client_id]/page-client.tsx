@@ -635,7 +635,7 @@ export default function CoachClientSessionPage({
                       <button
                         type="button"
                         onClick={() => setSelectedGoalId(goal.id)}
-                        className={`flex w-full items-center gap-2 rounded-[8px] border-[0.5px] px-[10px] py-[9px] text-left transition-colors ${
+                        className={`flex w-full items-center gap-2 rounded-[8px] border-[0.5px] px-3 py-3 text-left transition-colors ${
                           isActive
                             ? 'border-[#1D9E75] bg-[rgba(29,158,117,0.04)]'
                             : 'border-[#e0ddd6] bg-white hover:border-[#b4b2a9]'
@@ -659,7 +659,7 @@ export default function CoachClientSessionPage({
                             />
                           </svg>
                         </div>
-                        <div className="min-w-0 flex-1 text-[12px] leading-[1.4] text-[#1a1a18]">{goal.title}</div>
+                        <div className="min-w-0 flex-1 text-[14px] leading-[1.4] text-[#1a1a18]">{goal.title}</div>
                         <div className="shrink-0 text-[11px] font-medium" style={{ color: goalColor }}>
                           {goal.progress}%
                         </div>
@@ -669,126 +669,125 @@ export default function CoachClientSessionPage({
                       </div>
 
                       {isActive ? (
-                        <div className="ml-6 mt-1 flex flex-col gap-1">
+                        <div className="ml-0 mt-2 flex flex-col gap-2 sm:ml-6">
                           {goal.steps.map((step) => {
                             return (
                               <div
                                 key={step.id}
-                                className="rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[10px] py-[7px]"
+                                className="rounded-[8px] border-[0.5px] border-[#e0ddd6] bg-white px-3 py-3"
                               >
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-start gap-3">
                                   <button
                                     type="button"
                                     onClick={() => void handleToggleStep(step.id, !step.done)}
                                     disabled={savingStepId === step.id}
-                                    className="flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[0.5px] border-[#d3d1c7] disabled:cursor-not-allowed disabled:opacity-70"
+                                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] border transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
+                                      step.done
+                                        ? 'border-transparent bg-[#e1f5ee]'
+                                        : 'border-[#d3d1c7] hover:border-[#b4b2a9]'
+                                    }`}
+                                    aria-label={step.done ? 'Отметить как невыполненный' : 'Отметить как выполненный'}
                                   >
-                                    <div
-                                      className={`flex h-[14px] w-[14px] items-center justify-center rounded-[3px] ${
-                                        step.done ? 'border-transparent bg-[#e1f5ee]' : ''
-                                      }`}
-                                    >
-                                      {step.done ? (
-                                        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-                                          <path
-                                            d="M2 5l2.5 2.5L8 3"
-                                            stroke="#0f6e56"
-                                            strokeWidth="1.5"
-                                            fill="none"
-                                            strokeLinecap="round"
-                                          />
-                                        </svg>
-                                      ) : null}
-                                    </div>
+                                    {step.done ? (
+                                      <svg width="12" height="12" viewBox="0 0 10 10" aria-hidden="true">
+                                        <path
+                                          d="M2 5l2.5 2.5L8 3"
+                                          stroke="#0f6e56"
+                                          strokeWidth="1.5"
+                                          fill="none"
+                                          strokeLinecap="round"
+                                        />
+                                      </svg>
+                                    ) : null}
                                   </button>
 
                                   <div className="min-w-0 flex-1">
                                     <Link
                                       href={`/coach/clients/${clientId}/steps/${step.id}`}
-                                      className={`block text-[11px] transition-colors hover:text-[#185fa5] hover:underline ${
-                                        step.done ? 'text-[#73726c] opacity-60 line-through' : 'text-[#73726c]'
+                                      className={`block text-[14px] leading-[1.4] transition-colors hover:text-[#185fa5] hover:underline ${
+                                        step.done ? 'text-[#b4b2a9] line-through' : 'text-[#1a1a18]'
                                       }`}
                                     >
                                       {step.text}
                                     </Link>
+
+                                    {step.dueDate && !step.done ? (
+                                      <div className="mt-1 inline-flex rounded-full bg-[rgba(186,117,23,0.1)] px-2 py-0.5 text-[12px] text-[#633806]">
+                                        {formatShortDate(step.dueDate)}
+                                      </div>
+                                    ) : null}
                                   </div>
 
-                                  {step.dueDate && !step.done ? (
-                                    <div className="shrink-0 rounded-full bg-[rgba(186,117,23,0.1)] px-[6px] py-[1px] text-[10px] text-[#633806]">
-                                      {formatShortDate(step.dueDate)}
-                                    </div>
-                                  ) : null}
-
-                                  <div className="flex shrink-0 items-center gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleToggleStepMilestone(step.id, !step.isMilestone)}
-                                      disabled={savingStepId === step.id}
-                                      className={`flex h-[27px] w-[27px] items-center justify-center rounded-[6px] border text-[13px] leading-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                                        step.isMilestone
-                                          ? 'border-[#EF9F27] bg-[rgba(186,117,23,0.08)] text-[#BA7517]'
-                                          : 'border-[#d7d2c7] text-[#b4b2a9] hover:bg-[#f5f4f0]'
-                                      }`}
-                                      aria-label={step.isMilestone ? `Убрать веху у шага ${step.text}` : `Сделать шаг вехой ${step.text}`}
-                                      title={step.isMilestone ? 'Убрать веху' : 'Отметить как веху'}
-                                    >
-                                      ★
-                                    </button>
-                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleToggleStepMilestone(step.id, !step.isMilestone)}
+                                    disabled={savingStepId === step.id}
+                                    className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] border text-[15px] leading-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                      step.isMilestone
+                                        ? 'border-[#EF9F27] bg-[rgba(186,117,23,0.08)] text-[#BA7517]'
+                                        : 'border-[#d7d2c7] text-[#b4b2a9] hover:bg-[#f5f4f0]'
+                                    }`}
+                                    aria-label={step.isMilestone ? `Убрать веху у шага ${step.text}` : `Сделать шаг вехой ${step.text}`}
+                                    title={step.isMilestone ? 'Убрать веху' : 'Отметить как веху'}
+                                  >
+                                    ★
+                                  </button>
                                 </div>
                               </div>
                             );
                           })}
 
-                          <div className="flex flex-col gap-1.5">
-                            <div className="flex flex-col gap-2 sm:flex-row">
-                              <input
-                                value={newStepText}
-                                onChange={(event) => setNewStepText(event.target.value)}
-                                onKeyDown={(event) => {
-                                  if (event.key === 'Enter' && newStepText.trim()) {
-                                    void handleAddStep();
-                                  }
-                                }}
-                                disabled={false}
-                                placeholder="Введите новый шаг"
-                                className="min-w-0 h-[34px] flex-1 rounded-[6px] border-[0.5px] border-dashed border-[#e0ddd6] bg-white px-[10px] py-0 text-[11px] leading-[34px] text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
-                              />
-                              <input
-                                ref={newStepDueDateInputRef}
-                                type="date"
-                                value={newStepDueDate}
-                                onChange={(event) => setNewStepDueDate(event.target.value)}
-                                title="Срок выполнения (необязательно)"
-                                className="sr-only"
-                                tabIndex={-1}
-                                aria-hidden="true"
-                              />
-                              <button
-                                type="button"
-                                onClick={handleOpenDueDatePicker}
-                                title={newStepDueDate ? `Срок: ${formatShortDate(newStepDueDate)}` : 'Выбрать срок'}
-                                className={`shrink-0 rounded-[6px] border-[0.5px] px-[8px] py-[6px] transition-colors ${
-                                  newStepDueDate
-                                    ? 'border-[#BA7517] bg-[rgba(186,117,23,0.08)] text-[#633806]'
-                                    : 'border-[#d3d1c7] text-[#73726c] hover:bg-[#f5f4f0]'
-                                }`}
-                              >
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <path
-                                    d="M7 3v3M17 3v3M4 9h16M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"
-                                    stroke="currentColor"
-                                    strokeWidth="1.7"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                  />
-                                </svg>
-                              </button>
+                          <div className="mt-2 flex flex-col gap-3">
+                            <input
+                              value={newStepText}
+                              onChange={(event) => setNewStepText(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' && newStepText.trim()) {
+                                  void handleAddStep();
+                                }
+                              }}
+                              placeholder="Введите новый шаг"
+                              className="min-w-0 h-11 w-full rounded-[8px] border-[0.5px] border-dashed border-[#e0ddd6] bg-white px-3 py-0 text-[14px] text-[#1a1a18] outline-none placeholder:text-[#a6a39a] focus:border-[#b4b2a9]"
+                            />
+
+                            <div className="flex items-center gap-2">
+                              <div className="relative shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={handleOpenDueDatePicker}
+                                  title={newStepDueDate ? `Срок: ${formatShortDate(newStepDueDate)}` : 'Выбрать срок'}
+                                  className={`flex h-11 items-center gap-2 rounded-[8px] border-[0.5px] px-3 text-[13px] transition-colors ${
+                                    newStepDueDate
+                                      ? 'border-[#BA7517] bg-[rgba(186,117,23,0.08)] text-[#633806]'
+                                      : 'border-[#d3d1c7] text-[#73726c] hover:bg-[#f5f4f0]'
+                                  }`}
+                                >
+                                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="shrink-0">
+                                    <path
+                                      d="M7 3v3M17 3v3M4 9h16M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"
+                                      stroke="currentColor"
+                                      strokeWidth="1.7"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                  <span>{newStepDueDate ? formatShortDate(newStepDueDate) : 'Срок'}</span>
+                                </button>
+                                <input
+                                  ref={newStepDueDateInputRef}
+                                  type="date"
+                                  value={newStepDueDate}
+                                  onChange={(event) => setNewStepDueDate(event.target.value)}
+                                  aria-label="Срок выполнения шага"
+                                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                  style={{ fontSize: '16px' }}
+                                />
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => void handleAddStep()}
                                 disabled={savingGoalList || !newStepText.trim()}
-                                className="rounded-[6px] border-[0.5px] border-[#d3d1c7] px-3 py-[6px] text-[11px] text-[#73726c] transition-colors hover:bg-[#f5f4f0] disabled:cursor-not-allowed disabled:opacity-50"
+                                className="h-11 rounded-[8px] border-[0.5px] border-[#d3d1c7] px-4 text-[13px] text-[#73726c] transition-colors hover:bg-[#f5f4f0] disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 {savingGoalList ? '...' : 'Добавить'}
                               </button>

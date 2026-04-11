@@ -259,7 +259,7 @@ export default function CoachClientStepPage({ clientId, stepId }: CoachClientSte
               type="button"
               onClick={() => void handleToggleDone()}
               disabled={saving}
-              className={`rounded-[8px] px-3 py-2 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+              className={`rounded-[8px] px-4 py-3 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                 step.done
                   ? 'border border-[#d7d2c7] bg-white text-[#5c564e]'
                   : 'bg-[#1D9E75] text-[#E1F5EE]'
@@ -290,50 +290,51 @@ export default function CoachClientStepPage({ clientId, stepId }: CoachClientSte
             <div className="mb-4 text-[16px] font-medium">Параметры шага</div>
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-[12px] font-medium text-[#5c564e]">Название шага</label>
+                <label className="text-[13px] font-medium text-[#5c564e]">Название шага</label>
                 <input
                   value={titleDraft}
                   onChange={(event) => setTitleDraft(event.target.value)}
-                  className="w-full rounded-[8px] border border-[#d7d2c7] bg-white px-3 py-2 text-[14px] outline-none focus:border-[#185fa5]"
+                  className="w-full rounded-[8px] border border-[#d7d2c7] bg-white px-3 py-3 text-[14px] outline-none focus:border-[#185fa5]"
                 />
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-[12px] font-medium text-[#5c564e]">Срок</label>
+                  <label className="text-[13px] font-medium text-[#5c564e]">Срок</label>
                   <input
                     type="date"
                     value={dueDateDraft}
                     onChange={(event) => setDueDateDraft(event.target.value)}
-                    className="w-full rounded-[8px] border border-[#d7d2c7] bg-white px-3 py-2 text-[14px] outline-none focus:border-[#185fa5]"
+                    className="w-full rounded-[8px] border border-[#d7d2c7] bg-white px-3 py-3 text-[14px] outline-none focus:border-[#185fa5]"
+                    style={{ fontSize: '16px', minHeight: '44px' }}
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-[12px] font-medium text-[#5c564e]">Статус</label>
+                  <label className="text-[13px] font-medium text-[#5c564e]">Статус</label>
                   <div className="rounded-[8px] border border-[#e0ddd6] bg-[#f8f6f1] px-3 py-2 text-[14px] text-[#4f4b45]">
                     {step.done ? 'Выполнен' : 'В работе'}
                   </div>
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 rounded-[8px] border border-[#e0ddd6] bg-[#f8f6f1] px-3 py-2 text-[13px] text-[#4f4b45]">
+              <label className="flex items-center gap-3 rounded-[8px] border border-[#e0ddd6] bg-[#f8f6f1] px-3 py-3 text-[14px] text-[#4f4b45]">
                 <input
                   type="checkbox"
                   checked={isMilestoneDraft}
                   onChange={(event) => setIsMilestoneDraft(event.target.checked)}
-                  className="h-4 w-4 rounded border-[#c8c3b7]"
+                  className="h-5 w-5 rounded border-[#c8c3b7]"
                 />
                 Отмечать этот шаг как веху
               </label>
 
               <div className="space-y-1.5">
-                <label className="text-[12px] font-medium text-[#5c564e]">Комментарий к вехе</label>
+                <label className="text-[13px] font-medium text-[#5c564e]">Комментарий к вехе</label>
                 <textarea
                   value={milestoneNoteDraft}
                   onChange={(event) => setMilestoneNoteDraft(event.target.value)}
                   rows={4}
                   placeholder="Необязательно"
-                  className="w-full rounded-[8px] border border-[#d7d2c7] bg-white px-3 py-2 text-[14px] outline-none focus:border-[#185fa5]"
+                  className="w-full rounded-[8px] border border-[#d7d2c7] bg-white px-3 py-3 text-[14px] outline-none focus:border-[#185fa5]"
                 />
               </div>
 
@@ -342,7 +343,7 @@ export default function CoachClientStepPage({ clientId, stepId }: CoachClientSte
                   type="button"
                   onClick={() => void handleSave()}
                   disabled={saving || !stepChanged || !titleDraft.trim()}
-                  className="rounded-[8px] bg-[#185fa5] px-3 py-2 text-[12px] text-white transition-colors hover:bg-[#154f89] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-[8px] bg-[#185fa5] px-4 py-3 text-[13px] text-white transition-colors hover:bg-[#154f89] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {saving ? 'Сохраняем...' : 'Сохранить'}
                 </button>
@@ -350,7 +351,7 @@ export default function CoachClientStepPage({ clientId, stepId }: CoachClientSte
                   type="button"
                   onClick={() => syncDrafts(step)}
                   disabled={saving || !stepChanged}
-                  className="rounded-[8px] border border-[#d7d2c7] bg-white px-3 py-2 text-[12px] text-[#5c564e] transition-colors hover:bg-[#f8f6f1] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-[8px] border border-[#d7d2c7] bg-white px-4 py-3 text-[13px] text-[#5c564e] transition-colors hover:bg-[#f8f6f1] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Сбросить
                 </button>
@@ -367,13 +368,13 @@ export default function CoachClientStepPage({ clientId, stepId }: CoachClientSte
                   onChange={(event) => setCommentDraft(event.target.value)}
                   rows={4}
                   placeholder="Добавьте комментарий к задаче"
-                  className="w-full rounded-[8px] border border-[#d7d2c7] bg-white px-3 py-2 text-[14px] outline-none focus:border-[#185fa5]"
+                  className="w-full rounded-[8px] border border-[#d7d2c7] bg-white px-3 py-3 text-[14px] outline-none focus:border-[#185fa5]"
                 />
                 <button
                   type="button"
                   onClick={() => void handleAddComment()}
                   disabled={commentSaving || !commentDraft.trim()}
-                  className="rounded-[8px] bg-[#1D9E75] px-3 py-2 text-[12px] text-[#E1F5EE] transition-colors hover:bg-[#16805f] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-[8px] bg-[#1D9E75] px-4 py-3 text-[13px] text-[#E1F5EE] transition-colors hover:bg-[#16805f] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {commentSaving ? 'Добавляем...' : 'Добавить комментарий'}
                 </button>
@@ -393,24 +394,24 @@ export default function CoachClientStepPage({ clientId, stepId }: CoachClientSte
                   {orderedHistory.map((entry) => {
                     const isComment = entry.created_by !== 0;
                     return (
-                      <div key={entry.id} className="rounded-[8px] border border-[#ece8df] bg-[#faf9f6] px-3 py-2.5">
+                      <div key={entry.id} className="rounded-[8px] border border-[#ece8df] bg-[#faf9f6] px-3 py-3">
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <div className="text-[12px] font-medium text-[#1a1a18]">
                               {isComment ? 'Комментарий' : entry.note}
                             </div>
-                            <div className="mt-0.5 text-[11px] text-[#8b887f]">
+                            <div className="mt-0.5 text-[12px] text-[#8b887f]">
                               {formatHistoryMeta(entry)}
                             </div>
                           </div>
                           {entry.status ? (
-                            <div className="rounded-full border border-[#d7d2c7] bg-white px-2 py-0.5 text-[10px] text-[#5c564e]">
+                            <div className="rounded-full border border-[#d7d2c7] bg-white px-2 py-1 text-[11px] text-[#5c564e]">
                               {formatTaskStatus(entry.status)}
                             </div>
                           ) : null}
                         </div>
                         {isComment ? (
-                          <div className="mt-2 whitespace-pre-wrap text-[13px] leading-5 text-[#4f4b45]">
+                          <div className="mt-2 whitespace-pre-wrap text-[14px] leading-[1.5] text-[#4f4b45]">
                             {entry.note}
                           </div>
                         ) : null}

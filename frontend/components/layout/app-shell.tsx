@@ -4,12 +4,83 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { ReactNode } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Sheet, SheetClose, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CheckCircle2, LayoutDashboard, Megaphone, Menu, Package2, Settings2, UserRound, XCircle } from 'lucide-react';
-import { getAppShellRouteTitle, type AuthProviderUser, type LoggedUserModalData, useAppShellState } from './use-app-shell-state';
+import {
+  CheckCircle2,
+  LayoutDashboard,
+  Megaphone,
+  Package2,
+  Settings2,
+  UserRound,
+  Users,
+  XCircle,
+} from 'lucide-react';
+import {
+  getAppShellRouteTitle,
+  type AuthProviderUser,
+  type LoggedUserModalData,
+  useAppShellState,
+} from './use-app-shell-state';
 import { DASHBOARD_ROUTE, MARKETING_ROUTE } from '@/lib/routes';
+
+function getNavItemIcon(href: string) {
+  if (href === DASHBOARD_ROUTE) return LayoutDashboard;
+  if (href === MARKETING_ROUTE) return Megaphone;
+  if (href === '/products') return Package2;
+  if (href === '/clients') return Users;
+  if (href === '/settings') return Settings2;
+  return LayoutDashboard;
+}
+
+function formatRoleLabel(role?: string | null) {
+  if (role === 'owner') return 'Владелец';
+  if (role === 'editor') return 'Редактор';
+  if (role === 'viewer') return 'Наблюдатель';
+  return 'Участник команды';
+}
+
+function formatDateLabel(value?: string | null) {
+  if (!value) return 'Не указано';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return new Intl.DateTimeFormat('ru-RU', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function formatDisplayName(profile?: AuthProviderUser | null) {
+  if (!profile) return 'Не подключено';
+
+  const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ').trim();
+  if (fullName) return fullName;
+
+  const username = profile.username?.trim().replace(/^@+/, '');
+  if (username) return `@${username}`;
+
+  return 'Без имени';
+}
+
+function formatProviderName(provider?: string | null) {
+  if (provider === 'telegram') return 'Telegram';
+  if (provider === 'vk') return 'ВКонтакте';
+  return provider ?? 'Неизвестный сервис';
+}
+
+type LinkedSocialAccount = NonNullable<LoggedUserModalData['accounts']>[number];
+
+function formatAccountHandle(account?: LinkedSocialAccount) {
+  const username = account?.extra_data?.username?.trim();
+  if (username) return `@${username.replace(/^@+/, '')}`;
+
+  const screenName = account?.extra_data?.screen_name?.trim();
+  if (screenName) return `@${screenName.replace(/^@+/, '')}`;
+
+  return account?.provider_id?.trim() || 'Без идентификатора';
+}
 
 function UserAvatar({
   avatarUrl,
@@ -17,22 +88,26 @@ function UserAvatar({
   onClick,
   onImageError,
   interactive = true,
+  size = 'md',
 }: {
   avatarUrl: string | null;
   avatarInitial: string;
   onClick?: () => void;
   onImageError?: () => void;
   interactive?: boolean;
+  size?: 'sm' | 'md';
 }) {
+  const dimensions = size === 'sm' ? 'h-8 w-8' : 'h-10 w-10';
+  const imageSize = size === 'sm' ? 32 : 40;
   const content = (
     <>
       {avatarUrl ? (
         <Image
           src={avatarUrl}
           alt="Аватар пользователя"
-          width={40}
-          height={40}
-          className="h-10 w-10 rounded-full object-cover"
+          width={imageSize}
+          height={imageSize}
+          className={`${dimensions} rounded-full object-cover`}
           unoptimized
           loading="lazy"
           onError={onImageError}
@@ -44,20 +119,17 @@ function UserAvatar({
       )}
     </>
   );
+  const baseClass = `flex ${dimensions} items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-white shadow-sm`;
 
   if (!interactive) {
-    return (
-      <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-white shadow-sm">
-        {content}
-      </div>
-    );
+    return <div className={baseClass}>{content}</div>;
   }
 
   return (
     <button
       type="button"
       aria-label="Открыть данные пользователя"
-      className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-white shadow-sm transition-colors hover:border-gray-300"
+      className={`${baseClass} transition-colors hover:border-gray-300`}
       onClick={onClick}
     >
       {content}
@@ -79,92 +151,19 @@ function ClientSwitcher({
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="min-w-[200px]">
-      <Select value={value} onValueChange={onChange} disabled={loading || switching}>
-        <SelectTrigger className="h-10 w-full rounded-2xl border-gray-200 bg-white text-sm text-gray-700 shadow-none">
-          <SelectValue placeholder={loading ? 'Загрузка проектов...' : 'Выберите проект'} />
-        </SelectTrigger>
-        <SelectContent>
-          {memberships.map((membership) => (
-            <SelectItem key={membership.client.id} value={String(membership.client.id)}>
-              {membership.displayName || membership.client.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+    <Select value={value} onValueChange={onChange} disabled={loading || switching}>
+      <SelectTrigger className="h-10 w-full rounded-2xl border-gray-200 bg-white text-sm text-gray-700 shadow-none">
+        <SelectValue placeholder={loading ? 'Загрузка...' : 'Выберите проект'} />
+      </SelectTrigger>
+      <SelectContent>
+        {memberships.map((membership) => (
+          <SelectItem key={membership.client.id} value={String(membership.client.id)}>
+            {membership.displayName || membership.client.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
-}
-
-function getNavItemIcon(href: string) {
-  if (href === DASHBOARD_ROUTE) return LayoutDashboard;
-  if (href === MARKETING_ROUTE) return Megaphone;
-  if (href === '/products') return Package2;
-  if (href === '/settings') return Settings2;
-  return LayoutDashboard;
-}
-
-function formatRoleLabel(role?: string | null) {
-  if (role === 'owner') return 'Владелец';
-  if (role === 'editor') return 'Редактор';
-  if (role === 'viewer') return 'Наблюдатель';
-  return 'Участник команды';
-}
-
-function formatDateLabel(value?: string | null) {
-  if (!value) {
-    return 'Не указано';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat('ru-RU', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date);
-}
-
-function formatDisplayName(profile?: AuthProviderUser | null) {
-  if (!profile) {
-    return 'Не подключено';
-  }
-
-  const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ').trim();
-  if (fullName) {
-    return fullName;
-  }
-
-  const username = profile.username?.trim().replace(/^@+/, '');
-  if (username) {
-    return `@${username}`;
-  }
-
-  return 'Без имени';
-}
-
-function formatProviderName(provider?: string | null) {
-  if (provider === 'telegram') return 'Telegram';
-  if (provider === 'vk') return 'ВКонтакте';
-  return provider ? provider : 'Неизвестный сервис';
-}
-
-type LinkedSocialAccount = NonNullable<LoggedUserModalData['accounts']>[number];
-
-function formatAccountHandle(account?: LinkedSocialAccount) {
-  const username = account?.extra_data?.username?.trim();
-  if (username) {
-    return `@${username.replace(/^@+/, '')}`;
-  }
-
-  const screenName = account?.extra_data?.screen_name?.trim();
-  if (screenName) {
-    return `@${screenName.replace(/^@+/, '')}`;
-  }
-
-  return account?.provider_id?.trim() || 'Без идентификатора';
 }
 
 function ProviderStatusCard({
@@ -201,26 +200,18 @@ function ProviderStatusCard({
 
       {connected ? (
         <dl className="mt-4 space-y-2 text-sm">
-          <div className="flex items-start justify-between gap-4">
-            <dt className="text-gray-500">{idLabel}</dt>
-            <dd className="text-right text-gray-900">{accountId || 'Не указано'}</dd>
-          </div>
-          <div className="flex items-start justify-between gap-4">
-            <dt className="text-gray-500">Логин</dt>
-            <dd className="text-right text-gray-900">{username ? `@${username.replace(/^@+/, '')}` : 'Не указан'}</dd>
-          </div>
-          <div className="flex items-start justify-between gap-4">
-            <dt className="text-gray-500">Контакт в CRM</dt>
-            <dd className="text-right text-gray-900">{profile?.contactId ?? 'Не привязан'}</dd>
-          </div>
-          <div className="flex items-start justify-between gap-4">
-            <dt className="text-gray-500">ID проекта</dt>
-            <dd className="text-right text-gray-900">{profile?.tenantId ?? 'Не указан'}</dd>
-          </div>
-          <div className="flex items-start justify-between gap-4">
-            <dt className="text-gray-500">Дата авторизации</dt>
-            <dd className="text-right text-gray-900">{formatDateLabel(profile?.authDate)}</dd>
-          </div>
+          {[
+            [idLabel, accountId || 'Не указано'],
+            ['Логин', username ? `@${username.replace(/^@+/, '')}` : 'Не указан'],
+            ['Контакт в CRM', profile?.contactId ?? 'Не привязан'],
+            ['ID проекта', profile?.tenantId ?? 'Не указан'],
+            ['Дата авторизации', formatDateLabel(profile?.authDate)],
+          ].map(([label, value]) => (
+            <div key={String(label)} className="flex items-start justify-between gap-4">
+              <dt className="text-gray-500">{label}</dt>
+              <dd className="text-right text-gray-900">{value}</dd>
+            </div>
+          ))}
         </dl>
       ) : null}
     </section>
@@ -258,9 +249,7 @@ function LinkedAccountsSection({ accounts }: { accounts: LoggedUserModalData['ac
                 {formatAccountHandle(account)}
               </div>
             </div>
-            <div className="mt-3 text-xs text-gray-500">
-              Подключён: {formatDateLabel(account.created_at)}
-            </div>
+            <div className="mt-3 text-xs text-gray-500">Подключён: {formatDateLabel(account.created_at)}</div>
           </div>
         );
       })}
@@ -269,9 +258,7 @@ function LinkedAccountsSection({ accounts }: { accounts: LoggedUserModalData['ac
 }
 
 function UserProfileDialogContent({ data }: { data: LoggedUserModalData | null }) {
-  if (!data) {
-    return <div className="text-sm text-gray-600">Нет данных для отображения.</div>;
-  }
+  if (!data) return <div className="text-sm text-gray-600">Нет данных для отображения.</div>;
 
   if (data.error) {
     return (
@@ -306,15 +293,13 @@ function UserProfileDialogContent({ data }: { data: LoggedUserModalData | null }
           <div className="mt-1 text-sm text-gray-600">
             {primaryProfile?.username ? `@${primaryProfile.username.replace(/^@+/, '')}` : 'Логин не указан'}
           </div>
-          <div className="mt-1 text-xs text-gray-500">
-            Основной профиль для входа и связанных социальных аккаунтов
-          </div>
+          <div className="mt-1 text-xs text-gray-500">Основной профиль</div>
         </div>
       </section>
 
       <section>
         <div className="mb-3 text-sm font-semibold text-gray-950">Подключённые способы входа</div>
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2">
           <ProviderStatusCard title="Telegram" profile={data.user?.telegram} idLabel="Telegram ID" />
           <ProviderStatusCard title="ВКонтакте" profile={data.user?.vk} idLabel="VK ID" />
         </div>
@@ -328,35 +313,7 @@ function UserProfileDialogContent({ data }: { data: LoggedUserModalData | null }
   );
 }
 
-function NavigationLink({
-  href,
-  label,
-  active,
-  mobile = false,
-}: {
-  href: string;
-  label: string;
-  active: boolean;
-  mobile?: boolean;
-}) {
-  const Icon = getNavItemIcon(href);
-
-  if (mobile) {
-    return (
-      <Link
-        href={href}
-        className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm transition-colors ${
-          active
-            ? 'border-gray-200 bg-white font-medium text-gray-950'
-            : 'border-gray-100 bg-white text-gray-600 hover:text-gray-950'
-        }`}
-      >
-        <Icon className={`h-4 w-4 ${active ? 'text-gray-900' : 'text-gray-400'}`} />
-        {label}
-      </Link>
-    );
-  }
-
+function SidebarNavLink({ href, label, active }: { href: string; label: string; active: boolean }) {
   return (
     <Link
       href={href}
@@ -372,13 +329,104 @@ function NavigationLink({
   );
 }
 
+const BOTTOM_NAV_ITEMS = [
+  { href: DASHBOARD_ROUTE, label: 'Обзор', icon: LayoutDashboard },
+  { href: '/clients', label: 'CRM', icon: Users },
+  { href: '/products', label: 'Продукты', icon: Package2 },
+  { href: '/settings', label: 'Настройки', icon: Settings2 },
+] as const;
+
+function MobileBottomNav({
+  pathname,
+  onProfileOpen,
+}: {
+  pathname: string;
+  onProfileOpen: () => void;
+}) {
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-black/5 bg-[rgba(244,241,234,0.96)] pb-safe backdrop-blur lg:hidden">
+      <div className="flex items-stretch">
+        {BOTTOM_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+          const active = pathname === href || pathname.startsWith(`${href}/`);
+          return (
+            <Link
+              key={href}
+              href={href}
+              className="relative flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-center"
+              style={{ minHeight: 'var(--bottom-nav-height)' }}
+            >
+              <Icon className="h-5 w-5 transition-colors" style={{ color: active ? '#5c52e0' : '#9c9690' }} />
+              <span
+                className="text-[10px] font-medium leading-none transition-colors"
+                style={{ color: active ? '#5c52e0' : '#9c9690' }}
+              >
+                {label}
+              </span>
+              {active ? (
+                <span className="absolute left-1/2 top-0 h-[2px] w-6 -translate-x-1/2 rounded-full bg-[#5c52e0]" />
+              ) : null}
+            </Link>
+          );
+        })}
+
+        <button
+          type="button"
+          aria-label="Профиль"
+          className="flex flex-1 flex-col items-center justify-center gap-0.5 py-2"
+          style={{ minHeight: 'var(--bottom-nav-height)' }}
+          onClick={onProfileOpen}
+        >
+          <UserRound className="h-5 w-5 text-[#9c9690]" />
+          <span className="text-[10px] font-medium leading-none text-[#9c9690]">Профиль</span>
+        </button>
+      </div>
+    </nav>
+  );
+}
+
+function MobileTopHeader({
+  title,
+  projectName,
+  avatarUrl,
+  avatarInitial,
+  onAvatarError,
+  onProfileOpen,
+}: {
+  title: string;
+  projectName: string;
+  avatarUrl: string | null;
+  avatarInitial: string;
+  onAvatarError?: () => void;
+  onProfileOpen: () => void;
+}) {
+  return (
+    <header
+      className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-black/5 bg-[rgba(244,241,234,0.95)] px-4 pb-3 pt-3 backdrop-blur lg:hidden"
+      style={{ paddingTop: 'max(12px, var(--safe-top))' }}
+    >
+      <div className="min-w-0">
+        <Link href={DASHBOARD_ROUTE} className="text-[11px] font-medium text-[#746d66]">
+          ✦ {projectName || 'Fibonatty'}
+        </Link>
+        <div className="truncate text-[15px] font-semibold leading-tight text-gray-950">{title}</div>
+      </div>
+
+      <UserAvatar
+        avatarUrl={avatarUrl}
+        avatarInitial={avatarInitial}
+        onImageError={onAvatarError}
+        onClick={onProfileOpen}
+        size="sm"
+      />
+    </header>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const {
     pathname,
     isPublicRoute,
     navItems,
-    mobileMenuOpen,
-    setMobileMenuOpen,
     avatarUrl,
     avatarInitial,
     clearAvatar,
@@ -395,12 +443,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     handleClientSwitch,
   } = useAppShellState();
 
+  if (isPublicRoute) return <>{children}</>;
+
   const currentTitle = getAppShellRouteTitle(pathname);
-
-  if (isPublicRoute) {
-    return <>{children}</>;
-  }
-
   const memberships = clientInfo?.memberships ?? [];
   const switcherMemberships = memberships.map((membership) => (
     membership.client.id === clientInfo?.active_client_id
@@ -409,16 +454,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   ));
   const canSwitchClient = memberships.length > 1;
   const activeMembership = memberships.find((membership) => membership.client.id === clientInfo?.active_client_id) ?? memberships[0];
+  const projectName = activeClientDisplayName || clientInfo?.client.name || 'Fibonatty';
+  const handleProfileOpen = () => {
+    void openLoggedUserModal();
+  };
 
   return (
     <div className="min-h-screen bg-[#f4f1ea] text-gray-900">
       <div className="flex min-h-screen w-full">
         <aside className="hidden w-[250px] shrink-0 border-r border-black/5 bg-[linear-gradient(180deg,#f3f0ea_0%,#ebe7e0_100%)] px-[18px] py-[26px] lg:flex lg:flex-col">
           <Link href={DASHBOARD_ROUTE} className="px-3 py-1">
-            <div
-              className="text-[24px] text-gray-950"
-              style={{ fontFamily: 'Georgia, Times New Roman, serif' }}
-            >
+            <div className="text-[24px] text-gray-950" style={{ fontFamily: 'Georgia, Times New Roman, serif' }}>
               Fibo<span className="text-[#5c52e0]">n</span>atty
             </div>
           </Link>
@@ -426,11 +472,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="-mx-[18px] mt-6 border-y border-black/5 bg-white px-[18px] py-5">
             <div className="px-3">
               <div className="text-[11px] uppercase tracking-[0.18em] text-[#948c84]">Активный проект</div>
-              <div className="mt-2 text-[17px] font-semibold text-gray-950">
-                {activeClientDisplayName || clientInfo?.client.name || 'Загрузка проекта...'}
-              </div>
+              <div className="mt-2 text-[17px] font-semibold text-gray-950">{projectName}</div>
               <div className="mt-1 text-sm text-[#746d66]">{formatRoleLabel(activeMembership?.role)}</div>
-
               {canSwitchClient ? (
                 <div className="mt-4">
                   <ClientSwitcher
@@ -448,7 +491,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <nav className="mt-6 space-y-[10px]">
             {navItems.map((item) => {
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-              return <NavigationLink key={item.href} href={item.href} label={item.label} active={active} />;
+              return <SidebarNavLink key={item.href} href={item.href} label={item.label} active={active} />;
             })}
           </nav>
 
@@ -456,16 +499,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button
               type="button"
               className="flex w-full items-center gap-3 rounded-[22px] border border-black/10 bg-[rgba(255,255,255,0.88)] px-4 py-4 text-left shadow-[0_10px_24px_rgba(0,0,0,0.04)] transition-colors hover:border-black/15"
-              onClick={() => {
-                void openLoggedUserModal();
-              }}
+              onClick={handleProfileOpen}
             >
-              <UserAvatar
-                avatarUrl={avatarUrl}
-                avatarInitial={avatarInitial}
-                onImageError={clearAvatar}
-                interactive={false}
-              />
+              <UserAvatar avatarUrl={avatarUrl} avatarInitial={avatarInitial} onImageError={clearAvatar} interactive={false} />
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium text-gray-950">Профиль и соцаккаунты</div>
                 <div className="mt-1 text-xs text-[#746d66]">Telegram, VK и связанные учётные записи</div>
@@ -483,103 +519,22 @@ export function AppShell({ children }: { children: ReactNode }) {
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="border-b border-black/5 bg-white/90 px-4 py-4 backdrop-blur sm:px-6 lg:hidden">
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <Link href={DASHBOARD_ROUTE} className="text-sm font-medium text-gray-950">
-                  ✦ Fibonatty
-                </Link>
-                <div className="truncate text-sm text-gray-500">{currentTitle}</div>
-              </div>
+          <MobileTopHeader
+            title={currentTitle}
+            projectName={projectName}
+            avatarUrl={avatarUrl}
+            avatarInitial={avatarInitial}
+            onAvatarError={clearAvatar}
+            onProfileOpen={handleProfileOpen}
+          />
 
-              <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-                <SheetTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-9 w-9" aria-label="Открыть меню">
-                    <Menu className="h-5 w-5" />
-                  </Button>
-                </SheetTrigger>
-                <SheetContent side="right" className="w-[320px] border-l border-gray-100 bg-[#f4f1ea] px-0">
-                  <div className="flex h-full flex-col">
-                    <div className="border-b border-gray-100 px-6 py-5">
-                      <div className="text-sm font-medium text-gray-950">✦ Fibonatty</div>
-                      <div className="mt-1 text-sm text-gray-500">{currentTitle}</div>
-                    </div>
-
-                    <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
-                      <div className="rounded-3xl border border-gray-200 bg-white px-4 py-4 shadow-sm">
-                        <div className="text-xs uppercase tracking-[0.16em] text-gray-400">Активный проект</div>
-                        <div className="mt-2 text-base font-semibold text-gray-950">
-                          {activeClientDisplayName || clientInfo?.client.name || 'Загрузка проекта...'}
-                        </div>
-                        <div className="mt-1 text-sm text-gray-500">{formatRoleLabel(activeMembership?.role)}</div>
-
-                        {canSwitchClient ? (
-                          <div className="mt-4">
-                            <ClientSwitcher
-                              value={clientInfo ? String(clientInfo.active_client_id) : undefined}
-                              loading={clientInfoLoading}
-                              switching={switchingClient}
-                              memberships={switcherMemberships}
-                              onChange={(value) => void handleClientSwitch(value)}
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-
-                      <nav className="space-y-2">
-                        {navItems.map((item) => {
-                          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-                          return (
-                            <SheetClose key={item.href} asChild>
-                              <div>
-                                <NavigationLink href={item.href} label={item.label} active={active} mobile />
-                              </div>
-                            </SheetClose>
-                          );
-                        })}
-                      </nav>
-
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-3 rounded-3xl border border-gray-200 bg-white px-4 py-4 text-left shadow-sm"
-                        onClick={() => {
-                          void openLoggedUserModal();
-                        }}
-                      >
-                        <UserAvatar
-                          avatarUrl={avatarUrl}
-                          avatarInitial={avatarInitial}
-                          onImageError={clearAvatar}
-                          interactive={false}
-                        />
-                        <div>
-                          <div className="text-sm font-medium text-gray-950">Профиль и соц. аккаунты</div>
-                          <div className="text-xs text-gray-500">Telegram, VK и связанные учётные записи</div>
-                        </div>
-                      </button>
-                    </div>
-
-                    <div className="border-t border-gray-200 px-6 py-5">
-                      <Button
-                        variant="outline"
-                        className="w-full border-gray-200 bg-white"
-                        onClick={() => {
-                          setMobileMenuOpen(false);
-                          void onLogout();
-                        }}
-                      >
-                        Выйти
-                      </Button>
-                    </div>
-                  </div>
-                </SheetContent>
-              </Sheet>
-            </div>
-          </header>
-
-          <main className="flex-1 px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-6">{children}</main>
+          <main className="flex-1 px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-6">
+            <div className="mobile-main-content">{children}</div>
+          </main>
         </div>
       </div>
+
+      <MobileBottomNav pathname={pathname} onProfileOpen={handleProfileOpen} />
 
       <Dialog open={userModalOpen} onOpenChange={setUserModalOpen}>
         <DialogContent className="border-gray-200 !bg-white !text-gray-900 shadow-xl sm:max-w-2xl">

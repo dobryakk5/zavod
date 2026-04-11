@@ -124,7 +124,6 @@ function getDisplayClientName(clientName: string | undefined, vkDisplayName: str
 export function useAppShellState() {
   const pathname = usePathname();
   const router = useRouter();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarInitial, setAvatarInitial] = useState('U');
   const [userModalOpen, setUserModalOpen] = useState(false);
@@ -187,12 +186,6 @@ export function useAppShellState() {
       setUserModalLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (!isPublicRoute) {
-      setMobileMenuOpen(false);
-    }
-  }, [isPublicRoute, pathname]);
 
   useEffect(() => {
     if (isPublicRoute) {
@@ -302,8 +295,6 @@ export function useAppShellState() {
     pathname,
     isPublicRoute,
     navItems: APP_SHELL_NAV_ITEMS,
-    mobileMenuOpen,
-    setMobileMenuOpen,
     avatarUrl,
     avatarInitial,
     clearAvatar: () => setAvatarUrl(null),
