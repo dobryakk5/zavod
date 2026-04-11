@@ -167,14 +167,7 @@ export default function CoachClientSessionPage({
     return () => {
       isActive = false;
     };
-  }, [
-    clientId,
-    initialData?.client,
-    initialData?.competencies,
-    initialData?.goals,
-    initialData?.milestones,
-    initialData?.sessions,
-  ]);
+  }, [clientId, initialData]);
 
   useEffect(() => {
     if (!loading) {

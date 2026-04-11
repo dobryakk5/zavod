@@ -539,7 +539,7 @@ function EmptyQuickAddHint({ entityLabel }: { entityLabel: string }) {
           <ArrowUpRight className="h-5 w-5 -translate-y-1 translate-x-8" />
         </div>
         <div className="text-[12px] leading-5">
-          Для добавления {entityLabel} нажмите кнопку <span className="font-medium text-[#1a1a18]">"+"</span>
+          Для добавления {entityLabel} нажмите кнопку <span className="font-medium text-[#1a1a18]">&quot;+&quot;</span>
         </div>
       </div>
     </div>
