@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { ArrowUpRight } from 'lucide-react';
 import {
   coachingApiGroups,
   type CoachGroup,
@@ -18,13 +19,20 @@ const GROUP_COLORS = [
   { bg: '#FAECE7', text: '#712B13' },
 ];
 
-export default function GroupsTab({ clients }: { clients: CoachingClient[] }) {
+export type GroupsTabHandle = {
+  createGroup: (name: string) => Promise<void>;
+};
+
+type GroupsTabProps = {
+  clients: CoachingClient[];
+};
+
+const GroupsTab = forwardRef<GroupsTabHandle, GroupsTabProps>(function GroupsTab({ clients }, ref) {
   const [groups, setGroups] = useState<CoachGroup[]>([]);
   const [detail, setDetail] = useState<CoachGroupDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [newGroupName, setNewGroupName] = useState('');
   const [showAddMember, setShowAddMember] = useState(false);
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [taskText, setTaskText] = useState('');
@@ -32,7 +40,6 @@ export default function GroupsTab({ clients }: { clients: CoachingClient[] }) {
   const [addingTask, setAddingTask] = useState(false);
   const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);
   const [addingMembers, setAddingMembers] = useState(false);
-  const newGroupRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -81,23 +88,25 @@ export default function GroupsTab({ clients }: { clients: CoachingClient[] }) {
     }
   }
 
-  async function handleCreateGroup() {
-    const name = newGroupName.trim();
-    if (!name) {
+  async function createGroup(name: string) {
+    const normalizedName = name.trim();
+    if (!normalizedName || creating) {
       return;
     }
 
     setCreating(true);
     try {
-      const group = await coachingApiGroups.createCoachGroup(name);
+      const group = await coachingApiGroups.createCoachGroup(normalizedName);
       setGroups((current) => [...current, group]);
-      setNewGroupName('');
       await loadDetail(group.id, group);
-      newGroupRef.current?.focus();
     } finally {
       setCreating(false);
     }
   }
+
+  useImperativeHandle(ref, () => ({
+    createGroup,
+  }));
 
   async function handleAddSelectedMembers() {
     if (!detail || selectedClientIds.length === 0) {
@@ -234,35 +243,17 @@ export default function GroupsTab({ clients }: { clients: CoachingClient[] }) {
           Группы
         </div>
 
-        <div className="border-b border-[#e0ddd6] px-[10px] py-[8px]">
-          <div className="flex gap-2">
-            <input
-              ref={newGroupRef}
-              value={newGroupName}
-              onChange={(event) => setNewGroupName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  void handleCreateGroup();
-                }
-              }}
-              placeholder="Название новой группы..."
-              className="min-w-0 flex-1 rounded-[6px] border-[0.5px] border-dashed border-[#e0ddd6] bg-[#f5f4f0] px-[8px] py-[5px] text-[11px] text-[#1a1a18] outline-none placeholder:text-[#b4b2a9] focus:border-[#b4b2a9]"
-            />
-            <button
-              type="button"
-              onClick={() => void handleCreateGroup()}
-              disabled={creating || !newGroupName.trim()}
-              className="rounded-[6px] border-[0.5px] border-[#d3d1c7] px-[8px] py-[5px] text-[11px] text-[#73726c] transition-colors hover:bg-[#f5f4f0] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {creating ? '...' : '+ Создать'}
-            </button>
-          </div>
-        </div>
-
         <div className="flex-1 overflow-y-auto p-[8px]">
                     {groups.length === 0 ? (
-            <div className="px-2 py-4 text-center text-[12px] text-[#73726c]">
-              Групп пока нет
+            <div className="flex min-h-[160px] items-center justify-center rounded-[8px] border-[0.5px] border-dashed border-[#e0ddd6] bg-[#fbfaf7] p-4 text-center">
+              <div className="max-w-[220px] text-[#73726c]">
+                <div className="flex justify-center">
+                  <ArrowUpRight className="h-5 w-5 -translate-y-1 translate-x-8" />
+                </div>
+                <div className="text-[12px] leading-5">
+                  Для добавления групп нажмите кнопку <span className="font-medium text-[#1a1a18]">"+"</span>
+                </div>
+              </div>
             </div>
           ) : (
             groups.map((group, index) => {
@@ -454,14 +445,14 @@ export default function GroupsTab({ clients }: { clients: CoachingClient[] }) {
                     onChange={(event) => setTaskText(event.target.value)}
                     placeholder="Что должен сделать каждый участник группы..."
                     rows={2}
-                    className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[10px] py-2 text-[12px] leading-relaxed text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9]"
+                    className="w-full resize-none rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[10px] py-2 text-[16px] leading-relaxed text-[#1a1a18] outline-none placeholder:text-[#73726c] focus:border-[#b4b2a9] sm:text-[12px]"
                   />
                   <div className="flex flex-wrap items-center gap-2">
                     <input
                       type="date"
                       value={taskDue}
                       onChange={(event) => setTaskDue(event.target.value)}
-                      className="rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[8px] py-[5px] text-[11px] text-[#73726c] outline-none focus:border-[#b4b2a9]"
+                      className="rounded-[6px] border-[0.5px] border-[#e0ddd6] bg-white px-[8px] py-[5px] text-[16px] text-[#73726c] outline-none focus:border-[#b4b2a9] sm:text-[11px]"
                     />
                     <span className="text-[10px] text-[#73726c]">срок (необязательно)</span>
                     <div className="flex-1" />
@@ -558,7 +549,9 @@ export default function GroupsTab({ clients }: { clients: CoachingClient[] }) {
       </div>
     </div>
   );
-}
+});
+
+export default GroupsTab;
 
 function formatDate(iso: string) {
   const date = new Date(iso);

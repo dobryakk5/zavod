@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, ExternalLink } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowRight, ArrowUpRight, ExternalLink } from 'lucide-react';
 import { coachingApi, type CoachStats, type CoachingClient, type CoachingCompetency } from '@/lib/api/coaching';
-import GroupsTab from './groups-tab';
+import GroupsTab, { type GroupsTabHandle } from './groups-tab';
 import { crmContactsApi, crmDealsApi, crmEventsApi, type Contact, type Deal, type Event } from '@/lib/api/crm';
 import type { CoachingClientStatus } from '@/lib/api/coaching';
 
@@ -62,9 +62,15 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardData>(EMPTY_DATA);
   const [selectedCoachClientId, setSelectedCoachClientId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'clients' | 'groups'>('clients');
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddValue, setQuickAddValue] = useState('');
+  const [quickAddLoading, setQuickAddLoading] = useState(false);
+  const [quickAddError, setQuickAddError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [coachCompetenciesLoading, setCoachCompetenciesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const quickAddInputRef = useRef<HTMLInputElement>(null);
+  const groupsTabRef = useRef<GroupsTabHandle>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -150,6 +156,14 @@ export default function DashboardPage() {
     };
   }, [selectedCoachClientId]);
 
+  useEffect(() => {
+    if (!quickAddOpen) {
+      return;
+    }
+
+    quickAddInputRef.current?.focus();
+  }, [quickAddOpen, activeTab]);
+
   const visibleClients = useMemo(() => data.coachClients.slice(0, 4), [data.coachClients]);
   const selectedCoachClient = visibleClients.find((client) => client.id === selectedCoachClientId) ?? visibleClients[0] ?? null;
   const progressItems = useMemo(() => getProgressItems(data.coachCompetencies), [data.coachCompetencies]);
@@ -170,6 +184,77 @@ export default function DashboardPage() {
   if (loading) {
     return <LoadingState />;
   }
+
+  const quickAddLabel = activeTab === 'clients' ? 'клиента' : 'группу';
+  const quickAddPlaceholder = activeTab === 'clients' ? 'Новый клиент...' : 'Новая группа...';
+
+  const resetQuickAdd = () => {
+    setQuickAddOpen(false);
+    setQuickAddValue('');
+    setQuickAddError(null);
+    setQuickAddLoading(false);
+  };
+
+  const handleTabChange = (nextTab: 'clients' | 'groups') => {
+    if (nextTab === activeTab) {
+      return;
+    }
+    setActiveTab(nextTab);
+    resetQuickAdd();
+  };
+
+  const handleQuickAddToggle = () => {
+    if (quickAddOpen) {
+      resetQuickAdd();
+      return;
+    }
+
+    setQuickAddOpen(true);
+    setQuickAddValue('');
+    setQuickAddError(null);
+  };
+
+  const handleQuickAddSubmit = async () => {
+    const normalizedValue = normalizeDashboardEntityName(quickAddValue);
+    if (!normalizedValue) {
+      setQuickAddError(`Введите ${quickAddLabel}.`);
+      return;
+    }
+
+    setQuickAddLoading(true);
+    setQuickAddError(null);
+
+    try {
+      if (activeTab === 'clients') {
+        const createdContact = await crmContactsApi.create({ name: normalizedValue });
+        const createdClient = mapContactToDashboardClient(createdContact);
+        setData((current) => {
+          const clientExists = current.coachClients.some((client) => client.id === createdClient.id);
+          return {
+            ...current,
+            coachClients: [createdClient, ...current.coachClients.filter((client) => client.id !== createdClient.id)],
+            coachStats: current.coachStats
+              ? {
+                  ...current.coachStats,
+                  activeClients: current.coachStats.activeClients + (clientExists ? 0 : 1),
+                }
+              : current.coachStats,
+          };
+        });
+        setSelectedCoachClientId(createdClient.id);
+      } else {
+        if (!groupsTabRef.current) {
+          throw new Error('GroupsTab is not ready');
+        }
+        await groupsTabRef.current.createGroup(normalizedValue);
+      }
+
+      resetQuickAdd();
+    } catch {
+      setQuickAddLoading(false);
+      setQuickAddError(`Не удалось добавить ${quickAddLabel}.`);
+    }
+  };
 
   return (
     <div className="min-h-full rounded-none bg-[#f5f4f0] p-3 text-[#1a1a18] sm:rounded-[24px] sm:p-5">
@@ -205,12 +290,12 @@ export default function DashboardPage() {
         </section>
 
         <section className={`${PANEL_CLASS} overflow-hidden`}>
-          <div className="flex items-center border-b border-[#e0ddd6]">
+          <div className="flex items-center gap-1 border-b border-[#e0ddd6]">
             {(['clients', 'groups'] as const).map((tab) => (
               <button
                 key={tab}
                 type="button"
-                onClick={() => setActiveTab(tab)}
+                onClick={() => handleTabChange(tab)}
                 className={`border-b-2 px-4 py-[10px] text-[12px] transition-colors ${
                   activeTab === tab
                     ? 'border-[#1a1a18] font-medium text-[#1a1a18]'
@@ -227,7 +312,45 @@ export default function DashboardPage() {
               <ArrowRight className="h-3 w-3" />
               <span>CRM</span>
             </Link>
+            <button
+              type="button"
+              onClick={handleQuickAddToggle}
+              className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#d8d4ca] text-[18px] leading-none text-[#1a1a18] transition-colors hover:border-[#1a1a18] hover:bg-[#f8f6f1]"
+            >
+              +
+            </button>
           </div>
+
+          {quickAddOpen ? (
+            <div className="border-b border-[#e0ddd6] bg-[#f8f6f1] px-[14px] py-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  ref={quickAddInputRef}
+                  value={quickAddValue}
+                  onChange={(event) => setQuickAddValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void handleQuickAddSubmit();
+                    }
+                  }}
+                  placeholder={quickAddPlaceholder}
+                  className="min-w-0 flex-1 rounded-[6px] border-[0.5px] border-dashed border-[#d8d4ca] bg-white px-3 py-2 text-[16px] text-[#1a1a18] outline-none placeholder:text-[#a6a39a] focus:border-[#b4b2a9] sm:text-[12px]"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleQuickAddSubmit()}
+                  disabled={quickAddLoading}
+                  className="rounded-[6px] bg-[#1D9E75] px-3 py-2 text-[12px] text-[#E1F5EE] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:py-[7px]"
+                >
+                  {quickAddLoading ? 'Добавляю...' : 'Добавить'}
+                </button>
+              </div>
+              {quickAddError ? (
+                <div className="mt-2 text-[12px] text-[#b2471f]">{quickAddError}</div>
+              ) : null}
+            </div>
+          ) : null}
 
           {activeTab === 'clients' ? (
             <div className="grid gap-0 xl:grid-cols-2">
@@ -245,7 +368,7 @@ export default function DashboardPage() {
                     ))}
                   </div>
                 ) : (
-                  <div className="text-sm text-[#73726c]">Нет клиентов для отображения.</div>
+                  <EmptyQuickAddHint entityLabel="клиентов" />
                 )}
               </div>
 
@@ -274,7 +397,7 @@ export default function DashboardPage() {
             </div>
           ) : (
             <div className="p-[14px]">
-              <GroupsTab clients={data.coachClients} />
+              <GroupsTab ref={groupsTabRef} clients={data.coachClients} />
             </div>
           )}
         </section>
@@ -404,6 +527,21 @@ function TaskRow({ task }: { task: DashboardTask }) {
         ) : null}
       </div>
       <span className="min-w-0 flex-1 leading-4 text-[#1a1a18]">{task.text}</span>
+    </div>
+  );
+}
+
+function EmptyQuickAddHint({ entityLabel }: { entityLabel: string }) {
+  return (
+    <div className="flex min-h-[160px] items-center justify-center rounded-[8px] border-[0.5px] border-dashed border-[#e0ddd6] bg-[#fbfaf7] p-4 text-center">
+      <div className="max-w-[220px] text-[#73726c]">
+        <div className="flex justify-center">
+          <ArrowUpRight className="h-5 w-5 -translate-y-1 translate-x-8" />
+        </div>
+        <div className="text-[12px] leading-5">
+          Для добавления {entityLabel} нажмите кнопку <span className="font-medium text-[#1a1a18]">"+"</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -585,4 +723,29 @@ function getInitials(name: string) {
 
   if (parts.length === 0) return 'К';
   return parts.map((part) => part[0]?.toUpperCase() ?? '').join('') || 'К';
+}
+
+function normalizeDashboardEntityName(value: string) {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+function mapContactToDashboardClient(contact: Contact): CoachingClient {
+  const createdAt = contact.created_at || new Date().toISOString();
+  return {
+    id: String(contact.id),
+    name: contact.name,
+    initials: getInitials(contact.name),
+    focus: '',
+    intention: '',
+    sessionsCount: 0,
+    avgProgress: 0,
+    nextSession: null,
+    clientStatus: {
+      kind: 'new',
+      label: 'Новый',
+      at: null,
+    },
+    coachId: '',
+    createdAt,
+  };
 }
