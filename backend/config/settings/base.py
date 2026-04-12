@@ -449,5 +449,20 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "api.views_accounts": {
+            "handlers": ["console", "runserver_file", "celery_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "api.views_vk_auth": {
+            "handlers": ["console", "runserver_file", "celery_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "api.views_social_accounts": {
+            "handlers": ["console", "runserver_file", "celery_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }

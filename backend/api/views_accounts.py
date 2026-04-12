@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 
 from django.conf import settings
@@ -37,6 +38,7 @@ from .serializers import ClientSettingsSerializer, ClientSummarySerializer
 from .utils import build_client_info_payload, enforce_generation_limit, get_active_client
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 COOKIE_SECURE = not settings.DEBUG
 COOKIE_SAMESITE = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
@@ -45,6 +47,15 @@ REFRESH_COOKIE_MAX_AGE = int(getattr(settings, "JWT_REFRESH_COOKIE_MAX_AGE", 60 
 
 def _is_dev_user(user) -> bool:
     return getattr(user, "is_dev_user", False) or user.username == "dev_user"
+
+
+def _request_meta(request) -> str:
+    forwarded_for = (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+    client_ip = forwarded_for or (request.META.get("REMOTE_ADDR") or "-")
+    origin = request.META.get("HTTP_ORIGIN") or "-"
+    referer = request.META.get("HTTP_REFERER") or "-"
+    user_agent = (request.META.get("HTTP_USER_AGENT") or "-")[:160]
+    return f"ip={client_ip} origin={origin!r} referer={referer!r} ua={user_agent!r}"
 
 def set_token_cookie(response: Response, key: str, value: str, max_age: int):
     response.set_cookie(
@@ -146,168 +157,227 @@ class TelegramAuthView(APIView):
         last_name = telegram_data.get('last_name', '')
         username = telegram_data.get('username', '')
         photo_url = telegram_data.get('photo_url')
-
-        if not telegram_id:
-            return Response(
-                {"error": "Missing Telegram ID"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        telegram_id_str = str(telegram_id)
-        stored_photo_url, avatar_metadata = persist_social_avatar(
-            request=request,
-            photo_url=photo_url,
-            provider=UserSocialAccount.PROVIDER_TELEGRAM,
-            provider_id=telegram_id_str,
-        )
-        photo_url = stored_photo_url or photo_url
         tenant_id_raw = request.data.get("tenant_id")
-        tenant_id_hint = None
-        if tenant_id_raw not in (None, ""):
-            try:
-                tenant_id_hint = int(tenant_id_raw)
-            except (TypeError, ValueError):
-                return Response(
-                    {"error": "Некорректный tenant_id"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if tenant_id_hint <= 0:
-                return Response(
-                    {"error": "Некорректный tenant_id"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
 
-        linked_social = (
-            UserSocialAccount.objects.select_related("user")
-            .filter(provider=UserSocialAccount.PROVIDER_TELEGRAM, provider_id=telegram_id_str)
-            .first()
+        logger.info(
+            "Telegram auth attempt telegram_id=%s tenant_id_raw=%r username=%r %s",
+            telegram_id,
+            tenant_id_raw,
+            username,
+            _request_meta(request),
         )
 
-        if linked_social:
-            user = linked_social.user
-            user_created = False
-        else:
-            # Use telegram username if available, otherwise fallback to tg_{telegram_id}
-            user_username = username if username else f"tg_{telegram_id_str}"
-            user, user_created = User.objects.get_or_create(
-                username=user_username,
-                defaults={
-                    'first_name': first_name,
-                    'last_name': last_name,
-                    'email': f"{user_username}@telegram.local"
-                }
-            )
+        try:
+            if not telegram_id:
+                logger.warning(
+                    "Telegram auth rejected: missing telegram id tenant_id_raw=%r %s",
+                    tenant_id_raw,
+                    _request_meta(request),
+                )
+                return Response(
+                    {"error": "Missing Telegram ID"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        # Update user info if it changed
-        if not user_created:
-            if user.first_name != first_name or user.last_name != last_name:
-                user.first_name = first_name
-                user.last_name = last_name
-                user.save()
-
-        # Ensure provider link points to this user.
-        linked_for_user = UserSocialAccount.objects.filter(
-            user=user, provider=UserSocialAccount.PROVIDER_TELEGRAM
-        ).first()
-        if linked_for_user and linked_for_user.provider_id != telegram_id_str:
-            return Response(
-                {"error": "У пользователя уже привязан другой Telegram-аккаунт"},
-                status=status.HTTP_409_CONFLICT,
-            )
-        extra_data = {
-            "first_name": first_name,
-            "last_name": last_name,
-            "username": username,
-            "photo_url": photo_url,
-            **avatar_metadata,
-        }
-        if linked_for_user:
-            linked_for_user.extra_data = extra_data
-            linked_for_user.save(update_fields=["extra_data", "updated_at"])
-        elif not linked_social:
-            UserSocialAccount.objects.create(
-                user=user,
+            telegram_id_str = str(telegram_id)
+            stored_photo_url, avatar_metadata = persist_social_avatar(
+                request=request,
+                photo_url=photo_url,
                 provider=UserSocialAccount.PROVIDER_TELEGRAM,
                 provider_id=telegram_id_str,
-                extra_data=extra_data,
             )
+            photo_url = stored_photo_url or photo_url
+            tenant_id_hint = None
+            if tenant_id_raw not in (None, ""):
+                try:
+                    tenant_id_hint = int(tenant_id_raw)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Telegram auth rejected: invalid tenant_id tenant_id_raw=%r telegram_id=%s %s",
+                        tenant_id_raw,
+                        telegram_id_str,
+                        _request_meta(request),
+                    )
+                    return Response(
+                        {"error": "Некорректный tenant_id"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if tenant_id_hint <= 0:
+                    logger.warning(
+                        "Telegram auth rejected: non-positive tenant_id tenant_id=%s telegram_id=%s %s",
+                        tenant_id_hint,
+                        telegram_id_str,
+                        _request_meta(request),
+                    )
+                    return Response(
+                        {"error": "Некорректный tenant_id"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
-        # If the login came from /c/<client_id>, create/bind a CRM contact for that tenant.
-        if tenant_id_hint is not None:
-            existing_tenant_binding = (
-                UserTenantBinding.objects.filter(
-                    provider=UserTenantBinding.PROVIDER_TELEGRAM,
-                    provider_user_id=telegram_id_str,
-                    tenant_id=tenant_id_hint,
-                )
-                .order_by("-bound_at", "-id")
+            linked_social = (
+                UserSocialAccount.objects.select_related("user")
+                .filter(provider=UserSocialAccount.PROVIDER_TELEGRAM, provider_id=telegram_id_str)
                 .first()
             )
 
-            contact_id = int(existing_tenant_binding.contact_id) if (
-                existing_tenant_binding and existing_tenant_binding.contact_id is not None
-            ) else None
-
-            if contact_id is None:
-                contact_name = (
-                    f"{first_name} {last_name}".strip()
-                    or username
-                    or f"Telegram {telegram_id_str}"
+            if linked_social:
+                user = linked_social.user
+                user_created = False
+            else:
+                # Use telegram username if available, otherwise fallback to tg_{telegram_id}
+                user_username = username if username else f"tg_{telegram_id_str}"
+                user, user_created = User.objects.get_or_create(
+                    username=user_username,
+                    defaults={
+                        'first_name': first_name,
+                        'last_name': last_name,
+                        'email': f"{user_username}@telegram.local"
+                    }
                 )
-                contact = MapContact.objects.create(name=contact_name)
-                contact_id = int(contact.id)
 
-            try:
-                TelegramUserService().bind_user_to_tenant(
-                    telegram_chat_id=int(telegram_id_str),
-                    tenant_id=tenant_id_hint,
-                    contact_id=contact_id,
-                    telegram_username=(str(username or "").strip() or None),
+            # Update user info if it changed
+            if not user_created:
+                if user.first_name != first_name or user.last_name != last_name:
+                    user.first_name = first_name
+                    user.last_name = last_name
+                    user.save()
+
+            # Ensure provider link points to this user.
+            linked_for_user = UserSocialAccount.objects.filter(
+                user=user, provider=UserSocialAccount.PROVIDER_TELEGRAM
+            ).first()
+            if linked_for_user and linked_for_user.provider_id != telegram_id_str:
+                logger.warning(
+                    "Telegram auth conflict user_id=%s existing_provider_id=%s attempted_provider_id=%s %s",
+                    user.id,
+                    linked_for_user.provider_id,
+                    telegram_id_str,
+                    _request_meta(request),
                 )
-            except ValueError as exc:
                 return Response(
-                    {"error": str(exc)},
-                    status=status.HTTP_400_BAD_REQUEST,
+                    {"error": "У пользователя уже привязан другой Telegram-аккаунт"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            extra_data = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "username": username,
+                "photo_url": photo_url,
+                **avatar_metadata,
+            }
+            if linked_for_user:
+                linked_for_user.extra_data = extra_data
+                linked_for_user.save(update_fields=["extra_data", "updated_at"])
+            elif not linked_social:
+                UserSocialAccount.objects.create(
+                    user=user,
+                    provider=UserSocialAccount.PROVIDER_TELEGRAM,
+                    provider_id=telegram_id_str,
+                    extra_data=extra_data,
                 )
 
-        accepted_invites = accept_pending_team_invites(user)
+            # If the login came from /c/<client_id>, create/bind a CRM contact for that tenant.
+            if tenant_id_hint is not None:
+                existing_tenant_binding = (
+                    UserTenantBinding.objects.filter(
+                        provider=UserTenantBinding.PROVIDER_TELEGRAM,
+                        provider_user_id=telegram_id_str,
+                        tenant_id=tenant_id_hint,
+                    )
+                    .order_by("-bound_at", "-id")
+                    .first()
+                )
 
-        # For first-time users in regular login flow, create client tenant only when no team access exists.
-        if user_created and tenant_id_hint is None and not accepted_invites:
-            client_slug = telegram_id_str
-            client, _ = Client.objects.get_or_create(
-                slug=client_slug,
-                defaults={
-                    'name': f"{first_name} {last_name}".strip() or username or f"User {telegram_id_str}",
+                contact_id = int(existing_tenant_binding.contact_id) if (
+                    existing_tenant_binding and existing_tenant_binding.contact_id is not None
+                ) else None
+
+                if contact_id is None:
+                    contact_name = (
+                        f"{first_name} {last_name}".strip()
+                        or username
+                        or f"Telegram {telegram_id_str}"
+                    )
+                    contact = MapContact.objects.create(name=contact_name)
+                    contact_id = int(contact.id)
+
+                try:
+                    TelegramUserService().bind_user_to_tenant(
+                        telegram_chat_id=int(telegram_id_str),
+                        tenant_id=tenant_id_hint,
+                        contact_id=contact_id,
+                        telegram_username=(str(username or "").strip() or None),
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        "Telegram auth tenant bind failed telegram_id=%s tenant_id=%s contact_id=%s error=%s %s",
+                        telegram_id_str,
+                        tenant_id_hint,
+                        contact_id,
+                        exc,
+                        _request_meta(request),
+                    )
+                    return Response(
+                        {"error": str(exc)},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            accepted_invites = accept_pending_team_invites(user)
+
+            # For first-time users in regular login flow, create client tenant only when no team access exists.
+            if user_created and tenant_id_hint is None and not accepted_invites:
+                client_slug = telegram_id_str
+                client, _ = Client.objects.get_or_create(
+                    slug=client_slug,
+                    defaults={
+                        'name': f"{first_name} {last_name}".strip() or username or f"User {telegram_id_str}",
+                    }
+                )
+                UserTenantRole.objects.get_or_create(
+                    user=user,
+                    client=client,
+                    defaults={'role': 'owner'}
+                )
+
+            # Generate JWT tokens
+            refresh = RefreshToken.for_user(user)
+            access = refresh.access_token
+
+            user_data = {
+                "user": {
+                    "telegramId": telegram_id,
+                    "firstName": first_name,
+                    "lastName": last_name,
+                    "username": username,
+                    "photoUrl": photo_url,
+                    "authDate": str(user.date_joined),
+                    "isDev": _is_dev_user(user)
                 }
-            )
-            UserTenantRole.objects.get_or_create(
-                user=user,
-                client=client,
-                defaults={'role': 'owner'}
-            )
-
-        # Generate JWT tokens
-        refresh = RefreshToken.for_user(user)
-        access = refresh.access_token
-
-        user_data = {
-            "user": {
-                "telegramId": telegram_id,
-                "firstName": first_name,
-                "lastName": last_name,
-                "username": username,
-                "photoUrl": photo_url,
-                "authDate": str(user.date_joined),
-                "isDev": _is_dev_user(user)
             }
-        }
 
-        response = Response(user_data)
-        set_token_cookie(response, "access_token", str(access), COOKIE_MAX_AGE)
-        set_token_cookie(response, "refresh_token", str(refresh), REFRESH_COOKIE_MAX_AGE)
+            response = Response(user_data)
+            set_token_cookie(response, "access_token", str(access), COOKIE_MAX_AGE)
+            set_token_cookie(response, "refresh_token", str(refresh), REFRESH_COOKIE_MAX_AGE)
 
-        return response
+            logger.info(
+                "Telegram auth success telegram_id=%s user_id=%s user_created=%s tenant_id=%s accepted_invites=%s %s",
+                telegram_id_str,
+                user.id,
+                user_created,
+                tenant_id_hint,
+                bool(accepted_invites),
+                _request_meta(request),
+            )
+            return response
+        except Exception:
+            logger.exception(
+                "Telegram auth unexpected error telegram_id=%s tenant_id_raw=%r username=%r %s",
+                telegram_id,
+                tenant_id_raw,
+                username,
+                _request_meta(request),
+            )
+            raise
 
     def put(self, request):
         """Dev mode login - auto-create/login as dev user"""

@@ -50,6 +50,15 @@ def _authenticate_cookie_user(request):
     return user
 
 
+def _request_meta(request) -> str:
+    forwarded_for = (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+    client_ip = forwarded_for or (request.META.get("REMOTE_ADDR") or "-")
+    origin = request.META.get("HTTP_ORIGIN") or "-"
+    referer = request.META.get("HTTP_REFERER") or "-"
+    user_agent = (request.META.get("HTTP_USER_AGENT") or "-")[:160]
+    return f"ip={client_ip} origin={origin!r} referer={referer!r} ua={user_agent!r}"
+
+
 # ---------------------------------------------------------------------------
 # profile summary (для модалки выбора на фронте)
 # ---------------------------------------------------------------------------
@@ -371,97 +380,140 @@ class LinkVkView(APIView):
         redirect_uri = (request.data.get("redirect_uri") or "").strip()
         config = _get_vk_config()
 
-        if not code:
-            return Response({"error": "Missing code"}, status=status.HTTP_400_BAD_REQUEST)
-        if not state:
-            return Response({"error": "Missing state"}, status=status.HTTP_400_BAD_REQUEST)
-        if not device_id:
-            return Response({"error": "Missing device_id"}, status=status.HTTP_400_BAD_REQUEST)
-        if not config["app_id"] or not config["app_secret"] or not config["redirect_uri"]:
-            return Response(
-                {"error": "VK auth is not configured on server"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-        if not redirect_uri:
-            redirect_uri = config["redirect_uri"]
-        if redirect_uri != config["redirect_uri"]:
-            return Response({"error": "Invalid redirect_uri"}, status=status.HTTP_400_BAD_REQUEST)
-
-        cache_key = f"vk_auth_state:{state}"
-        code_verifier = cache.get(cache_key)
-        if not code_verifier:
-            return Response({"error": "Invalid or expired state"}, status=status.HTTP_400_BAD_REQUEST)
-        cache.delete(cache_key)
-
-        token_data = _exchange_code_for_token(
-            code=code,
-            redirect_uri=redirect_uri,
-            app_id=config["app_id"],
-            app_secret=config["app_secret"],
-            code_verifier=code_verifier,
-            device_id=device_id,
+        logger.info(
+            "VK link attempt user_id=%s state_suffix=%s device_id_prefix=%s %s",
+            user.id,
+            state[-6:] if state else "-",
+            device_id[:8] if device_id else "-",
+            _request_meta(request),
         )
-        if not token_data:
-            return Response({"error": "Failed to exchange code"}, status=status.HTTP_400_BAD_REQUEST)
-        if token_data.get("error"):
-            return Response(
-                {"error": token_data.get("error_description") or token_data.get("error") or "Failed to exchange code"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
-        access_token = token_data.get("access_token")
-        vk_user_id = token_data.get("user_id")
-        email = token_data.get("email")
-        if not access_token or not vk_user_id:
-            return Response({"error": "Invalid token response"}, status=status.HTTP_400_BAD_REQUEST)
-
-        profile = _fetch_vk_profile(access_token=access_token, user_id=vk_user_id) or {}
-        stored_photo_url, avatar_metadata = persist_social_avatar(
-            request=request,
-            photo_url=profile.get("avatar"),
-            provider=UserSocialAccount.PROVIDER_VK,
-            provider_id=str(vk_user_id),
-        )
-        extra_data = {
-            "first_name": profile.get("first_name", ""),
-            "last_name": profile.get("last_name", ""),
-            "screen_name": profile.get("screen_name", ""),
-            "photo_url": stored_photo_url or profile.get("avatar"),
-            "email": email or profile.get("email"),
-            **avatar_metadata,
-        }
-
-        ok, error, conflicting_user = _link_provider(
-            user=user,
-            provider=UserSocialAccount.PROVIDER_VK,
-            provider_id=str(vk_user_id),
-            extra_data=extra_data,
-        )
-        if not ok:
-            if conflicting_user is not None:
-                return _build_conflict_response(
-                    current_user=user,
-                    existing_user=conflicting_user,
-                    provider=UserSocialAccount.PROVIDER_VK,
-                    provider_id=str(vk_user_id),
-                    extra_data=extra_data,
+        try:
+            if not code:
+                logger.warning("VK link rejected: missing code user_id=%s state_suffix=%s %s", user.id, state[-6:] if state else "-", _request_meta(request))
+                return Response({"error": "Missing code"}, status=status.HTTP_400_BAD_REQUEST)
+            if not state:
+                logger.warning("VK link rejected: missing state user_id=%s %s", user.id, _request_meta(request))
+                return Response({"error": "Missing state"}, status=status.HTTP_400_BAD_REQUEST)
+            if not device_id:
+                logger.warning("VK link rejected: missing device_id user_id=%s state_suffix=%s %s", user.id, state[-6:] if state else "-", _request_meta(request))
+                return Response({"error": "Missing device_id"}, status=status.HTTP_400_BAD_REQUEST)
+            if not config["app_id"] or not config["app_secret"] or not config["redirect_uri"]:
+                missing = [key for key, value in config.items() if not value]
+                logger.warning("VK link rejected: missing config fields=%s user_id=%s %s", ",".join(missing), user.id, _request_meta(request))
+                return Response(
+                    {"error": "VK auth is not configured on server"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
-            return Response({"error": error}, status=status.HTTP_409_CONFLICT)
+            if not redirect_uri:
+                redirect_uri = config["redirect_uri"]
+            if redirect_uri != config["redirect_uri"]:
+                logger.warning(
+                    "VK link rejected: invalid redirect_uri provided=%r expected=%r user_id=%s %s",
+                    redirect_uri,
+                    config["redirect_uri"],
+                    user.id,
+                    _request_meta(request),
+                )
+                return Response({"error": "Invalid redirect_uri"}, status=status.HTTP_400_BAD_REQUEST)
 
-        accept_pending_team_invites(user)
+            cache_key = f"vk_auth_state:{state}"
+            code_verifier = cache.get(cache_key)
+            if not code_verifier:
+                logger.warning("VK link rejected: invalid or expired state user_id=%s state_suffix=%s %s", user.id, state[-6:], _request_meta(request))
+                return Response({"error": "Invalid or expired state"}, status=status.HTTP_400_BAD_REQUEST)
+            cache.delete(cache_key)
 
-        display_name = (
-            f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip()
-            or profile.get("screen_name", "")
-        )
-        return Response(
-            {
-                "linked": True,
-                "provider": UserSocialAccount.PROVIDER_VK,
-                "providerDisplayName": display_name,
-                "photoUrl": extra_data.get("photo_url"),
+            token_data = _exchange_code_for_token(
+                code=code,
+                redirect_uri=redirect_uri,
+                app_id=config["app_id"],
+                app_secret=config["app_secret"],
+                code_verifier=code_verifier,
+                device_id=device_id,
+            )
+            if not token_data:
+                logger.warning("VK link rejected: token exchange returned no payload user_id=%s state_suffix=%s %s", user.id, state[-6:], _request_meta(request))
+                return Response({"error": "Failed to exchange code"}, status=status.HTTP_400_BAD_REQUEST)
+            if token_data.get("error"):
+                logger.warning("VK link rejected: token exchange error user_id=%s error=%s %s", user.id, token_data.get("error"), _request_meta(request))
+                return Response(
+                    {"error": token_data.get("error_description") or token_data.get("error") or "Failed to exchange code"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            access_token = token_data.get("access_token")
+            vk_user_id = token_data.get("user_id")
+            email = token_data.get("email")
+            if not access_token or not vk_user_id:
+                logger.warning("VK link rejected: invalid token response user_id=%s %s", user.id, _request_meta(request))
+                return Response({"error": "Invalid token response"}, status=status.HTTP_400_BAD_REQUEST)
+
+            profile = _fetch_vk_profile(access_token=access_token, user_id=vk_user_id) or {}
+            stored_photo_url, avatar_metadata = persist_social_avatar(
+                request=request,
+                photo_url=profile.get("avatar"),
+                provider=UserSocialAccount.PROVIDER_VK,
+                provider_id=str(vk_user_id),
+            )
+            extra_data = {
+                "first_name": profile.get("first_name", ""),
+                "last_name": profile.get("last_name", ""),
+                "screen_name": profile.get("screen_name", ""),
+                "photo_url": stored_photo_url or profile.get("avatar"),
+                "email": email or profile.get("email"),
+                **avatar_metadata,
             }
-        )
+
+            ok, error, conflicting_user = _link_provider(
+                user=user,
+                provider=UserSocialAccount.PROVIDER_VK,
+                provider_id=str(vk_user_id),
+                extra_data=extra_data,
+            )
+            if not ok:
+                logger.warning(
+                    "VK link conflict user_id=%s vk_user_id=%s error=%s conflicting_user_id=%s %s",
+                    user.id,
+                    vk_user_id,
+                    error,
+                    conflicting_user.id if conflicting_user is not None else None,
+                    _request_meta(request),
+                )
+                if conflicting_user is not None:
+                    return _build_conflict_response(
+                        current_user=user,
+                        existing_user=conflicting_user,
+                        provider=UserSocialAccount.PROVIDER_VK,
+                        provider_id=str(vk_user_id),
+                        extra_data=extra_data,
+                    )
+                return Response({"error": error}, status=status.HTTP_409_CONFLICT)
+
+            accept_pending_team_invites(user)
+
+            display_name = (
+                f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip()
+                or profile.get("screen_name", "")
+            )
+            logger.info("VK link success user_id=%s vk_user_id=%s %s", user.id, vk_user_id, _request_meta(request))
+            return Response(
+                {
+                    "linked": True,
+                    "provider": UserSocialAccount.PROVIDER_VK,
+                    "providerDisplayName": display_name,
+                    "photoUrl": extra_data.get("photo_url"),
+                }
+            )
+        except Exception:
+            logger.exception(
+                "VK link unexpected error user_id=%s state_suffix=%s device_id_prefix=%s %s",
+                user.id,
+                state[-6:] if state else "-",
+                device_id[:8] if device_id else "-",
+                _request_meta(request),
+            )
+            raise
 
 
 class LinkTelegramView(APIView):
@@ -475,59 +527,87 @@ class LinkTelegramView(APIView):
 
         telegram_data = request.data
         telegram_id = telegram_data.get("id")
-        if not telegram_id:
-            return Response({"error": "Missing Telegram ID"}, status=status.HTTP_400_BAD_REQUEST)
-
-        if not _verify_telegram_payload(telegram_data):
-            return Response(
-                {"error": "Invalid Telegram payload signature"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        stored_photo_url, avatar_metadata = persist_social_avatar(
-            request=request,
-            photo_url=telegram_data.get("photo_url"),
-            provider=UserSocialAccount.PROVIDER_TELEGRAM,
-            provider_id=str(telegram_id),
+        logger.info(
+            "Telegram link attempt user_id=%s telegram_id=%s username=%r %s",
+            user.id,
+            telegram_id,
+            telegram_data.get("username", ""),
+            _request_meta(request),
         )
-        extra_data = {
-            "first_name": telegram_data.get("first_name", ""),
-            "last_name": telegram_data.get("last_name", ""),
-            "username": telegram_data.get("username", ""),
-            "photo_url": stored_photo_url or telegram_data.get("photo_url"),
-            **avatar_metadata,
-        }
 
-        ok, error, conflicting_user = _link_provider(
-            user=user,
-            provider=UserSocialAccount.PROVIDER_TELEGRAM,
-            provider_id=str(telegram_id),
-            extra_data=extra_data,
-        )
-        if not ok:
-            if conflicting_user is not None:
-                return _build_conflict_response(
-                    current_user=user,
-                    existing_user=conflicting_user,
-                    provider=UserSocialAccount.PROVIDER_TELEGRAM,
-                    provider_id=str(telegram_id),
-                    extra_data=extra_data,
+        try:
+            if not telegram_id:
+                logger.warning("Telegram link rejected: missing telegram id user_id=%s %s", user.id, _request_meta(request))
+                return Response({"error": "Missing Telegram ID"}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not _verify_telegram_payload(telegram_data):
+                logger.warning("Telegram link rejected: invalid payload signature user_id=%s telegram_id=%s %s", user.id, telegram_id, _request_meta(request))
+                return Response(
+                    {"error": "Invalid Telegram payload signature"},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
-            return Response({"error": error}, status=status.HTTP_409_CONFLICT)
 
-        accept_pending_team_invites(user)
-
-        return Response(
-            {
-                "linked": True,
-                "provider": UserSocialAccount.PROVIDER_TELEGRAM,
-                "providerDisplayName": (
-                    f"{telegram_data.get('first_name', '')} {telegram_data.get('last_name', '')}".strip()
-                    or telegram_data.get("username", "")
-                ),
-                "photoUrl": extra_data.get("photo_url"),
+            stored_photo_url, avatar_metadata = persist_social_avatar(
+                request=request,
+                photo_url=telegram_data.get("photo_url"),
+                provider=UserSocialAccount.PROVIDER_TELEGRAM,
+                provider_id=str(telegram_id),
+            )
+            extra_data = {
+                "first_name": telegram_data.get("first_name", ""),
+                "last_name": telegram_data.get("last_name", ""),
+                "username": telegram_data.get("username", ""),
+                "photo_url": stored_photo_url or telegram_data.get("photo_url"),
+                **avatar_metadata,
             }
-        )
+
+            ok, error, conflicting_user = _link_provider(
+                user=user,
+                provider=UserSocialAccount.PROVIDER_TELEGRAM,
+                provider_id=str(telegram_id),
+                extra_data=extra_data,
+            )
+            if not ok:
+                logger.warning(
+                    "Telegram link conflict user_id=%s telegram_id=%s error=%s conflicting_user_id=%s %s",
+                    user.id,
+                    telegram_id,
+                    error,
+                    conflicting_user.id if conflicting_user is not None else None,
+                    _request_meta(request),
+                )
+                if conflicting_user is not None:
+                    return _build_conflict_response(
+                        current_user=user,
+                        existing_user=conflicting_user,
+                        provider=UserSocialAccount.PROVIDER_TELEGRAM,
+                        provider_id=str(telegram_id),
+                        extra_data=extra_data,
+                    )
+                return Response({"error": error}, status=status.HTTP_409_CONFLICT)
+
+            accept_pending_team_invites(user)
+            logger.info("Telegram link success user_id=%s telegram_id=%s %s", user.id, telegram_id, _request_meta(request))
+
+            return Response(
+                {
+                    "linked": True,
+                    "provider": UserSocialAccount.PROVIDER_TELEGRAM,
+                    "providerDisplayName": (
+                        f"{telegram_data.get('first_name', '')} {telegram_data.get('last_name', '')}".strip()
+                        or telegram_data.get("username", "")
+                    ),
+                    "photoUrl": extra_data.get("photo_url"),
+                }
+            )
+        except Exception:
+            logger.exception(
+                "Telegram link unexpected error user_id=%s telegram_id=%s %s",
+                user.id,
+                telegram_id,
+                _request_meta(request),
+            )
+            raise
 
 
 class UnlinkView(APIView):
