@@ -29,6 +29,7 @@ def set_coach_invite_cookie(response, invite: InviteLink) -> None:
         "contact_id": int(invite.contact_id),
     }
     signed_payload = signing.dumps(payload, salt=COACH_INVITE_COOKIE_SALT)
+    cookie_domain: str | None = getattr(settings, "JWT_COOKIE_DOMAIN", None) or None
     response.set_cookie(
         COACH_INVITE_COOKIE,
         signed_payload,
@@ -36,6 +37,7 @@ def set_coach_invite_cookie(response, invite: InviteLink) -> None:
         secure=not settings.DEBUG,
         samesite=getattr(settings, "JWT_COOKIE_SAMESITE", "Lax"),
         path="/",
+        domain=cookie_domain,
     )
 
 

@@ -21,8 +21,31 @@ const PUBLIC_CLIENT_PATH_PATTERNS = [
   /^\/tasks\/?$/,
 ];
 
+const IPV4_RE = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+const getHost = (hostHeader: string): string => {
+  const normalized = hostHeader.trim().toLowerCase();
+  if (!normalized) {
+    return '';
+  }
+  if (normalized.startsWith('[')) {
+    const closingBracketIndex = normalized.indexOf(']');
+    if (closingBracketIndex > 1) {
+      return normalized.slice(1, closingBracketIndex);
+    }
+  }
+  return normalized.split(':')[0] ?? '';
+};
+
+const isIpHost = (host: string): boolean => {
+  return IPV4_RE.test(host) || host.includes(':');
+};
+
 const isPlatformHost = (host: string): boolean => {
   if (PLATFORM_HOSTS.has(host)) {
+    return true;
+  }
+  if (isIpHost(host)) {
     return true;
   }
   if (host.endsWith('.fibonatty.ru')) {
@@ -39,8 +62,7 @@ const isPublicClientPath = (pathname: string): boolean => {
 };
 
 export function middleware(request: NextRequest) {
-  const hostHeader = request.headers.get('host') || '';
-  const host = hostHeader.split(':')[0]?.trim().toLowerCase() || '';
+  const host = getHost(request.headers.get('host') || '');
   const pathname = request.nextUrl.pathname;
 
   if (!host || isPlatformHost(host) || !isPublicClientPath(pathname)) {

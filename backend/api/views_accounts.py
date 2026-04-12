@@ -44,6 +44,8 @@ COOKIE_SECURE = not settings.DEBUG
 COOKIE_SAMESITE = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
 COOKIE_MAX_AGE = int(getattr(settings, "JWT_COOKIE_MAX_AGE", 60 * 60))  # 1 hour for access token
 REFRESH_COOKIE_MAX_AGE = int(getattr(settings, "JWT_REFRESH_COOKIE_MAX_AGE", 60 * 60 * 24 * 7))
+# Явный domain нужен когда фронтенд и API работают на разных субдоменах одного домена.
+COOKIE_DOMAIN: str | None = getattr(settings, "JWT_COOKIE_DOMAIN", None) or None
 
 def _is_dev_user(user) -> bool:
     return getattr(user, "is_dev_user", False) or user.username == "dev_user"
@@ -66,6 +68,7 @@ def set_token_cookie(response: Response, key: str, value: str, max_age: int):
         samesite=COOKIE_SAMESITE,
         path="/",
         max_age=max_age,
+        domain=COOKIE_DOMAIN,
     )
 
 
@@ -439,8 +442,8 @@ class TelegramAuthView(APIView):
     def delete(self, request):
         """Logout user"""
         response = Response({"success": True})
-        response.delete_cookie("access_token", path="/", samesite=COOKIE_SAMESITE)
-        response.delete_cookie("refresh_token", path="/", samesite=COOKIE_SAMESITE)
+        response.delete_cookie("access_token", path="/", samesite=COOKIE_SAMESITE, domain=COOKIE_DOMAIN)
+        response.delete_cookie("refresh_token", path="/", samesite=COOKIE_SAMESITE, domain=COOKIE_DOMAIN)
         return response
 
 
@@ -495,8 +498,8 @@ class LogoutView(APIView):
 
     def post(self, request, *args, **kwargs):
         response = Response({"success": True})
-        response.delete_cookie("access_token", path="/", samesite=COOKIE_SAMESITE)
-        response.delete_cookie("refresh_token", path="/", samesite=COOKIE_SAMESITE)
+        response.delete_cookie("access_token", path="/", samesite=COOKIE_SAMESITE, domain=COOKIE_DOMAIN)
+        response.delete_cookie("refresh_token", path="/", samesite=COOKIE_SAMESITE, domain=COOKIE_DOMAIN)
         return response
 
 

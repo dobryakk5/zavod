@@ -22,7 +22,7 @@ from core.services.telegram_user_service import TelegramUserService
 
 from .authentication import CookieJWTAuthentication
 from .social_avatar_storage import persist_social_avatar
-from .views_accounts import COOKIE_MAX_AGE, COOKIE_SAMESITE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
+from .views_accounts import COOKIE_DOMAIN, COOKIE_MAX_AGE, COOKIE_SAMESITE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
 
 VK_OAUTH_URL = "https://id.vk.com/authorize"
 VK_TOKEN_URL = "https://id.vk.com/oauth2/auth"
@@ -586,6 +586,6 @@ class VkAuthView(APIView):
 
     def delete(self, request):
         response = Response({"success": True})
-        response.delete_cookie("access_token", path="/", samesite=COOKIE_SAMESITE)
-        response.delete_cookie("refresh_token", path="/", samesite=COOKIE_SAMESITE)
+        response.delete_cookie("access_token", path="/", samesite=COOKIE_SAMESITE, domain=COOKIE_DOMAIN)
+        response.delete_cookie("refresh_token", path="/", samesite=COOKIE_SAMESITE, domain=COOKIE_DOMAIN)
         return response

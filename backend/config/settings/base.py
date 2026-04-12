@@ -309,6 +309,9 @@ SIMPLE_JWT = {
     "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
 }
 
+JWT_COOKIE_SAMESITE = os.getenv("JWT_COOKIE_SAMESITE", "Lax")
+JWT_COOKIE_DOMAIN = os.getenv("JWT_COOKIE_DOMAIN", "").strip() or None
+
 # CORS / CSRF settings
 _DEFAULT_CLIENT_ORIGINS_BASE = [
     "http://localhost:3000",
