@@ -115,7 +115,9 @@ INSTALLED_APPS = [
     "corsheaders",
     "modelcluster",
     "taggit",
+    "anymail",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
 
     # API
     "api",
@@ -297,14 +299,16 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "team_invitation_minute": "10/min",
         "team_invitation_day": "100/day",
+        "auth_minute": os.getenv("AUTH_THROTTLE_MINUTE", "10/min"),
+        "auth_day": os.getenv("AUTH_THROTTLE_DAY", "200/day"),
     },
 }
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.getenv("JWT_ACCESS_MINUTES", "30"))),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=int(os.getenv("JWT_REFRESH_DAYS", "7"))),
-    "ROTATE_REFRESH_TOKENS": False,
-    "BLACKLIST_AFTER_ROTATION": False,
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
     "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
 }
@@ -354,21 +358,23 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
 TELEGRAM_ALERT_USER_ID = os.getenv("TELEGRAM_ALERT_USER_ID", "")
 
-# Email (SMTP)
-EMAIL_HOST = os.getenv("EMAIL_HOST", "")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
-EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
-EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
-_EMAIL_BACKEND_ENV = os.getenv("EMAIL_BACKEND", "").strip()
-if _EMAIL_BACKEND_ENV:
-    EMAIL_BACKEND = _EMAIL_BACKEND_ENV
-elif EMAIL_HOST and EMAIL_HOST_USER and EMAIL_HOST_PASSWORD:
-    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-else:
-    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
-EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False") == "True"
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "support@fibonatty.ru")
+# Email (Mailgun via django-anymail)
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "anymail.backends.mailgun.EmailBackend",
+)
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "noreply@mg.fibonatty.ru")
+SERVER_EMAIL = os.getenv("SERVER_EMAIL", "server@mg.fibonatty.ru")
+
+ANYMAIL = {
+    "MAILGUN_API_KEY": os.getenv("MAILGUN_API_KEY", ""),
+    "MAILGUN_WEBHOOK_SIGNING_KEY": os.getenv("MAILGUN_WEBHOOK_SIGNING_KEY", ""),
+    "MAILGUN_SENDER_DOMAIN": os.getenv("MAILGUN_SENDER_DOMAIN", ""),
+    "WEBHOOK_SECRET": os.getenv("ANYMAIL_WEBHOOK_SECRET", ""),
+}
+_mailgun_api_url = os.getenv("MAILGUN_API_URL", "").strip()
+if _mailgun_api_url:
+    ANYMAIL["MAILGUN_API_URL"] = _mailgun_api_url
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 TEAM_MAX_COLLABORATORS = int(os.getenv("TEAM_MAX_COLLABORATORS", "20"))
 

@@ -434,7 +434,7 @@ def _send_course_message_via_channel(
             fail_silently=False,
         )
         if not sent:
-            raise ValueError("SMTP не подтвердил отправку письма.")
+            raise ValueError("Email backend не подтвердил отправку письма.")
         return "", {"to_email": recipient, "contact_id": int(contact_id)}
 
     raise ValueError("Канал ответа не поддерживается для курсов.")
@@ -584,7 +584,7 @@ def _send_email_reply(*, client, thread_id: str, text: str) -> tuple[str, dict[s
         fail_silently=False,
     )
     if not sent:
-        raise ValueError("SMTP не подтвердил отправку письма.")
+        raise ValueError("Email backend не подтвердил отправку письма.")
     return "", {"to_email": recipient, "subject": subject, "thread_key": thread_key}
 
 

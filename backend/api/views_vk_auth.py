@@ -21,8 +21,9 @@ from core.services.team_invites import accept_pending_team_invites
 from core.services.telegram_user_service import TelegramUserService
 
 from .authentication import CookieJWTAuthentication
+from .throttles import AuthDayThrottle, AuthMinuteThrottle
 from .social_avatar_storage import persist_social_avatar
-from .views_accounts import COOKIE_DOMAIN, COOKIE_MAX_AGE, COOKIE_SAMESITE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
+from .views_accounts import COOKIE_DOMAIN, COOKIE_MAX_AGE, COOKIE_SAMESITE, COOKIE_SECURE, REFRESH_COOKIE_MAX_AGE, set_token_cookie
 
 VK_OAUTH_URL = "https://id.vk.com/authorize"
 VK_TOKEN_URL = "https://id.vk.com/oauth2/auth"
@@ -243,6 +244,7 @@ def _link_vk_to_user(
 class VkAuthUrlView(APIView):
     permission_classes = [AllowAny]
     authentication_classes: tuple = ()
+    throttle_classes = [AuthMinuteThrottle, AuthDayThrottle]
 
     def get(self, request):
         config = _get_vk_config()
@@ -277,6 +279,7 @@ class VkAuthUrlView(APIView):
 class VkAuthView(APIView):
     permission_classes = [AllowAny]
     authentication_classes: tuple = ()
+    throttle_classes = [AuthMinuteThrottle, AuthDayThrottle]
 
     def _authenticate_cookie_user(self, request):
         authenticator = CookieJWTAuthentication()
@@ -344,6 +347,12 @@ class VkAuthView(APIView):
             tenant_id_raw,
             redirect_uri or config["redirect_uri"],
             _request_meta(request),
+        )
+        logger.debug(
+            "VK auth cookie_domain=%r cookie_samesite=%r cookie_secure=%r",
+            COOKIE_DOMAIN,
+            COOKIE_SAMESITE,
+            COOKIE_SECURE,
         )
 
         try:

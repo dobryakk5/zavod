@@ -114,6 +114,9 @@ from .amocrm import (
     resync_all_crm_clients_to_amocrm_task,
     process_amocrm_contacts_webhook_task,
 )
+from .inbound_email import (
+    process_inbound_email_task,
+)
 
 __all__ = [
     # Publishing (2)
@@ -189,4 +192,5 @@ __all__ = [
     'sync_crm_client_to_amocrm_contact_task',
     'resync_all_crm_clients_to_amocrm_task',
     'process_amocrm_contacts_webhook_task',
+    'process_inbound_email_task',
 ]

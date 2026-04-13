@@ -2,18 +2,22 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
+  Check,
   CheckCircle2,
   LayoutDashboard,
   Megaphone,
   Package2,
+  Pencil,
   Settings2,
   UserRound,
   Users,
+  X,
   XCircle,
 } from 'lucide-react';
 import {
@@ -163,6 +167,132 @@ function ClientSwitcher({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function ProjectNameEditor({
+  projectName,
+  canEdit,
+  saving,
+  onSave,
+}: {
+  projectName: string;
+  canEdit: boolean;
+  saving: boolean;
+  onSave: (value: string) => Promise<void>;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftValue, setDraftValue] = useState(projectName);
+  const [errorMessage, setErrorMessage] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setDraftValue(projectName);
+      setErrorMessage('');
+    }
+  }, [isEditing, projectName]);
+
+  useEffect(() => {
+    if (isEditing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [isEditing]);
+
+  const handleCancel = () => {
+    setDraftValue(projectName);
+    setErrorMessage('');
+    setIsEditing(false);
+  };
+
+  const handleSubmit = async () => {
+    const normalizedValue = draftValue.trim();
+    if (!normalizedValue) {
+      setErrorMessage('Введите название проекта.');
+      return;
+    }
+
+    if (normalizedValue === projectName.trim()) {
+      handleCancel();
+      return;
+    }
+
+    try {
+      setErrorMessage('');
+      await onSave(normalizedValue);
+      setIsEditing(false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error && error.message ? error.message : 'Не удалось обновить название проекта.');
+    }
+  };
+
+  if (!isEditing) {
+    return (
+      <div className="mt-2 flex items-start gap-2">
+        <div className="min-w-0 flex-1 text-[17px] font-semibold leading-tight text-gray-950">{projectName}</div>
+        {canEdit ? (
+          <button
+            type="button"
+            aria-label="Редактировать название проекта"
+            className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-black/10 bg-white text-[#746d66] transition-colors hover:border-black/15 hover:text-gray-950"
+            onClick={() => setIsEditing(true)}
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <Input
+          ref={inputRef}
+          value={draftValue}
+          aria-label="Название проекта"
+          placeholder="Название проекта"
+          className="h-10 rounded-2xl border-black/10 bg-white text-sm"
+          disabled={saving}
+          onChange={(event) => {
+            setDraftValue(event.target.value);
+            if (errorMessage) {
+              setErrorMessage('');
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              void handleSubmit();
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              handleCancel();
+            }
+          }}
+        />
+        <button
+          type="button"
+          aria-label="Сохранить название проекта"
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={saving}
+          onClick={() => void handleSubmit()}
+        >
+          <Check className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="Отменить редактирование названия проекта"
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-black/10 bg-white text-[#746d66] transition-colors hover:border-black/15 hover:text-gray-950 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={saving}
+          onClick={handleCancel}
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      {errorMessage ? <div className="text-xs text-rose-600">{errorMessage}</div> : null}
+    </div>
   );
 }
 
@@ -438,9 +568,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     activeClientDisplayName,
     clientInfoLoading,
     switchingClient,
+    renamingClient,
     openLoggedUserModal,
     onLogout,
     handleClientSwitch,
+    renameClient,
   } = useAppShellState();
 
   if (isPublicRoute) return <>{children}</>;
@@ -472,7 +604,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="-mx-[18px] mt-6 border-y border-black/5 bg-white px-[18px] py-5">
             <div className="px-3">
               <div className="text-[11px] uppercase tracking-[0.18em] text-[#948c84]">Активный проект</div>
-              <div className="mt-2 text-[17px] font-semibold text-gray-950">{projectName}</div>
+              <ProjectNameEditor
+                projectName={projectName}
+                canEdit={activeMembership?.role === 'owner'}
+                saving={renamingClient}
+                onSave={async (value) => {
+                  await renameClient(value);
+                }}
+              />
               <div className="mt-1 text-sm text-[#746d66]">{formatRoleLabel(activeMembership?.role)}</div>
               {canSwitchClient ? (
                 <div className="mt-4">

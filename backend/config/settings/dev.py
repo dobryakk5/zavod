@@ -22,3 +22,6 @@ CELERY_WORKER_POOL = os.getenv("CELERY_WORKER_POOL", "solo")
 CELERY_WORKER_CONCURRENCY = int(os.getenv("CELERY_WORKER_CONCURRENCY", "1"))
 CELERY_WORKER_PREFETCH_MULTIPLIER = int(os.getenv("CELERY_WORKER_PREFETCH_MULTIPLIER", "1"))
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+# Keep local development usable without Mailgun credentials.
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import re
+import time
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -32,9 +35,10 @@ from core.services.custom_domain import (
 from core.services.team_invites import accept_pending_team_invites
 
 from .authentication import CookieJWTAuthentication
-from .permissions import IsTenantMember, IsTenantOwnerOrEditor
+from .throttles import AuthDayThrottle, AuthMinuteThrottle
+from .permissions import IsTenantMember, IsTenantOwner, IsTenantOwnerOrEditor
 from .social_avatar_storage import persist_social_avatar
-from .serializers import ClientSettingsSerializer, ClientSummarySerializer
+from .serializers import ClientNameSerializer, ClientSettingsSerializer, ClientSummarySerializer
 from .utils import build_client_info_payload, enforce_generation_limit, get_active_client
 
 User = get_user_model()
@@ -44,7 +48,7 @@ COOKIE_SECURE = not settings.DEBUG
 COOKIE_SAMESITE = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
 COOKIE_MAX_AGE = int(getattr(settings, "JWT_COOKIE_MAX_AGE", 60 * 60))  # 1 hour for access token
 REFRESH_COOKIE_MAX_AGE = int(getattr(settings, "JWT_REFRESH_COOKIE_MAX_AGE", 60 * 60 * 24 * 7))
-# Явный domain нужен когда фронтенд и API работают на разных субдоменах одного домена.
+# Явный domain нужен когда фронтенд и API на разных субдоменах одного домена.
 COOKIE_DOMAIN: str | None = getattr(settings, "JWT_COOKIE_DOMAIN", None) or None
 
 def _is_dev_user(user) -> bool:
@@ -72,10 +76,41 @@ def set_token_cookie(response: Response, key: str, value: str, max_age: int):
     )
 
 
+def _verify_telegram_payload(payload: dict) -> bool:
+    """Validate Telegram Login Widget signature."""
+    if settings.DEBUG:
+        return True
+
+    bot_token = (getattr(settings, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+    if not bot_token:
+        logger.error("Telegram auth rejected: TELEGRAM_BOT_TOKEN is not configured")
+        return False
+
+    received_hash = (payload.get("hash") or "").strip()
+    if not received_hash:
+        return False
+
+    try:
+        auth_date = int(payload.get("auth_date") or 0)
+    except (TypeError, ValueError):
+        return False
+
+    if abs(time.time() - auth_date) > 86400:
+        logger.warning("Telegram auth rejected: stale auth_date=%s", auth_date)
+        return False
+
+    check_data = {key: value for key, value in payload.items() if key != "hash" and value is not None}
+    check_string = "\n".join(f"{key}={value}" for key, value in sorted(check_data.items()))
+    secret_key = hashlib.sha256(bot_token.encode()).digest()
+    expected_hash = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected_hash, received_hash)
+
+
 class TelegramAuthView(APIView):
     """Telegram authentication endpoint for frontend"""
     permission_classes = [AllowAny]
     authentication_classes: tuple = ()
+    throttle_classes = [AuthMinuteThrottle, AuthDayThrottle]
 
     def _authenticate_cookie_user(self, request):
         """
@@ -151,9 +186,6 @@ class TelegramAuthView(APIView):
         from core.models import Client, MapContact, UserSocialAccount, UserTenantBinding, UserTenantRole
         from core.services.telegram_user_service import TelegramUserService
 
-        # TODO: Verify Telegram data hash for security
-        # For now, accepting Telegram auth data as-is
-
         telegram_data = request.data
         telegram_id = telegram_data.get('id')
         first_name = telegram_data.get('first_name', '')
@@ -169,6 +201,17 @@ class TelegramAuthView(APIView):
             username,
             _request_meta(request),
         )
+
+        if not _verify_telegram_payload(telegram_data):
+            logger.warning(
+                "Telegram auth rejected: invalid signature telegram_id=%s %s",
+                telegram_id,
+                _request_meta(request),
+            )
+            return Response(
+                {"error": "Invalid Telegram signature"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             if not telegram_id:
@@ -227,14 +270,13 @@ class TelegramAuthView(APIView):
                 user = linked_social.user
                 user_created = False
             else:
-                # Use telegram username if available, otherwise fallback to tg_{telegram_id}
-                user_username = username if username else f"tg_{telegram_id_str}"
+                user_username = f"tg_{telegram_id_str}"
                 user, user_created = User.objects.get_or_create(
                     username=user_username,
                     defaults={
                         'first_name': first_name,
                         'last_name': last_name,
-                        'email': f"{user_username}@telegram.local"
+                        'email': f"{user_username}@telegram.local",
                     }
                 )
 
@@ -243,7 +285,7 @@ class TelegramAuthView(APIView):
                 if user.first_name != first_name or user.last_name != last_name:
                     user.first_name = first_name
                     user.last_name = last_name
-                    user.save()
+                    user.save(update_fields=["first_name", "last_name"])
 
             # Ensure provider link points to this user.
             linked_for_user = UserSocialAccount.objects.filter(
@@ -450,6 +492,7 @@ class TelegramAuthView(APIView):
 class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes: tuple = ()
+    throttle_classes = [AuthMinuteThrottle, AuthDayThrottle]
 
     def post(self, request, *args, **kwargs):
         serializer = TokenObtainPairSerializer(data=request.data, context={"request": request})
@@ -497,6 +540,15 @@ class LogoutView(APIView):
     authentication_classes: tuple = ()
 
     def post(self, request, *args, **kwargs):
+        cookie_refresh = request.COOKIES.get("refresh_token")
+        if cookie_refresh:
+            try:
+                token = RefreshToken(cookie_refresh)
+                token.blacklist()
+                logger.info("Logout: refresh token blacklisted jti=%s", token.get("jti", "-"))
+            except Exception as exc:
+                logger.debug("Logout: could not blacklist refresh token: %s", exc)
+
         response = Response({"success": True})
         response.delete_cookie("access_token", path="/", samesite=COOKIE_SAMESITE, domain=COOKIE_DOMAIN)
         response.delete_cookie("refresh_token", path="/", samesite=COOKIE_SAMESITE, domain=COOKIE_DOMAIN)
@@ -507,6 +559,17 @@ class ClientInfoView(APIView):
     """Get current client info and user role"""
 
     def get(self, request, *args, **kwargs):
+        return Response(build_client_info_payload(request.user))
+
+    def patch(self, request, *args, **kwargs):
+        owner_permission = IsTenantOwner()
+        if not owner_permission.has_permission(request, self):
+            return Response({"detail": "Недостаточно прав для изменения проекта."}, status=status.HTTP_403_FORBIDDEN)
+
+        client = get_active_client(request.user)
+        serializer = ClientNameSerializer(client, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(build_client_info_payload(request.user))
 
 

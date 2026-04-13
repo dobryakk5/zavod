@@ -132,6 +132,7 @@ export function useAppShellState() {
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   const [clientInfoLoading, setClientInfoLoading] = useState(false);
   const [switchingClient, setSwitchingClient] = useState(false);
+  const [renamingClient, setRenamingClient] = useState(false);
   const [vkDisplayName, setVkDisplayName] = useState<string | null>(null);
 
   const isPublicRoute = isAppShellPublicRoute(pathname);
@@ -289,6 +290,17 @@ export function useAppShellState() {
     }
   };
 
+  const renameClient = async (name: string) => {
+    setRenamingClient(true);
+    try {
+      const nextInfo = await clientApi.updateName(name);
+      setClientInfo(nextInfo);
+      return nextInfo;
+    } finally {
+      setRenamingClient(false);
+    }
+  };
+
   const activeClientDisplayName = getDisplayClientName(clientInfo?.client.name, vkDisplayName);
 
   return {
@@ -306,8 +318,10 @@ export function useAppShellState() {
     activeClientDisplayName,
     clientInfoLoading,
     switchingClient,
+    renamingClient,
     openLoggedUserModal,
     onLogout,
     handleClientSwitch,
+    renameClient,
   };
 }

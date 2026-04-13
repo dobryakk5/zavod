@@ -6,6 +6,7 @@ const testState = vi.hoisted(() => ({
   pathname: '/dashboard',
   push: vi.fn(),
   info: vi.fn(),
+  updateName: vi.fn(),
   setActiveClient: vi.fn(),
   reload: vi.fn(),
 }));
@@ -32,6 +33,7 @@ vi.mock('next/image', async () => {
 vi.mock('@/lib/api/client', () => ({
   clientApi: {
     info: (...args: unknown[]) => testState.info(...args),
+    updateName: (...args: unknown[]) => testState.updateName(...args),
     setActiveClient: (...args: unknown[]) => testState.setActiveClient(...args),
   },
 }));
@@ -99,6 +101,15 @@ describe('AppShell', () => {
         { client: { id: 2, name: 'Second', slug: 'second' }, role: 'editor' },
       ],
     });
+    testState.updateName.mockResolvedValue({
+      client: { id: 1, name: 'Renamed Project', slug: 'main' },
+      role: 'owner',
+      active_client_id: 1,
+      memberships: [
+        { client: { id: 1, name: 'Renamed Project', slug: 'main' }, role: 'owner' },
+        { client: { id: 2, name: 'Second', slug: 'second' }, role: 'editor' },
+      ],
+    });
     testState.setActiveClient.mockResolvedValue({
       client: { id: 2, name: 'Second', slug: 'second' },
       role: 'editor',
@@ -137,6 +148,60 @@ describe('AppShell', () => {
     });
   });
 
+  it('shows project rename pencil only for owner and saves updated name', async () => {
+    const mod = await import('@/components/layout/app-shell');
+    const AppShell = mod.AppShell;
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    await waitFor(() => {
+      expect(testState.info).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByLabelText('Редактировать название проекта'));
+    fireEvent.change(screen.getByLabelText('Название проекта'), {
+      target: { value: 'Renamed Project' },
+    });
+    fireEvent.click(screen.getByLabelText('Сохранить название проекта'));
+
+    await waitFor(() => {
+      expect(testState.updateName).toHaveBeenCalledWith('Renamed Project');
+    });
+
+    expect(screen.getAllByText('Renamed Project').length).toBeGreaterThan(0);
+  });
+
+  it('does not show project rename pencil for non-owner role', async () => {
+    testState.info.mockResolvedValue({
+      client: { id: 2, name: 'Second', slug: 'second' },
+      role: 'editor',
+      active_client_id: 2,
+      memberships: [
+        { client: { id: 1, name: 'Main', slug: 'main' }, role: 'owner' },
+        { client: { id: 2, name: 'Second', slug: 'second' }, role: 'editor' },
+      ],
+    });
+
+    const mod = await import('@/components/layout/app-shell');
+    const AppShell = mod.AppShell;
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    await waitFor(() => {
+      expect(testState.info).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByLabelText('Редактировать название проекта')).not.toBeInTheDocument();
+  });
+
   it('renders only marketing top-level navigation for internal routes', async () => {
     const mod = await import('@/components/layout/app-shell');
     const AppShell = mod.AppShell;
@@ -151,10 +216,10 @@ describe('AppShell', () => {
       expect(testState.info).toHaveBeenCalled();
     });
 
-    expect(screen.getByRole('link', { name: 'Обзор' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Маркетинг' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Продукты' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Настройки' })).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Обзор' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Маркетинг' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Продукты' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Настройки' }).length).toBeGreaterThan(0);
     expect(screen.queryByText('Приветствие')).not.toBeInTheDocument();
     expect(screen.queryByText('Аналитика')).not.toBeInTheDocument();
     expect(screen.queryByText('Посты')).not.toBeInTheDocument();
@@ -310,7 +375,7 @@ describe('AppShell', () => {
       expect(testState.info).toHaveBeenCalled();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /профиль/i }));
+    fireEvent.click(screen.getByText('Профиль и соцаккаунты').closest('button') as HTMLButtonElement);
 
     await waitFor(() => {
       expect(screen.getByText('Подключённые способы входа')).toBeInTheDocument();

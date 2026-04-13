@@ -28,6 +28,13 @@ export const clientApi = {
     return apiFetch<ClientInfo>('/client/info/');
   },
 
+  updateName: async (name: string): Promise<ClientInfo> => {
+    return apiFetch<ClientInfo>('/client/info/', {
+      method: 'PATCH',
+      body: { name },
+    });
+  },
+
   setActiveClient: async (clientId: number): Promise<ClientInfo> => {
     return apiFetch<ClientInfo>('/client/active/', {
       method: 'POST',

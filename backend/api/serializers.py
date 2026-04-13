@@ -1128,6 +1128,18 @@ class ClientSettingsSerializer(serializers.ModelSerializer):
         return updated_client
 
 
+class ClientNameSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Client
+        fields = ["name"]
+
+    def validate_name(self, value: str) -> str:
+        normalized = str(value).strip()
+        if not normalized:
+            raise serializers.ValidationError("Введите название проекта.")
+        return normalized
+
+
 
 class PostTypeSerializer(serializers.ModelSerializer):
     """Serializer for PostType (справочник типов постов)"""

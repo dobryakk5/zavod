@@ -101,6 +101,30 @@ def test_switch_active_client_returns_same_payload_shape(owner_user, project):
 
 
 @pytest.mark.django_db
+def test_owner_can_rename_active_project(owner_client, project):
+    response = owner_client.patch(reverse("api:client-info"), {"name": "Renamed Project"}, format="json")
+
+    assert response.status_code == 200, response.content
+    project.refresh_from_db()
+    assert project.name == "Renamed Project"
+    assert response.json()["client"]["name"] == "Renamed Project"
+    assert response.json()["memberships"][0]["client"]["name"] == "Renamed Project"
+
+
+@pytest.mark.django_db
+def test_editor_cannot_rename_active_project(project):
+    editor = User.objects.create_user(username="team-editor", email="team-editor@example.com", password="testpass123")
+    UserTenantRole.objects.create(user=editor, client=project, role="editor")
+    client = _api_client_for(editor)
+
+    response = client.patch(reverse("api:client-info"), {"name": "Editor Rename"}, format="json")
+
+    assert response.status_code == 403, response.content
+    project.refresh_from_db()
+    assert project.name == "Team Project"
+
+
+@pytest.mark.django_db
 def test_create_team_invitation_returns_pending_created(owner_client, project):
     response = owner_client.post(
         reverse("api:client-team-invitations"),

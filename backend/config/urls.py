@@ -14,6 +14,7 @@ urlpatterns = [
     path('django-admin/', admin.site.urls),
     path('admin/', include(wagtailadmin_urls)),
     path('documents/', include(wagtaildocs_urls)),
+    path('anymail/', include('anymail.urls')),
     path('api/v1/', include('core.api.v1.urls')),
     path('api/', include('api.urls')),
     path('core/', include('core.urls')),  # Core app URLs
